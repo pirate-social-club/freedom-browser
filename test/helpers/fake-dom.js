@@ -45,6 +45,13 @@ const getDataAttributeName = (selector) => {
 };
 
 const matchesSingleSelector = (element, selector) => {
+  const classAndDataMatch = selector.match(/^\.([A-Za-z0-9_-]+)(\[data-([a-z-]+)="([^"]+)"\])$/);
+  if (classAndDataMatch) {
+    const [, className, , dataName, dataValue] = classAndDataMatch;
+    const dataKey = dataName.replace(/-([a-z])/g, (_, char) => char.toUpperCase());
+    return element.classList.contains(className) && element.dataset[dataKey] === dataValue;
+  }
+
   if (selector.startsWith('.')) {
     return element.classList.contains(selector.slice(1));
   }
