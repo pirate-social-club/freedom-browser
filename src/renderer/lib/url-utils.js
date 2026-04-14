@@ -62,6 +62,46 @@ const looksLikeDomain = (str) => {
   return domainRegex.test(hostPart);
 };
 
+const looksLikeSingleLabelHost = (str) => {
+  if (!str || typeof str !== 'string') return false;
+
+  const trimmed = str.trim();
+  if (!trimmed) return false;
+
+  const hostPart = trimmed.split(/[/?#]/)[0];
+
+  if (!hostPart) return false;
+  if (hostPart.includes('.')) return false;
+  if (hostPart.includes(' ')) return false;
+  if (/^\d+$/.test(hostPart)) return false;
+  if (hostPart.startsWith('/') || hostPart.startsWith('.')) return false;
+  if (hostPart.includes(':')) return false;
+
+  const knownPrefixes = ['bzz:', 'ipfs:', 'ipns:', 'rad:', 'ens:', 'freedom:', 'http:', 'https:'];
+  for (const prefix of knownPrefixes) {
+    if (hostPart.toLowerCase().startsWith(prefix)) return false;
+  }
+
+  if (isValidSwarmHash(hostPart)) return false;
+  if (isValidCid(hostPart)) return false;
+  if (isValidRadicleId(hostPart)) return false;
+
+  if (hostPart.length > 63) return false;
+
+  return /^[a-z]([a-z0-9-]*[a-z0-9])?$/.test(hostPart);
+};
+
+export const normalizeHnsHostInput = (str) => {
+  if (!looksLikeSingleLabelHost(str)) return null;
+
+  const trimmed = str.trim();
+  const parts = trimmed.split(/[/?#]/);
+  const host = parts[0];
+  const rest = trimmed.slice(host.length);
+
+  return `https://${host}${rest || '/'}`;
+};
+
 export const parseHashInput = (rawInput, bzzRoutePrefix) => {
   const withoutScheme = rawInput.replace(/^bzz:\/\//i, '').replace(/^\/+/, '');
   if (!withoutScheme) {

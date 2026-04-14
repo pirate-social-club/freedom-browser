@@ -33,6 +33,12 @@ module.exports = {
   RADICLE_GET_REPO_PAYLOAD: 'radicle:getRepoPayload',
   RADICLE_SYNC_REPO: 'radicle:syncRepo',
 
+  // HNS node management
+  HNS_START: 'hns:start',
+  HNS_STOP: 'hns:stop',
+  HNS_GET_STATUS: 'hns:getStatus',
+  HNS_STATUS_UPDATE: 'hns:statusUpdate',
+
   // ENS resolution
   ENS_RESOLVE: 'ens:resolve',
 

@@ -25,6 +25,15 @@ export const state = {
       statusMessage: null,
       tempMessage: null,
     },
+    hns: {
+      api: null,
+      proxy: null,
+      mode: 'none',
+      statusMessage: null,
+      tempMessage: null,
+      synced: false,
+      height: 0,
+    },
   },
 
   // Bee/Swarm Gateway config (defaults from env or hardcoded, updated from registry)
@@ -96,6 +105,7 @@ export const state = {
 
   // Feature flags
   enableRadicleIntegration: false,
+  enableHnsIntegration: false,
 };
 
 // Build Bee URL using registry or fallback to defaults
@@ -137,6 +147,10 @@ export const updateRegistry = (newRegistry) => {
 
 export const setRadicleIntegrationEnabled = (enabled) => {
   state.enableRadicleIntegration = enabled === true;
+};
+
+export const setHnsIntegrationEnabled = (enabled) => {
+  state.enableHnsIntegration = enabled === true;
 };
 
 // Get display message for a service (temp message takes priority)

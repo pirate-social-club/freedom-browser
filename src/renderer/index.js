@@ -1,5 +1,5 @@
 // Renderer process entry point
-import { updateRegistry, setRadicleIntegrationEnabled } from './lib/state.js';
+import { updateRegistry, setRadicleIntegrationEnabled, setHnsIntegrationEnabled } from './lib/state.js';
 import { initBeeUi, updateBeeStatusLine, updateBeeToggleState } from './lib/bee-ui.js';
 import { initIpfsUi, updateIpfsStatusLine, updateIpfsToggleState } from './lib/ipfs-ui.js';
 import {
@@ -184,11 +184,14 @@ window.addEventListener('DOMContentLoaded', async () => {
   try {
     const settings = await electronAPI.getSettings();
     setRadicleIntegrationEnabled(settings?.enableRadicleIntegration === true);
+    setHnsIntegrationEnabled(settings?.enableHnsIntegration === true);
   } catch {
     setRadicleIntegrationEnabled(false);
+    setHnsIntegrationEnabled(false);
   }
   window.addEventListener('settings:updated', (event) => {
     setRadicleIntegrationEnabled(event.detail?.enableRadicleIntegration === true);
+    setHnsIntegrationEnabled(event.detail?.enableHnsIntegration === true);
   });
 
   initMenuBackdrop(closeAllOverlays);

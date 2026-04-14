@@ -210,6 +210,18 @@ contextBridge.exposeInMainWorld('radicle', {
   },
 });
 
+contextBridge.exposeInMainWorld('hns', {
+  start: () => ipcRenderer.invoke('hns:start'),
+  stop: () => ipcRenderer.invoke('hns:stop'),
+  getStatus: () => ipcRenderer.invoke('hns:getStatus'),
+  onStatusUpdate: (callback) => {
+    const handler = (_event, value) => callback(value);
+    ipcRenderer.on('hns:statusUpdate', handler);
+    ipcRenderer.invoke('hns:getStatus').then(callback);
+    return () => ipcRenderer.removeListener('hns:statusUpdate', handler);
+  },
+});
+
 contextBridge.exposeInMainWorld('githubBridge', {
   import: (url) => ipcRenderer.invoke('github-bridge:import', url),
   checkGit: () => ipcRenderer.invoke('github-bridge:check-git'),

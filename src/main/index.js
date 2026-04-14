@@ -48,6 +48,7 @@ const { registerEnsIpc } = require('./ens-resolver');
 const { registerBeeIpc, stopBee, startBee, setUseInjectedIdentity: setBeeInjectedIdentity } = require('./bee-manager');
 const { registerIpfsIpc, stopIpfs, startIpfs, setUseInjectedIdentity: setIpfsInjectedIdentity } = require('./ipfs-manager');
 const { registerRadicleIpc, stopRadicle, startRadicle, setUseInjectedIdentity: setRadicleInjectedIdentity } = require('./radicle-manager');
+const { registerHnsIpc, stopHns, startHns } = require('./hns-manager');
 const { registerIdentityIpc, hasVault, isBeeIdentityInjected, isIpfsIdentityInjected, isRadicleIdentityInjected } = require('./identity-manager');
 const { registerQuickUnlockIpc } = require('./quick-unlock');
 const { registerWalletIpc } = require('./wallet/wallet-ipc');
@@ -100,6 +101,7 @@ async function bootstrap() {
   registerBeeIpc();
   registerIpfsIpc();
   registerRadicleIpc();
+  registerHnsIpc();
   registerGithubBridgeIpc();
   registerServiceRegistryIpc();
   registerIdentityIpc();
@@ -160,6 +162,9 @@ async function bootstrap() {
   }
   if (settings.enableRadicleIntegration && settings.startRadicleAtLaunch) {
     startRadicle();
+  }
+  if (settings.enableHnsIntegration && settings.startHnsAtLaunch) {
+    startHns();
   }
 
   const mainWindow = createMainWindow();
@@ -232,8 +237,8 @@ app.on('before-quit', async (event) => {
   // Clean up any GitHub bridge temp directories
   cleanupTempDirs();
 
-  log.info('[App] Waiting for Bee, IPFS, and Radicle to stop...');
-  await Promise.all([stopBee(), stopIpfs(), stopRadicle()]);
+  log.info('[App] Waiting for Bee, IPFS, Radicle, and HNS to stop...');
+  await Promise.all([stopBee(), stopIpfs(), stopRadicle(), stopHns()]);
   log.info('[App] All processes stopped, quitting...');
 
 

@@ -42,6 +42,16 @@ const registry = {
     tempMessage: null,
     tempMessageTimeout: null,
   },
+  hns: {
+    api: null,
+    proxy: null,
+    mode: MODE.NONE,
+    statusMessage: null,
+    tempMessage: null,
+    tempMessageTimeout: null,
+    synced: false,
+    height: 0,
+  },
 };
 
 // Default ports
@@ -80,6 +90,7 @@ function getRegistry() {
     ipfs: { ...registry.ipfs },
     bee: { ...registry.bee },
     radicle: { ...registry.radicle },
+    hns: { ...registry.hns },
   };
 }
 

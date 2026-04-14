@@ -23,6 +23,7 @@ import {
   deriveBzzBaseFromUrl,
   deriveIpfsBaseFromUrl,
   deriveRadBaseFromUrl,
+  normalizeHnsHostInput,
 } from './url-utils.js';
 import {
   getActiveWebview,
@@ -496,6 +497,23 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     syncIpfsBase(null);
     syncRadBase(null);
     return;
+  }
+
+  // Try HNS single-label hostname normalization (when HNS is enabled)
+  if (state.enableHnsIntegration) {
+    const hnsUrl = normalizeHnsHostInput(value);
+    if (hnsUrl) {
+      addressInput.value = displayOverride || value;
+      pushDebug(`[AddressBar] HNS normalization: ${value} -> ${hnsUrl}`);
+      navState.pendingTitleForUrl = hnsUrl;
+      navState.pendingNavigationUrl = hnsUrl;
+      navState.hasNavigatedDuringCurrentLoad = false;
+      webview.loadURL(hnsUrl);
+      syncBzzBase(null);
+      syncIpfsBase(null);
+      syncRadBase(null);
+      return;
+    }
   }
 
   pushDebug('Ignoring empty input or invalid URL.');
