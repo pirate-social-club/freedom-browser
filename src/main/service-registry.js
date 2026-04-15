@@ -50,6 +50,7 @@ const registry = {
     tempMessage: null,
     tempMessageTimeout: null,
     synced: false,
+    canaryReady: false,
     height: 0,
   },
 };

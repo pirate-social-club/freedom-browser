@@ -85,7 +85,7 @@ describe('preload', () => {
       ipfsGatewayEnv: 'http://127.0.0.1:9090',
     });
 
-    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledTimes(14);
+    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledTimes(15);
     expect(Object.keys(exposures)).toEqual([
       'nodeConfig',
       'internalPages',
@@ -93,6 +93,7 @@ describe('preload', () => {
       'bee',
       'ipfs',
       'radicle',
+      'hns',
       'githubBridge',
       'serviceRegistry',
       'identity',

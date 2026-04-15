@@ -29,10 +29,12 @@ describe('settings-store', () => {
     expect(mod.loadSettings()).toEqual({
       theme: 'system',
       enableRadicleIntegration: false,
+      enableHnsIntegration: true,
       enableIdentityWallet: false,
       startBeeAtLaunch: true,
       startIpfsAtLaunch: true,
       startRadicleAtLaunch: false,
+      startHnsAtLaunch: true,
       autoUpdate: true,
       showBookmarkBar: false,
       sidebarOpen: false,

@@ -23,6 +23,9 @@ const loadSettingsModule = async (options = {}) => {
         startIpfsAtLaunch: true,
         enableRadicleIntegration: false,
         startRadicleAtLaunch: false,
+        enableHnsIntegration: true,
+        startHnsAtLaunch: true,
+        enableIdentityWallet: false,
         autoUpdate: true,
       },
     ],
@@ -42,6 +45,19 @@ const loadSettingsModule = async (options = {}) => {
   const startRadicleAtLaunchCheckbox = createCheckbox();
   const autoUpdateCheckbox = createCheckbox();
   const experimentalSection = createElement('section');
+  const enableHnsIntegrationCheckbox = createCheckbox();
+  const startHnsRow = createElement('div');
+  const startHnsAtLaunchCheckbox = createCheckbox();
+  const enableIdentityWalletCheckbox = createCheckbox();
+  const hnsStatusValue = createElement('span');
+  const hnsHeightRow = createElement('div');
+  const hnsHeightValue = createElement('span');
+  const hnsProxyRow = createElement('div');
+  const hnsProxyValue = createElement('span');
+  const hnsErrorRow = createElement('div');
+  const hnsErrorValue = createElement('span');
+  const hnsStartBtn = createElement('button');
+  const hnsStopBtn = createElement('button');
   const mediaQueryList = {
     matches: prefersDark,
     addEventListener: jest.fn(),
@@ -59,6 +75,19 @@ const loadSettingsModule = async (options = {}) => {
       'start-radicle-at-launch': startRadicleAtLaunchCheckbox,
       'auto-update': autoUpdateCheckbox,
       'experimental-section': experimentalSection,
+      'enable-hns-integration': enableHnsIntegrationCheckbox,
+      'start-hns-row': startHnsRow,
+      'start-hns-at-launch': startHnsAtLaunchCheckbox,
+      'enable-identity-wallet': enableIdentityWalletCheckbox,
+      'hns-status-value': hnsStatusValue,
+      'hns-height-row': hnsHeightRow,
+      'hns-height-value': hnsHeightValue,
+      'hns-proxy-row': hnsProxyRow,
+      'hns-proxy-value': hnsProxyValue,
+      'hns-error-row': hnsErrorRow,
+      'hns-error-value': hnsErrorValue,
+      'hns-start-btn': hnsStartBtn,
+      'hns-stop-btn': hnsStopBtn,
     },
   });
   const settingsUpdatedEvents = [];
@@ -98,6 +127,12 @@ const loadSettingsModule = async (options = {}) => {
     radicle: {
       stop: jest.fn(() => radicleStopResult),
     },
+    hns: {
+      start: jest.fn(),
+      stop: jest.fn(() => ({ catch: jest.fn() })),
+      getStatus: jest.fn().mockResolvedValue({ status: 'stopped', height: 0, synced: false, error: null }),
+      onStatusUpdate: jest.fn(),
+    },
   };
   global.document = document;
   global.CustomEvent = jest.fn((type, init) => ({
@@ -124,6 +159,18 @@ const loadSettingsModule = async (options = {}) => {
       startRadicleAtLaunchCheckbox,
       autoUpdateCheckbox,
       experimentalSection,
+      enableHnsIntegrationCheckbox,
+      startHnsAtLaunchCheckbox,
+      enableIdentityWalletCheckbox,
+      hnsStatusValue,
+      hnsHeightRow,
+      hnsHeightValue,
+      hnsProxyRow,
+      hnsProxyValue,
+      hnsErrorRow,
+      hnsErrorValue,
+      hnsStartBtn,
+      hnsStopBtn,
     },
     electronAPI,
     mediaQueryList,
@@ -149,6 +196,9 @@ describe('settings-ui', () => {
         {
           theme: 'system',
           enableRadicleIntegration: true,
+          enableHnsIntegration: true,
+          startHnsAtLaunch: true,
+          enableIdentityWallet: false,
         },
       ],
       prefersDark: true,
@@ -181,6 +231,9 @@ describe('settings-ui', () => {
           {
             theme: 'dark',
             enableRadicleIntegration: true,
+            enableHnsIntegration: true,
+            startHnsAtLaunch: true,
+            enableIdentityWallet: false,
           },
           {
             theme: 'dark',
@@ -188,6 +241,9 @@ describe('settings-ui', () => {
             startIpfsAtLaunch: false,
             enableRadicleIntegration: true,
             startRadicleAtLaunch: true,
+            enableHnsIntegration: true,
+            startHnsAtLaunch: true,
+            enableIdentityWallet: false,
             autoUpdate: false,
           },
         ],
@@ -208,8 +264,12 @@ describe('settings-ui', () => {
     expect(elements.startIpfsAtLaunchCheckbox.checked).toBe(false);
     expect(elements.enableRadicleIntegrationCheckbox.checked).toBe(true);
     expect(elements.startRadicleAtLaunchCheckbox.checked).toBe(true);
+    expect(elements.enableHnsIntegrationCheckbox.checked).toBe(true);
+    expect(elements.startHnsAtLaunchCheckbox.checked).toBe(true);
+    expect(elements.enableIdentityWalletCheckbox.checked).toBe(false);
     expect(elements.autoUpdateCheckbox.checked).toBe(false);
     expect(elements.startRadicleAtLaunchCheckbox.disabled).toBe(false);
+    expect(elements.startHnsAtLaunchCheckbox.disabled).toBe(false);
     expect(elements.settingsModal.showModal).toHaveBeenCalled();
 
     elements.themeModeSelect.value = 'light';
@@ -217,6 +277,9 @@ describe('settings-ui', () => {
     elements.startIpfsAtLaunchCheckbox.checked = true;
     elements.enableRadicleIntegrationCheckbox.checked = false;
     elements.startRadicleAtLaunchCheckbox.checked = true;
+    elements.enableHnsIntegrationCheckbox.checked = true;
+    elements.startHnsAtLaunchCheckbox.checked = true;
+    elements.enableIdentityWalletCheckbox.checked = false;
     elements.autoUpdateCheckbox.checked = true;
     elements.enableRadicleIntegrationCheckbox.dispatch('change');
     await Promise.resolve();
@@ -229,6 +292,8 @@ describe('settings-ui', () => {
       startIpfsAtLaunch: true,
       enableRadicleIntegration: false,
       startRadicleAtLaunch: true,
+      enableHnsIntegration: true,
+      startHnsAtLaunch: true,
       enableIdentityWallet: false,
       autoUpdate: true,
     });
@@ -244,6 +309,8 @@ describe('settings-ui', () => {
         startIpfsAtLaunch: true,
         enableRadicleIntegration: false,
         startRadicleAtLaunch: true,
+        enableHnsIntegration: true,
+        startHnsAtLaunch: true,
         enableIdentityWallet: false,
         autoUpdate: true,
       },
@@ -258,6 +325,9 @@ describe('settings-ui', () => {
         {
           theme: 'system',
           enableRadicleIntegration: false,
+          enableHnsIntegration: true,
+          startHnsAtLaunch: true,
+          enableIdentityWallet: false,
         },
         {
           theme: 'system',
@@ -265,6 +335,9 @@ describe('settings-ui', () => {
           startIpfsAtLaunch: false,
           enableRadicleIntegration: true,
           startRadicleAtLaunch: true,
+          enableHnsIntegration: true,
+          startHnsAtLaunch: true,
+          enableIdentityWallet: false,
           autoUpdate: true,
         },
       ],
@@ -292,6 +365,8 @@ describe('settings-ui', () => {
       startIpfsAtLaunch: false,
       enableRadicleIntegration: false,
       startRadicleAtLaunch: false,
+      enableHnsIntegration: true,
+      startHnsAtLaunch: true,
       enableIdentityWallet: false,
       autoUpdate: false,
     });

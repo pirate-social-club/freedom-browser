@@ -258,3 +258,64 @@
   justify-content: flex-end;
   background: var(--modal-bg);
 }
+
+/* HNS Status Display */
+.hns-status-display {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--settings-section-bg);
+  border-radius: 6px;
+}
+
+.hns-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.hns-status-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.hns-status-value {
+  font-size: 13px;
+  color: var(--text);
+  font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+}
+
+.hns-error-text {
+  color: var(--danger);
+  word-break: break-word;
+  text-align: right;
+  max-width: 220px;
+}
+
+.hns-controls {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.hns-control-btn {
+  padding: 6px 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: default;
+  transition: background-color 0.15s ease;
+}
+
+.hns-control-btn:hover:not(:disabled) {
+  background: var(--settings-section-bg);
+}
+
+.hns-control-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

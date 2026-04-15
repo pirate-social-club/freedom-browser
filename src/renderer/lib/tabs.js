@@ -261,7 +261,7 @@ const createWebview = (tabId, initialUrl) => {
         // Track view-source state directly on tab for reliable detection in page-title-updated
         tab.isViewingSource = webviewUrl.startsWith('view-source:');
         // Clear favicon and set title for home page navigation (e.g., when hitting back)
-        if (homeUrl && (event.url === homeUrl || event.url.endsWith('/pages/home.html'))) {
+        if (homeUrl && event.url === homeUrl) {
           tab.favicon = null;
           tab.title = 'New Tab';
           renderTabs();
@@ -289,7 +289,7 @@ const createWebview = (tabId, initialUrl) => {
       if (tab) {
         const currentUrl = webview.getURL();
         // For home page, always use "New Tab" regardless of what the page reports
-        if (homeUrl && (currentUrl === homeUrl || currentUrl.endsWith('/pages/home.html'))) {
+        if (homeUrl && currentUrl === homeUrl) {
           if (tab.title !== 'New Tab') {
             tab.title = 'New Tab';
             renderTabs();

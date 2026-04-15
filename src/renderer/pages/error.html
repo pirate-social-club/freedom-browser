@@ -147,11 +147,23 @@
       const params = new URLSearchParams(window.location.search);
       const error = params.get('error');
       const url = params.get('url');
+      const height = params.get('height');
       const protocolUrl = toProtocolUrl(url);
       const protocol = detectProtocol(url);
 
       const detailsEl = document.getElementById('details');
       const descriptionEl = document.getElementById('description');
+      const titleEl = document.querySelector('h1');
+
+      function isSingleLabelHost(urlValue) {
+        if (!urlValue) return false;
+        try {
+          const parsed = new URL(urlValue);
+          return parsed.hostname && !parsed.hostname.includes('.');
+        } catch (e) {
+          return false;
+        }
+      }
 
       async function checkSwarmStatus() {
         try {
@@ -175,6 +187,22 @@
       }
 
       async function displayError() {
+        if (error === 'HNS_NOT_READY') {
+          titleEl.textContent = 'Handshake Syncing';
+          descriptionEl.textContent =
+            'Freedom is still syncing Handshake. This site should load once the resolver is ready.';
+          detailsEl.textContent = height ? `${url}\n\nCurrent height: ${height}` : url || 'Handshake resolver not ready';
+          return;
+        }
+
+        if (error === 'HNS_LOOKUP_FAILED' || (error === 'ERR_TUNNEL_CONNECTION_FAILED' && isSingleLabelHost(url))) {
+          titleEl.textContent = 'Handshake Site Unavailable';
+          descriptionEl.textContent =
+            'Freedom could not resolve this Handshake site yet. The resolver may still be syncing, or the name may not exist.';
+          detailsEl.textContent = url ? `${url}\n\n${error}` : error || 'Handshake lookup failed';
+          return;
+        }
+
         const parts = [];
         if (protocolUrl) parts.push(protocolUrl);
 

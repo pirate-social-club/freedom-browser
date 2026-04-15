@@ -36,7 +36,22 @@ let proxyAddr = null;
 let caPemPath = null;
 let caCertFingerprint = null;
 let synced = false;
+let canaryReady = false;
 let height = 0;
+
+function isLoopbackHostname(hostname = '') {
+  return hostname === 'localhost' || hostname === '::1' || /^127\./.test(hostname);
+}
+
+function isHnsHostname(hostname = '') {
+  if (!hostname || typeof hostname !== 'string') return false;
+
+  const normalized = hostname.trim().toLowerCase();
+  if (!normalized || normalized.includes('.')) return false;
+  if (isLoopbackHostname(normalized)) return false;
+
+  return /^[a-z0-9-]+$/.test(normalized);
+}
 
 function getHelperBinaryPath() {
   const platformMap = {
@@ -179,6 +194,11 @@ function configureCertVerification(targetSession) {
 
   targetSession.setCertificateVerifyProc((request, callback) => {
     try {
+      if (proxyAddr && isHnsHostname(request?.hostname)) {
+        callback(0);
+        return;
+      }
+
       const cert = request.certificate;
       if (cert && cert.fingerprint === trustedFingerprint) {
         callback(0);
@@ -264,10 +284,12 @@ function parseStdoutLine(line) {
 
       case 'sync':
         synced = event.synced || false;
+        canaryReady = event.synced || false;
         height = event.height || 0;
 
         updateService('hns', {
           synced,
+          canaryReady,
           height,
         });
 
@@ -370,6 +392,7 @@ async function startHns() {
       caPemPath = null;
       caCertFingerprint = null;
       synced = false;
+      canaryReady = false;
       height = 0;
 
       if (pendingStart) {
@@ -466,6 +489,7 @@ function getHnsStatus() {
     status: currentState,
     error: lastError,
     synced,
+    canaryReady,
     height,
     proxyAddr,
     caPemPath,

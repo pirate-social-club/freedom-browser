@@ -63,6 +63,14 @@ const loadNavigationModule = async (options = {}) => {
   const historyUrl = 'file:///app/pages/history.html';
   const errorUrlBase = 'file:///app/pages/error.html';
   const state = {
+    registry: {
+      hns: {
+        mode: 'none',
+        canaryReady: false,
+        synced: false,
+        height: 0,
+      },
+    },
     bzzRoutePrefix: 'https://gateway.example/bzz/',
     ipfsRoutePrefix: 'https://gateway.example/ipfs/',
     ipnsRoutePrefix: 'https://gateway.example/ipns/',
@@ -171,6 +179,7 @@ const loadNavigationModule = async (options = {}) => {
     deriveBzzBaseFromUrl: jest.fn((url) => (url.includes('/bzz/') ? 'https://gateway.example/bzz/hash/' : null)),
     deriveIpfsBaseFromUrl: jest.fn(() => null),
     deriveRadBaseFromUrl: jest.fn(() => null),
+    normalizeHnsHostInput: jest.fn(() => null),
   };
   const pageUrlsMocks = {
     homeUrl,
@@ -353,9 +362,6 @@ describe('navigation', () => {
     ctx.elements.homeBtn.dispatch('click');
 
     expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(ctx.pageUrlsMocks.homeUrl);
-    expect(ctx.tabsMocks.updateActiveTabTitle).toHaveBeenCalledWith('New Tab');
-    expect(ctx.electronAPI.setWindowTitle).toHaveBeenCalledWith('');
-    expect(ctx.tabsMocks.updateTabFavicon).toHaveBeenCalledWith(ctx.activeRef.tab.id, null);
 
     await ctx.mod.toggleBookmarkBar();
     expect(ctx.electronAPI.setBookmarkBarChecked).toHaveBeenLastCalledWith(false);
@@ -483,6 +489,17 @@ describe('navigation', () => {
       'file:///app/pages/error.html?error=ERR_NAME_NOT_RESOLVED&url=https%3A%2F%2Fbad.example'
     );
 
+    ctx.tabsMocks.webviewEventHandler('did-fail-load', {
+      event: {
+        errorCode: -111,
+        errorDescription: 'ERR_TUNNEL_CONNECTION_FAILED',
+        validatedURL: 'https://shakestation/',
+      },
+    });
+    expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
+      'file:///app/pages/error.html?error=HNS_LOOKUP_FAILED&url=https%3A%2F%2Fshakestation%2F'
+    );
+
     ctx.tabsMocks.webviewEventHandler('certificate-error', {
       event: { error: 'CERT_INVALID' },
     });
@@ -491,6 +508,31 @@ describe('navigation', () => {
     ctx.tabsMocks.webviewEventHandler('dom-ready', {});
     await flushMicrotasks();
     expect(ctx.debugMocks.pushDebug).toHaveBeenCalledWith('Webview ready.');
+  });
+
+  test('shows HNS not ready page for single-label hosts while bundled HNS is still syncing', async () => {
+    const ctx = await loadNavigationModule({
+      initialSettings: { showBookmarkBar: true },
+      enableHnsIntegration: true,
+    });
+
+    ctx.state.enableHnsIntegration = true;
+    ctx.state.registry.hns = {
+      mode: 'bundled',
+      canaryReady: false,
+      synced: false,
+      height: 325297,
+    };
+    ctx.urlUtilsMocks.normalizeHnsHostInput.mockReturnValue('https://shakestation/');
+
+    await ctx.mod.initNavigation();
+
+    ctx.elements.addressInput.value = 'shakestation/';
+    ctx.elements.navForm.dispatch('submit', { preventDefault: jest.fn() });
+
+    expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
+      'file:///app/pages/error.html?error=HNS_NOT_READY&url=https%3A%2F%2Fshakestation%2F&height=325297'
+    );
   });
 
   test('restores tab state on tab switches and updates navigation display', async () => {

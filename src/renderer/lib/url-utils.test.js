@@ -277,8 +277,8 @@ describe('url-utils', () => {
       );
     });
 
-    test('returns empty string for home url', () => {
-      expect(deriveDisplayValue(HOME_URL, BZZ_ROUTE_PREFIX, HOME_URL)).toBe('');
+    test('returns the url for home url', () => {
+      expect(deriveDisplayValue(HOME_URL, BZZ_ROUTE_PREFIX, HOME_URL)).toBe(HOME_URL);
     });
 
     test('returns empty string for about:blank', () => {

@@ -83,6 +83,16 @@ export const setOnHistoryRecorded = (callback) => {
   onHistoryRecorded = callback;
 };
 
+const isSingleLabelHostname = (value = '') => {
+  try {
+    const parsed = new URL(value);
+    const hostname = parsed.hostname || '';
+    return Boolean(hostname) && !hostname.includes('.');
+  } catch {
+    return false;
+  }
+};
+
 const setLoading = (isLoading) => {
   setTabLoading(isLoading);
   updateBookmarkButtonVisibility();
@@ -503,6 +513,25 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
   if (state.enableHnsIntegration) {
     const hnsUrl = normalizeHnsHostInput(value);
     if (hnsUrl) {
+      const hnsState = state.registry?.hns;
+      if (hnsState?.mode === 'bundled' && hnsState.canaryReady !== true) {
+        const errorUrl = new URL(errorUrlBase);
+        errorUrl.searchParams.set('error', 'HNS_NOT_READY');
+        errorUrl.searchParams.set('url', hnsUrl);
+        if (hnsState.height > 0) {
+          errorUrl.searchParams.set('height', String(hnsState.height));
+        }
+        addressInput.value = displayOverride || value;
+        navState.pendingTitleForUrl = hnsUrl;
+        navState.pendingNavigationUrl = errorUrl.toString();
+        navState.hasNavigatedDuringCurrentLoad = false;
+        webview.loadURL(errorUrl.toString());
+        syncBzzBase(null);
+        syncIpfsBase(null);
+        syncRadBase(null);
+        return;
+      }
+
       addressInput.value = displayOverride || value;
       pushDebug(`[AddressBar] HNS normalization: ${value} -> ${hnsUrl}`);
       navState.pendingTitleForUrl = hnsUrl;
@@ -558,18 +587,11 @@ export const loadHomePage = () => {
   syncBzzBase(null);
   syncIpfsBase(null);
   syncRadBase(null);
-  addressInput.value = '';
+  addressInput.value = homeUrl;
   updateProtocolIcon();
   navState.pendingNavigationUrl = homeUrlNormalized;
   navState.hasNavigatedDuringCurrentLoad = false;
   webview.loadURL(homeUrl);
-  updateActiveTabTitle('New Tab');
-  electronAPI?.setWindowTitle?.('');
-  // Clear favicon for home page
-  const activeTab = getActiveTab();
-  if (activeTab) {
-    updateTabFavicon(activeTab.id, null);
-  }
   pushDebug('Loading home page');
 };
 
@@ -1087,8 +1109,13 @@ export const initNavigation = () => {
 
         if (data.event && data.event.errorCode !== -3 && webview) {
           const errorUrl = new URL('pages/error.html', window.location.href);
-          errorUrl.searchParams.set('error', data.event.errorDescription || data.event.errorCode);
-          errorUrl.searchParams.set('url', data.event.validatedURL || data.event.url || '');
+          const failedUrl = data.event.validatedURL || data.event.url || '';
+          const failedError = data.event.errorDescription || data.event.errorCode;
+          const isHnsLookupFailure =
+            failedError === 'ERR_TUNNEL_CONNECTION_FAILED' && isSingleLabelHostname(failedUrl);
+
+          errorUrl.searchParams.set('error', isHnsLookupFailure ? 'HNS_LOOKUP_FAILED' : failedError);
+          errorUrl.searchParams.set('url', failedUrl);
           webview.loadURL(errorUrl.toString());
         }
 

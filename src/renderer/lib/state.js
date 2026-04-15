@@ -32,6 +32,7 @@ export const state = {
       statusMessage: null,
       tempMessage: null,
       synced: false,
+      canaryReady: false,
       height: 0,
     },
   },

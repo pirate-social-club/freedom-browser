@@ -5,9 +5,10 @@
 
 const ROUTABLE_PAGES = window.internalPages?.routable || {};
 
-// URLs for pages
-export const homeUrl = new URL('pages/home.html', window.location.href).toString();
-export const homeUrlNormalized = homeUrl;
+const HOME_START_URL = 'https://pirate.sc/';
+
+export const homeUrl = HOME_START_URL;
+export const homeUrlNormalized = HOME_START_URL;
 export const errorUrlBase = new URL('pages/error.html', window.location.href).toString();
 
 // Internal pages map for freedom:// protocol
@@ -37,7 +38,6 @@ export const isHistoryRecordable = (displayUrl, internalUrl) => {
   if (displayUrl.startsWith('freedom://')) return false;
   if (displayUrl.startsWith('view-source:')) return false;
   if (internalUrl?.includes('/error.html')) return false;
-  if (internalUrl === homeUrl || internalUrl === homeUrlNormalized) return false;
   return true;
 };
 

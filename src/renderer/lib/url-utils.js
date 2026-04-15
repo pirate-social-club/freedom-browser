@@ -309,7 +309,7 @@ export const deriveDisplayValue = (
     return '';
   }
 
-  if (url === 'about:blank' || url === homeUrlNormalized) {
+  if (url === 'about:blank') {
     return '';
   }
 

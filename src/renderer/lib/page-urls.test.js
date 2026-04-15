@@ -26,7 +26,7 @@ describe('page-urls', () => {
       history: 'file:///app/pages/history.html',
       'protocol-test': 'file:///app/pages/protocol-test.html',
     });
-    expect(mod.homeUrl).toBe('file:///app/pages/home.html');
+    expect(mod.homeUrl).toBe('https://pirate.sc/');
     expect(mod.errorUrlBase).toBe('file:///app/pages/error.html');
   });
 
@@ -50,7 +50,7 @@ describe('page-urls', () => {
     expect(mod.isHistoryRecordable('freedom://history', 'file:///app/pages/history.html')).toBe(false);
     expect(mod.isHistoryRecordable('view-source:https://example.com', 'view-source:https://example.com')).toBe(false);
     expect(mod.isHistoryRecordable('https://example.com', 'file:///app/pages/error.html')).toBe(false);
-    expect(mod.isHistoryRecordable('https://example.com', mod.homeUrl)).toBe(false);
+    expect(mod.isHistoryRecordable('https://example.com', mod.homeUrl)).toBe(true);
     expect(mod.isHistoryRecordable('https://example.com', 'https://example.com')).toBe(true);
   });
 

@@ -1767,6 +1767,47 @@
             </div>
           </section>
 
+          <!-- Handshake Section -->
+          <section class="settings-section" id="hns-section">
+            <h3 class="settings-section-header">Handshake</h3>
+            <div class="settings-toggle-row">
+              <span class="toggle-label">Enable Handshake</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="enable-hns-integration" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="settings-toggle-row sub-toggle" id="start-hns-row">
+              <span class="toggle-label">Start Handshake when Freedom opens</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="start-hns-at-launch" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="hns-status-display" id="hns-status-display">
+              <div class="hns-status-row">
+                <span class="hns-status-label">Status</span>
+                <span class="hns-status-value" id="hns-status-value">Stopped</span>
+              </div>
+              <div class="hns-status-row" id="hns-height-row" style="display: none;">
+                <span class="hns-status-label">Height</span>
+                <span class="hns-status-value" id="hns-height-value">0</span>
+              </div>
+              <div class="hns-status-row" id="hns-proxy-row" style="display: none;">
+                <span class="hns-status-label">Proxy</span>
+                <span class="hns-status-value" id="hns-proxy-value"></span>
+              </div>
+              <div class="hns-status-row" id="hns-error-row" style="display: none;">
+                <span class="hns-status-label">Error</span>
+                <span class="hns-status-value hns-error-text" id="hns-error-value"></span>
+              </div>
+            </div>
+            <div class="hns-controls" id="hns-controls">
+              <button type="button" class="hns-control-btn" id="hns-start-btn">Start</button>
+              <button type="button" class="hns-control-btn" id="hns-stop-btn" disabled>Stop</button>
+            </div>
+          </section>
+
           <!-- Experimental Section (hidden on Windows — no Radicle binaries yet) -->
           <section class="settings-section" id="experimental-section">
             <h3 class="settings-section-header">Experimental</h3>
