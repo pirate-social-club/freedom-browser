@@ -254,8 +254,6 @@ async function handleReady(event) {
 function parseStdoutLine(line) {
   if (!line || !line.trim()) return;
 
-  log.info(`[HNS] stdout: ${line.trim()}`);
-
   try {
     const event = JSON.parse(line);
 
