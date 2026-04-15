@@ -106,7 +106,7 @@ function buildPacScript(proxyAddress) {
   if (shExpMatch(host, "127.0.0.*") || host === "localhost" || host === "::1") {
     return "DIRECT";
   }
-  if (dnsDomainLevels(host) === 0 && !isResolvable(host)) {
+  if (dnsDomainLevels(host) === 0) {
     return "PROXY ${proxyAddress}";
   }
   return "DIRECT";
