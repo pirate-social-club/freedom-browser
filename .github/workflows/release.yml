@@ -120,7 +120,7 @@ jobs:
         run: |
           cd release-artifacts
           find . -maxdepth 1 -type f \
-            \( -name '*.dmg' -o -name '*.zip' -o -name '*.deb' -o -name '*.exe' -o -name '*.blockmap' -o -name 'latest*.yml' \) \
+            \( -name '*.dmg' -o -name '*.zip' -o -name '*.deb' -o -name '*.AppImage' -o -name '*.exe' -o -name '*.blockmap' -o -name 'latest*.yml' \) \
             -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
 
       - name: Publish GitHub release
@@ -131,6 +131,7 @@ jobs:
             release-artifacts/*.dmg
             release-artifacts/*.zip
             release-artifacts/*.deb
+            release-artifacts/*.AppImage
             release-artifacts/*.exe
             release-artifacts/*.blockmap
             release-artifacts/latest*.yml

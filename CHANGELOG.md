@@ -2,6 +2,16 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [0.6.4] - 2026-04-17
+
+### Added
+
+- Linux GitHub Releases now publish an `AppImage` alongside the existing `.deb` package for easier distro-agnostic installs
+
+### Changed
+
+- Release metadata and workflow asset publishing now include the Linux `AppImage` artifact and checksums
+
 ## [0.6.3] - 2026-04-17
 
 ### Added
