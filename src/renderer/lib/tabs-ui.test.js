@@ -164,6 +164,7 @@ const loadTabsModule = async (options = {}) => {
   jest.doMock('./page-context-menu.js', () => pageContextMenuMocks);
   jest.doMock('./page-urls.js', () => ({
     homeUrl: HOME_URL,
+    isHomeUrl: (url) => url === HOME_URL || url === 'https://pirate.sc/' || url === 'https://pirate/',
   }));
 
   const mod = await import('./tabs.js');
@@ -484,6 +485,16 @@ describe('tabs ui behavior', () => {
 
     electronHandlers.newTab();
     expect(mod.getTabs()).toHaveLength(4);
+
+    const tabCountBeforeMetaClose = mod.getTabs().length;
+    windowHandlers.keydown({
+      ctrlKey: false,
+      shiftKey: false,
+      metaKey: true,
+      key: 'w',
+      preventDefault: jest.fn(),
+    });
+    expect(mod.getTabs()).toHaveLength(tabCountBeforeMetaClose);
 
     const activeTab = mod.getActiveTab();
     activeTab.pinned = true;

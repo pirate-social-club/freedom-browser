@@ -27,6 +27,10 @@ const DEFAULT_SETTINGS = {
   startHnsAtLaunch: true,
   autoUpdate: true,
   showBookmarkBar: false,
+  showDvpnControls: false,
+  dvpnMaxSpendP2P: 1.0,
+  dvpnLowBalanceStop: 0.5,
+  dvpnMaxDurationMinutes: 120,
   sidebarOpen: false,
   sidebarWidth: 320,
 };

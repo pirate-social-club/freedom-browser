@@ -31,6 +31,36 @@ let hnsStartBtn = null;
 let hnsStopBtn = null;
 let isWindows = false;
 
+let showDvpnControlsCheckbox = null;
+let dvpnContent = null;
+let dvpnCreateWalletBtn = null;
+let dvpnWalletSetup = null;
+let dvpnWalletDisplay = null;
+let dvpnWalletAddressEl = null;
+let dvpnCopyAddressBtn = null;
+let dvpnQrRow = null;
+let dvpnQrImage = null;
+let dvpnBalanceRow = null;
+let dvpnBalanceValue = null;
+let dvpnRefreshBalanceBtn = null;
+let dvpnStatusRow = null;
+let dvpnStatusValue = null;
+let dvpnNodeRow = null;
+let dvpnNodeValue = null;
+let dvpnCountryRow = null;
+let dvpnCountryValue = null;
+let dvpnIpRow = null;
+let dvpnIpValue = null;
+let dvpnErrorRow = null;
+let dvpnErrorValue = null;
+let dvpnConnectBtn = null;
+let dvpnDisconnectBtn = null;
+let dvpnControls = null;
+let dvpnMaxSpendInput = null;
+let dvpnLowBalanceStopInput = null;
+let dvpnMaxDurationInput = null;
+let _dvpnStatusUnsubscribe = null;
+
 let currentThemeMode = 'system';
 let currentRadicleIntegrationEnabled = false;
 let currentHnsIntegrationEnabled = false;
@@ -59,6 +89,110 @@ const updateHnsSettingsVisibility = () => {
   startHnsRow?.classList.toggle('disabled', !enabled);
   if (startHnsAtLaunchCheckbox) {
     startHnsAtLaunchCheckbox.disabled = !enabled;
+  }
+};
+
+const updateDvpnSettingsVisibility = () => {
+  const show = showDvpnControlsCheckbox?.checked === true;
+  if (dvpnContent) dvpnContent.style.display = show ? '' : 'none';
+  if (!show && window.dvpn) {
+    window.dvpn.stop?.().catch(() => {});
+  }
+};
+
+const copyText = async (text) => {
+  if (!text) return false;
+
+  try {
+    const result = await electronAPI?.copyText?.(text);
+    if (result?.success) {
+      return true;
+    }
+  } catch {
+    // Fallback below
+  }
+
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Ignore clipboard fallback failures
+  }
+
+  return false;
+};
+
+const renderDvpnQr = async (address) => {
+  if (!dvpnQrRow || !dvpnQrImage || !window.dvpn?.generateQR) return;
+  if (!address) {
+    dvpnQrRow.style.display = 'none';
+    dvpnQrImage.removeAttribute('src');
+    return;
+  }
+
+  try {
+    const result = await window.dvpn.generateQR(address, { width: 192, margin: 1 });
+    if (result?.success && result.dataUrl) {
+      dvpnQrImage.src = result.dataUrl;
+      dvpnQrRow.style.display = '';
+    } else {
+      dvpnQrRow.style.display = 'none';
+    }
+  } catch {
+    dvpnQrRow.style.display = 'none';
+  }
+};
+
+const updateDvpnStatusDisplay = (status) => {
+  if (!status) return;
+
+  const hasWallet = !!status.walletAddress;
+  const isConnected = status.state === 'connected';
+  const isConnecting = status.state === 'connecting';
+  const isStopping =
+    status.state === 'disconnecting' || status.state === 'local_off_remote_pending';
+
+  if (dvpnWalletSetup) dvpnWalletSetup.style.display = hasWallet ? 'none' : '';
+  if (dvpnWalletDisplay) dvpnWalletDisplay.style.display = hasWallet ? '' : 'none';
+  if (dvpnWalletAddressEl) dvpnWalletAddressEl.textContent = status.walletAddress || '';
+  renderDvpnQr(status.walletAddress || null);
+
+  if (dvpnBalanceRow) dvpnBalanceRow.style.display = hasWallet ? '' : 'none';
+  if (dvpnBalanceValue) dvpnBalanceValue.textContent = status.balance || '—';
+
+  if (dvpnStatusRow) dvpnStatusRow.style.display = hasWallet ? '' : 'none';
+  if (dvpnStatusValue) {
+    const stateLabels = {
+      off: 'Off',
+      wallet_ready: status.lastDisconnectReason ? `Stopped — ${status.lastDisconnectReason.replace(/_/g, ' ')}` : 'Off',
+      connecting: 'Connecting...',
+      connected: 'Connected',
+      disconnecting: 'Disconnecting...',
+      local_off_remote_pending: 'Ending session...',
+      error: 'Error',
+    };
+    dvpnStatusValue.textContent = stateLabels[status.state] || status.state || 'Off';
+  }
+
+  if (dvpnControls) dvpnControls.style.display = hasWallet ? '' : 'none';
+
+  if (dvpnNodeRow) dvpnNodeRow.style.display = status.nodeAddress ? '' : 'none';
+  if (dvpnNodeValue) dvpnNodeValue.textContent = status.nodeAddress || '';
+
+  if (dvpnCountryRow) dvpnCountryRow.style.display = status.country ? '' : 'none';
+  if (dvpnCountryValue) dvpnCountryValue.textContent = status.country || '';
+
+  if (dvpnIpRow) dvpnIpRow.style.display = status.ip ? '' : 'none';
+  if (dvpnIpValue) dvpnIpValue.textContent = status.ip || '';
+
+  if (dvpnErrorRow) dvpnErrorRow.style.display = status.error ? '' : 'none';
+  if (dvpnErrorValue) dvpnErrorValue.textContent = status.error || '';
+
+  if (dvpnConnectBtn && dvpnDisconnectBtn) {
+    dvpnConnectBtn.disabled = isConnected || isConnecting || isStopping || !hasWallet || !status.funded;
+    dvpnDisconnectBtn.disabled = !isConnected && !isConnecting && !isStopping;
   }
 };
 
@@ -144,6 +278,10 @@ const saveSettings = async () => {
     startHnsAtLaunch: startHnsAtLaunchCheckbox?.checked ?? true,
     enableIdentityWallet: enableIdentityWalletCheckbox?.checked ?? false,
     autoUpdate: autoUpdateCheckbox?.checked ?? true,
+    showDvpnControls: showDvpnControlsCheckbox?.checked ?? false,
+    dvpnMaxSpendP2P: Math.max(0.1, parseFloat(dvpnMaxSpendInput?.value || '1') || 1),
+    dvpnLowBalanceStop: Math.max(0.1, parseFloat(dvpnLowBalanceStopInput?.value || '0.5') || 0.5),
+    dvpnMaxDurationMinutes: Math.max(30, parseInt(dvpnMaxDurationInput?.value || '120', 10) || 120),
   };
 
   const success = await electronAPI.saveSettings(newSettings);
@@ -198,6 +336,35 @@ export const initSettings = async () => {
   hnsStartBtn = document.getElementById('hns-start-btn');
   hnsStopBtn = document.getElementById('hns-stop-btn');
 
+  showDvpnControlsCheckbox = document.getElementById('show-dvpn-controls');
+  dvpnContent = document.getElementById('dvpn-content');
+  dvpnCreateWalletBtn = document.getElementById('dvpn-create-wallet-btn');
+  dvpnWalletSetup = document.getElementById('dvpn-wallet-setup');
+  dvpnWalletDisplay = document.getElementById('dvpn-wallet-display');
+  dvpnWalletAddressEl = document.getElementById('dvpn-wallet-address');
+  dvpnCopyAddressBtn = document.getElementById('dvpn-copy-address');
+  dvpnQrRow = document.getElementById('dvpn-qr-row');
+  dvpnQrImage = document.getElementById('dvpn-qr-image');
+  dvpnBalanceRow = document.getElementById('dvpn-balance-row');
+  dvpnBalanceValue = document.getElementById('dvpn-balance-value');
+  dvpnRefreshBalanceBtn = document.getElementById('dvpn-refresh-balance');
+  dvpnStatusRow = document.getElementById('dvpn-status-row');
+  dvpnStatusValue = document.getElementById('dvpn-status-value');
+  dvpnNodeRow = document.getElementById('dvpn-node-row');
+  dvpnNodeValue = document.getElementById('dvpn-node-value');
+  dvpnCountryRow = document.getElementById('dvpn-country-row');
+  dvpnCountryValue = document.getElementById('dvpn-country-value');
+  dvpnIpRow = document.getElementById('dvpn-ip-row');
+  dvpnIpValue = document.getElementById('dvpn-ip-value');
+  dvpnErrorRow = document.getElementById('dvpn-error-row');
+  dvpnErrorValue = document.getElementById('dvpn-error-value');
+  dvpnConnectBtn = document.getElementById('dvpn-connect-btn');
+  dvpnDisconnectBtn = document.getElementById('dvpn-disconnect-btn');
+  dvpnControls = document.getElementById('dvpn-controls');
+  dvpnMaxSpendInput = document.getElementById('dvpn-max-spend');
+  dvpnLowBalanceStopInput = document.getElementById('dvpn-low-balance-stop');
+  dvpnMaxDurationInput = document.getElementById('dvpn-max-duration');
+
   const platform = await electronAPI.getPlatform();
   isWindows = platform === 'win32';
   if (isWindows && experimentalSection) {
@@ -217,6 +384,42 @@ export const initSettings = async () => {
     saveSettings();
   });
   startHnsAtLaunchCheckbox?.addEventListener('change', saveSettings);
+  showDvpnControlsCheckbox?.addEventListener('change', () => {
+    updateDvpnSettingsVisibility();
+    saveSettings();
+  });
+  dvpnCreateWalletBtn?.addEventListener('click', async () => {
+    if (!window.dvpn) return;
+    dvpnCreateWalletBtn.disabled = true;
+    const result = await window.dvpn.createWallet();
+    if (result.success) {
+      window.dvpn.getStatus().then(updateDvpnStatusDisplay).catch(() => {});
+    } else {
+      dvpnCreateWalletBtn.disabled = false;
+    }
+  });
+  dvpnRefreshBalanceBtn?.addEventListener('click', () => {
+    window.dvpn?.getBalance?.().then((result) => {
+      if (result?.success && dvpnBalanceValue) {
+        dvpnBalanceValue.textContent = result.p2p;
+        window.dvpn?.getStatus?.().then(updateDvpnStatusDisplay).catch(() => {});
+      }
+    }).catch(() => {});
+  });
+  dvpnCopyAddressBtn?.addEventListener('click', async () => {
+    const address = dvpnWalletAddressEl?.textContent?.trim();
+    if (!address) return;
+    await copyText(address);
+  });
+  dvpnConnectBtn?.addEventListener('click', () => {
+    window.dvpn?.start?.().catch(() => {});
+  });
+  dvpnDisconnectBtn?.addEventListener('click', () => {
+    window.dvpn?.stop?.().catch(() => {});
+  });
+  dvpnMaxSpendInput?.addEventListener('change', saveSettings);
+  dvpnLowBalanceStopInput?.addEventListener('change', saveSettings);
+  dvpnMaxDurationInput?.addEventListener('change', saveSettings);
   enableIdentityWalletCheckbox?.addEventListener('change', saveSettings);
   autoUpdateCheckbox?.addEventListener('change', saveSettings);
 
@@ -230,6 +433,10 @@ export const initSettings = async () => {
 
   if (window.hns?.onStatusUpdate) {
     _hnsStatusUnsubscribe = window.hns.onStatusUpdate(updateHnsStatusDisplay);
+  }
+
+  if (window.dvpn?.onStatusUpdate) {
+    _dvpnStatusUnsubscribe = window.dvpn.onStatusUpdate(updateDvpnStatusDisplay);
   }
 
   settingsBtn?.addEventListener('click', async () => {
@@ -251,14 +458,30 @@ export const initSettings = async () => {
       currentHnsIntegrationEnabled = settings.enableHnsIntegration !== false;
       if (startHnsAtLaunchCheckbox)
         startHnsAtLaunchCheckbox.checked = settings.startHnsAtLaunch !== false;
+      if (showDvpnControlsCheckbox)
+        showDvpnControlsCheckbox.checked = settings.showDvpnControls === true;
+      if (dvpnMaxSpendInput)
+        dvpnMaxSpendInput.value = String(settings.dvpnMaxSpendP2P ?? 1.0);
+      if (dvpnLowBalanceStopInput)
+        dvpnLowBalanceStopInput.value = String(settings.dvpnLowBalanceStop ?? 0.5);
+      if (dvpnMaxDurationInput)
+        dvpnMaxDurationInput.value = String(settings.dvpnMaxDurationMinutes ?? 120);
       if (enableIdentityWalletCheckbox)
         enableIdentityWalletCheckbox.checked = settings.enableIdentityWallet === true;
       if (autoUpdateCheckbox) autoUpdateCheckbox.checked = settings.autoUpdate !== false;
       updateRadicleSettingsVisibility();
       updateHnsSettingsVisibility();
+      updateDvpnSettingsVisibility();
     }
 
     window.hns?.getStatus?.().then(updateHnsStatusDisplay).catch(() => {});
+
+    window.dvpn?.getStatus?.().then(async (status) => {
+      updateDvpnStatusDisplay(status);
+      if (status?.walletAddress) {
+        window.dvpn?.getBalance?.().then(() => window.dvpn?.getStatus?.().then(updateDvpnStatusDisplay)).catch(() => {});
+      }
+    }).catch(() => {});
 
     settingsModal?.showModal();
   });

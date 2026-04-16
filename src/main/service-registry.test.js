@@ -111,6 +111,76 @@ describe('service-registry', () => {
     });
   });
 
+  test('clearService preserves HNS-specific fields', () => {
+    const { mod } = loadServiceRegistry();
+
+    mod.updateService('hns', {
+      api: 'http://127.0.0.1:5380',
+      proxy: '127.0.0.1:5380',
+      mode: mod.MODE.BUNDLED,
+      synced: true,
+      canaryReady: true,
+      height: 42000,
+    });
+
+    mod.clearService('hns');
+
+    const hns = mod.getService('hns');
+    expect(hns).toEqual({
+      api: null,
+      proxy: null,
+      mode: mod.MODE.NONE,
+      statusMessage: null,
+      tempMessage: null,
+      tempMessageTimeout: null,
+      synced: false,
+      canaryReady: false,
+      height: 0,
+    });
+  });
+
+  test('clearService preserves dVPN-specific fields', () => {
+    const { mod } = loadServiceRegistry();
+
+    mod.updateService('dvpn', {
+      api: 'http://127.0.0.1:9999',
+      proxy: '127.0.0.1:10808',
+      mode: mod.MODE.BUNDLED,
+      walletAddress: 'sent1test',
+      balance: 10,
+      funded: true,
+      connected: true,
+      sessionId: 'session-1',
+      protocol: 'v2ray',
+      nodeAddress: 'sent1node',
+      country: 'US',
+      ip: '1.2.3.4',
+      lastDisconnectReason: null,
+    });
+
+    mod.clearService('dvpn');
+
+    const dvpn = mod.getService('dvpn');
+    expect(dvpn).toEqual({
+      api: null,
+      proxy: null,
+      mode: mod.MODE.NONE,
+      statusMessage: null,
+      tempMessage: null,
+      tempMessageTimeout: null,
+      walletAddress: null,
+      balance: null,
+      funded: false,
+      connected: false,
+      sessionId: null,
+      protocol: null,
+      nodeAddress: null,
+      country: null,
+      ip: null,
+      lastDisconnectReason: null,
+    });
+  });
+
   test('registers an IPC handler that returns the current registry state', async () => {
     const ipcMain = createIpcMainMock();
     const { mod } = loadServiceRegistry({ ipcMain });

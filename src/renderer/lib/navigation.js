@@ -38,6 +38,7 @@ import {
 import {
   homeUrl,
   homeUrlNormalized,
+  isHomeUrl,
   errorUrlBase,
   internalPages,
   detectProtocol,
@@ -91,6 +92,41 @@ const isSingleLabelHostname = (value = '') => {
   } catch {
     return false;
   }
+};
+
+const normalizeExplicitHnsUrlInput = (value = '') => {
+  if (!value.startsWith('http://') && !value.startsWith('https://')) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(value);
+    if (parsed.port || parsed.username || parsed.password) {
+      return null;
+    }
+
+    const candidate = `${parsed.hostname}${parsed.pathname}${parsed.search}${parsed.hash}`;
+    return normalizeHnsHostInput(candidate);
+  } catch {
+    return null;
+  }
+};
+
+const loadHnsNotReadyPage = (webview, navState, inputValue, hnsUrl, hnsState) => {
+  const errorUrl = new URL(errorUrlBase);
+  errorUrl.searchParams.set('error', 'HNS_NOT_READY');
+  errorUrl.searchParams.set('url', hnsUrl);
+  if (hnsState?.height > 0) {
+    errorUrl.searchParams.set('height', String(hnsState.height));
+  }
+  addressInput.value = inputValue;
+  navState.pendingTitleForUrl = hnsUrl;
+  navState.pendingNavigationUrl = errorUrl.toString();
+  navState.hasNavigatedDuringCurrentLoad = false;
+  webview.loadURL(errorUrl.toString());
+  syncBzzBase(null);
+  syncIpfsBase(null);
+  syncRadBase(null);
 };
 
 const setLoading = (isLoading) => {
@@ -494,6 +530,30 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     return;
   }
 
+  // Explicit http(s) URLs targeting a single-label HNS host should use the same
+  // readiness gate as bare single-label input.
+  if (state.enableHnsIntegration) {
+    const explicitHnsUrl = normalizeExplicitHnsUrlInput(value);
+    if (explicitHnsUrl) {
+      const hnsState = state.registry?.hns;
+      if (hnsState?.mode === 'bundled' && hnsState.canaryReady !== true) {
+        loadHnsNotReadyPage(webview, navState, displayOverride || value, explicitHnsUrl, hnsState);
+        return;
+      }
+
+      addressInput.value = displayOverride || value;
+      pushDebug(`[AddressBar] HNS explicit URL: ${value} -> ${explicitHnsUrl}`);
+      navState.pendingTitleForUrl = explicitHnsUrl;
+      navState.pendingNavigationUrl = explicitHnsUrl;
+      navState.hasNavigatedDuringCurrentLoad = false;
+      webview.loadURL(explicitHnsUrl);
+      syncBzzBase(null);
+      syncIpfsBase(null);
+      syncRadBase(null);
+      return;
+    }
+  }
+
   // Try HTTP/HTTPS URLs
   if (value.startsWith('http://') || value.startsWith('https://')) {
     addressInput.value = displayOverride || value;
@@ -515,20 +575,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     if (hnsUrl) {
       const hnsState = state.registry?.hns;
       if (hnsState?.mode === 'bundled' && hnsState.canaryReady !== true) {
-        const errorUrl = new URL(errorUrlBase);
-        errorUrl.searchParams.set('error', 'HNS_NOT_READY');
-        errorUrl.searchParams.set('url', hnsUrl);
-        if (hnsState.height > 0) {
-          errorUrl.searchParams.set('height', String(hnsState.height));
-        }
-        addressInput.value = displayOverride || value;
-        navState.pendingTitleForUrl = hnsUrl;
-        navState.pendingNavigationUrl = errorUrl.toString();
-        navState.hasNavigatedDuringCurrentLoad = false;
-        webview.loadURL(errorUrl.toString());
-        syncBzzBase(null);
-        syncIpfsBase(null);
-        syncRadBase(null);
+        loadHnsNotReadyPage(webview, navState, displayOverride || value, hnsUrl, hnsState);
         return;
       }
 
@@ -656,7 +703,7 @@ const handleNavigationEvent = (event) => {
     // Handle view-source pages - derive display URL and update tab title
     if (urlIsViewSource) {
       // Skip home page navigation events during view-source load
-      if (event.url === homeUrl || event.url === homeUrlNormalized) {
+      if (isHomeUrl(event.url) || event.url === homeUrlNormalized) {
         return;
       }
       const displayInner = deriveDisplayAddress({
@@ -1226,7 +1273,7 @@ export const initNavigation = () => {
           const isEmptyNewTab =
             !isViewingSource &&
             !addressInput.value &&
-            (url === homeUrl || url === homeUrlNormalized || !url);
+            (isHomeUrl(url) || url === homeUrlNormalized || !url);
           if (data.isNewTab && isEmptyNewTab) {
             addressInput.focus();
           }
@@ -1286,4 +1333,39 @@ export const initNavigation = () => {
   });
 
   // Note: No initial loadHomePage() - tabs module handles the first tab
+};
+
+export const upgradeHomePageIfNeeded = (oldHomeUrl) => {
+  const tabs = getTabs();
+  if (!tabs.length) return;
+
+  let upgradedCount = 0;
+
+  for (const tab of tabs) {
+    const currentUrl = tab.webview?.getURL?.() || tab.url || tab.navigationState?.currentPageUrl || '';
+    if (currentUrl !== oldHomeUrl) continue;
+
+    tab.url = homeUrl;
+    if (tab.navigationState) {
+      tab.navigationState.currentPageUrl = homeUrl;
+      tab.navigationState.pendingNavigationUrl = homeUrlNormalized;
+      tab.navigationState.hasNavigatedDuringCurrentLoad = false;
+    }
+
+    if (tab.id === getActiveTab()?.id) {
+      syncBzzBase(null);
+      syncIpfsBase(null);
+      syncRadBase(null);
+      if (addressInput) {
+        addressInput.value = homeUrl;
+      }
+    }
+
+    tab.webview?.loadURL?.(homeUrl);
+    upgradedCount++;
+  }
+
+  if (upgradedCount > 0) {
+    pushDebug(`Homepage upgraded: ${oldHomeUrl} -> ${homeUrl} (${upgradedCount} tab(s))`);
+  }
 };

@@ -4,7 +4,7 @@ import { closeMenus } from './menus.js';
 import { hideBookmarkContextMenu } from './bookmarks-ui.js';
 import { showMenuBackdrop, hideMenuBackdrop } from './menu-backdrop.js';
 import { setupWebviewContextMenu } from './page-context-menu.js';
-import { homeUrl } from './page-urls.js';
+import { homeUrl, isHomeUrl } from './page-urls.js';
 import { setupWebviewProvider, setActiveWebview } from './dapp-provider.js';
 
 const electronAPI = window.electronAPI;
@@ -261,7 +261,7 @@ const createWebview = (tabId, initialUrl) => {
         // Track view-source state directly on tab for reliable detection in page-title-updated
         tab.isViewingSource = webviewUrl.startsWith('view-source:');
         // Clear favicon and set title for home page navigation (e.g., when hitting back)
-        if (homeUrl && event.url === homeUrl) {
+        if (isHomeUrl(event.url)) {
           tab.favicon = null;
           tab.title = 'New Tab';
           renderTabs();
@@ -289,7 +289,7 @@ const createWebview = (tabId, initialUrl) => {
       if (tab) {
         const currentUrl = webview.getURL();
         // For home page, always use "New Tab" regardless of what the page reports
-        if (homeUrl && currentUrl === homeUrl) {
+        if (isHomeUrl(currentUrl)) {
           if (tab.title !== 'New Tab') {
             tab.title = 'New Tab';
             renderTabs();
@@ -686,7 +686,7 @@ export const closeTab = (tabId) => {
 
   // Save to closed tabs stack for reopening later (skip blank/empty tabs)
   const tabUrl = tab.url || tab.navigationState?.currentPageUrl;
-  if (tabUrl && tabUrl !== 'about:blank' && tabUrl !== homeUrl) {
+  if (tabUrl && tabUrl !== 'about:blank' && !isHomeUrl(tabUrl)) {
     closedTabsStack.push({ url: tabUrl, title: tab.title });
     if (closedTabsStack.length > MAX_CLOSED_TABS) {
       closedTabsStack.shift();
@@ -1116,23 +1116,8 @@ export const initTabs = async () => {
     reopenLastClosedTab();
   });
 
-  // Keyboard shortcuts (fallback for when menu doesn't handle it)
+  // Keyboard shortcuts that do not already route through the main-process menu
   window.addEventListener('keydown', (event) => {
-    // Cmd+T - New tab (exclude Shift to avoid conflict with Cmd+Shift+T)
-    if (event.metaKey && !event.shiftKey && event.key.toLowerCase() === 't') {
-      event.preventDefault();
-      createTab(homeUrl);
-    }
-    // Cmd+W - Close tab (skip pinned tabs)
-    if (event.metaKey && event.key.toLowerCase() === 'w') {
-      event.preventDefault();
-      if (tabState.activeTabId) {
-        const activeTab = tabState.tabs.find((t) => t.id === tabState.activeTabId);
-        if (activeTab && !activeTab.pinned) {
-          closeTab(tabState.activeTabId);
-        }
-      }
-    }
     // Cmd+Option+I (Mac) or Ctrl+Shift+I (Win/Linux) - Toggle DevTools
     if (
       (event.metaKey && event.altKey && event.key.toLowerCase() === 'i') ||
@@ -1140,15 +1125,6 @@ export const initTabs = async () => {
     ) {
       event.preventDefault();
       toggleDevTools();
-    }
-    // Cmd+L (Mac) or Ctrl+L (Win/Linux) - Focus address bar
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'l') {
-      event.preventDefault();
-      const addressInput = document.getElementById('address-input');
-      if (addressInput) {
-        addressInput.focus();
-        addressInput.select();
-      }
     }
     // Ctrl+Tab / Ctrl+PageDown - Next tab (all platforms)
     // Cmd+Shift+] - Next tab (macOS alternative)
@@ -1179,21 +1155,6 @@ export const initTabs = async () => {
     if (event.ctrlKey && event.shiftKey && event.key === 'PageUp') {
       event.preventDefault();
       moveTab('left');
-    }
-    // Ctrl+F4 - Close tab (Windows/Linux)
-    if (event.ctrlKey && event.key === 'F4') {
-      event.preventDefault();
-      if (tabState.activeTabId) {
-        const activeTab = tabState.tabs.find((t) => t.id === tabState.activeTabId);
-        if (activeTab && !activeTab.pinned) {
-          closeTab(tabState.activeTabId);
-        }
-      }
-    }
-    // Cmd+Shift+T / Ctrl+Shift+T - Reopen closed tab
-    if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 't') {
-      event.preventDefault();
-      reopenLastClosedTab();
     }
     // F11 - Toggle fullscreen
     if (event.key === 'F11') {

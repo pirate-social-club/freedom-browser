@@ -5,10 +5,33 @@
 
 const ROUTABLE_PAGES = window.internalPages?.routable || {};
 
-const HOME_START_URL = 'https://pirate.sc/';
+const HOME_ICANN_URL = 'https://pirate.sc/';
+const HOME_HNS_URL = 'https://pirate/';
 
-export const homeUrl = HOME_START_URL;
-export const homeUrlNormalized = HOME_START_URL;
+export let homeUrl = HOME_ICANN_URL;
+export let homeUrlNormalized = HOME_ICANN_URL;
+
+export const isHomeUrl = (url = '') => {
+  return url === HOME_ICANN_URL || url === HOME_HNS_URL;
+};
+
+export const isHnsHomeReady = () => {
+  const hns = window.__rendererState?.registry?.hns;
+  if (!hns) return false;
+  if (window.__rendererState?.enableHnsIntegration !== true) return false;
+  if (hns.mode !== 'bundled') return false;
+  if (hns.canaryReady !== true) return false;
+  return true;
+};
+
+export const updateHomeUrl = () => {
+  const newUrl = isHnsHomeReady() ? HOME_HNS_URL : HOME_ICANN_URL;
+  if (newUrl === homeUrl) return false;
+  homeUrl = newUrl;
+  homeUrlNormalized = newUrl;
+  return true;
+};
+
 export const errorUrlBase = new URL('pages/error.html', window.location.href).toString();
 
 // Internal pages map for freedom:// protocol

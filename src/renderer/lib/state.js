@@ -131,6 +131,9 @@ export const buildRadicleUrl = (endpoint) => {
 export const updateRegistry = (newRegistry) => {
   state.registry = newRegistry;
 
+  // Expose on window so page-urls.js can read registry without circular imports
+  window.__rendererState = state;
+
   // Update base URLs from registry if available
   if (newRegistry.bee.api) {
     state.beeBase = newRegistry.bee.api.replace(/\/$/, '');
@@ -152,6 +155,7 @@ export const setRadicleIntegrationEnabled = (enabled) => {
 
 export const setHnsIntegrationEnabled = (enabled) => {
   state.enableHnsIntegration = enabled === true;
+  window.__rendererState = state;
 };
 
 // Get display message for a service (temp message takes priority)

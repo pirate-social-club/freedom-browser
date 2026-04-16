@@ -141,6 +141,14 @@ describe('navigation-utils extracted helpers', () => {
         homeUrlNormalized: 'file:///app/pages/home.html',
       })
     ).toBe('');
+
+    expect(
+      mod.deriveSwitchedTabDisplay({
+        url: 'https://pirate.sc/',
+        bzzRoutePrefix: 'http://127.0.0.1:1633/bzz/',
+        homeUrlNormalized: 'https://pirate/',
+      })
+    ).toBe('');
   });
 
   test('computes bookmark bar state and extracts original urls from error pages', async () => {
@@ -152,6 +160,18 @@ describe('navigation-utils extracted helpers', () => {
         bookmarkBarOverride: false,
         homeUrl: 'file:///app/pages/home.html',
         homeUrlNormalized: 'file:///app/pages/home.html',
+      })
+    ).toEqual({
+      isHomePage: true,
+      visible: true,
+    });
+
+    expect(
+      mod.getBookmarkBarState({
+        url: 'https://pirate.sc/',
+        bookmarkBarOverride: false,
+        homeUrl: 'https://pirate/',
+        homeUrlNormalized: 'https://pirate/',
       })
     ).toEqual({
       isHomePage: true,

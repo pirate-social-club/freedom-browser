@@ -352,3 +352,18 @@ contextBridge.exposeInMainWorld('dappPermissions', {
   getAllPermissions: () => ipcRenderer.invoke('dapp:get-all-permissions'),
   updateLastUsed: (origin, chainId) => ipcRenderer.invoke('dapp:update-last-used', origin, chainId),
 });
+
+contextBridge.exposeInMainWorld('dvpn', {
+  start: () => ipcRenderer.invoke('dvpn:start'),
+  stop: () => ipcRenderer.invoke('dvpn:stop'),
+  getStatus: () => ipcRenderer.invoke('dvpn:getStatus'),
+  onStatusUpdate: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('dvpn:statusUpdate', handler);
+    return () => ipcRenderer.removeListener('dvpn:statusUpdate', handler);
+  },
+  getBalance: () => ipcRenderer.invoke('dvpn:getBalance'),
+  createWallet: () => ipcRenderer.invoke('dvpn:createWallet'),
+  getWalletAddress: () => ipcRenderer.invoke('dvpn:getWalletAddress'),
+  generateQR: (text, options) => ipcRenderer.invoke('dvpn:generateQr', text, options),
+});

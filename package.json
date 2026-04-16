@@ -93,6 +93,13 @@
           "filter": [
             "**/*"
           ]
+        },
+        {
+          "from": "dvpn-bin/${os}-${arch}/",
+          "to": "dvpn-bin",
+          "filter": [
+            "**/*"
+          ]
         }
       ]
     },
@@ -119,6 +126,13 @@
         {
           "from": "hns-bin/${os}-${arch}/",
           "to": "hns-bin",
+          "filter": [
+            "**/*"
+          ]
+        },
+        {
+          "from": "dvpn-bin/${os}-${arch}/",
+          "to": "dvpn-bin",
           "filter": [
             "**/*"
           ]
@@ -164,6 +178,13 @@
         ]
       },
       {
+        "from": "dvpn-bin/${os}-${arch}/",
+        "to": "dvpn-bin",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
         "from": "assets/",
         "to": "assets",
         "filter": [
@@ -204,7 +225,8 @@
     "electron-updater": "^6.7.3",
     "ethers": "^6.16.0",
     "micro-key-producer": "^0.8.2",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "sentinel-ai-connect": "file:../../blue-ai-connect"
   },
   "title": "Freedom",
   "displayName": "Freedom"

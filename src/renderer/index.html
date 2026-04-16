@@ -1808,6 +1808,86 @@
             </div>
           </section>
 
+          <section class="settings-section">
+            <h3 class="settings-section-header">Sentinel DVPN</h3>
+            <div class="settings-toggle-row">
+              <span class="toggle-label">Show dVPN controls</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="show-dvpn-controls" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div id="dvpn-content" class="settings-subsection" style="display: none;">
+              <div class="settings-action-row" id="dvpn-wallet-setup">
+                <span class="toggle-label">Wallet</span>
+                <button type="button" class="hns-control-btn" id="dvpn-create-wallet-btn">Create Wallet</button>
+              </div>
+
+              <div id="dvpn-wallet-display" style="display: none;">
+                <div class="hns-status-display">
+                  <div class="hns-status-row">
+                    <span class="hns-status-label">Address</span>
+                    <button type="button" class="hns-control-btn hns-control-btn-compact" id="dvpn-copy-address">Copy</button>
+                  </div>
+                  <span class="hns-status-value dvpn-wallet-address" id="dvpn-wallet-address"></span>
+                  <div class="hns-status-row" id="dvpn-qr-row" style="display: none;">
+                    <span class="hns-status-label">QR</span>
+                    <img id="dvpn-qr-image" class="dvpn-qr-image" alt="dVPN wallet QR code" />
+                  </div>
+                  <div class="hns-status-row" id="dvpn-balance-row" style="display: none;">
+                    <span class="hns-status-label">Balance</span>
+                    <span class="hns-status-value" id="dvpn-balance-value">—</span>
+                    <button type="button" class="icon-btn dvpn-inline-icon-btn" id="dvpn-refresh-balance" aria-label="Refresh balance">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 2v6h-6" />
+                        <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+                        <path d="M3 22v-6h6" />
+                        <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div class="hns-status-row" id="dvpn-status-row" style="display: none;">
+                    <span class="hns-status-label">Status</span>
+                    <span class="hns-status-value" id="dvpn-status-value">Off</span>
+                  </div>
+                  <div class="hns-status-row" id="dvpn-node-row" style="display: none;">
+                    <span class="hns-status-label">Node</span>
+                    <span class="hns-status-value" id="dvpn-node-value"></span>
+                  </div>
+                  <div class="hns-status-row" id="dvpn-country-row" style="display: none;">
+                    <span class="hns-status-label">Country</span>
+                    <span class="hns-status-value" id="dvpn-country-value"></span>
+                  </div>
+                  <div class="hns-status-row" id="dvpn-ip-row" style="display: none;">
+                    <span class="hns-status-label">IP</span>
+                    <span class="hns-status-value" id="dvpn-ip-value"></span>
+                  </div>
+                  <div class="hns-status-row" id="dvpn-error-row" style="display: none;">
+                    <span class="hns-status-label">Error</span>
+                    <span class="hns-status-value hns-error-text" id="dvpn-error-value"></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-toggle-row settings-input-row" id="dvpn-max-spend-row">
+                <span class="toggle-label">Max spend per session (P2P)</span>
+                <input type="number" id="dvpn-max-spend" class="settings-input settings-inline-input" step="0.1" min="0.1" />
+              </div>
+              <div class="settings-toggle-row settings-input-row" id="dvpn-low-balance-row">
+                <span class="toggle-label">Low balance stop (P2P)</span>
+                <input type="number" id="dvpn-low-balance-stop" class="settings-input settings-inline-input" step="0.1" min="0.1" />
+              </div>
+              <div class="settings-toggle-row settings-input-row" id="dvpn-max-duration-row">
+                <span class="toggle-label">Auto disconnect after (minutes)</span>
+                <input type="number" id="dvpn-max-duration" class="settings-input settings-inline-input" step="30" min="30" />
+              </div>
+              <div class="hns-controls" id="dvpn-controls" style="display: none;">
+                <button type="button" class="hns-control-btn" id="dvpn-connect-btn" disabled>Connect</button>
+                <button type="button" class="hns-control-btn" id="dvpn-disconnect-btn" disabled>Disconnect</button>
+              </div>
+            </div>
+          </section>
+
           <!-- Experimental Section (hidden on Windows — no Radicle binaries yet) -->
           <section class="settings-section" id="experimental-section">
             <h3 class="settings-section-header">Experimental</h3>

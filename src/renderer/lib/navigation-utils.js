@@ -1,5 +1,5 @@
 import { applyEnsNamePreservation, deriveDisplayValue } from './url-utils.js';
-import { getInternalPageName } from './page-urls.js';
+import { getInternalPageName, isHomeUrl } from './page-urls.js';
 
 export const resolveProtocolIconType = ({
   value = '',
@@ -206,7 +206,7 @@ export const deriveSwitchedTabDisplay = ({
     knownEnsNames,
   });
 
-  if (display === homeUrlNormalized) {
+  if (isHomeUrl(urlToDerive) || display === homeUrlNormalized) {
     display = '';
   }
 
@@ -223,7 +223,7 @@ export const getBookmarkBarState = ({
   homeUrl = '',
   homeUrlNormalized = '',
 } = {}) => {
-  const isHomePage = url === homeUrlNormalized || url === homeUrl || !url;
+  const isHomePage = isHomeUrl(url) || url === homeUrlNormalized || url === homeUrl || !url;
 
   return {
     isHomePage,

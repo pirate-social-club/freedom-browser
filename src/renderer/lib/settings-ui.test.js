@@ -3,6 +3,7 @@ const { createDocument, createElement } = require('../../../test/helpers/fake-do
 const originalWindow = global.window;
 const originalDocument = global.document;
 const originalCustomEvent = global.CustomEvent;
+const originalNavigator = global.navigator;
 
 const createCheckbox = () => {
   const checkbox = createElement('input');
@@ -27,6 +28,10 @@ const loadSettingsModule = async (options = {}) => {
         startHnsAtLaunch: true,
         enableIdentityWallet: false,
         autoUpdate: true,
+        showDvpnControls: false,
+        dvpnMaxSpendP2P: 1.0,
+        dvpnLowBalanceStop: 0.5,
+        dvpnMaxDurationMinutes: 120,
       },
     ],
     saveSettingsResult = true,
@@ -49,6 +54,34 @@ const loadSettingsModule = async (options = {}) => {
   const startHnsRow = createElement('div');
   const startHnsAtLaunchCheckbox = createCheckbox();
   const enableIdentityWalletCheckbox = createCheckbox();
+  const showDvpnControlsCheckbox = createCheckbox();
+  const dvpnContent = createElement('div');
+  const dvpnCreateWalletBtn = createElement('button');
+  const dvpnWalletSetup = createElement('div');
+  const dvpnWalletDisplay = createElement('div');
+  const dvpnWalletAddress = createElement('span');
+  const dvpnCopyAddress = createElement('button');
+  const dvpnQrRow = createElement('div');
+  const dvpnQrImage = createElement('img');
+  const dvpnBalanceRow = createElement('div');
+  const dvpnBalanceValue = createElement('span');
+  const dvpnRefreshBalance = createElement('button');
+  const dvpnStatusRow = createElement('div');
+  const dvpnStatusValue = createElement('span');
+  const dvpnNodeRow = createElement('div');
+  const dvpnNodeValue = createElement('span');
+  const dvpnCountryRow = createElement('div');
+  const dvpnCountryValue = createElement('span');
+  const dvpnIpRow = createElement('div');
+  const dvpnIpValue = createElement('span');
+  const dvpnErrorRow = createElement('div');
+  const dvpnErrorValue = createElement('span');
+  const dvpnConnectBtn = createElement('button');
+  const dvpnDisconnectBtn = createElement('button');
+  const dvpnControls = createElement('div');
+  const dvpnMaxSpend = createElement('input');
+  const dvpnLowBalanceStop = createElement('input');
+  const dvpnMaxDuration = createElement('input');
   const hnsStatusValue = createElement('span');
   const hnsHeightRow = createElement('div');
   const hnsHeightValue = createElement('span');
@@ -79,6 +112,34 @@ const loadSettingsModule = async (options = {}) => {
       'start-hns-row': startHnsRow,
       'start-hns-at-launch': startHnsAtLaunchCheckbox,
       'enable-identity-wallet': enableIdentityWalletCheckbox,
+      'show-dvpn-controls': showDvpnControlsCheckbox,
+      'dvpn-content': dvpnContent,
+      'dvpn-create-wallet-btn': dvpnCreateWalletBtn,
+      'dvpn-wallet-setup': dvpnWalletSetup,
+      'dvpn-wallet-display': dvpnWalletDisplay,
+      'dvpn-wallet-address': dvpnWalletAddress,
+      'dvpn-copy-address': dvpnCopyAddress,
+      'dvpn-qr-row': dvpnQrRow,
+      'dvpn-qr-image': dvpnQrImage,
+      'dvpn-balance-row': dvpnBalanceRow,
+      'dvpn-balance-value': dvpnBalanceValue,
+      'dvpn-refresh-balance': dvpnRefreshBalance,
+      'dvpn-status-row': dvpnStatusRow,
+      'dvpn-status-value': dvpnStatusValue,
+      'dvpn-node-row': dvpnNodeRow,
+      'dvpn-node-value': dvpnNodeValue,
+      'dvpn-country-row': dvpnCountryRow,
+      'dvpn-country-value': dvpnCountryValue,
+      'dvpn-ip-row': dvpnIpRow,
+      'dvpn-ip-value': dvpnIpValue,
+      'dvpn-error-row': dvpnErrorRow,
+      'dvpn-error-value': dvpnErrorValue,
+      'dvpn-connect-btn': dvpnConnectBtn,
+      'dvpn-disconnect-btn': dvpnDisconnectBtn,
+      'dvpn-controls': dvpnControls,
+      'dvpn-max-spend': dvpnMaxSpend,
+      'dvpn-low-balance-stop': dvpnLowBalanceStop,
+      'dvpn-max-duration': dvpnMaxDuration,
       'hns-status-value': hnsStatusValue,
       'hns-height-row': hnsHeightRow,
       'hns-height-value': hnsHeightValue,
@@ -103,6 +164,7 @@ const loadSettingsModule = async (options = {}) => {
     }),
     saveSettings: jest.fn().mockImplementation(async () => saveSettingsResult),
     getPlatform: jest.fn().mockResolvedValue(platform),
+    copyText: jest.fn().mockResolvedValue({ success: true }),
   };
   const debugMocks = {
     pushDebug: jest.fn(),
@@ -133,12 +195,33 @@ const loadSettingsModule = async (options = {}) => {
       getStatus: jest.fn().mockResolvedValue({ status: 'stopped', height: 0, synced: false, error: null }),
       onStatusUpdate: jest.fn(),
     },
+    dvpn: {
+      start: jest.fn(),
+      stop: jest.fn(() => ({ catch: jest.fn() })),
+      getStatus: jest.fn().mockResolvedValue({
+        state: 'off',
+        walletAddress: null,
+        connected: false,
+        balance: null,
+        funded: false,
+        lastDisconnectReason: null,
+        error: null,
+      }),
+      getBalance: jest.fn().mockResolvedValue({ success: false, error: 'No wallet' }),
+      createWallet: jest.fn(),
+      onStatusUpdate: jest.fn(),
+    },
   };
   global.document = document;
   global.CustomEvent = jest.fn((type, init) => ({
     type,
     detail: init.detail,
   }));
+  global.navigator = {
+    clipboard: {
+      writeText: jest.fn().mockResolvedValue(undefined),
+    },
+  };
 
   jest.doMock('./debug.js', () => debugMocks);
   jest.doMock('./menus.js', () => menuMocks);
@@ -162,6 +245,9 @@ const loadSettingsModule = async (options = {}) => {
       enableHnsIntegrationCheckbox,
       startHnsAtLaunchCheckbox,
       enableIdentityWalletCheckbox,
+      showDvpnControlsCheckbox,
+      dvpnWalletAddress,
+      dvpnCopyAddress,
       hnsStatusValue,
       hnsHeightRow,
       hnsHeightValue,
@@ -187,6 +273,7 @@ describe('settings-ui', () => {
     global.window = originalWindow;
     global.document = originalDocument;
     global.CustomEvent = originalCustomEvent;
+    global.navigator = originalNavigator;
     jest.restoreAllMocks();
   });
 
@@ -234,6 +321,10 @@ describe('settings-ui', () => {
             enableHnsIntegration: true,
             startHnsAtLaunch: true,
             enableIdentityWallet: false,
+            showDvpnControls: false,
+            dvpnMaxSpendP2P: 1.0,
+            dvpnLowBalanceStop: 0.5,
+            dvpnMaxDurationMinutes: 120,
           },
           {
             theme: 'dark',
@@ -245,6 +336,10 @@ describe('settings-ui', () => {
             startHnsAtLaunch: true,
             enableIdentityWallet: false,
             autoUpdate: false,
+            showDvpnControls: false,
+            dvpnMaxSpendP2P: 1.0,
+            dvpnLowBalanceStop: 0.5,
+            dvpnMaxDurationMinutes: 120,
           },
         ],
         saveSettingsResult: true,
@@ -296,6 +391,10 @@ describe('settings-ui', () => {
       startHnsAtLaunch: true,
       enableIdentityWallet: false,
       autoUpdate: true,
+      showDvpnControls: false,
+      dvpnMaxSpendP2P: 1,
+      dvpnLowBalanceStop: 0.5,
+      dvpnMaxDurationMinutes: 120,
     });
     expect(global.window.radicle.stop).toHaveBeenCalled();
     expect(radicleStopResult.catch).toHaveBeenCalledWith(expect.any(Function));
@@ -313,6 +412,10 @@ describe('settings-ui', () => {
         startHnsAtLaunch: true,
         enableIdentityWallet: false,
         autoUpdate: true,
+        showDvpnControls: false,
+        dvpnMaxSpendP2P: 1,
+        dvpnLowBalanceStop: 0.5,
+        dvpnMaxDurationMinutes: 120,
       },
     });
     expect(onSettingsChanged).toHaveBeenCalled();
@@ -325,22 +428,30 @@ describe('settings-ui', () => {
         {
           theme: 'system',
           enableRadicleIntegration: false,
-          enableHnsIntegration: true,
-          startHnsAtLaunch: true,
-          enableIdentityWallet: false,
-        },
-        {
-          theme: 'system',
+            enableHnsIntegration: true,
+            startHnsAtLaunch: true,
+            enableIdentityWallet: false,
+            showDvpnControls: false,
+            dvpnMaxSpendP2P: 1.0,
+            dvpnLowBalanceStop: 0.5,
+            dvpnMaxDurationMinutes: 120,
+          },
+          {
+            theme: 'system',
           startBeeAtLaunch: false,
           startIpfsAtLaunch: false,
           enableRadicleIntegration: true,
           startRadicleAtLaunch: true,
           enableHnsIntegration: true,
-          startHnsAtLaunch: true,
-          enableIdentityWallet: false,
-          autoUpdate: true,
-        },
-      ],
+            startHnsAtLaunch: true,
+            enableIdentityWallet: false,
+            autoUpdate: true,
+            showDvpnControls: false,
+            dvpnMaxSpendP2P: 1.0,
+            dvpnLowBalanceStop: 0.5,
+            dvpnMaxDurationMinutes: 120,
+          },
+        ],
       saveSettingsResult: false,
       prefersDark: false,
     });
@@ -369,6 +480,10 @@ describe('settings-ui', () => {
       startHnsAtLaunch: true,
       enableIdentityWallet: false,
       autoUpdate: false,
+      showDvpnControls: false,
+      dvpnMaxSpendP2P: 1,
+      dvpnLowBalanceStop: 0.5,
+      dvpnMaxDurationMinutes: 120,
     });
     expect(debugMocks.pushDebug).toHaveBeenCalledWith('Failed to save settings');
 
@@ -377,5 +492,36 @@ describe('settings-ui', () => {
 
     elements.settingsModal.dispatch('click', { target: elements.settingsModal });
     expect(elements.settingsModal.close).toHaveBeenCalledTimes(2);
+  });
+
+  test('copies the dVPN wallet address through the Electron clipboard bridge', async () => {
+    const { mod, elements, electronAPI } = await loadSettingsModule({
+      settingsResponses: [
+        {
+          theme: 'system',
+          startBeeAtLaunch: true,
+          startIpfsAtLaunch: true,
+          enableRadicleIntegration: false,
+          startRadicleAtLaunch: false,
+          enableHnsIntegration: true,
+          startHnsAtLaunch: true,
+          enableIdentityWallet: false,
+          autoUpdate: true,
+          showDvpnControls: true,
+          dvpnMaxSpendP2P: 1.0,
+          dvpnLowBalanceStop: 0.5,
+          dvpnMaxDurationMinutes: 120,
+        },
+      ],
+    });
+
+    await mod.initTheme();
+    await mod.initSettings();
+
+    elements.dvpnWalletAddress.textContent = 'sent1testaddress';
+    elements.dvpnCopyAddress.dispatch('click');
+    await Promise.resolve();
+
+    expect(electronAPI.copyText).toHaveBeenCalledWith('sent1testaddress');
   });
 });

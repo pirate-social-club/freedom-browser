@@ -85,7 +85,7 @@ describe('preload', () => {
       ipfsGatewayEnv: 'http://127.0.0.1:9090',
     });
 
-    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledTimes(15);
+    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledTimes(16);
     expect(Object.keys(exposures)).toEqual([
       'nodeConfig',
       'internalPages',
@@ -102,6 +102,7 @@ describe('preload', () => {
       'chainRegistry',
       'rpcManager',
       'dappPermissions',
+      'dvpn',
     ]);
     expect(ipcRenderer.sendSync).toHaveBeenCalledWith(IPC.GET_INTERNAL_PAGES);
     expect(exposures.nodeConfig).toEqual({

@@ -50,16 +50,16 @@ When a user enters a `bzz://`, `ipfs://`, `ipns://`, `rad://`, or ENS URL, the m
 
 Freedom runs Swarm, IPFS, and Radicle nodes, giving you access to three major decentralized networks from a single interface.
 
-|                      | Swarm          | IPFS                                  | Radicle                        |
-| -------------------- | -------------- | ------------------------------------- | ------------------------------ |
-| **Protocol**         | `bzz://`       | `ipfs://`, `ipns://`                  | `rad://`                       |
-| **Node Software**    | Bee            | Kubo                                  | radicle-node + radicle-httpd   |
-| **Hash Format**      | 64 or 128-char hex (encrypted refs supported) | CIDv0 (`Qm...`) or CIDv1 (`bafy...`) | Repository ID (`z...`)         |
-| **Gateway Port**     | 1633           | 8080                                  | 8780                           |
-| **API Port**         | 1633           | 5001                                  | 8780                           |
-| **Route Prefix**     | `/bzz/{hash}/` | `/ipfs/{cid}/`, `/ipns/{name}/`       | `/api/v1/repos/{rid}/`         |
-| **Data Directory**   | `bee-data/`    | `ipfs-data/`                          | `radicle-data/`                |
-| **Binary Directory** | `bee-bin/`     | `ipfs-bin/`                           | `radicle-bin/`                 |
+|                      | Swarm                                         | IPFS                                 | Radicle                      |
+| -------------------- | --------------------------------------------- | ------------------------------------ | ---------------------------- |
+| **Protocol**         | `bzz://`                                      | `ipfs://`, `ipns://`                 | `rad://`                     |
+| **Node Software**    | Bee                                           | Kubo                                 | radicle-node + radicle-httpd |
+| **Hash Format**      | 64 or 128-char hex (encrypted refs supported) | CIDv0 (`Qm...`) or CIDv1 (`bafy...`) | Repository ID (`z...`)       |
+| **Gateway Port**     | 1633                                          | 8080                                 | 8780                         |
+| **API Port**         | 1633                                          | 5001                                 | 8780                         |
+| **Route Prefix**     | `/bzz/{hash}/`                                | `/ipfs/{cid}/`, `/ipns/{name}/`      | `/api/v1/repos/{rid}/`       |
+| **Data Directory**   | `bee-data/`                                   | `ipfs-data/`                         | `radicle-data/`              |
+| **Binary Directory** | `bee-bin/`                                    | `ipfs-bin/`                          | `radicle-bin/`               |
 
 ### Smart Node Connection
 
@@ -280,35 +280,35 @@ Edit `src/renderer/pages/home.html` to customize the welcome view shown on start
 
 ## NPM Scripts
 
-| Script                                                            | Description                                  |
-| ----------------------------------------------------------------- | -------------------------------------------- |
-| `npm start`                                                       | Launch the Electron app                      |
-| `npm test`                                                        | Run unit tests (Jest)                        |
-| `npm run bee:download`                                            | Download the Bee binary for your platform    |
-| `npm run ipfs:download`                                           | Download the Kubo binary for your platform   |
-| `npm run bee:start` / `bee:stop` / `bee:status` / `bee:reset`     | Manage Bee outside the app                   |
-| `npm run ipfs:start` / `ipfs:stop` / `ipfs:status` / `ipfs:reset` | Manage IPFS outside the app                  |
-| `npm run build -- --mac --unsigned`                               | Build unsigned macOS app (for local testing) |
-| `npm run dist -- --mac`                                           | Build signed macOS distributable (DMG + ZIP) |
+| Script                                                            | Description                                            |
+| ----------------------------------------------------------------- | ------------------------------------------------------ |
+| `npm start`                                                       | Launch the Electron app                                |
+| `npm test`                                                        | Run unit tests (Jest)                                  |
+| `npm run bee:download`                                            | Download the Bee binary for your platform              |
+| `npm run ipfs:download`                                           | Download the Kubo binary for your platform             |
+| `npm run bee:start` / `bee:stop` / `bee:status` / `bee:reset`     | Manage Bee outside the app                             |
+| `npm run ipfs:start` / `ipfs:stop` / `ipfs:status` / `ipfs:reset` | Manage IPFS outside the app                            |
+| `npm run build -- --mac --unsigned`                               | Build unsigned macOS app (for local testing)           |
+| `npm run dist -- --mac`                                           | Build signed macOS distributable (DMG + ZIP)           |
 | `npm run dist:mac:prepare-notary`                                 | Build signed macOS artifacts without notarization wait |
-| `npm run dist:mac:submit-notary`                                  | Submit macOS artifacts to Apple asynchronously |
-| `npm run dist:mac:notary-status`                                  | Check notarization status from saved receipts |
-| `npm run dist:mac:notary-log -- <submission-id>`                  | Fetch notarization log JSON for a submission ID |
-| `npm run dist:mac:staple-notary`                                  | Staple and validate accepted notarized artifacts |
-| `npm run dist:linux:arm64:docker`                                 | Build Linux ARM64 via Docker (recommended)   |
-| `npm run dist:linux:x64:docker`                                   | Build Linux x64 via Docker                   |
-| `npm run dist -- --win`                                           | Build Windows x64 distributable (NSIS + ZIP) |
+| `npm run dist:mac:submit-notary`                                  | Submit macOS artifacts to Apple asynchronously         |
+| `npm run dist:mac:notary-status`                                  | Check notarization status from saved receipts          |
+| `npm run dist:mac:notary-log -- <submission-id>`                  | Fetch notarization log JSON for a submission ID        |
+| `npm run dist:mac:staple-notary`                                  | Staple and validate accepted notarized artifacts       |
+| `npm run dist:linux:arm64:docker`                                 | Build Linux ARM64 via Docker (recommended)             |
+| `npm run dist:linux:x64:docker`                                   | Build Linux x64 via Docker                             |
+| `npm run dist -- --win`                                           | Build Windows x64 distributable (NSIS + ZIP)           |
 
 The `build` and `dist` scripts accept `--mac`, `--linux`, or `--win` with optional `--arm64`, `--x64`, `--unsigned`, `--no-notarize`, and `--verbose` flags. See `scripts/build.js` for details.
 
 ### Radicle Scripts
 
-| Script | Description |
-|--------|-------------|
+| Script                     | Description                                     |
+| -------------------------- | ----------------------------------------------- |
 | `npm run radicle:download` | Download the Radicle binaries for your platform |
-| `npm run radicle:init` | Initialize Radicle identity and configuration |
-| `npm run radicle:status` | Check Radicle httpd API status |
-| `npm run radicle:reset` | Delete all Radicle data and start fresh |
+| `npm run radicle:init`     | Initialize Radicle identity and configuration   |
+| `npm run radicle:status`   | Check Radicle httpd API status                  |
+| `npm run radicle:reset`    | Delete all Radicle data and start fresh         |
 
 ---
 
@@ -425,6 +425,16 @@ npm run dist -- --win --arm64
 Output goes to the `dist/` folder as NSIS installer and ZIP archive.
 
 **Note:** Windows builds do not include Radicle binaries (no official upstream release yet). The Experimental settings section is hidden automatically on Windows.
+
+### GitHub Releases
+
+Tagged GitHub releases are built by `.github/workflows/release.yml`.
+
+- Push a tag like `v0.6.3` to build and publish release assets to GitHub Releases
+- The workflow checks out `Sentinel-Autonomybuilder/blue-ai-connect` as a sibling checkout so the current `file:../../blue-ai-connect` dependency resolves the same way it does locally
+- The workflow currently publishes macOS (`x64`, `arm64`), Linux (`x64`), and Windows (`x64`) artifacts
+- macOS builds are signed and notarized only when `APPLE_ID`, `APPLE_TEAM_ID`, and `APPLE_APP_SPECIFIC_PASSWORD` secrets are configured; otherwise the workflow falls back to unsigned, non-notarized macOS artifacts
+- GitHub Releases are for distribution artifacts; the in-app auto-updater still reads from `https://freedom.baby/downloads/`
 
 #### Apple Code Signing & Notarization
 
@@ -562,6 +572,7 @@ npm run start:test-updater
 - Reset IPFS data: `npm run ipfs:reset`
 
 ### Radicle fails to start
+
 - Ensure **Settings → Experimental → Enable Radicle integration (Beta)** is enabled
 - Freedom automatically detects port conflicts and uses fallback ports
 - Ensure both `radicle-node` and `radicle-httpd` binaries exist in `radicle-bin/`

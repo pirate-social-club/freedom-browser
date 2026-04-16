@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-13
+            label: macOS x64
+            artifact_name: macos-x64
+            workdir: pirate-v2/freedom-browser
+            install_shell: bash
+            build_shell: bash
+            build_command: npm run dist -- --mac --x64
+          - os: macos-14
+            label: macOS arm64
+            artifact_name: macos-arm64
+            workdir: pirate-v2/freedom-browser
+            install_shell: bash
+            build_shell: bash
+            build_command: npm run dist -- --mac --arm64
+          - os: ubuntu-latest
+            label: Linux x64
+            artifact_name: linux-x64
+            workdir: pirate-v2/freedom-browser
+            install_shell: bash
+            build_shell: bash
+            build_command: npm run dist:linux:x64:docker
+          - os: windows-latest
+            label: Windows x64
+            artifact_name: windows-x64
+            workdir: pirate-v2/freedom-browser
+            install_shell: pwsh
+            build_shell: pwsh
+            build_command: npm run dist -- --win --x64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          path: pirate-v2/freedom-browser
+
+      - name: Check out sentinel-ai-connect dependency
+        uses: actions/checkout@v4
+        with:
+          repository: Sentinel-Autonomybuilder/blue-ai-connect
+          path: blue-ai-connect
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: pirate-v2/freedom-browser/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.workdir }}
+        shell: ${{ matrix.install_shell }}
+        run: npm ci
+
+      - name: Build macOS release artifacts
+        if: runner.os == 'macOS'
+        working-directory: ${{ matrix.workdir }}
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          if [ -n "${APPLE_ID}" ] && [ -n "${APPLE_TEAM_ID}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD}" ]; then
+            ${{ matrix.build_command }}
+          else
+            ${{ matrix.build_command }} --unsigned --no-notarize
+          fi
+
+      - name: Build non-macOS release artifacts
+        if: runner.os != 'macOS'
+        working-directory: ${{ matrix.workdir }}
+        shell: ${{ matrix.build_shell }}
+        run: ${{ matrix.build_command }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.workdir }}/dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd release-artifacts
+          find . -maxdepth 1 -type f \
+            \( -name '*.dmg' -o -name '*.zip' -o -name '*.deb' -o -name '*.exe' -o -name '*.blockmap' -o -name 'latest*.yml' \) \
+            -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release-artifacts/*.dmg
+            release-artifacts/*.zip
+            release-artifacts/*.deb
+            release-artifacts/*.exe
+            release-artifacts/*.blockmap
+            release-artifacts/latest*.yml
+            release-artifacts/SHA256SUMS.txt

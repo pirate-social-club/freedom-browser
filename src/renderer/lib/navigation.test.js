@@ -184,6 +184,7 @@ const loadNavigationModule = async (options = {}) => {
   const pageUrlsMocks = {
     homeUrl,
     homeUrlNormalized: homeUrl,
+    isHomeUrl: jest.fn((url) => url === 'https://pirate.sc/' || url === 'https://pirate/' || url === homeUrl),
     errorUrlBase,
     internalPages: {
       history: historyUrl,
@@ -535,6 +536,36 @@ describe('navigation', () => {
     );
   });
 
+  test('shows HNS not ready page for explicit https single-label hosts while bundled HNS is still syncing', async () => {
+    const ctx = await loadNavigationModule({
+      initialSettings: { showBookmarkBar: true },
+      enableHnsIntegration: true,
+    });
+
+    ctx.state.enableHnsIntegration = true;
+    ctx.state.registry.hns = {
+      mode: 'bundled',
+      canaryReady: false,
+      synced: false,
+      height: 325297,
+    };
+    ctx.urlUtilsMocks.normalizeHnsHostInput.mockImplementation((input) => {
+      if (input === 'shakestation/' || input === 'shakestation') {
+        return 'https://shakestation/';
+      }
+      return null;
+    });
+
+    await ctx.mod.initNavigation();
+
+    ctx.elements.addressInput.value = 'https://shakestation/';
+    ctx.elements.navForm.dispatch('submit', { preventDefault: jest.fn() });
+
+    expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
+      'file:///app/pages/error.html?error=HNS_NOT_READY&url=https%3A%2F%2Fshakestation%2F&height=325297'
+    );
+  });
+
   test('restores tab state on tab switches and updates navigation display', async () => {
     const secondTab = createTab(2, 'https://second.example', {
       title: 'Second Tab',
@@ -592,5 +623,53 @@ describe('navigation', () => {
     });
 
     expect(ctx.elements.addressInput.focus).toHaveBeenCalled();
+  });
+
+  test('upgrades all untouched home tabs when the canonical homepage changes', async () => {
+    const oldHomeUrl = 'https://pirate.sc/';
+    const newHomeUrl = 'https://pirate/';
+    const activeTab = createTab(1, oldHomeUrl, {
+      title: 'New Tab',
+      webview: createWebview(oldHomeUrl, {
+        webContentsId: 21,
+      }),
+    });
+    const secondHomeTab = createTab(2, oldHomeUrl, {
+      title: 'New Tab',
+      webview: createWebview(oldHomeUrl, {
+        webContentsId: 22,
+      }),
+    });
+    const navigatedTab = createTab(3, 'https://pirate.sc/docs', {
+      title: 'Docs',
+      webview: createWebview('https://pirate.sc/docs', {
+        webContentsId: 23,
+      }),
+    });
+
+    const ctx = await loadNavigationModule({
+      tabs: [activeTab, secondHomeTab, navigatedTab],
+      activeTab,
+    });
+
+    ctx.tabsRef.list = [activeTab, secondHomeTab, navigatedTab];
+    ctx.activeRef.tab = activeTab;
+    ctx.pageUrlsMocks.homeUrl = newHomeUrl;
+    ctx.pageUrlsMocks.homeUrlNormalized = newHomeUrl;
+    ctx.pageUrlsMocks.isHomeUrl.mockImplementation(
+      (url) => url === oldHomeUrl || url === newHomeUrl || url === 'file:///app/pages/home.html'
+    );
+
+    await ctx.mod.initNavigation();
+
+    ctx.mod.upgradeHomePageIfNeeded(oldHomeUrl);
+
+    expect(activeTab.webview.loadURL).toHaveBeenCalledWith(newHomeUrl);
+    expect(secondHomeTab.webview.loadURL).toHaveBeenCalledWith(newHomeUrl);
+    expect(navigatedTab.webview.loadURL).not.toHaveBeenCalledWith(newHomeUrl);
+    expect(activeTab.navigationState.currentPageUrl).toBe(newHomeUrl);
+    expect(secondHomeTab.navigationState.currentPageUrl).toBe(newHomeUrl);
+    expect(navigatedTab.navigationState.currentPageUrl).toBe('https://pirate.sc/docs');
+    expect(ctx.elements.addressInput.value).toBe(newHomeUrl);
   });
 });

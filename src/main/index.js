@@ -49,6 +49,7 @@ const { registerBeeIpc, stopBee, startBee, setUseInjectedIdentity: setBeeInjecte
 const { registerIpfsIpc, stopIpfs, startIpfs, setUseInjectedIdentity: setIpfsInjectedIdentity } = require('./ipfs-manager');
 const { registerRadicleIpc, stopRadicle, startRadicle, setUseInjectedIdentity: setRadicleInjectedIdentity } = require('./radicle-manager');
 const { registerHnsIpc, stopHns, startHns } = require('./hns-manager');
+const { registerDvpnIpc, initDvpn, stopDvpn } = require('./dvpn-manager');
 const { registerIdentityIpc, hasVault, isBeeIdentityInjected, isIpfsIdentityInjected, isRadicleIdentityInjected } = require('./identity-manager');
 const { registerQuickUnlockIpc } = require('./quick-unlock');
 const { registerWalletIpc } = require('./wallet/wallet-ipc');
@@ -102,6 +103,7 @@ async function bootstrap() {
   registerIpfsIpc();
   registerRadicleIpc();
   registerHnsIpc();
+  registerDvpnIpc();
   registerGithubBridgeIpc();
   registerServiceRegistryIpc();
   registerIdentityIpc();
@@ -146,7 +148,7 @@ async function bootstrap() {
   // Start nodes automatically if:
   // - Vault exists and keys are injected (completed onboarding), OR
   // - No vault but keys exist (skipped onboarding, using random keys)
-  // If no vault AND no keys, defer to onboarding wizard (renderer handles this)
+  // If no vault AND no keys, defer identity-bound node startup to onboarding (renderer handles this)
   if (vaultExists || keysExist) {
     if (settings.startBeeAtLaunch && isBeeIdentityInjected()) {
       startBee();
@@ -158,7 +160,7 @@ async function bootstrap() {
       startRadicle();
     }
   } else {
-    log.info('[App] Deferring node startup until onboarding completes');
+    log.info('[App] Deferring identity-bound node startup until onboarding completes');
   }
   if (settings.enableRadicleIntegration && settings.startRadicleAtLaunch) {
     startRadicle();
@@ -166,6 +168,7 @@ async function bootstrap() {
   if (settings.enableHnsIntegration && settings.startHnsAtLaunch) {
     startHns();
   }
+  await initDvpn();
 
   const mainWindow = createMainWindow();
 
@@ -237,8 +240,8 @@ app.on('before-quit', async (event) => {
   // Clean up any GitHub bridge temp directories
   cleanupTempDirs();
 
-  log.info('[App] Waiting for Bee, IPFS, Radicle, and HNS to stop...');
-  await Promise.all([stopBee(), stopIpfs(), stopRadicle(), stopHns()]);
+  log.info('[App] Waiting for Bee, IPFS, Radicle, HNS, and dVPN to stop...');
+  await Promise.all([stopBee(), stopIpfs(), stopRadicle(), stopHns(), stopDvpn()]);
   log.info('[App] All processes stopped, quitting...');
 
 

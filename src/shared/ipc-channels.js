@@ -39,6 +39,16 @@ module.exports = {
   HNS_GET_STATUS: 'hns:getStatus',
   HNS_STATUS_UPDATE: 'hns:statusUpdate',
 
+  // dVPN management
+  DVPN_START: 'dvpn:start',
+  DVPN_STOP: 'dvpn:stop',
+  DVPN_GET_STATUS: 'dvpn:getStatus',
+  DVPN_STATUS_UPDATE: 'dvpn:statusUpdate',
+  DVPN_GET_BALANCE: 'dvpn:getBalance',
+  DVPN_CREATE_WALLET: 'dvpn:createWallet',
+  DVPN_GET_WALLET_ADDRESS: 'dvpn:getWalletAddress',
+  DVPN_GENERATE_QR: 'dvpn:generateQr',
+
   // ENS resolution
   ENS_RESOLVE: 'ens:resolve',
 

@@ -79,4 +79,138 @@ describe('page-urls', () => {
     expect(mod.parseEnsInput('example.com')).toBeNull();
     expect(mod.parseEnsInput('')).toBeNull();
   });
+
+  test('homeUrl defaults to ICANN URL', async () => {
+    const mod = await loadModule();
+    expect(mod.homeUrl).toBe('https://pirate.sc/');
+    expect(mod.homeUrlNormalized).toBe('https://pirate.sc/');
+  });
+
+  test('isHnsHomeReady returns false when no registry state', async () => {
+    const mod = await loadModule();
+    expect(mod.isHnsHomeReady()).toBe(false);
+  });
+
+  test('isHomeUrl treats both ICANN and HNS homepages as equivalent', async () => {
+    const mod = await loadModule();
+
+    expect(mod.isHomeUrl('https://pirate.sc/')).toBe(true);
+    expect(mod.isHomeUrl('https://pirate/')).toBe(true);
+    expect(mod.isHomeUrl('https://pirate.sc/docs')).toBe(false);
+    expect(mod.isHomeUrl('https://example.com')).toBe(false);
+  });
+
+  test('isHnsHomeReady returns false when HNS integration disabled', async () => {
+    const mod = await loadModule();
+    global.window.__rendererState = {
+      enableHnsIntegration: false,
+      registry: {
+        hns: { mode: 'bundled', canaryReady: true },
+      },
+    };
+    expect(mod.isHnsHomeReady()).toBe(false);
+    delete global.window.__rendererState;
+  });
+
+  test('isHnsHomeReady returns false when mode is not bundled', async () => {
+    const mod = await loadModule();
+    global.window.__rendererState = {
+      enableHnsIntegration: true,
+      registry: {
+        hns: { mode: 'none', canaryReady: true },
+      },
+    };
+    expect(mod.isHnsHomeReady()).toBe(false);
+    delete global.window.__rendererState;
+  });
+
+  test('isHnsHomeReady returns false when canaryReady is false', async () => {
+    const mod = await loadModule();
+    global.window.__rendererState = {
+      enableHnsIntegration: true,
+      registry: {
+        hns: { mode: 'bundled', canaryReady: false },
+      },
+    };
+    expect(mod.isHnsHomeReady()).toBe(false);
+    delete global.window.__rendererState;
+  });
+
+  test('isHnsHomeReady returns true when all conditions met', async () => {
+    const mod = await loadModule();
+    global.window.__rendererState = {
+      enableHnsIntegration: true,
+      registry: {
+        hns: { mode: 'bundled', canaryReady: true },
+      },
+    };
+    expect(mod.isHnsHomeReady()).toBe(true);
+    delete global.window.__rendererState;
+  });
+
+  test('updateHomeUrl switches to HNS URL when ready', async () => {
+    const mod = await loadModule();
+    global.window.__rendererState = {
+      enableHnsIntegration: true,
+      registry: {
+        hns: { mode: 'bundled', canaryReady: true },
+      },
+    };
+    const changed = mod.updateHomeUrl();
+    expect(changed).toBe(true);
+    expect(mod.homeUrl).toBe('https://pirate/');
+    expect(mod.homeUrlNormalized).toBe('https://pirate/');
+    delete global.window.__rendererState;
+  });
+
+  test('updateHomeUrl keeps ICANN URL when not ready', async () => {
+    const mod = await loadModule();
+    global.window.__rendererState = {
+      enableHnsIntegration: true,
+      registry: {
+        hns: { mode: 'bundled', canaryReady: false },
+      },
+    };
+    const changed = mod.updateHomeUrl();
+    expect(changed).toBe(false);
+    expect(mod.homeUrl).toBe('https://pirate.sc/');
+    delete global.window.__rendererState;
+  });
+
+  test('updateHomeUrl returns false when URL already matches', async () => {
+    const mod = await loadModule();
+    global.window.__rendererState = {
+      enableHnsIntegration: true,
+      registry: {
+        hns: { mode: 'bundled', canaryReady: true },
+      },
+    };
+    mod.updateHomeUrl();
+    const changed = mod.updateHomeUrl();
+    expect(changed).toBe(false);
+    delete global.window.__rendererState;
+  });
+
+  test('updateHomeUrl reverts to ICANN when HNS becomes unavailable', async () => {
+    const mod = await loadModule();
+    global.window.__rendererState = {
+      enableHnsIntegration: true,
+      registry: {
+        hns: { mode: 'bundled', canaryReady: true },
+      },
+    };
+    mod.updateHomeUrl();
+    expect(mod.homeUrl).toBe('https://pirate/');
+
+    global.window.__rendererState = {
+      enableHnsIntegration: true,
+      registry: {
+        hns: { mode: 'bundled', canaryReady: false },
+      },
+    };
+    const changed = mod.updateHomeUrl();
+    expect(changed).toBe(true);
+    expect(mod.homeUrl).toBe('https://pirate.sc/');
+    delete global.window.__rendererState;
+  });
 });

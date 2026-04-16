@@ -53,6 +53,24 @@ const registry = {
     canaryReady: false,
     height: 0,
   },
+  dvpn: {
+    api: null,
+    proxy: null,
+    mode: MODE.NONE,
+    statusMessage: null,
+    tempMessage: null,
+    tempMessageTimeout: null,
+    walletAddress: null,
+    balance: null,
+    funded: false,
+    connected: false,
+    sessionId: null,
+    protocol: null,
+    nodeAddress: null,
+    country: null,
+    ip: null,
+    lastDisconnectReason: null,
+  },
 };
 
 // Default ports
@@ -92,6 +110,7 @@ function getRegistry() {
     bee: { ...registry.bee },
     radicle: { ...registry.radicle },
     hns: { ...registry.hns },
+    dvpn: { ...registry.dvpn },
   };
 }
 
@@ -176,6 +195,62 @@ function clearErrorState(service) {
   broadcastRegistryUpdate();
 }
 
+const SERVICE_DEFAULTS = {
+  ipfs: {
+    api: null,
+    gateway: null,
+    mode: MODE.NONE,
+    statusMessage: null,
+    tempMessage: null,
+    tempMessageTimeout: null,
+  },
+  bee: {
+    api: null,
+    gateway: null,
+    mode: MODE.NONE,
+    statusMessage: null,
+    tempMessage: null,
+    tempMessageTimeout: null,
+  },
+  radicle: {
+    api: null,
+    gateway: null,
+    mode: MODE.NONE,
+    statusMessage: null,
+    tempMessage: null,
+    tempMessageTimeout: null,
+  },
+  hns: {
+    api: null,
+    proxy: null,
+    mode: MODE.NONE,
+    statusMessage: null,
+    tempMessage: null,
+    tempMessageTimeout: null,
+    synced: false,
+    canaryReady: false,
+    height: 0,
+  },
+  dvpn: {
+    api: null,
+    proxy: null,
+    mode: MODE.NONE,
+    statusMessage: null,
+    tempMessage: null,
+    tempMessageTimeout: null,
+    walletAddress: null,
+    balance: null,
+    funded: false,
+    connected: false,
+    sessionId: null,
+    protocol: null,
+    nodeAddress: null,
+    country: null,
+    ip: null,
+    lastDisconnectReason: null,
+  },
+};
+
 /**
  * Clear service state (when stopped)
  */
@@ -186,14 +261,7 @@ function clearService(service) {
     clearTimeout(registry[service].tempMessageTimeout);
   }
 
-  registry[service] = {
-    api: null,
-    gateway: null,
-    mode: MODE.NONE,
-    statusMessage: null,
-    tempMessage: null,
-    tempMessageTimeout: null,
-  };
+  registry[service] = { ...SERVICE_DEFAULTS[service] };
 
   broadcastRegistryUpdate();
 }

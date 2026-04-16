@@ -3,7 +3,8 @@ const { ipcMain, app, session } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const http = require('http');
+const net = require('net');
+const dgram = require('dgram');
 const readline = require('readline');
 const IPC = require('../shared/ipc-channels');
 const {
@@ -14,6 +15,7 @@ const {
   clearErrorState,
   clearService,
 } = require('./service-registry');
+const networkManager = require('./network-manager');
 
 const STATUS = {
   STOPPED: 'stopped',
@@ -38,6 +40,10 @@ let caCertFingerprint = null;
 let synced = false;
 let canaryReady = false;
 let height = 0;
+let lastLoggedHeight = 0;
+let rootAddr = null;
+let recursiveAddr = null;
+let lastProcessError = null;
 
 function isLoopbackHostname(hostname = '') {
   return hostname === 'localhost' || hostname === '::1' || /^127\./.test(hostname);
@@ -104,84 +110,83 @@ function getHnsDataPath() {
   return dataDir;
 }
 
+function reserveTcpPort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref?.();
+
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' ? address?.port : null;
+      server.close((err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        if (!port) {
+          reject(new Error('Failed to reserve TCP port'));
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
+}
+
+function canBindUdpPort(port) {
+  return new Promise((resolve) => {
+    const socket = dgram.createSocket('udp4');
+    socket.unref?.();
+
+    let settled = false;
+    const finish = (available) => {
+      if (settled) return;
+      settled = true;
+      try {
+        socket.close();
+      } catch {
+        // Ignore close errors during probe cleanup.
+      }
+      resolve(available);
+    };
+
+    socket.once('error', () => finish(false));
+    socket.bind(port, '127.0.0.1', () => finish(true));
+  });
+}
+
+async function reserveLoopbackPort(excludedPorts = new Set()) {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const port = await reserveTcpPort();
+    if (excludedPorts.has(port)) continue;
+    if (await canBindUdpPort(port)) {
+      return port;
+    }
+  }
+
+  throw new Error('Failed to reserve a free loopback port for HNS');
+}
+
+async function allocateResolverAddrs() {
+  const excluded = new Set();
+  const rootPort = await reserveLoopbackPort(excluded);
+  excluded.add(rootPort);
+  const recursivePort = await reserveLoopbackPort(excluded);
+
+  return {
+    rootAddr: `127.0.0.1:${rootPort}`,
+    recursiveAddr: `127.0.0.1:${recursivePort}`,
+  };
+}
+
 function updateState(newState, error = null) {
   currentState = newState;
   lastError = error;
-  const windows = require('electron').BrowserWindow.getAllWindows();
+  const windows = require('electron').BrowserWindow?.getAllWindows?.() || [];
   for (const win of windows) {
     win.webContents.send(IPC.HNS_STATUS_UPDATE, { status: currentState, error: lastError });
   }
-}
-
-let pacServer = null;
-let pacPort = null;
-
-function buildPacScript(proxyAddress) {
-  return `function FindProxyForURL(url, host) {
-  if (shExpMatch(host, "127.0.0.*") || host === "localhost" || host === "::1") {
-    return "DIRECT";
-  }
-  if (dnsDomainLevels(host) === 0) {
-    return "PROXY ${proxyAddress}";
-  }
-  return "DIRECT";
-}`;
-}
-
-async function startPacServer(pacContent) {
-  if (pacServer) {
-    pacServer.close();
-    pacServer = null;
-  }
-
-  return new Promise((resolve, reject) => {
-    const srv = http.createServer((req, res) => {
-      res.writeHead(200, { 'Content-Type': 'application/x-ns-proxy-autoconfig' });
-      res.end(pacContent);
-    });
-
-    srv.listen(0, '127.0.0.1', () => {
-      pacServer = srv;
-      pacPort = srv.address().port;
-      resolve(pacPort);
-    });
-
-    srv.on('error', (err) => {
-      pacServer = null;
-      pacPort = null;
-      reject(err);
-    });
-  });
-}
-
-async function stopPacServer() {
-  if (!pacServer) return;
-  return new Promise((resolve) => {
-    pacServer.close(() => {
-      pacServer = null;
-      pacPort = null;
-      resolve();
-    });
-  });
-}
-
-async function configureProxy(targetSession) {
-  if (!proxyAddr) {
-    log.warn('[HNS] Cannot configure proxy: no proxy address');
-    return;
-  }
-
-  const pac = buildPacScript(proxyAddr);
-  const port = await startPacServer(pac);
-  const pacUrl = `http://127.0.0.1:${port}/proxy.pac`;
-  await targetSession.setProxy({ pacScript: pacUrl });
-  log.info(`[HNS] Proxy configured via PAC at ${pacUrl}`);
-}
-
-async function clearProxy(targetSession) {
-  await stopPacServer();
-  await targetSession.setProxy({ proxyRules: '' });
-  log.info('[HNS] Proxy configuration cleared');
 }
 
 function configureCertVerification(targetSession) {
@@ -241,6 +246,7 @@ function loadCaFingerprint(pemPath) {
 async function handleReady(event) {
   proxyAddr = event.proxyAddr || null;
   caPemPath = event.caPath || null;
+  lastProcessError = null;
 
   if (!caPemPath || !loadCaFingerprint(caPemPath)) {
     updateState(STATUS.ERROR, 'Failed to load HNS CA certificate');
@@ -251,7 +257,8 @@ async function handleReady(event) {
   const defaultSession = session.defaultSession;
 
   try {
-    await configureProxy(defaultSession);
+    networkManager.setHnsProxy(proxyAddr);
+    await networkManager.rebuild();
   } catch (err) {
     updateState(STATUS.ERROR, `Proxy configuration failed: ${err.message}`);
     setErrorState('hns', 'Proxy configuration failed');
@@ -284,6 +291,9 @@ function parseStdoutLine(line) {
 
       case 'sync':
         synced = event.synced || false;
+        // canaryReady tracks whether the resolver has passed a canary-domain
+        // check (stronger than just block sync). Currently equal to synced
+        // until fingertipd emits a distinct canary-ready event.
         canaryReady = event.synced || false;
         height = event.height || 0;
 
@@ -296,15 +306,18 @@ function parseStdoutLine(line) {
         if (synced) {
           clearErrorState('hns');
           setStatusMessage('hns', null);
-          log.info(`[HNS] Synced at height ${height}`);
+          if (height !== lastLoggedHeight) {
+            lastLoggedHeight = height;
+            log.info(`[HNS] Synced at height ${height}`);
+          }
         } else {
           setStatusMessage('hns', `Syncing block ${height}`);
-          log.info(`[HNS] Syncing: height ${height}`);
         }
         break;
 
       case 'error':
         log.error(`[HNS] Helper error: ${event.error}`);
+        lastProcessError = event.error || 'Unknown error';
         setErrorState('hns', event.error || 'Unknown error');
         break;
 
@@ -351,9 +364,24 @@ async function startHns() {
     return;
   }
 
+  let resolverAddrs;
+  try {
+    resolverAddrs = await allocateResolverAddrs();
+  } catch (err) {
+    updateState(STATUS.ERROR, `Resolver port allocation failed: ${err.message}`);
+    setErrorState('hns', 'HNS resolver ports unavailable');
+    return;
+  }
+
+  rootAddr = resolverAddrs.rootAddr;
+  recursiveAddr = resolverAddrs.recursiveAddr;
+  lastProcessError = null;
+
   const args = [
     '-data-dir', dataDir,
     '-hnsd-path', hnsdPath,
+    '-root-addr', rootAddr,
+    '-recursive-addr', recursiveAddr,
   ];
 
   log.info(`[HNS] Starting: ${binPath} ${args.join(' ')}`);
@@ -377,14 +405,18 @@ async function startHns() {
         forceKillTimeout = null;
       }
 
+      const exitError =
+        code !== 0 ? lastProcessError || `Exited with code ${code}` : null;
+
       if (currentState !== STATUS.STOPPING) {
-        updateState(STATUS.STOPPED, code !== 0 ? `Exited with code ${code}` : null);
+        updateState(STATUS.STOPPED, exitError);
       } else {
         updateState(STATUS.STOPPED);
       }
 
-      clearProxy(session.defaultSession).catch((err) => {
-        log.error(`[HNS] Failed to clear proxy on process exit: ${err.message}`);
+      networkManager.clearHnsProxy();
+      networkManager.rebuild().catch((err) => {
+        log.error(`[HNS] Failed to rebuild proxy on process exit: ${err.message}`);
       });
       clearCertVerification(session.defaultSession);
       clearService('hns');
@@ -394,6 +426,9 @@ async function startHns() {
       synced = false;
       canaryReady = false;
       height = 0;
+      rootAddr = null;
+      recursiveAddr = null;
+      lastProcessError = null;
 
       if (pendingStart) {
         log.info('[HNS] Processing queued start request');
@@ -449,7 +484,11 @@ function stopHns() {
     if (!helperProcess) {
       updateState(STATUS.STOPPED);
       clearService('hns');
-      clearProxy(session.defaultSession).then(() => resolve());
+      networkManager.clearHnsProxy();
+      rootAddr = null;
+      recursiveAddr = null;
+      lastProcessError = null;
+      networkManager.rebuild().then(() => resolve());
       clearCertVerification(session.defaultSession);
       return;
     }
@@ -493,6 +532,8 @@ function getHnsStatus() {
     height,
     proxyAddr,
     caPemPath,
+    rootAddr,
+    recursiveAddr,
   };
 }
 
