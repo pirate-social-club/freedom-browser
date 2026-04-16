@@ -84,49 +84,46 @@ function extractDomain(url) {
  */
 async function fetchWithTimeout(url, timeout = 5000) {
   return new Promise((resolve, reject) => {
-    const request = net.request(url);
-    let data = [];
-    let contentType = 'image/x-icon';
+    let requestUrl;
+    try {
+      requestUrl = new URL(url);
+    } catch {
+      reject(new Error('Invalid URL'));
+      return;
+    }
 
+    const controller = new AbortController();
     const timer = setTimeout(() => {
-      request.abort();
-      reject(new Error('Timeout'));
+      controller.abort();
     }, timeout);
 
-    request.on('response', (response) => {
-      if (response.statusCode !== 200) {
-        clearTimeout(timer);
-        reject(new Error(`HTTP ${response.statusCode}`));
-        return;
-      }
+    net.fetch(requestUrl.toString(), {
+      method: 'GET',
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
 
-      contentType = response.headers['content-type'] || 'image/x-icon';
-      if (Array.isArray(contentType)) contentType = contentType[0];
+        const contentType = response.headers.get('content-type') || 'image/x-icon';
+        const data = Buffer.from(await response.arrayBuffer());
 
-      response.on('data', (chunk) => {
-        data.push(chunk);
-      });
-
-      response.on('end', () => {
-        clearTimeout(timer);
         resolve({
-          data: Buffer.concat(data),
+          data,
           contentType,
         });
-      });
-
-      response.on('error', (err) => {
-        clearTimeout(timer);
+      })
+      .catch((err) => {
+        if (err.name === 'AbortError') {
+          reject(new Error('Timeout'));
+          return;
+        }
         reject(err);
+      })
+      .finally(() => {
+        clearTimeout(timer);
       });
-    });
-
-    request.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-
-    request.end();
   });
 }
 

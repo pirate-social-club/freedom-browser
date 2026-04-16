@@ -2,6 +2,32 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [0.6.3] - 2026-04-17
+
+### Added
+
+- Bundled Handshake resolver/runtime with selective single-label proxying and adaptive homepage promotion from `pirate.sc` to `pirate/`
+- Sentinel dVPN integration with encrypted wallet persistence, session budgeting, SOCKS proxy handoff, and packaged V2Ray runtime
+- Tagged GitHub release builds for macOS, Linux x64, and Windows x64 artifacts
+
+### Changed
+
+- New-tab and home-page handling now treat `https://pirate.sc/` and `https://pirate/` as equivalent home states while promoting `pirate/` once HNS is ready
+- CI and release workflows now use Blacksmith runners for Linux and Windows jobs while keeping macOS builds on GitHub-hosted runners
+
+### Fixed
+
+- HNS startup now avoids stale local resolver port collisions and falls back cleanly during sync
+- `Cmd/Ctrl+W` closes only the active tab instead of double-firing and closing the window
+- Settings modal layout, Sentinel wallet copy, and homepage upgrade behavior are stable again
+- dVPN connects more reliably by forcing Node HTTP for SDK chain calls, increasing auto-select retries, and resolving VPN IP through the SOCKS proxy when the SDK leaves it blank
+- Favicon fetching now passes WHATWG `URL` objects into Electron networking, removing the `DEP0169` `url.parse()` startup warning
+
+### Security
+
+- Service registry reset paths now preserve per-service fields instead of briefly dropping HNS and dVPN state shape on shutdown
+- Home-page and HNS readiness gating now stay aligned with bundled HNS integration settings to avoid invalid single-label navigation states
+
 ## [0.6.2] - 2026-03-01
 
 ### Added

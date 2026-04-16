@@ -6,8 +6,6 @@ const {
   loadMainModule,
 } = require('../../test/helpers/main-process-test-utils');
 
-const PROJECT_ROOT = path.join(__dirname, '..', '..');
-
 function flushMicrotasks() {
   return Promise.resolve().then(() => Promise.resolve());
 }
@@ -608,5 +606,57 @@ describe('dvpn-manager', () => {
       call => typeof call[1] === 'string' && call[1].includes('"lastState"')
     );
     expect(stateWrites.length).toBeGreaterThan(0);
+  });
+
+  test('withMutedSdkWarnings suppresses known sentinel-ai IP-check warnings only', async () => {
+    const ctx = loadDvpnManagerModule({
+      walletExists: false,
+    });
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await ctx.mod.withMutedSdkWarnings(async () => {
+      console.warn('[sentinel-ai] IP check skipped: missing dependency — /tmp/example');
+      console.warn('keep this warning');
+    });
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith('keep this warning');
+  });
+
+  test('resolveConnectedIp returns SOCKS-routed IP when axios and agent modules are available', async () => {
+    const ctx = loadDvpnManagerModule({
+      walletExists: false,
+    });
+    const packageRoot = '/virtual/sentinel-ai-connect';
+
+    const fakeAxios = {
+      defaults: {},
+      get: jest.fn().mockResolvedValue({ data: { ip: '91.148.135.233' } }),
+    };
+    const fakeLoader = jest.fn(async (modulePath) => {
+      if (modulePath.includes('axios')) {
+        return { default: fakeAxios };
+      }
+      return {
+        SocksProxyAgent: jest.fn((url) => ({ url })),
+      };
+    });
+
+    jest.spyOn(ctx.fsMock, 'existsSync').mockImplementation((target) => (
+      target.includes(`${packageRoot}/node_modules/axios/index.js`)
+      || target.includes(`${packageRoot}/node_modules/socks-proxy-agent/dist/index.js`)
+    ));
+
+    const ip = await ctx.mod.resolveConnectedIp(10954, fakeLoader, packageRoot);
+
+    expect(ip).toBe('91.148.135.233');
+    expect(fakeAxios.get).toHaveBeenCalledWith(
+      'https://api.ipify.org?format=json',
+      expect.objectContaining({
+        timeout: 10000,
+        proxy: false,
+        adapter: 'http',
+      })
+    );
   });
 });

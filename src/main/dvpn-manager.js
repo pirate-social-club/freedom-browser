@@ -37,6 +37,8 @@ let cachedFunded = false;
 let sdk = null;
 let sdkHttpHardened = false;
 const DVPN_MAX_CONNECT_ATTEMPTS = 7;
+const DVPN_IP_CHECK_URL = 'https://api.ipify.org?format=json';
+const DVPN_IP_CHECK_TIMEOUT = 10000;
 
 function getDataDir() {
   const dir = path.join(app.getPath('userData'), 'dvpn');
@@ -72,12 +74,20 @@ async function loadSdk() {
   }
 }
 
+function getSdkPackageRoot() {
+  return path.dirname(require.resolve('sentinel-ai-connect/package.json'));
+}
+
+async function importModuleFromFile(modulePath) {
+  return import(pathToFileURL(modulePath).href);
+}
+
 async function hardenSdkHttpStack() {
   if (sdkHttpHardened) return;
 
   let packageRoot;
   try {
-    packageRoot = path.dirname(require.resolve('sentinel-ai-connect/package.json'));
+    packageRoot = getSdkPackageRoot();
   } catch (err) {
     log.warn('[dVPN] Could not resolve sentinel-ai-connect package root:', err.message);
     return;
@@ -110,6 +120,78 @@ async function hardenSdkHttpStack() {
     log.info(`[dVPN] Hardened SDK HTTP clients (${patched.length} axios module${patched.length === 1 ? '' : 's'})`);
   } else {
     log.warn('[dVPN] No SDK axios modules were patched');
+  }
+}
+
+function isSuppressedSdkWarning(message) {
+  return typeof message === 'string'
+    && message.startsWith('[sentinel-ai] IP check skipped: missing dependency');
+}
+
+async function withMutedSdkWarnings(operation) {
+  const originalWarn = console.warn;
+  console.warn = (...args) => {
+    if (isSuppressedSdkWarning(args[0])) {
+      return;
+    }
+    return originalWarn(...args);
+  };
+
+  try {
+    return await operation();
+  } finally {
+    console.warn = originalWarn;
+  }
+}
+
+async function resolveConnectedIp(socksPort, moduleLoader = importModuleFromFile, packageRootOverride = null) {
+  if (!socksPort) return null;
+
+  let packageRoot = packageRootOverride;
+  try {
+    if (!packageRoot) {
+      packageRoot = getSdkPackageRoot();
+    }
+  } catch {
+    return null;
+  }
+
+  const axiosCandidates = [
+    path.join(packageRoot, 'node_modules', 'axios', 'index.js'),
+    path.join(packageRoot, 'node_modules', 'sentinel-dvpn-sdk', 'node_modules', 'axios', 'index.js'),
+  ];
+  const socksCandidates = [
+    path.join(packageRoot, 'node_modules', 'socks-proxy-agent', 'dist', 'index.js'),
+    path.join(packageRoot, 'node_modules', 'sentinel-dvpn-sdk', 'node_modules', 'socks-proxy-agent', 'dist', 'index.js'),
+  ];
+
+  const axiosPath = axiosCandidates.find((candidate) => fs.existsSync(candidate));
+  const socksPath = socksCandidates.find((candidate) => fs.existsSync(candidate));
+  if (!axiosPath || !socksPath) return null;
+
+  try {
+    const axiosModule = await moduleLoader(axiosPath);
+    const socksModule = await moduleLoader(socksPath);
+    const axios = axiosModule.default || axiosModule;
+    const SocksProxyAgent = socksModule.SocksProxyAgent || socksModule.default?.SocksProxyAgent;
+    if (!axios?.get || !SocksProxyAgent) return null;
+
+    axios.defaults = axios.defaults || {};
+    axios.defaults.adapter = 'http';
+    axios.defaults.proxy = false;
+
+    const agent = new SocksProxyAgent(`socks5h://127.0.0.1:${socksPort}`);
+    const response = await axios.get(DVPN_IP_CHECK_URL, {
+      httpAgent: agent,
+      httpsAgent: agent,
+      timeout: DVPN_IP_CHECK_TIMEOUT,
+      adapter: 'http',
+      proxy: false,
+    });
+
+    return response?.data?.ip || null;
+  } catch {
+    return null;
   }
 }
 
@@ -310,14 +392,18 @@ async function startDvpn() {
     log.info(
       `[dVPN] Connecting with opts: protocol=v2ray gb=${gigabytes} attempts=${DVPN_MAX_CONNECT_ATTEMPTS} v2ray=${v2rayPath}`
     );
-    const result = await sdkModule.connect(connectOpts);
+    const result = await withMutedSdkWarnings(() => sdkModule.connect(connectOpts));
+    const resolvedIp = result.ip || await resolveConnectedIp(result.socksPort);
+    if (!result.ip && resolvedIp) {
+      log.info(`[dVPN] Resolved VPN IP via SOCKS proxy: ${resolvedIp}`);
+    }
 
     connectResult = {
       sessionId: String(result.sessionId),
       protocol: result.protocol,
       nodeAddress: result.nodeAddress,
       country: result.country || null,
-      ip: result.ip || null,
+      ip: resolvedIp || null,
       socksPort: result.socksPort || null,
     };
 
@@ -594,4 +680,7 @@ module.exports = {
   getStatus,
   walletExists,
   STATES,
+  resolveConnectedIp,
+  withMutedSdkWarnings,
+  isSuppressedSdkWarning,
 };

@@ -1,7 +1,7 @@
 # Freedom Browser
 
 [![License: MPL-2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
-[![Platform](https://img.shields.io/badge/platform-macOS%20|%20Linux%20|%20Windows-lightgrey)](https://github.com/solardev-xyz/freedom-browser/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS%20|%20Linux%20|%20Windows-lightgrey)](https://github.com/pirate-social-club/freedom-browser/releases)
 
 Freedom is a browser for the decentralized web, with Swarm, IPFS, Radicle, and ENS as first-class protocols.
 It ships with integrated Swarm, IPFS, and Radicle nodes, enabling direct peer-to-peer network access without relying on centralized HTTP gateways. Radicle is available on macOS and Linux; the Windows build ships without Radicle until official Windows binaries are published upstream.
@@ -433,6 +433,7 @@ Tagged GitHub releases are built by `.github/workflows/release.yml`.
 - Push a tag like `v0.6.3` to build and publish release assets to GitHub Releases
 - The workflow checks out `Sentinel-Autonomybuilder/blue-ai-connect` as a sibling checkout so the current `file:../../blue-ai-connect` dependency resolves the same way it does locally
 - The workflow currently publishes macOS (`x64`, `arm64`), Linux (`x64`), and Windows (`x64`) artifacts
+- Linux and Windows jobs run on Blacksmith-hosted GitHub Actions runners; macOS builds remain on GitHub-hosted macOS runners because the release pipeline still needs an `x64` macOS build
 - macOS builds are signed and notarized only when `APPLE_ID`, `APPLE_TEAM_ID`, and `APPLE_APP_SPECIFIC_PASSWORD` secrets are configured; otherwise the workflow falls back to unsigned, non-notarized macOS artifacts
 - GitHub Releases are for distribution artifacts; the in-app auto-updater still reads from `https://freedom.baby/downloads/`
 
