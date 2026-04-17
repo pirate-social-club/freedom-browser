@@ -74,6 +74,16 @@ jobs:
         shell: pwsh
         run: npm ci
 
+      - name: Download platform binaries
+        working-directory: ${{ matrix.workdir }}
+        shell: bash
+        run: |
+          npm run bee:download
+          npm run ipfs:download
+          if [ "$RUNNER_OS" != "Windows" ]; then
+            npm run radicle:download
+          fi
+
       - name: Build macOS release artifacts
         if: runner.os == 'macOS'
         working-directory: ${{ matrix.workdir }}
