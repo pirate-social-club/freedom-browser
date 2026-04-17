@@ -93,7 +93,13 @@ async function main() {
 
       if (asset.name.endsWith('.tar.gz') || asset.name.endsWith('.tgz')) {
         console.log(`Extracting ${asset.name}...`);
-        execSync(`tar -xzf "${tempDest}" -C "${targetDir}"`);
+        if (process.platform === 'win32') {
+          const src = tempDest.replace(/\\/g, '/');
+          const dst = targetDir.replace(/\\/g, '/');
+          execSync(`tar -xzf "${src}" --force-local -C "${dst}"`);
+        } else {
+          execSync(`tar -xzf "${tempDest}" -C "${targetDir}"`);
+        }
         fs.unlinkSync(tempDest);
       } else if (asset.name.endsWith('.zip')) {
         console.log(`Extracting ${asset.name}...`);

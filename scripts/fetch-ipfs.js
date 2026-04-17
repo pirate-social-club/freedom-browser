@@ -105,9 +105,12 @@ async function main() {
       console.log(`Extracting ${fileName}...`);
       if (target.zip) {
         execSync(`unzip -o "${tempDest}" -d "${targetDir}"`);
+      } else if (process.platform === 'win32') {
+        const src = tempDest.replace(/\\/g, '/');
+        const dst = targetDir.replace(/\\/g, '/');
+        execSync(`tar -xzf "${src}" --force-local -C "${dst}"`);
       } else {
-        const forceLocal = process.platform === 'win32' ? ' --force-local' : '';
-        execSync(`tar -xzf "${tempDest}"${forceLocal} -C "${targetDir}"`);
+        execSync(`tar -xzf "${tempDest}" -C "${targetDir}"`);
       }
       fs.unlinkSync(tempDest);
 
