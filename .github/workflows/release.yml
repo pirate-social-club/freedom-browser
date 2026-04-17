@@ -26,29 +26,21 @@ jobs:
             label: macOS x64
             artifact_name: macos-x64
             workdir: pirate-v2/freedom-browser
-            install_shell: bash
-            build_shell: bash
             build_command: npm run dist -- --mac --x64
           - os: macos-14
             label: macOS arm64
             artifact_name: macos-arm64
             workdir: pirate-v2/freedom-browser
-            install_shell: bash
-            build_shell: bash
             build_command: npm run dist -- --mac --arm64
           - os: ubuntu-latest
             label: Linux x64
             artifact_name: linux-x64
             workdir: pirate-v2/freedom-browser
-            install_shell: bash
-            build_shell: bash
             build_command: npm run dist:linux:x64:docker
           - os: windows-latest
             label: Windows x64
             artifact_name: windows-x64
             workdir: pirate-v2/freedom-browser
-            install_shell: pwsh
-            build_shell: pwsh
             build_command: npm run dist -- --win --x64
 
     steps:
@@ -71,8 +63,15 @@ jobs:
           cache-dependency-path: pirate-v2/freedom-browser/package-lock.json
 
       - name: Install dependencies
+        if: runner.os != 'Windows'
         working-directory: ${{ matrix.workdir }}
-        shell: ${{ matrix.install_shell }}
+        shell: bash
+        run: npm ci
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        working-directory: ${{ matrix.workdir }}
+        shell: pwsh
         run: npm ci
 
       - name: Build macOS release artifacts
@@ -91,9 +90,15 @@ jobs:
           fi
 
       - name: Build non-macOS release artifacts
-        if: runner.os != 'macOS'
+        if: runner.os == 'Linux'
         working-directory: ${{ matrix.workdir }}
-        shell: ${{ matrix.build_shell }}
+        shell: bash
+        run: ${{ matrix.build_command }}
+
+      - name: Build Windows release artifacts
+        if: runner.os == 'Windows'
+        working-directory: ${{ matrix.workdir }}
+        shell: pwsh
         run: ${{ matrix.build_command }}
 
       - name: Upload build artifacts

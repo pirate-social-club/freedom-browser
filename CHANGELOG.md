@@ -2,6 +2,12 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [0.6.7] - 2026-04-17
+
+### Fixed
+
+- Release workflow no longer relies on matrix-driven `shell` selection, using explicit Windows and Unix steps instead so tagged builds can pass GitHub workflow validation
+
 ## [0.6.6] - 2026-04-17
 
 ### Changed
