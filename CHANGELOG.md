@@ -2,11 +2,37 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [0.7.1] - 2026-04-17
+
+### Fixed
+
+- Tagged GitHub releases now publish reliably without requiring a repository checkout in the publish job, and artifact uploads tolerate missing platform-specific globs while still producing `SHA256SUMS.txt` and the `latest-*.yml` updater manifests
+
+## [0.7.0] - 2026-04-17
+
+### Fixed
+
+- Cross-architecture Radicle downloads now work in release builds so macOS and Linux packaging can fetch the correct bundled binaries during tagged releases
+
+## [0.6.9] - 2026-04-17
+
+### Fixed
+
+- macOS `x64` release builds now run on `macos-14` and cross-compile successfully instead of depending on an unavailable Intel runner pool
+
+## [0.6.8] - 2026-04-17
+
+### Fixed
+
+- Bundled Bee downloads in release builds now authenticate GitHub API requests to avoid rate-limit failures on macOS runners
+
 ## [0.6.7] - 2026-04-17
 
 ### Fixed
 
 - Release workflow no longer relies on matrix-driven `shell` selection, using explicit Windows and Unix steps instead so tagged builds can pass GitHub workflow validation
+- Release builds now fetch Bee, IPFS, and Radicle binaries before packaging, and the Linux Docker build reuses the checked-out `node_modules` tree instead of reinstalling inside the container
+- Windows release packaging now normalizes tar extraction paths and uses `--force-local` so bundled protocol binaries unpack correctly under Git Bash
 
 ## [0.6.6] - 2026-04-17
 
