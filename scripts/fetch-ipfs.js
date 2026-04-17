@@ -106,7 +106,8 @@ async function main() {
       if (target.zip) {
         execSync(`unzip -o "${tempDest}" -d "${targetDir}"`);
       } else {
-        execSync(`tar -xzf "${tempDest}" -C "${targetDir}"`);
+        const forceLocal = process.platform === 'win32' ? ' --force-local' : '';
+        execSync(`tar -xzf "${tempDest}"${forceLocal} -C "${targetDir}"`);
       }
       fs.unlinkSync(tempDest);
 
