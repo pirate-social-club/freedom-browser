@@ -143,28 +143,13 @@ jobs:
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: pirate-social-club/freedom-browser
         run: |
+          shopt -s nullglob
           tag="${GITHUB_REF#refs/tags/}"
+          artifacts=(release-artifacts/*.dmg release-artifacts/*.zip release-artifacts/*.deb release-artifacts/*.AppImage release-artifacts/*.exe release-artifacts/*.blockmap release-artifacts/latest*.yml release-artifacts/SHA256SUMS.txt)
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" \
-              release-artifacts/*.dmg \
-              release-artifacts/*.zip \
-              release-artifacts/*.deb \
-              release-artifacts/*.AppImage \
-              release-artifacts/*.exe \
-              release-artifacts/*.blockmap \
-              release-artifacts/latest*.yml \
-              release-artifacts/SHA256SUMS.txt \
-              --clobber
+            gh release upload "$tag" "${artifacts[@]}" --clobber
           else
-            gh release create "$tag" \
-              release-artifacts/*.dmg \
-              release-artifacts/*.zip \
-              release-artifacts/*.deb \
-              release-artifacts/*.AppImage \
-              release-artifacts/*.exe \
-              release-artifacts/*.blockmap \
-              release-artifacts/latest*.yml \
-              release-artifacts/SHA256SUMS.txt \
-              --generate-notes
+            gh release create "$tag" "${artifacts[@]}" --generate-notes
           fi
