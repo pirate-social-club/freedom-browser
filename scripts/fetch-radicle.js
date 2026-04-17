@@ -84,132 +84,129 @@ function extractTarXz(archivePath, destDir) {
 
 async function main() {
   try {
-    const platform = PLATFORM_MAP[process.platform] || process.platform;
-    const arch = process.arch;
-    const targetKey = `${platform}-${arch}`;
+    const args = process.argv.slice(2);
+    const allFlag = args.includes('--all');
+    const targetIdx = args.indexOf('--target');
 
-    const radicleTarget = TARGETS[targetKey];
-    if (!radicleTarget) {
-      console.error(`Unsupported platform: ${targetKey}`);
-      console.error(`Supported platforms: ${Object.keys(TARGETS).join(', ')}`);
-      process.exit(1);
+    let targetKeys;
+    if (allFlag) {
+      targetKeys = Object.keys(TARGETS);
+    } else if (targetIdx !== -1 && args[targetIdx + 1]) {
+      targetKeys = [args[targetIdx + 1]];
+    } else {
+      const platform = PLATFORM_MAP[process.platform] || process.platform;
+      const arch = process.arch;
+      targetKeys = [`${platform}-${arch}`];
     }
 
-    console.log(`Platform: ${targetKey} -> Radicle target: ${radicleTarget}`);
+    for (const targetKey of targetKeys) {
+      const radicleTarget = TARGETS[targetKey];
+      if (!radicleTarget) {
+        console.error(`Unsupported platform: ${targetKey}`);
+        console.error(`Supported platforms: ${Object.keys(TARGETS).join(', ')}`);
+        process.exit(1);
+      }
 
-    // Create target directory
-    const targetDir = path.join(OUTPUT_DIR, targetKey);
-    if (!fs.existsSync(targetDir)) {
-      fs.mkdirSync(targetDir, { recursive: true });
-    }
+      console.log(`Platform: ${targetKey} -> Radicle target: ${radicleTarget}`);
 
-    // Fetch main bundle version info
-    console.log('\nFetching Radicle main bundle version info...');
-    let mainVersion;
-    try {
-      const versionInfo = await fetchJson(`${MAIN_RELEASES_URL}/radicle.json`);
-      mainVersion = versionInfo.version;
-      console.log(`Main bundle version: ${mainVersion}`);
-    } catch (err) {
-      console.warn(`Could not fetch main version info: ${err.message}`);
-      mainVersion = null;
-    }
+      const targetDir = path.join(OUTPUT_DIR, targetKey);
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
 
-    // Download main bundle (rad, radicle-node, git-remote-rad)
-    // Use version-less filename as fallback (symlinked to latest)
-    const mainBundleName = mainVersion
-      ? `radicle-${mainVersion}-${radicleTarget}.tar.xz`
-      : `radicle-${radicleTarget}.tar.xz`;
-    const mainBundleUrl = `${MAIN_RELEASES_URL}/${mainBundleName}`;
-    const mainBundleDest = path.join(targetDir, mainBundleName);
+      console.log('\nFetching Radicle main bundle version info...');
+      let mainVersion;
+      try {
+        const versionInfo = await fetchJson(`${MAIN_RELEASES_URL}/radicle.json`);
+        mainVersion = versionInfo.version;
+        console.log(`Main bundle version: ${mainVersion}`);
+      } catch (err) {
+        console.warn(`Could not fetch main version info: ${err.message}`);
+        mainVersion = null;
+      }
 
-    await downloadFile(mainBundleUrl, mainBundleDest);
-    extractTarXz(mainBundleDest, targetDir);
-    fs.unlinkSync(mainBundleDest);
+      const mainBundleName = mainVersion
+        ? `radicle-${mainVersion}-${radicleTarget}.tar.xz`
+        : `radicle-${radicleTarget}.tar.xz`;
+      const mainBundleUrl = `${MAIN_RELEASES_URL}/${mainBundleName}`;
+      const mainBundleDest = path.join(targetDir, mainBundleName);
 
-    // Fetch httpd version info (different release path!)
-    console.log('\nFetching Radicle httpd version info...');
-    let httpdVersion;
-    try {
-      const httpdVersionInfo = await fetchJson(`${HTTPD_RELEASES_URL}/radicle-httpd.json`);
-      httpdVersion = httpdVersionInfo.version;
-      console.log(`HTTPD version: ${httpdVersion}`);
-    } catch (err) {
-      console.warn(`Could not fetch httpd version info: ${err.message}`);
-      httpdVersion = null;
-    }
+      await downloadFile(mainBundleUrl, mainBundleDest);
+      extractTarXz(mainBundleDest, targetDir);
+      fs.unlinkSync(mainBundleDest);
 
-    // Download httpd bundle (separate release path)
-    const httpdBundleName = httpdVersion
-      ? `radicle-httpd-${httpdVersion}-${radicleTarget}.tar.xz`
-      : `radicle-httpd-${radicleTarget}.tar.xz`;
-    const httpdBundleUrl = `${HTTPD_RELEASES_URL}/${httpdBundleName}`;
-    const httpdBundleDest = path.join(targetDir, httpdBundleName);
+      console.log('\nFetching Radicle httpd version info...');
+      let httpdVersion;
+      try {
+        const httpdVersionInfo = await fetchJson(`${HTTPD_RELEASES_URL}/radicle-httpd.json`);
+        httpdVersion = httpdVersionInfo.version;
+        console.log(`HTTPD version: ${httpdVersion}`);
+      } catch (err) {
+        console.warn(`Could not fetch httpd version info: ${err.message}`);
+        httpdVersion = null;
+      }
 
-    await downloadFile(httpdBundleUrl, httpdBundleDest);
-    extractTarXz(httpdBundleDest, targetDir);
-    fs.unlinkSync(httpdBundleDest);
+      const httpdBundleName = httpdVersion
+        ? `radicle-httpd-${httpdVersion}-${radicleTarget}.tar.xz`
+        : `radicle-httpd-${radicleTarget}.tar.xz`;
+      const httpdBundleUrl = `${HTTPD_RELEASES_URL}/${httpdBundleName}`;
+      const httpdBundleDest = path.join(targetDir, httpdBundleName);
 
-    // Find and move binaries to target directory root
-    // Radicle tarballs extract to a subdirectory with bin/ folder
-    const findAndMoveBinaries = (searchDir, binaries) => {
-      const found = {};
+      await downloadFile(httpdBundleUrl, httpdBundleDest);
+      extractTarXz(httpdBundleDest, targetDir);
+      fs.unlinkSync(httpdBundleDest);
 
-      const search = (dir) => {
-        if (!fs.existsSync(dir)) return;
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          const fullPath = path.join(dir, entry.name);
-          if (entry.isFile() && binaries.includes(entry.name)) {
-            found[entry.name] = fullPath;
-          } else if (entry.isDirectory()) {
-            search(fullPath);
+      const findAndMoveBinaries = (searchDir, binaries) => {
+        const found = {};
+        const search = (dir) => {
+          if (!fs.existsSync(dir)) return;
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isFile() && binaries.includes(entry.name)) {
+              found[entry.name] = fullPath;
+            } else if (entry.isDirectory()) {
+              search(fullPath);
+            }
           }
-        }
+        };
+        search(searchDir);
+        return found;
       };
 
-      search(searchDir);
-      return found;
-    };
+      const requiredBinaries = ['rad', 'radicle-node', 'radicle-httpd', 'git-remote-rad'];
+      const foundBinaries = findAndMoveBinaries(targetDir, requiredBinaries);
 
-    const requiredBinaries = ['rad', 'radicle-node', 'radicle-httpd', 'git-remote-rad'];
-    const foundBinaries = findAndMoveBinaries(targetDir, requiredBinaries);
-
-    // Move binaries to target directory root and set permissions
-    for (const [name, srcPath] of Object.entries(foundBinaries)) {
-      const destPath = path.join(targetDir, name);
-      if (srcPath !== destPath) {
-        if (fs.existsSync(destPath)) {
-          fs.unlinkSync(destPath);
+      for (const [name, srcPath] of Object.entries(foundBinaries)) {
+        const destPath = path.join(targetDir, name);
+        if (srcPath !== destPath) {
+          if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+          fs.renameSync(srcPath, destPath);
         }
-        fs.renameSync(srcPath, destPath);
+        fs.chmodSync(destPath, '755');
+        console.log(`Installed: ${name}`);
       }
-      fs.chmodSync(destPath, '755');
-      console.log(`Installed: ${name}`);
-    }
 
-    // Clean up extracted subdirectories
-    const entries = fs.readdirSync(targetDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        fs.rmSync(path.join(targetDir, entry.name), { recursive: true, force: true });
+      const entries = fs.readdirSync(targetDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          fs.rmSync(path.join(targetDir, entry.name), { recursive: true, force: true });
+        }
       }
-    }
 
-    // Verify required binaries
-    const missing = requiredBinaries.filter(name => !fs.existsSync(path.join(targetDir, name)));
-    if (missing.length > 0) {
-      console.warn(`\nWarning: Missing binaries: ${missing.join(', ')}`);
-    }
+      const missing = requiredBinaries.filter(name => !fs.existsSync(path.join(targetDir, name)));
+      if (missing.length > 0) {
+        console.warn(`\nWarning: Missing binaries: ${missing.join(', ')}`);
+      }
 
-    console.log(`\nRadicle binaries installed to ${targetDir}`);
-    console.log('Installed binaries:');
-    for (const name of requiredBinaries) {
-      const binPath = path.join(targetDir, name);
-      if (fs.existsSync(binPath)) {
-        console.log(`  ✓ ${name}`);
-      } else {
-        console.log(`  ✗ ${name} (missing)`);
+      console.log(`\nRadicle binaries installed to ${targetDir}`);
+      for (const name of requiredBinaries) {
+        const binPath = path.join(targetDir, name);
+        if (fs.existsSync(binPath)) {
+          console.log(`  ✓ ${name}`);
+        } else {
+          console.log(`  ✗ ${name} (missing)`);
+        }
       }
     }
 

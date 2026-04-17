@@ -83,7 +83,7 @@ jobs:
           npm run bee:download
           npm run ipfs:download
           if [ "$RUNNER_OS" != "Windows" ]; then
-            npm run radicle:download
+            npm run radicle:download -- --all
           fi
 
       - name: Build macOS release artifacts
