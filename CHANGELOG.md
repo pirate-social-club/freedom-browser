@@ -2,6 +2,12 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [0.6.6] - 2026-04-17
+
+### Changed
+
+- Release publishing now uses the GitHub CLI with `GITHUB_TOKEN` instead of a third-party release action so tagged binary releases can run under stricter repository action policies
+
 ## [0.6.5] - 2026-04-17
 
 ### Changed
