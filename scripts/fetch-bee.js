@@ -7,10 +7,14 @@ const OUTPUT_DIR = path.join(__dirname, '..', 'bee-bin');
 
 async function fetchLatestRelease() {
   return new Promise((resolve, reject) => {
+    const headers = { 'User-Agent': 'Freedom-Updater' };
+    if (process.env.GITHUB_TOKEN) {
+      headers['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
+    }
     const options = {
       hostname: 'api.github.com',
       path: '/repos/ethersphere/bee/releases/latest',
-      headers: { 'User-Agent': 'Freedom-Updater' },
+      headers,
     };
 
     https

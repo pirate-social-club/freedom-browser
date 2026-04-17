@@ -77,6 +77,8 @@ jobs:
       - name: Download platform binaries
         working-directory: ${{ matrix.workdir }}
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npm run bee:download
           npm run ipfs:download
