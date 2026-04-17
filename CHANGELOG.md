@@ -2,6 +2,12 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [0.6.5] - 2026-04-17
+
+### Changed
+
+- Release and CI workflows now use GitHub-hosted runners again for Linux and Windows so tagged releases can publish reliably while keeping the Linux `AppImage`, `.deb`, Windows `.exe`, and macOS `.dmg` artifact matrix intact
+
 ## [0.6.4] - 2026-04-17
 
 ### Added
