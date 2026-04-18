@@ -26,7 +26,8 @@ describe('page-urls', () => {
       history: 'file:///app/pages/history.html',
       'protocol-test': 'file:///app/pages/protocol-test.html',
     });
-    expect(mod.homeUrl).toBe('https://pirate.sc/');
+    expect(mod.homeUrl).toBe('file:///app/pages/home.html');
+    expect(mod.landingUrl).toBe('https://pirate.sc/');
     expect(mod.errorUrlBase).toBe('file:///app/pages/error.html');
   });
 
@@ -80,10 +81,12 @@ describe('page-urls', () => {
     expect(mod.parseEnsInput('')).toBeNull();
   });
 
-  test('homeUrl defaults to ICANN URL', async () => {
+  test('homeUrl defaults to the internal bootstrap page', async () => {
     const mod = await loadModule();
-    expect(mod.homeUrl).toBe('https://pirate.sc/');
-    expect(mod.homeUrlNormalized).toBe('https://pirate.sc/');
+    expect(mod.homeUrl).toBe('file:///app/pages/home.html');
+    expect(mod.homeUrlNormalized).toBe('file:///app/pages/home.html');
+    expect(mod.landingUrl).toBe('https://pirate.sc/');
+    expect(mod.landingUrlNormalized).toBe('https://pirate.sc/');
   });
 
   test('isHnsHomeReady returns false when no registry state', async () => {
@@ -94,6 +97,7 @@ describe('page-urls', () => {
   test('isHomeUrl treats both ICANN and HNS homepages as equivalent', async () => {
     const mod = await loadModule();
 
+    expect(mod.isHomeUrl('file:///app/pages/home.html')).toBe(true);
     expect(mod.isHomeUrl('https://pirate.sc/')).toBe(true);
     expect(mod.isHomeUrl('https://pirate/')).toBe(true);
     expect(mod.isHomeUrl('https://pirate.sc/docs')).toBe(false);
@@ -158,8 +162,10 @@ describe('page-urls', () => {
     };
     const changed = mod.updateHomeUrl();
     expect(changed).toBe(true);
-    expect(mod.homeUrl).toBe('https://pirate/');
-    expect(mod.homeUrlNormalized).toBe('https://pirate/');
+    expect(mod.homeUrl).toBe('file:///app/pages/home.html');
+    expect(mod.homeUrlNormalized).toBe('file:///app/pages/home.html');
+    expect(mod.landingUrl).toBe('https://pirate/');
+    expect(mod.landingUrlNormalized).toBe('https://pirate/');
     delete global.window.__rendererState;
   });
 
@@ -173,7 +179,8 @@ describe('page-urls', () => {
     };
     const changed = mod.updateHomeUrl();
     expect(changed).toBe(false);
-    expect(mod.homeUrl).toBe('https://pirate.sc/');
+    expect(mod.homeUrl).toBe('file:///app/pages/home.html');
+    expect(mod.landingUrl).toBe('https://pirate.sc/');
     delete global.window.__rendererState;
   });
 
@@ -200,7 +207,8 @@ describe('page-urls', () => {
       },
     };
     mod.updateHomeUrl();
-    expect(mod.homeUrl).toBe('https://pirate/');
+    expect(mod.homeUrl).toBe('file:///app/pages/home.html');
+    expect(mod.landingUrl).toBe('https://pirate/');
 
     global.window.__rendererState = {
       enableHnsIntegration: true,
@@ -210,7 +218,8 @@ describe('page-urls', () => {
     };
     const changed = mod.updateHomeUrl();
     expect(changed).toBe(true);
-    expect(mod.homeUrl).toBe('https://pirate.sc/');
+    expect(mod.homeUrl).toBe('file:///app/pages/home.html');
+    expect(mod.landingUrl).toBe('https://pirate.sc/');
     delete global.window.__rendererState;
   });
 });

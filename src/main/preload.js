@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('bookmarks:update', { originalTarget, bookmark }),
   removeBookmark: (target) => ipcRenderer.invoke('bookmarks:remove', target),
   resolveEns: (name) => ipcRenderer.invoke('ens:resolve', { name }),
+  resolveSpace: (handle) => ipcRenderer.invoke('spaces:resolve', { handle }),
   // History
   getHistory: (options) => ipcRenderer.invoke('history:get', options),
   addHistory: (entry) => ipcRenderer.invoke('history:add', entry),

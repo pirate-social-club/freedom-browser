@@ -7,6 +7,7 @@
  */
 
 const { contextBridge, ipcRenderer } = require('electron');
+const IPC = require('../shared/ipc-channels');
 
 // Internal pages list — canonical source is src/shared/internal-pages.json,
 // served by the main process via sync IPC so preloads don't need require().
@@ -43,6 +44,23 @@ contextBridge.exposeInMainWorld('freedomAPI', {
 
   // Settings (read-only for internal pages)
   getSettings: guardInternal('getSettings', () => ipcRenderer.invoke('settings:get')),
+
+  // Service registry (read-only for internal pages)
+  getServiceRegistry: guardInternal('getServiceRegistry', () =>
+    ipcRenderer.invoke(IPC.SERVICE_REGISTRY_GET)
+  ),
+  onServiceRegistryUpdate: guardInternal('onServiceRegistryUpdate', (callback) => {
+    if (typeof callback !== 'function') {
+      return () => {};
+    }
+
+    const handler = (_event, registry) => callback(registry);
+    ipcRenderer.on(IPC.SERVICE_REGISTRY_UPDATE, handler);
+
+    return () => {
+      ipcRenderer.removeListener(IPC.SERVICE_REGISTRY_UPDATE, handler);
+    };
+  }),
 
   // Bookmarks (read-only for internal pages)
   getBookmarks: guardInternal('getBookmarks', () => ipcRenderer.invoke('bookmarks:get')),

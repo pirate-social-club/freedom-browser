@@ -62,7 +62,9 @@ const looksLikeDomain = (str) => {
   return domainRegex.test(hostPart);
 };
 
-const looksLikeSingleLabelHost = (str) => {
+const isValidHostLabel = (value) => /^[a-z]([a-z0-9-]*[a-z0-9])?$/.test(value);
+
+const looksLikeHnsHost = (str) => {
   if (!str || typeof str !== 'string') return false;
 
   const trimmed = str.trim();
@@ -71,7 +73,6 @@ const looksLikeSingleLabelHost = (str) => {
   const hostPart = trimmed.split(/[/?#]/)[0];
 
   if (!hostPart) return false;
-  if (hostPart.includes('.')) return false;
   if (hostPart.includes(' ')) return false;
   if (/^\d+$/.test(hostPart)) return false;
   if (hostPart.startsWith('/') || hostPart.startsWith('.')) return false;
@@ -88,11 +89,19 @@ const looksLikeSingleLabelHost = (str) => {
 
   if (hostPart.length > 63) return false;
 
-  return /^[a-z]([a-z0-9-]*[a-z0-9])?$/.test(hostPart);
+  if (!hostPart.includes('.')) {
+    return isValidHostLabel(hostPart);
+  }
+
+  const labels = hostPart.split('.');
+  if (labels.length !== 2) return false;
+  if (labels[1] !== 'pirate') return false;
+
+  return isValidHostLabel(labels[0]);
 };
 
 export const normalizeHnsHostInput = (str) => {
-  if (!looksLikeSingleLabelHost(str)) return null;
+  if (!looksLikeHnsHost(str)) return null;
 
   const trimmed = str.trim();
   const parts = trimmed.split(/[/?#]/);
@@ -100,6 +109,26 @@ export const normalizeHnsHostInput = (str) => {
   const rest = trimmed.slice(host.length);
 
   return `https://${host}${rest || '/'}`;
+};
+
+export const parseSpacesRootInput = (str) => {
+  if (!str || typeof str !== 'string') return null;
+
+  const trimmed = str.trim();
+  if (!trimmed.startsWith('@')) return null;
+
+  // Raw address-bar Spaces support is root-only for now. Once Freedom can
+  // resolve published web targets, suffix handling can move back in here.
+  const match = trimmed.match(/^@([^\s/?#:@]+)$/u);
+  if (!match) return null;
+
+  const [, label] = match;
+  if (!label) return null;
+
+  return {
+    routeKey: `@${label}`,
+    displayValue: trimmed,
+  };
 };
 
 export const parseHashInput = (rawInput, bzzRoutePrefix) => {

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self';"
+      content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; script-src 'self'; connect-src 'self';"
     />
     <style>
       html,
@@ -44,6 +44,45 @@
         max-width: 640px;
         line-height: 1.6;
         margin-bottom: 12px;
+      }
+      .status-card {
+        margin-top: 28px;
+        display: inline-flex;
+        flex-direction: column;
+        gap: 10px;
+        min-width: 320px;
+        padding: 18px 20px;
+        border-radius: 14px;
+        background: rgba(19, 20, 20, 0.76);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        backdrop-filter: blur(8px);
+      }
+      .status-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 24px;
+      }
+      .status-label {
+        color: #999;
+      }
+      .status-value {
+        color: #f2f2f2;
+      }
+      .status-actions {
+        display: flex;
+        gap: 12px;
+        margin-top: 8px;
+      }
+      .status-link {
+        color: #f2f2f2;
+        text-decoration: none;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.25);
+      }
+      .status-link:hover {
+        border-bottom-color: rgba(255, 255, 255, 0.65);
+      }
+      .muted {
+        color: #999;
       }
       h2 {
         font-size: 18px;
@@ -96,6 +135,16 @@
           background: #ffffff;
           color: #202124;
         }
+        .status-card {
+          background: rgba(255, 255, 255, 0.92);
+          border-color: rgba(0, 0, 0, 0.08);
+        }
+        .status-value {
+          color: #202124;
+        }
+        .muted {
+          color: #5f6368;
+        }
         h2 {
           color: #5f6368;
         }
@@ -133,8 +182,26 @@
       style="height: 48px; margin-bottom: 24px"
     />
     <p>
-      The decentralized web is here. Powered by built-in nodes, this browser connects you directly
-      to peers, keeping the network strong and user-controlled.
+      Freedom starts on the open web and upgrades to HNS once the bundled resolver is ready.
     </p>
+    <section class="status-card" aria-live="polite">
+      <div class="status-row">
+        <span class="status-label">Destination</span>
+        <span class="status-value" id="home-destination">pirate.sc</span>
+      </div>
+      <div class="status-row">
+        <span class="status-label">Status</span>
+        <span class="status-value" id="home-status">Checking HNS</span>
+      </div>
+      <div class="status-row" id="home-height-row" hidden>
+        <span class="status-label">Height</span>
+        <span class="status-value" id="home-height">0</span>
+      </div>
+      <div class="status-actions">
+        <a id="home-open-link" class="status-link" href="https://pirate.sc/">Open pirate.sc</a>
+        <span id="home-note" class="muted">Waiting for bundled HNS.</span>
+      </div>
+    </section>
+    <script src="scripts/home.js"></script>
   </body>
 </html>

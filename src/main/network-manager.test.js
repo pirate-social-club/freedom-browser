@@ -56,13 +56,15 @@ function loadNetworkManagerModule(options = {}) {
   };
 }
 
+const REPRESENTATIVE_PIRATE_HOST = 'sable-harbor-4143.pirate';
+
 describe('network-manager', () => {
   afterEach(() => {
     jest.clearAllMocks();
     jest.restoreAllMocks();
   });
 
-  test('HNS-only PAC: single-label hosts go PROXY, others go DIRECT', () => {
+  test('HNS-only PAC: single-label and .pirate hosts go PROXY, others go DIRECT', () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
 
@@ -71,9 +73,10 @@ describe('network-manager', () => {
     expect(pac).toContain('PROXY 127.0.0.1:5380');
     expect(pac).toContain('return "DIRECT"');
     expect(pac).toContain('dnsDomainLevels(host) === 0');
+    expect(pac).toContain('dnsDomainIs(host, ".pirate")');
   });
 
-  test('HNS + dVPN PAC composition: single-label → PROXY, others → SOCKS5', () => {
+  test('HNS + dVPN PAC composition: single-label and .pirate → PROXY, others → SOCKS5', () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
     ctx.mod.setDvpnProxy('127.0.0.1', 10808);
@@ -81,6 +84,7 @@ describe('network-manager', () => {
     const pac = ctx.mod.buildPacScript();
 
     expect(pac).toContain('dnsDomainLevels(host) === 0');
+    expect(pac).toContain('dnsDomainIs(host, ".pirate")');
     expect(pac).toContain('PROXY 127.0.0.1:5380');
     expect(pac).toContain('SOCKS5 127.0.0.1:10808');
   });
@@ -105,6 +109,16 @@ describe('network-manager', () => {
     const pac = ctx.mod.buildPacScript();
 
     expect(pac).toMatch(/dnsDomainLevels\(host\) === 0[^}]*PROXY 127\.0\.0\.1:5380/);
+  });
+
+  test('representative .pirate hosts go to HNS proxy when set', () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+
+    const pac = ctx.mod.buildPacScript();
+
+    expect(pac).toContain('dnsDomainIs(host, ".pirate")');
+    expect(REPRESENTATIVE_PIRATE_HOST.endsWith('.pirate')).toBe(true);
   });
 
   test('ordinary hosts go SOCKS5 when dVPN is connected', () => {
@@ -138,7 +152,7 @@ describe('network-manager', () => {
     expect(pac).toContain('return "DIRECT"');
   });
 
-  test('HNS not regressed by dVPN: single-label still goes to HNS PROXY', () => {
+  test('HNS not regressed by dVPN: single-label and .pirate still go to HNS PROXY', () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
     ctx.mod.setDvpnProxy('127.0.0.1', 10808);

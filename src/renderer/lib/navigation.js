@@ -19,11 +19,11 @@ import {
   formatBzzUrl,
   formatIpfsUrl,
   formatRadicleUrl,
-  deriveDisplayValue,
   deriveBzzBaseFromUrl,
   deriveIpfsBaseFromUrl,
   deriveRadBaseFromUrl,
   normalizeHnsHostInput,
+  parseSpacesRootInput,
 } from './url-utils.js';
 import {
   getActiveWebview,
@@ -38,7 +38,10 @@ import {
 import {
   homeUrl,
   homeUrlNormalized,
+  landingUrl,
+  landingUrlNormalized,
   isHomeUrl,
+  isHnsHomeReady,
   errorUrlBase,
   internalPages,
   detectProtocol,
@@ -94,6 +97,11 @@ const isSingleLabelHostname = (value = '') => {
   }
 };
 
+const isBundledHnsReady = () => {
+  if (!state.enableHnsIntegration) return false;
+  return state.registry?.hns?.canaryReady === true;
+};
+
 const normalizeExplicitHnsUrlInput = (value = '') => {
   if (!value.startsWith('http://') && !value.startsWith('https://')) {
     return null;
@@ -112,6 +120,122 @@ const normalizeExplicitHnsUrlInput = (value = '') => {
   }
 };
 
+const selectSpacesTargetUrl = (result) => {
+  if (!result || result.type !== 'ok') return null;
+
+  if (isHnsHomeReady() && result.freedomUrl) {
+    return result.freedomUrl;
+  }
+
+  return result.webUrl || result.freedomUrl || result.selectedUrl || null;
+};
+
+const rememberDisplayAlias = (navState, targetUrl, displayValue) => {
+  if (!navState || !targetUrl || !displayValue) return;
+  if (!navState.displayAliases) {
+    navState.displayAliases = new Map();
+  }
+  navState.displayAliases.set(targetUrl, displayValue);
+};
+
+const deriveDisplayForUrl = (url, navState = getNavState()) =>
+  deriveDisplayAddress({
+    url,
+    bzzRoutePrefix: state.bzzRoutePrefix,
+    homeUrlNormalized,
+    ipfsRoutePrefix: state.ipfsRoutePrefix,
+    ipnsRoutePrefix: state.ipnsRoutePrefix,
+    radicleApiPrefix: state.radicleApiPrefix,
+    knownEnsNames: state.knownEnsNames,
+    displayAliases: navState?.displayAliases,
+  });
+
+const buildSpaceBrowserUrl = (result = {}, requestedHandle = '') => {
+  const pageUrl = new URL('pages/space-browser.html', window.location.href);
+  const handle = result.handle || requestedHandle;
+  if (handle) {
+    pageUrl.searchParams.set('handle', handle);
+  }
+  if (result.type) {
+    pageUrl.searchParams.set('type', result.type);
+  }
+  if (result.reason) {
+    pageUrl.searchParams.set('reason', result.reason);
+  }
+  if (result.message) {
+    pageUrl.searchParams.set('message', result.message);
+  }
+  if (result.fallbackReason) {
+    pageUrl.searchParams.set('fallbackReason', result.fallbackReason);
+  }
+  if (result.txid) {
+    pageUrl.searchParams.set('txid', result.txid);
+  }
+  if (Number.isInteger(result.n)) {
+    pageUrl.searchParams.set('n', String(result.n));
+  }
+  if (result.rootPubkey) {
+    pageUrl.searchParams.set('rootPubkey', result.rootPubkey);
+  }
+  if (result.proofRootHash) {
+    pageUrl.searchParams.set('proofRootHash', result.proofRootHash);
+  }
+  if (Number.isInteger(result.acceptedAnchorHeight)) {
+    pageUrl.searchParams.set('acceptedAnchorHeight', String(result.acceptedAnchorHeight));
+  }
+  if (result.acceptedAnchorBlockHash) {
+    pageUrl.searchParams.set('acceptedAnchorBlockHash', result.acceptedAnchorBlockHash);
+  }
+  if (result.acceptedAnchorRootHash) {
+    pageUrl.searchParams.set('acceptedAnchorRootHash', result.acceptedAnchorRootHash);
+  }
+  if (result.controlClass) {
+    pageUrl.searchParams.set('controlClass', result.controlClass);
+  }
+  if (result.operationClass) {
+    pageUrl.searchParams.set('operationClass', result.operationClass);
+  }
+  if (result.canonicalHandle) {
+    pageUrl.searchParams.set('canonicalHandle', result.canonicalHandle);
+  }
+  if (result.observationProvider) {
+    pageUrl.searchParams.set('observationProvider', result.observationProvider);
+  }
+  if (typeof result.proofVerified === 'boolean') {
+    pageUrl.searchParams.set('proofVerified', result.proofVerified ? 'true' : 'false');
+  }
+  if (result.source) {
+    pageUrl.searchParams.set('source', result.source);
+  }
+  if (result.webUrl) {
+    pageUrl.searchParams.set('webUrl', result.webUrl);
+  }
+  if (result.freedomUrl) {
+    pageUrl.searchParams.set('freedomUrl', result.freedomUrl);
+  }
+  return pageUrl.toString();
+};
+
+const loadSpacesResultPage = ({
+  webview,
+  navState,
+  result,
+  displayValue,
+  requestedHandle,
+}) => {
+  const targetUrl = buildSpaceBrowserUrl(result, requestedHandle);
+  rememberDisplayAlias(navState, targetUrl, displayValue);
+  addressInput.value = displayValue;
+  navState.pendingTitleForUrl = targetUrl;
+  navState.pendingNavigationUrl = targetUrl;
+  navState.hasNavigatedDuringCurrentLoad = false;
+  safeLoadUrl(webview, targetUrl, 'spaces-result');
+  syncBzzBase(null);
+  syncIpfsBase(null);
+  syncRadBase(null);
+  updateProtocolIcon();
+};
+
 const loadHnsNotReadyPage = (webview, navState, inputValue, hnsUrl, hnsState) => {
   const errorUrl = new URL(errorUrlBase);
   errorUrl.searchParams.set('error', 'HNS_NOT_READY');
@@ -120,19 +244,64 @@ const loadHnsNotReadyPage = (webview, navState, inputValue, hnsUrl, hnsState) =>
     errorUrl.searchParams.set('height', String(hnsState.height));
   }
   addressInput.value = inputValue;
+  navState.pendingHnsUrl = hnsUrl;
   navState.pendingTitleForUrl = hnsUrl;
   navState.pendingNavigationUrl = errorUrl.toString();
   navState.hasNavigatedDuringCurrentLoad = false;
-  webview.loadURL(errorUrl.toString());
+  safeLoadUrl(webview, errorUrl.toString(), 'hns-not-ready');
   syncBzzBase(null);
   syncIpfsBase(null);
   syncRadBase(null);
+};
+
+const clearPendingHnsNavigation = (navState) => {
+  if (!navState) return;
+  navState.pendingHnsUrl = null;
 };
 
 const setLoading = (isLoading) => {
   setTabLoading(isLoading);
   updateBookmarkButtonVisibility();
   updateGithubBridgeIcon();
+};
+
+const isBenignLoadUrlError = (err) => {
+  const code = err?.code || '';
+  const errno = err?.errno;
+  const message = String(err?.message || '');
+
+  return (
+    code === 'ERR_ABORTED' ||
+    code === 'ERR_FAILED' ||
+    errno === -3 ||
+    errno === -2 ||
+    message.includes('ERR_ABORTED') ||
+    message.includes('ERR_FAILED')
+  );
+};
+
+const safeLoadUrl = (webview, url, context = 'navigation') => {
+  try {
+    const result = webview.loadURL(url);
+    Promise.resolve(result).catch((err) => {
+      if (isBenignLoadUrlError(err)) {
+        pushDebug(
+          `[Nav] Ignored ${context} loadURL noise for ${url}: ${err.code || err.errno || err.message}`
+        );
+        return;
+      }
+      pushDebug(`[Nav] loadURL failed during ${context} for ${url}: ${err.message || err}`);
+      console.error(`[Nav] loadURL failed during ${context}`, err);
+    });
+  } catch (err) {
+    if (isBenignLoadUrlError(err)) {
+      pushDebug(
+        `[Nav] Ignored ${context} loadURL noise for ${url}: ${err.code || err.errno || err.message}`
+      );
+      return;
+    }
+    throw err;
+  }
 };
 
 const storeEnsResolutionMetadata = (targetUri, ensName, { trackProtocol = true } = {}) => {
@@ -297,6 +466,8 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     return;
   }
 
+  clearPendingHnsNavigation(navState);
+
   // Handle view-source: URLs - need to resolve dweb URLs before loading
   if (value.startsWith('view-source:')) {
     isViewingSource = true; // Track that this tab is viewing source
@@ -336,7 +507,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
             alert(`Unsupported protocol: ${result.protocol}`);
             return;
           }
-          capturedWebview.loadURL(loadUrl);
+          safeLoadUrl(capturedWebview, loadUrl, 'view-source-ens');
         })
         .catch((err) => {
           setLoading(false);
@@ -356,7 +527,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     });
     addressInput.value = viewSourceNavigation.addressValue;
     updateProtocolIcon();
-    webview.loadURL(viewSourceNavigation.loadUrl);
+    safeLoadUrl(webview, viewSourceNavigation.loadUrl, 'view-source');
     return;
   }
 
@@ -369,7 +540,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     const pageName = fbMatch[1].toLowerCase();
     const pageUrl = internalPages[pageName];
     if (pageUrl) {
-      webview.loadURL(pageUrl);
+      safeLoadUrl(webview, pageUrl, 'internal-page');
       pushDebug(`Loading internal page: ${pageName}`);
     } else {
       pushDebug(`Unknown internal page: ${pageName}`);
@@ -433,6 +604,74 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     return;
   }
 
+  const spacesInput = parseSpacesRootInput(value);
+  if (spacesInput) {
+    const displayValue = displayOverride || spacesInput.displayValue;
+    const capturedWebview = webview;
+    const capturedNavState = navState;
+
+    if (!electronAPI?.resolveSpace) {
+      loadSpacesResultPage({
+        webview: capturedWebview,
+        navState: capturedNavState,
+        result: {
+          type: 'error',
+          handle: spacesInput.routeKey,
+          reason: 'RESOLVER_UNAVAILABLE',
+          message: 'Spaces resolver is unavailable in this build.',
+        },
+        displayValue,
+        requestedHandle: spacesInput.routeKey,
+      });
+      return;
+    }
+
+    setLoading(true);
+    pushDebug(`[AddressBar] Resolving Spaces handle: ${spacesInput.routeKey}`);
+    electronAPI
+      .resolveSpace(spacesInput.routeKey)
+      .then((result) => {
+        setLoading(false);
+
+        const selectedUrl = selectSpacesTargetUrl(result);
+        if (result?.type === 'ok' && selectedUrl) {
+          loadTarget(selectedUrl, displayValue, capturedWebview);
+          return;
+        }
+
+        loadSpacesResultPage({
+          webview: capturedWebview,
+          navState: capturedNavState,
+          result:
+            result || {
+              type: 'error',
+              handle: spacesInput.routeKey,
+              reason: 'EMPTY_RESOLUTION',
+              message: 'Spaces resolver returned no data.',
+            },
+          displayValue,
+          requestedHandle: spacesInput.routeKey,
+        });
+      })
+      .catch((err) => {
+        setLoading(false);
+        console.error('Spaces resolution error', err);
+        loadSpacesResultPage({
+          webview: capturedWebview,
+          navState: capturedNavState,
+          result: {
+            type: 'error',
+            handle: spacesInput.routeKey,
+            reason: 'SPACES_RESOLUTION_ERROR',
+            message: err.message,
+          },
+          displayValue,
+          requestedHandle: spacesInput.routeKey,
+        });
+      });
+    return;
+  }
+
   // Try Radicle (rad:RID or rad://RID)
   if (value.trim().toLowerCase().startsWith('rad:') || value.trim().toLowerCase().startsWith('rad://')) {
     if (!state.enableRadicleIntegration) {
@@ -441,7 +680,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
       addressInput.value = value.trim();
       navState.pendingNavigationUrl = disabledUrl;
       navState.hasNavigatedDuringCurrentLoad = false;
-      webview.loadURL(disabledUrl);
+      safeLoadUrl(webview, disabledUrl, 'radicle-disabled');
       syncRadBase(null);
       syncBzzBase(null);
       syncIpfsBase(null);
@@ -458,9 +697,9 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
       if (state.currentRadicleStatus === 'stopped' || state.currentRadicleStatus === 'error') {
         const offlineUrl = new URL(radicleTarget.targetUrl);
         offlineUrl.searchParams.set('status', 'offline');
-        webview.loadURL(offlineUrl.toString());
+        safeLoadUrl(webview, offlineUrl.toString(), 'radicle-offline');
       } else {
-        webview.loadURL(radicleTarget.targetUrl);
+        safeLoadUrl(webview, radicleTarget.targetUrl, 'radicle');
       }
       pushDebug(`Loading ${radicleTarget.displayValue} via ${radicleTarget.targetUrl}`);
       // rad-browser.html handles its own API calls, no base sync needed
@@ -479,7 +718,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     addressInput.value = value.trim();
     navState.pendingNavigationUrl = errorUrl.toString();
     navState.hasNavigatedDuringCurrentLoad = false;
-    webview.loadURL(errorUrl.toString());
+    safeLoadUrl(webview, errorUrl.toString(), 'radicle-error');
     syncRadBase(null);
     syncBzzBase(null);
     syncIpfsBase(null);
@@ -498,10 +737,11 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     }
     addressInput.value = displayOverride || ipfsTarget.displayValue;
     pushDebug(`[AddressBar] Loading IPFS target, set to: ${addressInput.value}`);
+    rememberDisplayAlias(navState, ipfsTarget.targetUrl, displayOverride);
     navState.pendingTitleForUrl = ipfsTarget.targetUrl;
     navState.pendingNavigationUrl = ipfsTarget.targetUrl;
     navState.hasNavigatedDuringCurrentLoad = false;
-    webview.loadURL(ipfsTarget.targetUrl);
+    safeLoadUrl(webview, ipfsTarget.targetUrl, 'ipfs');
     pushDebug(`Loading ${ipfsTarget.displayValue} via ${ipfsTarget.targetUrl}`);
     syncIpfsBase(ipfsTarget.baseUrl || null);
     syncBzzBase(null); // Clear bzz base when loading IPFS
@@ -519,10 +759,11 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     }
     addressInput.value = displayOverride || target.displayValue;
     pushDebug(`[AddressBar] Loading target, set to: ${addressInput.value}`);
+    rememberDisplayAlias(navState, target.targetUrl, displayOverride);
     navState.pendingTitleForUrl = target.targetUrl;
     navState.pendingNavigationUrl = target.targetUrl;
     navState.hasNavigatedDuringCurrentLoad = false;
-    webview.loadURL(target.targetUrl);
+    safeLoadUrl(webview, target.targetUrl, 'swarm');
     pushDebug(`Loading ${target.displayValue} via ${target.targetUrl}`);
     syncBzzBase(target.baseUrl || null);
     syncIpfsBase(null); // Clear ipfs base when loading bzz
@@ -530,23 +771,24 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     return;
   }
 
-  // Explicit http(s) URLs targeting a single-label HNS host should use the same
-  // readiness gate as bare single-label input.
+  // Explicit http(s) URLs targeting native HNS hosts should use the same
+  // readiness gate as bare HNS input.
   if (state.enableHnsIntegration) {
     const explicitHnsUrl = normalizeExplicitHnsUrlInput(value);
     if (explicitHnsUrl) {
       const hnsState = state.registry?.hns;
-      if (hnsState?.mode === 'bundled' && hnsState.canaryReady !== true) {
+      if (!isBundledHnsReady()) {
         loadHnsNotReadyPage(webview, navState, displayOverride || value, explicitHnsUrl, hnsState);
         return;
       }
 
       addressInput.value = displayOverride || value;
       pushDebug(`[AddressBar] HNS explicit URL: ${value} -> ${explicitHnsUrl}`);
+      rememberDisplayAlias(navState, explicitHnsUrl, displayOverride);
       navState.pendingTitleForUrl = explicitHnsUrl;
       navState.pendingNavigationUrl = explicitHnsUrl;
       navState.hasNavigatedDuringCurrentLoad = false;
-      webview.loadURL(explicitHnsUrl);
+      safeLoadUrl(webview, explicitHnsUrl, 'explicit-hns');
       syncBzzBase(null);
       syncIpfsBase(null);
       syncRadBase(null);
@@ -558,10 +800,11 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
   if (value.startsWith('http://') || value.startsWith('https://')) {
     addressInput.value = displayOverride || value;
     pushDebug(`[AddressBar] Loading HTTP(S) target: ${value}`);
+    rememberDisplayAlias(navState, value, displayOverride);
     navState.pendingTitleForUrl = value;
     navState.pendingNavigationUrl = value;
     navState.hasNavigatedDuringCurrentLoad = false;
-    webview.loadURL(value);
+    safeLoadUrl(webview, value, 'http');
     pushDebug(`Loading ${value}`);
     syncBzzBase(null);
     syncIpfsBase(null);
@@ -569,22 +812,23 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     return;
   }
 
-  // Try HNS single-label hostname normalization (when HNS is enabled)
+  // Try native HNS hostname normalization (when HNS is enabled)
   if (state.enableHnsIntegration) {
     const hnsUrl = normalizeHnsHostInput(value);
     if (hnsUrl) {
       const hnsState = state.registry?.hns;
-      if (hnsState?.mode === 'bundled' && hnsState.canaryReady !== true) {
+      if (!isBundledHnsReady()) {
         loadHnsNotReadyPage(webview, navState, displayOverride || value, hnsUrl, hnsState);
         return;
       }
 
       addressInput.value = displayOverride || value;
       pushDebug(`[AddressBar] HNS normalization: ${value} -> ${hnsUrl}`);
+      rememberDisplayAlias(navState, hnsUrl, displayOverride);
       navState.pendingTitleForUrl = hnsUrl;
       navState.pendingNavigationUrl = hnsUrl;
       navState.hasNavigatedDuringCurrentLoad = false;
-      webview.loadURL(hnsUrl);
+      safeLoadUrl(webview, hnsUrl, 'hns');
       syncBzzBase(null);
       syncIpfsBase(null);
       syncRadBase(null);
@@ -609,14 +853,7 @@ const stopLoadingAndRestore = () => {
     ? navState.pendingNavigationUrl || navState.currentPageUrl
     : navState.currentPageUrl;
   if (targetUrl) {
-    const display = deriveDisplayValue(
-      targetUrl,
-      state.bzzRoutePrefix,
-      homeUrlNormalized,
-      state.ipfsRoutePrefix,
-      state.ipnsRoutePrefix,
-      state.radicleApiPrefix
-    );
+    const display = deriveDisplayForUrl(targetUrl, navState);
     addressInput.value = display;
     pushDebug(`[AddressBar] Restored to: ${display} (raw: ${targetUrl})`);
   }
@@ -634,12 +871,35 @@ export const loadHomePage = () => {
   syncBzzBase(null);
   syncIpfsBase(null);
   syncRadBase(null);
-  addressInput.value = homeUrl;
+  addressInput.value = landingUrl;
   updateProtocolIcon();
-  navState.pendingNavigationUrl = homeUrlNormalized;
+  clearPendingHnsNavigation(navState);
+  navState.pendingNavigationUrl = landingUrlNormalized;
   navState.hasNavigatedDuringCurrentLoad = false;
-  webview.loadURL(homeUrl);
+  safeLoadUrl(webview, landingUrl, 'home');
   pushDebug('Loading home page');
+};
+
+export const resumePendingHnsNavigationIfReady = () => {
+  if (!isBundledHnsReady()) return false;
+
+  const webview = getActiveWebview();
+  const navState = getNavState();
+  const pendingHnsUrl = navState?.pendingHnsUrl;
+  if (!webview || !pendingHnsUrl) return false;
+
+  clearPendingHnsNavigation(navState);
+  addressInput.value = pendingHnsUrl;
+  navState.pendingTitleForUrl = pendingHnsUrl;
+  navState.pendingNavigationUrl = pendingHnsUrl;
+  navState.hasNavigatedDuringCurrentLoad = false;
+  safeLoadUrl(webview, pendingHnsUrl, 'hns-resume');
+  pushDebug(`[HNS] Resuming pending navigation: ${pendingHnsUrl}`);
+  syncBzzBase(null);
+  syncIpfsBase(null);
+  syncRadBase(null);
+  updateProtocolIcon();
+  return true;
 };
 
 // Shared error-page retry logic used by both reload variants and the reload button
@@ -714,6 +974,7 @@ const handleNavigationEvent = (event) => {
         ipnsRoutePrefix: state.ipnsRoutePrefix,
         radicleApiPrefix: state.radicleApiPrefix,
         knownEnsNames: state.knownEnsNames,
+        displayAliases: navState.displayAliases,
       });
       const displayUrl = `view-source:${displayInner || event.url}`;
       addressInput.value = displayUrl;
@@ -731,11 +992,13 @@ const handleNavigationEvent = (event) => {
 
     // Check for internal pages first
     const internalPageName = getInternalPageName(event.url);
-    if (internalPageName && internalPageName !== 'home') {
-      addressInput.value = `freedom://${internalPageName}`;
+    if (internalPageName) {
+      addressInput.value = internalPageName === 'home' ? '' : `freedom://${internalPageName}`;
       pushDebug(`[AddressBar] Internal page: freedom://${internalPageName}`);
       electronAPI?.setWindowTitle?.(
-        `${internalPageName.charAt(0).toUpperCase() + internalPageName.slice(1)}`
+        internalPageName === 'home'
+          ? 'New Tab'
+          : `${internalPageName.charAt(0).toUpperCase() + internalPageName.slice(1)}`
       );
       navState.pendingTitleForUrl = event.url;
       navState.pendingNavigationUrl = event.url;
@@ -744,6 +1007,7 @@ const handleNavigationEvent = (event) => {
       updateNavigationState();
       updateBookmarkButtonVisibility();
   updateGithubBridgeIcon();
+      updateProtocolIcon();
       return;
     }
 
@@ -768,14 +1032,7 @@ const handleNavigationEvent = (event) => {
         const parsed = new URL(event.url);
         const originalUrl = parsed.searchParams.get('url');
         if (originalUrl) {
-          const display = deriveDisplayValue(
-            originalUrl,
-            state.bzzRoutePrefix,
-            homeUrlNormalized,
-            state.ipfsRoutePrefix,
-            state.ipnsRoutePrefix,
-            state.radicleApiPrefix
-          );
+          const display = deriveDisplayForUrl(originalUrl, navState);
           addressInput.value = display;
           pushDebug(`[AddressBar] Error Page -> Original: ${display}`);
         } else {
@@ -795,6 +1052,7 @@ const handleNavigationEvent = (event) => {
         ipnsRoutePrefix: state.ipnsRoutePrefix,
         radicleApiPrefix: state.radicleApiPrefix,
         knownEnsNames: state.knownEnsNames,
+        displayAliases: navState.displayAliases,
       });
 
       // Don't clear address bar if navigating to about:blank and it has a value
@@ -921,14 +1179,7 @@ export const initNavigation = () => {
       if (!stopLoadingAndRestore() && navState.addressBarSnapshot) {
         addressInput.value = navState.addressBarSnapshot;
       } else if (navState.pendingTitleForUrl) {
-        addressInput.value = deriveDisplayValue(
-          navState.pendingTitleForUrl,
-          state.bzzRoutePrefix,
-          homeUrlNormalized,
-          state.ipfsRoutePrefix,
-          state.ipnsRoutePrefix,
-          state.radicleApiPrefix
-        );
+        addressInput.value = deriveDisplayForUrl(navState.pendingTitleForUrl, navState);
       }
       updateProtocolIcon();
       addressInput.blur();
@@ -948,7 +1199,7 @@ export const initNavigation = () => {
       if (pageUrl) {
         const webview = getActiveWebview();
         if (webview) {
-          webview.loadURL(pageUrl);
+          safeLoadUrl(webview, pageUrl, 'protocol-test');
           pushDebug(`Loading internal page: ${pageName}`);
         }
       } else {
@@ -1161,9 +1412,16 @@ export const initNavigation = () => {
           const isHnsLookupFailure =
             failedError === 'ERR_TUNNEL_CONNECTION_FAILED' && isSingleLabelHostname(failedUrl);
 
-          errorUrl.searchParams.set('error', isHnsLookupFailure ? 'HNS_LOOKUP_FAILED' : failedError);
+          if (isHnsLookupFailure && !isBundledHnsReady()) {
+            errorUrl.searchParams.set('error', 'HNS_NOT_READY');
+            if (state.registry?.hns?.height > 0) {
+              errorUrl.searchParams.set('height', String(state.registry.hns.height));
+            }
+          } else {
+            errorUrl.searchParams.set('error', isHnsLookupFailure ? 'HNS_LOOKUP_FAILED' : failedError);
+          }
           errorUrl.searchParams.set('url', failedUrl);
-          webview.loadURL(errorUrl.toString());
+          safeLoadUrl(webview, errorUrl.toString(), 'error-page');
         }
 
         pushDebug(
@@ -1240,6 +1498,7 @@ export const initNavigation = () => {
             ipnsRoutePrefix: state.ipnsRoutePrefix,
             radicleApiPrefix: state.radicleApiPrefix,
             knownEnsNames: state.knownEnsNames,
+            displayAliases: tabNavState.displayAliases,
           });
           // Don't clear address bar if it has a value and we're on about:blank
           // (happens during "open in new window" before loadTarget runs)
@@ -1345,10 +1604,10 @@ export const upgradeHomePageIfNeeded = (oldHomeUrl) => {
     const currentUrl = tab.webview?.getURL?.() || tab.url || tab.navigationState?.currentPageUrl || '';
     if (currentUrl !== oldHomeUrl) continue;
 
-    tab.url = homeUrl;
+    tab.url = landingUrl;
     if (tab.navigationState) {
-      tab.navigationState.currentPageUrl = homeUrl;
-      tab.navigationState.pendingNavigationUrl = homeUrlNormalized;
+      tab.navigationState.currentPageUrl = landingUrl;
+      tab.navigationState.pendingNavigationUrl = landingUrlNormalized;
       tab.navigationState.hasNavigatedDuringCurrentLoad = false;
     }
 
@@ -1357,15 +1616,15 @@ export const upgradeHomePageIfNeeded = (oldHomeUrl) => {
       syncIpfsBase(null);
       syncRadBase(null);
       if (addressInput) {
-        addressInput.value = homeUrl;
+        addressInput.value = landingUrl;
       }
     }
 
-    tab.webview?.loadURL?.(homeUrl);
+    tab.webview?.loadURL?.(landingUrl);
     upgradedCount++;
   }
 
   if (upgradedCount > 0) {
-    pushDebug(`Homepage upgraded: ${oldHomeUrl} -> ${homeUrl} (${upgradedCount} tab(s))`);
+    pushDebug(`Homepage upgraded: ${oldHomeUrl} -> ${landingUrl} (${upgradedCount} tab(s))`);
   }
 };

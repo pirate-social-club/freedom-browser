@@ -46,6 +46,15 @@ describe('navigation-utils extracted helpers', () => {
 
     expect(
       mod.deriveDisplayAddress({
+        url: 'file:///app/pages/space-browser.html?handle=%40space&type=ok',
+        bzzRoutePrefix: 'http://127.0.0.1:1633/bzz/',
+        homeUrlNormalized: 'file:///app/pages/home.html',
+        displayAliases: new Map([['file:///app/pages/space-browser.html?handle=%40space&type=ok', '@space']]),
+      })
+    ).toBe('@space');
+
+    expect(
+      mod.deriveDisplayAddress({
         url: 'http://127.0.0.1:1633/bzz/abcdef/path',
         bzzRoutePrefix: 'http://127.0.0.1:1633/bzz/',
         homeUrlNormalized: 'file:///app/pages/home.html',
@@ -113,6 +122,15 @@ describe('navigation-utils extracted helpers', () => {
         homeUrlNormalized: 'file:///app/pages/home.html',
       })
     ).toBe('typed value');
+
+    expect(
+      mod.deriveSwitchedTabDisplay({
+        url: 'file:///app/pages/space-browser.html?handle=%40space&type=ok',
+        bzzRoutePrefix: 'http://127.0.0.1:1633/bzz/',
+        homeUrlNormalized: 'file:///app/pages/home.html',
+        displayAliases: new Map([['file:///app/pages/space-browser.html?handle=%40space&type=ok', '@space']]),
+      })
+    ).toBe('@space');
 
     expect(
       mod.deriveSwitchedTabDisplay({

@@ -16,7 +16,7 @@ const internalPages = {
     links: 'links.html',
     'protocol-test': 'protocol-test.html',
   },
-  other: ['error.html', 'rad-browser.html'],
+  other: ['error.html', 'rad-browser.html', 'space-browser.html'],
 };
 
 const flushMicrotasks = async () => {
@@ -35,6 +35,13 @@ function loadWebviewPreloadModule(options = {}) {
     invokeResponses: {
       [IPC.HISTORY_GET]: [{ url: 'https://example.com' }],
       [IPC.SETTINGS_GET]: { theme: 'dark' },
+      [IPC.SERVICE_REGISTRY_GET]: {
+        hns: {
+          mode: 'bundled',
+          canaryReady: true,
+          height: 325297,
+        },
+      },
       [IPC.BOOKMARKS_GET]: [{ target: 'https://example.com' }],
       [IPC.RADICLE_GET_STATUS]: { status: 'running' },
       ...(options.invokeResponses || {}),
@@ -134,6 +141,7 @@ describe('webview-preload', () => {
       ['removeHistory', [5], IPC.HISTORY_REMOVE, [5]],
       ['clearHistory', [], IPC.HISTORY_CLEAR, []],
       ['getSettings', [], IPC.SETTINGS_GET, []],
+      ['getServiceRegistry', [], IPC.SERVICE_REGISTRY_GET, []],
       ['getBookmarks', [], IPC.BOOKMARKS_GET, []],
       ['openInNewTab', ['https://example.com'], IPC.OPEN_URL_IN_NEW_TAB, ['https://example.com']],
       ['getCachedFavicon', ['https://example.com'], IPC.FAVICON_GET_CACHED, ['https://example.com']],
@@ -150,6 +158,32 @@ describe('webview-preload', () => {
     }
 
     expect(consoleLogSpy).toHaveBeenCalledWith('[webview-preload] Loaded (freedomAPI + context menu + ethereum provider)');
+  });
+
+  test('subscribes to service registry updates on internal pages', () => {
+    const { exposures, ipcRenderer } = loadWebviewPreloadModule({
+      location: {
+        href: 'file:///app/pages/home.html',
+        protocol: 'file:',
+        pathname: '/app/pages/home.html',
+      },
+    });
+    const callback = jest.fn();
+
+    const unsubscribe = exposures.freedomAPI.onServiceRegistryUpdate(callback);
+    ipcRenderer.emit(IPC.SERVICE_REGISTRY_UPDATE, {
+      hns: { mode: 'bundled', canaryReady: true, height: 325297 },
+    });
+
+    expect(callback).toHaveBeenCalledWith({
+      hns: { mode: 'bundled', canaryReady: true, height: 325297 },
+    });
+
+    unsubscribe();
+    expect(ipcRenderer.removeListener).toHaveBeenCalledWith(
+      IPC.SERVICE_REGISTRY_UPDATE,
+      expect.any(Function)
+    );
   });
 
   test('blocks freedomAPI access on non-internal pages', async () => {

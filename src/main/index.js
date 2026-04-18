@@ -45,6 +45,7 @@ const { registerBookmarksIpc } = require('./bookmarks-store');
 const { registerHistoryIpc, closeDb: closeHistoryDb } = require('./history');
 const { registerFaviconsIpc } = require('./favicons');
 const { registerEnsIpc } = require('./ens-resolver');
+const { registerSpacesIpc } = require('./spaces-resolver');
 const { registerBeeIpc, stopBee, startBee, setUseInjectedIdentity: setBeeInjectedIdentity } = require('./bee-manager');
 const { registerIpfsIpc, stopIpfs, startIpfs, setUseInjectedIdentity: setIpfsInjectedIdentity } = require('./ipfs-manager');
 const { registerRadicleIpc, stopRadicle, startRadicle, setUseInjectedIdentity: setRadicleInjectedIdentity } = require('./radicle-manager');
@@ -99,6 +100,7 @@ async function bootstrap() {
   registerHistoryIpc();
   registerFaviconsIpc();
   registerEnsIpc();
+  registerSpacesIpc();
   registerBeeIpc();
   registerIpfsIpc();
   registerRadicleIpc();

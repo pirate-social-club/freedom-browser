@@ -33,6 +33,7 @@ let forceKillTimeout = null;
 let restartCount = 0;
 const MAX_RESTARTS = 5;
 const RESTART_RESET_MS = 10 * 60 * 1000;
+const HNS_SYNC_QUIET_MS = 20 * 1000;
 
 let proxyAddr = null;
 let caPemPath = null;
@@ -41,6 +42,7 @@ let synced = false;
 let canaryReady = false;
 let height = 0;
 let lastLoggedHeight = 0;
+let lastHeightChangeAt = 0;
 let rootAddr = null;
 let recursiveAddr = null;
 let lastProcessError = null;
@@ -53,10 +55,18 @@ function isHnsHostname(hostname = '') {
   if (!hostname || typeof hostname !== 'string') return false;
 
   const normalized = hostname.trim().toLowerCase();
-  if (!normalized || normalized.includes('.')) return false;
+  if (!normalized) return false;
   if (isLoopbackHostname(normalized)) return false;
 
-  return /^[a-z0-9-]+$/.test(normalized);
+  if (!normalized.includes('.')) {
+    return /^[a-z0-9-]+$/.test(normalized);
+  }
+
+  const labels = normalized.split('.');
+  if (labels.length !== 2) return false;
+  if (labels[1] !== 'pirate') return false;
+
+  return /^[a-z0-9-]+$/.test(labels[0]);
 }
 
 function getHelperBinaryPath() {
@@ -290,12 +300,24 @@ function parseStdoutLine(line) {
         break;
 
       case 'sync':
-        synced = event.synced || false;
-        // canaryReady tracks whether the resolver has passed a canary-domain
-        // check (stronger than just block sync). Currently equal to synced
-        // until fingertipd emits a distinct canary-ready event.
-        canaryReady = event.synced || false;
-        height = event.height || 0;
+        {
+          const nextHeight = event.height || 0;
+          if (nextHeight > height) {
+            lastHeightChangeAt = Date.now();
+          }
+          height = nextHeight;
+
+          const helperReady =
+            event.canaryReady === true ||
+            (event.canaryReady === undefined && event.synced === true);
+          const heightReady =
+            height > 0 &&
+            lastHeightChangeAt > 0 &&
+            Date.now() - lastHeightChangeAt >= HNS_SYNC_QUIET_MS;
+
+          synced = helperReady || heightReady;
+          canaryReady = helperReady || heightReady;
+        }
 
         updateService('hns', {
           synced,
@@ -428,6 +450,7 @@ async function startHns() {
       height = 0;
       rootAddr = null;
       recursiveAddr = null;
+      lastHeightChangeAt = 0;
       lastProcessError = null;
 
       if (pendingStart) {
@@ -487,6 +510,7 @@ function stopHns() {
       networkManager.clearHnsProxy();
       rootAddr = null;
       recursiveAddr = null;
+      lastHeightChangeAt = 0;
       lastProcessError = null;
       networkManager.rebuild().then(() => resolve());
       clearCertVerification(session.defaultSession);

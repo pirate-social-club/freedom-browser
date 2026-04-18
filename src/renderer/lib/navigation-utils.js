@@ -104,7 +104,13 @@ export const deriveDisplayAddress = ({
   ipnsRoutePrefix = null,
   radicleApiPrefix = null,
   knownEnsNames = new Map(),
+  displayAliases = new Map(),
 } = {}) => {
+  const alias = displayAliases.get(url);
+  if (alias) {
+    return alias;
+  }
+
   const display = deriveDisplayValue(
     url,
     bzzRoutePrefix,
@@ -125,6 +131,7 @@ export const buildViewSourceNavigation = ({
   ipnsRoutePrefix = null,
   radicleApiPrefix = null,
   knownEnsNames = new Map(),
+  displayAliases = new Map(),
 } = {}) => {
   const innerUrl = value.startsWith('view-source:') ? value.slice(12) : value;
 
@@ -166,6 +173,7 @@ export const buildViewSourceNavigation = ({
     ipnsRoutePrefix,
     radicleApiPrefix,
     knownEnsNames,
+    displayAliases,
   });
 
   return {
@@ -185,6 +193,7 @@ export const deriveSwitchedTabDisplay = ({
   ipnsRoutePrefix = null,
   radicleApiPrefix = null,
   knownEnsNames = new Map(),
+  displayAliases = new Map(),
 } = {}) => {
   if (isLoading && addressBarSnapshot) {
     return addressBarSnapshot;
@@ -204,6 +213,7 @@ export const deriveSwitchedTabDisplay = ({
     ipnsRoutePrefix,
     radicleApiPrefix,
     knownEnsNames,
+    displayAliases,
   });
 
   if (isHomeUrl(urlToDerive) || display === homeUrlNormalized) {

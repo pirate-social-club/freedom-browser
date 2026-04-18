@@ -5,14 +5,26 @@
 
 const ROUTABLE_PAGES = window.internalPages?.routable || {};
 
+const INTERNAL_HOME_URL = new URL(`pages/${ROUTABLE_PAGES.home || 'home.html'}`, window.location.href).toString();
 const HOME_ICANN_URL = 'https://pirate.sc/';
 const HOME_HNS_URL = 'https://pirate/';
 
-export let homeUrl = HOME_ICANN_URL;
-export let homeUrlNormalized = HOME_ICANN_URL;
+export let homeUrl = INTERNAL_HOME_URL;
+export let homeUrlNormalized = INTERNAL_HOME_URL;
+export let landingUrl = HOME_ICANN_URL;
+export let landingUrlNormalized = HOME_ICANN_URL;
 
 export const isHomeUrl = (url = '') => {
-  return url === HOME_ICANN_URL || url === HOME_HNS_URL;
+  const normalizedUrl = url.replace(/\/$/, '');
+  const knownHomeUrls = [
+    INTERNAL_HOME_URL,
+    HOME_ICANN_URL,
+    HOME_HNS_URL,
+    landingUrl,
+    landingUrlNormalized,
+  ].map((value) => value.replace(/\/$/, ''));
+
+  return knownHomeUrls.includes(normalizedUrl);
 };
 
 export const isHnsHomeReady = () => {
@@ -26,9 +38,9 @@ export const isHnsHomeReady = () => {
 
 export const updateHomeUrl = () => {
   const newUrl = isHnsHomeReady() ? HOME_HNS_URL : HOME_ICANN_URL;
-  if (newUrl === homeUrl) return false;
-  homeUrl = newUrl;
-  homeUrlNormalized = newUrl;
+  if (newUrl === landingUrl) return false;
+  landingUrl = newUrl;
+  landingUrlNormalized = newUrl;
   return true;
 };
 

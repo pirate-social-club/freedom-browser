@@ -11,8 +11,8 @@ let pacPort = null;
 
 function buildPacScript() {
   const hnsLine = hnsProxyAddr
-    ? `  if (dnsDomainLevels(host) === 0) {\n    return "PROXY ${hnsProxyAddr}";\n  }`
-    : `  if (dnsDomainLevels(host) === 0) {\n    return "DIRECT";\n  }`;
+    ? `  if (dnsDomainLevels(host) === 0 || host === "pirate" || dnsDomainIs(host, ".pirate")) {\n    return "PROXY ${hnsProxyAddr}";\n  }`
+    : `  if (dnsDomainLevels(host) === 0 || host === "pirate" || dnsDomainIs(host, ".pirate")) {\n    return "DIRECT";\n  }`;
 
   const dvpnLine = dvpnProxyHost && dvpnProxyPort
     ? `  return "SOCKS5 ${dvpnProxyHost}:${dvpnProxyPort}; SOCKS ${dvpnProxyHost}:${dvpnProxyPort}; DIRECT";`

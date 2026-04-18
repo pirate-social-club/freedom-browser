@@ -51,6 +51,7 @@ module.exports = {
 
   // ENS resolution
   ENS_RESOLVE: 'ens:resolve',
+  SPACES_RESOLVE: 'spaces:resolve',
 
   // Settings
   SETTINGS_GET: 'settings:get',

@@ -5,6 +5,7 @@ import {
   parseHashInput,
   formatBzzUrl,
   deriveDisplayValue,
+  parseSpacesRootInput,
   isValidCid,
   parseIpfsInput,
   deriveIpfsBaseFromUrl,
@@ -14,14 +15,37 @@ import {
   parseRadicleInput,
   deriveRadBaseFromUrl,
   deriveRadicleDisplayValue,
+  normalizeHnsHostInput,
 } from './url-utils.js';
 
 const BZZ_ROUTE_PREFIX = 'http://127.0.0.1:1633/bzz/';
 const IPFS_ROUTE_PREFIX = 'http://127.0.0.1:8080/ipfs/';
 const IPNS_ROUTE_PREFIX = 'http://127.0.0.1:8080/ipns/';
 const HOME_URL = 'file:///app/home.html';
+const REPRESENTATIVE_PIRATE_HOST = 'sable-harbor-4143.pirate';
 
 describe('url-utils', () => {
+  describe('normalizeHnsHostInput', () => {
+    test('normalizes single-label HNS hosts', () => {
+      expect(normalizeHnsHostInput('pirate')).toBe('https://pirate/');
+      expect(normalizeHnsHostInput('pirate/')).toBe('https://pirate/');
+    });
+
+    test('normalizes representative .pirate hosts', () => {
+      expect(normalizeHnsHostInput(REPRESENTATIVE_PIRATE_HOST)).toBe(
+        `https://${REPRESENTATIVE_PIRATE_HOST}/`
+      );
+      expect(normalizeHnsHostInput(`${REPRESENTATIVE_PIRATE_HOST}/about`)).toBe(
+        `https://${REPRESENTATIVE_PIRATE_HOST}/about`
+      );
+    });
+
+    test('rejects ordinary dotted web domains', () => {
+      expect(normalizeHnsHostInput('pirate.sc')).toBeNull();
+      expect(normalizeHnsHostInput('example.com')).toBeNull();
+    });
+  });
+
   describe('ensureTrailingSlash', () => {
     test('adds slash if missing', () => {
       expect(ensureTrailingSlash('http://example.com')).toBe('http://example.com/');
@@ -334,6 +358,29 @@ describe('url-utils', () => {
       expect(
         deriveDisplayValue(url, BZZ_ROUTE_PREFIX, HOME_URL, IPFS_ROUTE_PREFIX, IPNS_ROUTE_PREFIX)
       ).toBe('ipns://docs.ipfs.tech/index.html');
+    });
+  });
+
+  describe('Spaces shorthand helpers', () => {
+    test('parses root-only spaces input', () => {
+      expect(parseSpacesRootInput('@space')).toEqual({
+        routeKey: '@space',
+        displayValue: '@space',
+      });
+
+      expect(parseSpacesRootInput('@😀')).toEqual({
+        routeKey: '@😀',
+        displayValue: '@😀',
+      });
+    });
+
+    test('rejects invalid spaces shorthand input', () => {
+      expect(parseSpacesRootInput('name@space')).toBeNull();
+      expect(parseSpacesRootInput('@')).toBeNull();
+      expect(parseSpacesRootInput('@@space')).toBeNull();
+      expect(parseSpacesRootInput('@space path')).toBeNull();
+      expect(parseSpacesRootInput('@space/submit')).toBeNull();
+      expect(parseSpacesRootInput('https://pirate.sc/c/@space')).toBeNull();
     });
   });
 

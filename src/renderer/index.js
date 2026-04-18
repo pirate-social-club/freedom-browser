@@ -1,6 +1,6 @@
 // Renderer process entry point
 import { updateRegistry, setRadicleIntegrationEnabled, setHnsIntegrationEnabled } from './lib/state.js';
-import { updateHomeUrl, homeUrl } from './lib/page-urls.js';
+import { updateHomeUrl, landingUrl } from './lib/page-urls.js';
 import { initBeeUi, updateBeeStatusLine, updateBeeToggleState } from './lib/bee-ui.js';
 import { initIpfsUi, updateIpfsStatusLine, updateIpfsToggleState } from './lib/ipfs-ui.js';
 import {
@@ -40,6 +40,7 @@ import {
   onSettingsChanged,
   setOnHistoryRecorded,
   upgradeHomePageIfNeeded,
+  resumePendingHnsNavigationIfReady,
 } from './lib/navigation.js';
 import {
   initAutocomplete,
@@ -58,7 +59,7 @@ import { initWalletUi, updateIdentityState } from './lib/wallet-ui.js';
 const electronAPI = window.electronAPI;
 
 const syncHomeUrl = () => {
-  const oldHome = homeUrl;
+  const oldHome = landingUrl;
   const homeChanged = updateHomeUrl();
   if (homeChanged) {
     upgradeHomePageIfNeeded(oldHome);
@@ -73,6 +74,7 @@ window.serviceRegistry?.onUpdate?.((registry) => {
   pushDebug(`[ServiceRegistry] Update received: ${JSON.stringify(registry)}`);
   updateRegistry(registry);
   syncHomeUrl();
+  resumePendingHnsNavigationIfReady();
   updateBeeStatusLine();
   updateBeeToggleState();
   updateIpfsStatusLine();
@@ -87,6 +89,7 @@ window.serviceRegistry?.getRegistry?.().then((registry) => {
     pushDebug(`[ServiceRegistry] Initial state: ${JSON.stringify(registry)}`);
     updateRegistry(registry);
     syncHomeUrl();
+    resumePendingHnsNavigationIfReady();
   }
 });
 
