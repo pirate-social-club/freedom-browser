@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';"
+    />
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        box-sizing: border-box;
+        padding: 40px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background: radial-gradient(circle at top, #20242c 0%, #111318 62%);
+        color: #f2f4f7;
+      }
+
+      .wrap {
+        max-width: 760px;
+        margin: 0 auto;
+      }
+
+      h1 {
+        margin: 0 0 12px;
+        font-size: 28px;
+        font-weight: 650;
+      }
+
+      p {
+        margin: 0 0 24px;
+        color: #c4cad4;
+        line-height: 1.5;
+      }
+
+      .card {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 16px;
+        padding: 20px;
+        backdrop-filter: blur(12px);
+      }
+
+      .status {
+        display: inline-block;
+        margin-bottom: 16px;
+        font-size: 13px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #ffb45f;
+      }
+
+      dl {
+        margin: 0;
+        display: grid;
+        gap: 14px;
+      }
+
+      dt {
+        margin: 0 0 4px;
+        color: #8f9aaa;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      dd {
+        margin: 0;
+        color: #f2f4f7;
+        word-break: break-word;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      dd[data-variant='text'] {
+        font-family: inherit;
+      }
+
+      .hint {
+        margin-top: 20px;
+        color: #8f9aaa;
+      }
+
+      @media (prefers-color-scheme: light) {
+        body {
+          background: radial-gradient(circle at top, #f7f8fb 0%, #eef1f7 62%);
+          color: #151823;
+        }
+
+        p,
+        .hint,
+        dt {
+          color: #5f6b7a;
+        }
+
+        .card {
+          background: rgba(255, 255, 255, 0.9);
+          border-color: rgba(17, 19, 24, 0.08);
+        }
+
+        dd {
+          color: #151823;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1 id="title">Spaces Resolution</h1>
+      <p id="description"></p>
+
+      <div class="card">
+        <div id="status" class="status"></div>
+        <dl id="details"></dl>
+        <p id="hint" class="hint"></p>
+      </div>
+    </div>
+
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const type = params.get('type') || 'error';
+      const handle = params.get('handle') || '@unknown';
+      const reason = params.get('reason') || '';
+      const message = params.get('message') || '';
+      const txid = params.get('txid') || '';
+      const n = params.get('n') || '';
+      const rootPubkey = params.get('rootPubkey') || '';
+      const proofRootHash = params.get('proofRootHash') || '';
+      const acceptedAnchorHeight = params.get('acceptedAnchorHeight') || '';
+      const acceptedAnchorBlockHash = params.get('acceptedAnchorBlockHash') || '';
+      const acceptedAnchorRootHash = params.get('acceptedAnchorRootHash') || '';
+      const controlClass = params.get('controlClass') || '';
+      const operationClass = params.get('operationClass') || '';
+      const canonicalHandle = params.get('canonicalHandle') || '';
+      const observationProvider = params.get('observationProvider') || '';
+      const source = params.get('source') || '';
+      const webUrl = params.get('webUrl') || '';
+      const proofVerified = params.get('proofVerified') || '';
+
+      const titleEl = document.getElementById('title');
+      const descriptionEl = document.getElementById('description');
+      const statusEl = document.getElementById('status');
+      const detailsEl = document.getElementById('details');
+      const hintEl = document.getElementById('hint');
+
+      const addRow = (label, value, variant = 'mono') => {
+        if (!value) return;
+        const wrapper = document.createElement('div');
+        const dt = document.createElement('dt');
+        const dd = document.createElement('dd');
+
+        dt.textContent = label;
+        dd.textContent = value;
+        if (variant !== 'mono') {
+          dd.dataset.variant = variant;
+        }
+
+        wrapper.appendChild(dt);
+        wrapper.appendChild(dd);
+        detailsEl.appendChild(wrapper);
+      };
+
+      addRow('Handle', handle);
+
+      if (type === 'ok') {
+        statusEl.textContent = 'Resolved';
+        descriptionEl.textContent =
+          'Freedom resolved this Space. Browser-native web targets are not wired in yet, so this page shows the current root data instead.';
+        addRow('Canonical Handle', canonicalHandle && canonicalHandle !== handle ? canonicalHandle : '');
+        addRow('Current Outpoint', txid && n ? `${txid}:${n}` : '');
+        addRow('Root Pubkey', rootPubkey);
+        addRow('Proof Root Hash', proofRootHash);
+        addRow('Accepted Anchor Height', acceptedAnchorHeight, 'text');
+        addRow('Accepted Anchor Block', acceptedAnchorBlockHash);
+        addRow('Accepted Anchor Root', acceptedAnchorRootHash);
+        addRow('Proof Status', proofVerified === 'true' ? 'Verified' : proofVerified === 'false' ? 'Unverified' : '', 'text');
+        addRow('Control Class', controlClass, 'text');
+        addRow('Operation Class', operationClass, 'text');
+        addRow('Resolver Source', source, 'text');
+        addRow('Observation Provider', observationProvider, 'text');
+        addRow('Published Web Target', webUrl);
+        hintEl.textContent = 'This is a neutral resolver result page, not Pirate-owned content.';
+      } else if (type === 'not_found') {
+        statusEl.textContent = 'Not Found';
+        descriptionEl.textContent =
+          'Freedom could not find a Space with this handle.';
+        addRow('Reason', reason, 'text');
+        hintEl.textContent = 'Check the spelling and try again.';
+      } else {
+        statusEl.textContent = 'Resolver Error';
+        descriptionEl.textContent =
+          'Freedom could not reach a Spaces resolver for this handle.';
+        addRow('Reason', reason, 'text');
+        addRow('Message', message, 'text');
+        hintEl.textContent = 'The resolver is unavailable right now. Try again in a moment.';
+      }
+    </script>
+  </body>
+</html>
