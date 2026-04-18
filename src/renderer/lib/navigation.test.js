@@ -40,6 +40,7 @@ const createTab = (id, url, overrides = {}) => {
     currentIpfsBase: null,
     currentRadBase: null,
     addressBarSnapshot: '',
+    displayAliases: new Map(),
     cachedWebContentsId: null,
     resolvingWebContentsId: null,
     ...overrides.navigationState,
@@ -60,6 +61,7 @@ const loadNavigationModule = async (options = {}) => {
   jest.resetModules();
 
   const homeUrl = 'file:///app/pages/home.html';
+  const landingUrl = 'https://pirate.sc/';
   const historyUrl = 'file:///app/pages/history.html';
   const errorUrlBase = 'file:///app/pages/error.html';
   const state = {
@@ -180,11 +182,15 @@ const loadNavigationModule = async (options = {}) => {
     deriveIpfsBaseFromUrl: jest.fn(() => null),
     deriveRadBaseFromUrl: jest.fn(() => null),
     normalizeHnsHostInput: jest.fn(() => null),
+    parseSpacesRootInput: jest.fn(() => null),
   };
   const pageUrlsMocks = {
     homeUrl,
     homeUrlNormalized: homeUrl,
-    isHomeUrl: jest.fn((url) => url === 'https://pirate.sc/' || url === 'https://pirate/' || url === homeUrl),
+    landingUrl,
+    landingUrlNormalized: landingUrl,
+    isHomeUrl: jest.fn((url) => url === homeUrl || url === landingUrl || url === 'https://pirate/'),
+    isHnsHomeReady: jest.fn(() => false),
     errorUrlBase,
     internalPages: {
       history: historyUrl,
@@ -362,7 +368,7 @@ describe('navigation', () => {
 
     ctx.elements.homeBtn.dispatch('click');
 
-    expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(ctx.pageUrlsMocks.homeUrl);
+    expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(ctx.pageUrlsMocks.landingUrl);
 
     await ctx.mod.toggleBookmarkBar();
     expect(ctx.electronAPI.setBookmarkBarChecked).toHaveBeenLastCalledWith(false);
@@ -498,7 +504,7 @@ describe('navigation', () => {
       },
     });
     expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
-      'file:///app/pages/error.html?error=HNS_LOOKUP_FAILED&url=https%3A%2F%2Fshakestation%2F'
+      'file:///app/pages/error.html?error=HNS_NOT_READY&url=https%3A%2F%2Fshakestation%2F'
     );
 
     ctx.tabsMocks.webviewEventHandler('certificate-error', {
@@ -654,8 +660,8 @@ describe('navigation', () => {
 
     ctx.tabsRef.list = [activeTab, secondHomeTab, navigatedTab];
     ctx.activeRef.tab = activeTab;
-    ctx.pageUrlsMocks.homeUrl = newHomeUrl;
-    ctx.pageUrlsMocks.homeUrlNormalized = newHomeUrl;
+    ctx.pageUrlsMocks.landingUrl = newHomeUrl;
+    ctx.pageUrlsMocks.landingUrlNormalized = newHomeUrl;
     ctx.pageUrlsMocks.isHomeUrl.mockImplementation(
       (url) => url === oldHomeUrl || url === newHomeUrl || url === 'file:///app/pages/home.html'
     );
