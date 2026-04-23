@@ -21,7 +21,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
-          path: pirate-v2/freedom-browser
+          path: freedom-browser
 
       - name: Check out sentinel-ai-connect dependency
         uses: actions/checkout@v4
@@ -34,18 +34,18 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: pirate-v2/freedom-browser/package-lock.json
+          cache-dependency-path: freedom-browser/package-lock.json
 
       - name: Install dependencies
-        working-directory: pirate-v2/freedom-browser
+        working-directory: freedom-browser
         run: npm ci --ignore-scripts
 
       - name: Run lint
-        working-directory: pirate-v2/freedom-browser
+        working-directory: freedom-browser
         run: npm run lint
 
       - name: Run test coverage
-        working-directory: pirate-v2/freedom-browser
+        working-directory: freedom-browser
         run: npm run test:coverage
 
       - name: Upload coverage artifact
@@ -53,5 +53,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage
-          path: pirate-v2/freedom-browser/coverage/
+          path: freedom-browser/coverage/
           if-no-files-found: error

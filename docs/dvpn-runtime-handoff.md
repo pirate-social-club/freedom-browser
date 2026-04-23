@@ -12,7 +12,7 @@ Runtime is currently blocked by both path resolution AND binary absence — fixi
 
 | Repo | Path | Role |
 |---|---|---|
-| freedom-browser | `/home/t42/Documents/pirate-v2/freedom-browser` | Main work target |
+| freedom-browser | `/home/t42/Documents/pirate-workspace/freedom-browser` | Main work target |
 | blue-ai-connect | `/home/t42/Documents/blue-ai-connect` | SDK — only if a new blocker forces it |
 
 Do not touch pirate-api, pirate-web, pirate-tui, or pirate-contracts for this task.
@@ -77,7 +77,7 @@ SDK reference (read-only):
 The SDK has a setup script that downloads V2Ray. Run it:
 
 ```bash
-cd /home/t42/Documents/pirate-v2/freedom-browser
+cd /home/t42/Documents/pirate-workspace/freedom-browser
 node node_modules/sentinel-ai-connect/node_modules/sentinel-dvpn-sdk/setup.js
 ```
 
@@ -120,7 +120,7 @@ Fix `getV2RayPath()` to search these dev-mode paths in order:
 ### Step 3: Verify SDK Import Chain
 
 ```bash
-cd /home/t42/Documents/pirate-v2/freedom-browser
+cd /home/t42/Documents/pirate-workspace/freedom-browser
 node -e "import('sentinel-ai-connect').then(m => console.log('OK:', Object.keys(m).length, 'exports')).catch(e => console.error('FAIL:', e.message))"
 ```
 
@@ -133,7 +133,7 @@ If this fails, the local `file:../../blue-ai-connect` dependency is broken — f
 Start the browser:
 
 ```bash
-cd /home/t42/Documents/pirate-v2/freedom-browser
+cd /home/t42/Documents/pirate-workspace/freedom-browser
 npm start
 ```
 
@@ -284,7 +284,7 @@ Test cases:
 After writing tests, run:
 
 ```bash
-cd /home/t42/Documents/pirate-v2/freedom-browser
+cd /home/t42/Documents/pirate-workspace/freedom-browser
 npm test
 ```
 
@@ -369,7 +369,7 @@ Look for existing `electron`, `freedom`, `v2ray`, or `bee` processes. Do not sta
 ### Verify SDK import chain
 
 ```bash
-cd /home/t42/Documents/pirate-v2/freedom-browser
+cd /home/t42/Documents/pirate-workspace/freedom-browser
 node -e "import('sentinel-ai-connect').then(m => console.log('OK:', Object.keys(m).length, 'exports')).catch(e => console.error('FAIL:', e.message))"
 ```
 
@@ -378,14 +378,14 @@ Expected: `OK: 20 exports`
 ### Download V2Ray via SDK setup
 
 ```bash
-cd /home/t42/Documents/pirate-v2/freedom-browser
+cd /home/t42/Documents/pirate-workspace/freedom-browser
 node node_modules/sentinel-ai-connect/node_modules/sentinel-dvpn-sdk/setup.js
 ```
 
 ### Verify V2Ray downloaded (all three files required)
 
 ```bash
-ls -la /home/t42/Documents/pirate-v2/freedom-browser/node_modules/sentinel-ai-connect/node_modules/sentinel-dvpn-sdk/bin/
+ls -la /home/t42/Documents/pirate-workspace/freedom-browser/node_modules/sentinel-ai-connect/node_modules/sentinel-dvpn-sdk/bin/
 ```
 
 Expected: `v2ray`, `geoip.dat`, `geosite.dat` — all three must be present.
@@ -393,7 +393,7 @@ Expected: `v2ray`, `geoip.dat`, `geosite.dat` — all three must be present.
 ### Check V2Ray works
 
 ```bash
-/home/t42/Documents/pirate-v2/freedom-browser/node_modules/sentinel-ai-connect/node_modules/sentinel-dvpn-sdk/bin/v2ray version
+/home/t42/Documents/pirate-workspace/freedom-browser/node_modules/sentinel-ai-connect/node_modules/sentinel-dvpn-sdk/bin/v2ray version
 ```
 
 Expected: `V2Ray 5.2.1` or similar
@@ -401,28 +401,28 @@ Expected: `V2Ray 5.2.1` or similar
 ### Start Freedom for manual testing
 
 ```bash
-cd /home/t42/Documents/pirate-v2/freedom-browser
+cd /home/t42/Documents/pirate-workspace/freedom-browser
 npm start
 ```
 
 ### Run lint
 
 ```bash
-cd /home/t42/Documents/pirate-v2/freedom-browser
+cd /home/t42/Documents/pirate-workspace/freedom-browser
 npm run lint
 ```
 
 ### Run existing tests
 
 ```bash
-cd /home/t42/Documents/pirate-v2/freedom-browser
+cd /home/t42/Documents/pirate-workspace/freedom-browser
 npm test
 ```
 
 ### Run specific test file
 
 ```bash
-cd /home/t42/Documents/pirate-v2/freedom-browser
+cd /home/t42/Documents/pirate-workspace/freedom-browser
 npx jest src/main/dvpn-manager.test.js --no-coverage
 ```
 
