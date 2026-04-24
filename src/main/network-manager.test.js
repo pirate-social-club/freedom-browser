@@ -1,10 +1,8 @@
 const {
-  createIpcMainMock,
   loadMainModule,
 } = require('../../test/helpers/main-process-test-utils');
 
 function loadNetworkManagerModule(options = {}) {
-  const ipcMain = options.ipcMain || createIpcMainMock();
   const log = {
     info: jest.fn(),
     warn: jest.fn(),

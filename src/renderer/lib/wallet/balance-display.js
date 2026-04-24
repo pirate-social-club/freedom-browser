@@ -313,16 +313,6 @@ function stopBalanceRefresh() {
   }
 }
 
-function showBalanceError(message) {
-  if (balanceErrorEl) {
-    const textEl = document.getElementById('balance-error-text');
-    if (textEl) {
-      textEl.textContent = message;
-    }
-    balanceErrorEl.classList.remove('hidden');
-  }
-}
-
 function hideBalanceError() {
   if (balanceErrorEl) {
     balanceErrorEl.classList.add('hidden');

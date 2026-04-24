@@ -54,7 +54,7 @@ import { initPageContextMenu, hidePageContextMenu } from './lib/page-context-men
 import { pushDebug } from './lib/debug.js';
 import { initOnboarding, checkAndShowOnboarding } from './lib/onboarding.js';
 import { initSidebar } from './lib/sidebar.js';
-import { initWalletUi, updateIdentityState } from './lib/wallet-ui.js';
+import { initWalletUi } from './lib/wallet-ui.js';
 
 const electronAPI = window.electronAPI;
 

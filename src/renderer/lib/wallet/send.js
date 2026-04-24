@@ -5,7 +5,7 @@
  */
 
 import { walletState, registerScreenHider } from './wallet-state.js';
-import { escapeHtml, formatBalance } from './wallet-utils.js';
+import { escapeHtml } from './wallet-utils.js';
 import { refreshBalances, getTokensWithBalance, getChainsWithBalance, sortTokens } from './balance-display.js';
 import { createTab } from '../tabs.js';
 
@@ -55,7 +55,6 @@ let sendPasswordInput;
 let sendPasswordSubmit;
 let sendUnlockError;
 let sendReviewError;
-let sendSuccessText;
 let sendExplorerLink;
 let sendDoneBtn;
 let sendErrorText;
@@ -118,7 +117,6 @@ export function initSend() {
   sendPasswordSubmit = document.getElementById('send-password-submit');
   sendUnlockError = document.getElementById('send-unlock-error');
   sendReviewError = document.getElementById('send-review-error');
-  sendSuccessText = document.getElementById('send-success-text');
   sendExplorerLink = document.getElementById('send-explorer-link');
   sendDoneBtn = document.getElementById('send-done-btn');
   sendErrorText = document.getElementById('send-error-text');

@@ -5,18 +5,11 @@
  */
 
 import { buildBeeUrl } from '../state.js';
-import { formatBalance, formatBytes } from './wallet-utils.js';
 
 // DOM references
 let swarmModeBadge;
 let swarmStatusBadge;
-let swarmStampsCount;
-let swarmStampsSummary;
-let swarmBalanceXdaiEl;
-let swarmBalanceXbzzEl;
 let walletNotification;
-let walletNotificationText;
-let walletNotificationAction;
 
 // Node status tracking
 let nodeStatusUnsubscribers = [];
@@ -25,15 +18,9 @@ export function initNodeStatus() {
   // Node card elements
   swarmModeBadge = document.getElementById('swarm-mode-badge');
   swarmStatusBadge = document.getElementById('swarm-status-badge');
-  swarmStampsCount = document.getElementById('swarm-stamps-count');
-  swarmStampsSummary = document.getElementById('swarm-stamps-summary');
-  swarmBalanceXdaiEl = document.getElementById('swarm-balance-xdai');
-  swarmBalanceXbzzEl = document.getElementById('swarm-balance-xbzz');
 
   // Notification elements
   walletNotification = document.getElementById('wallet-notification');
-  walletNotificationText = document.getElementById('wallet-notification-text');
-  walletNotificationAction = document.getElementById('wallet-notification-action');
 
   // Setup node card collapse/expand
   setupNodeCards();
@@ -63,11 +50,6 @@ function setupNodeCards() {
       handleUpgradeNode();
     });
   }
-}
-
-function handleSendToNode(token) {
-  // TODO: Implement send flow
-  console.log(`[WalletUI] Send ${token} to node - not yet implemented`);
 }
 
 function toggleNodeCard(nodeName) {
@@ -280,106 +262,8 @@ function updateRadicleStatus(status, _error) {
   }
 }
 
-function updateSwarmWalletBalances(walletInfo) {
-  if (swarmBalanceXdaiEl && walletInfo?.xdai !== undefined) {
-    swarmBalanceXdaiEl.textContent = formatBalance(walletInfo.xdai);
-  }
-  if (swarmBalanceXbzzEl && walletInfo?.xbzz !== undefined) {
-    swarmBalanceXbzzEl.textContent = formatBalance(walletInfo.xbzz);
-  }
-}
-
-function updateSwarmStamps(stamps) {
-  if (swarmStampsCount) {
-    const count = Array.isArray(stamps) ? stamps.length : 0;
-    swarmStampsCount.textContent = count.toString();
-  }
-
-  if (swarmStampsSummary) {
-    if (!stamps || (Array.isArray(stamps) && stamps.length === 0)) {
-      swarmStampsSummary.innerHTML = '<span class="node-stamps-empty">No stamps available</span>';
-    } else if (Array.isArray(stamps)) {
-      const totalCapacity = stamps.reduce((sum, s) => sum + (s.amount || 0), 0);
-      swarmStampsSummary.innerHTML = `<span>Total capacity: ${formatBytes(totalCapacity)}</span>`;
-    }
-  }
-}
-
-// ============================================
-// Wallet Notifications
-// ============================================
-
-function checkSwarmNotifications(status) {
-  if (!walletNotification || !walletNotificationText || !walletNotificationAction) {
-    return;
-  }
-
-  walletNotification.classList.add('hidden');
-
-  if (!status?.running) return;
-
-  if (status.wallet?.xdai !== undefined) {
-    const xdaiBalance = parseFloat(status.wallet.xdai);
-    if (xdaiBalance < 0.01) {
-      showNotification(
-        'Swarm node needs xDAI for gas fees',
-        'Send xDAI',
-        () => handleSendToNode('xdai')
-      );
-      return;
-    }
-  }
-
-  if (status.wallet?.xbzz !== undefined) {
-    const xbzzBalance = parseFloat(status.wallet.xbzz);
-    if (xbzzBalance < 0.1) {
-      showNotification(
-        'Swarm node needs xBZZ for postage stamps',
-        'Send xBZZ',
-        () => handleSendToNode('xbzz')
-      );
-      return;
-    }
-  }
-
-  if (status.stamps !== undefined) {
-    const stampCount = Array.isArray(status.stamps) ? status.stamps.length : 0;
-    if (stampCount === 0 && status.wallet?.xbzz && parseFloat(status.wallet.xbzz) > 0) {
-      showNotification(
-        'No postage stamps available for uploads',
-        'Buy Stamps',
-        () => handleBuyStamps()
-      );
-      return;
-    }
-  }
-}
-
-function showNotification(message, actionLabel, actionHandler) {
-  if (!walletNotification || !walletNotificationText || !walletNotificationAction) {
-    return;
-  }
-
-  walletNotificationText.textContent = message;
-  walletNotificationAction.textContent = actionLabel;
-
-  // Remove old listener and add new one
-  const newActionBtn = walletNotificationAction.cloneNode(true);
-  walletNotificationAction.parentNode.replaceChild(newActionBtn, walletNotificationAction);
-  walletNotificationAction = newActionBtn;
-  walletNotificationAction.addEventListener('click', actionHandler);
-
-  walletNotification.classList.remove('hidden');
-}
-
 function hideNotification() {
   if (walletNotification) {
     walletNotification.classList.add('hidden');
   }
-}
-
-function handleBuyStamps() {
-  // TODO: Implement buy stamps flow
-  console.log('[WalletUI] Buy stamps - coming soon');
-  alert('Buy Postage Stamps - coming soon');
 }
