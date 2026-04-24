@@ -26,12 +26,12 @@ jobs:
             label: macOS x64
             artifact_name: macos-x64
             workdir: freedom-browser
-            build_command: npm run dist -- --mac --x64
+            build_command: node scripts/build.js --dist --mac --x64
           - os: macos-14
             label: macOS arm64
             artifact_name: macos-arm64
             workdir: freedom-browser
-            build_command: npm run dist -- --mac --arm64
+            build_command: node scripts/build.js --dist --mac --arm64
           - os: ubuntu-latest
             label: Linux x64
             artifact_name: linux-x64
@@ -41,7 +41,7 @@ jobs:
             label: Windows x64
             artifact_name: windows-x64
             workdir: freedom-browser
-            build_command: npm run dist -- --win --x64
+            build_command: node scripts/build.js --dist --win --x64
 
     steps:
       - name: Check out repository
