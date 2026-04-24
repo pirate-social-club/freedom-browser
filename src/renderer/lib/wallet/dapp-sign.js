@@ -287,7 +287,7 @@ async function handleDappSignPasswordUnlock() {
 async function approveDappSign() {
   if (!dappSignPending) return;
 
-  const { walletIndex, method, params, resolve } = dappSignPending;
+  const { permissionKey, walletIndex, method, params, resolve } = dappSignPending;
 
   try {
     if (dappSignApproveBtn) {
@@ -298,13 +298,13 @@ async function approveDappSign() {
     let signature;
 
     if (method === 'personal_sign') {
-      const result = await window.wallet.signMessage(params[0], walletIndex);
+      const result = await window.wallet.signMessage(params[0], walletIndex, permissionKey);
       if (!result.success) {
         throw new Error(result.error || 'Signing failed');
       }
       signature = result.signature;
     } else if (method === 'eth_signTypedData_v4') {
-      const result = await window.wallet.signTypedData(params[1], walletIndex);
+      const result = await window.wallet.signTypedData(params[1], walletIndex, permissionKey);
       if (!result.success) {
         throw new Error(result.error || 'Signing failed');
       }

@@ -8,6 +8,7 @@ import { walletState, registerScreenHider, hideAllSubscreens } from './wallet-st
 import { escapeHtml } from './wallet-utils.js';
 import { open as openSidebarPanel, isVisible as isSidebarVisible } from '../sidebar.js';
 import { getActiveWebview, emitAccountsChanged } from '../dapp-provider.js';
+import { getPermissionKeyFromUrl } from '../dapp-permission-key.js';
 
 // DOM references
 let dappConnectScreen;
@@ -351,36 +352,5 @@ async function disconnectCurrentDapp() {
     }
   } catch (err) {
     console.error('[WalletUI] Failed to disconnect:', err);
-  }
-}
-
-function getPermissionKeyFromUrl(displayUrl) {
-  if (!displayUrl) return null;
-  const trimmed = displayUrl.trim();
-
-  // ENS name without protocol
-  if (/^[a-z0-9-]+\.(eth|box)/i.test(trimmed)) {
-    return trimmed.split('/')[0].toLowerCase();
-  }
-
-  // ens:// protocol
-  const ensMatch = trimmed.match(/^ens:\/\/([^/#]+)/i);
-  if (ensMatch) return ensMatch[1].toLowerCase();
-
-  // dweb protocols
-  const dwebMatch = trimmed.match(/^(ipfs|bzz|ipns):\/\/([^/]+)/i);
-  if (dwebMatch) return `${dwebMatch[1].toLowerCase()}://${dwebMatch[2]}`;
-
-  // rad:// protocol
-  const radMatch = trimmed.match(/^rad:\/\/([^/]+)/i);
-  if (radMatch) return `rad://${radMatch[1]}`;
-
-  // Regular URL
-  try {
-    const url = new URL(trimmed);
-    if (url.origin === 'null') return trimmed;
-    return url.origin;
-  } catch {
-    return trimmed;
   }
 }

@@ -110,6 +110,10 @@ function registerBaseIpcHandlers(callbacks = {}) {
     if (!baseUrl) {
       return failure('INVALID_BASE_URL', 'Missing baseUrl');
     }
+    if (!isAllowedBaseUrl(baseUrl)) {
+      log.warn('[ipc] Rejecting non-local rad base URL');
+      return failure('INVALID_BASE_URL', 'Base URL must be localhost or 127.0.0.1', { baseUrl });
+    }
     try {
       const normalized = new URL(baseUrl);
       activeRadBases.set(webContentsId, normalized);

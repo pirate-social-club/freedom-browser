@@ -5,7 +5,7 @@ import { hideBookmarkContextMenu } from './bookmarks-ui.js';
 import { showMenuBackdrop, hideMenuBackdrop } from './menu-backdrop.js';
 import { setupWebviewContextMenu } from './page-context-menu.js';
 import { homeUrl, landingUrl, isHomeUrl } from './page-urls.js';
-import { setupWebviewProvider, setActiveWebview } from './dapp-provider.js';
+import { setupWebviewProvider, setActiveWebview, unregisterWebviewProvider } from './dapp-provider.js';
 
 const electronAPI = window.electronAPI;
 
@@ -671,6 +671,7 @@ const cleanupWebview = (webview) => {
   if (!webview) return;
 
   const handlers = webview._eventHandlers;
+  unregisterWebviewProvider(webview);
   if (handlers) {
     for (const [eventName, handler] of Object.entries(handlers)) {
       webview.removeEventListener(eventName, handler);

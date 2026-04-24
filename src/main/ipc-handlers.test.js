@@ -168,6 +168,18 @@ describe('ipc-handlers', () => {
     await expect(
       enabledCtx.ipcMain.invoke(IPC.RAD_SET_BASE, {
         webContentsId: 12,
+        baseUrl: 'https://radicle-gateway.example/api/v1/repos/rid/',
+      })
+    ).resolves.toEqual(
+      failure('INVALID_BASE_URL', 'Base URL must be localhost or 127.0.0.1', {
+        baseUrl: 'https://radicle-gateway.example/api/v1/repos/rid/',
+      })
+    );
+    expect(enabledCtx.log.warn).toHaveBeenCalledWith('[ipc] Rejecting non-local rad base URL');
+
+    await expect(
+      enabledCtx.ipcMain.invoke(IPC.RAD_SET_BASE, {
+        webContentsId: 12,
         baseUrl: 'http://127.0.0.1:8780/api/v1/repos/rid/',
       })
     ).resolves.toEqual(success());

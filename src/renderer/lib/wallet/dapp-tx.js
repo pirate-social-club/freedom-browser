@@ -296,7 +296,7 @@ async function handleDappTxPasswordUnlock() {
 async function approveDappTx() {
   if (!dappTxPending) return;
 
-  const { walletIndex, txParams, resolve, gasLimit, gasPrice, chainId } = dappTxPending;
+  const { permissionKey, walletIndex, txParams, resolve, gasLimit, gasPrice, chainId } = dappTxPending;
 
   try {
     if (dappTxApproveBtn) {
@@ -321,7 +321,7 @@ async function approveDappTx() {
       }
     }
 
-    const result = await window.wallet.dappSendTransaction(tx, walletIndex);
+    const result = await window.wallet.dappSendTransaction(tx, walletIndex, permissionKey);
 
     if (!result.success) {
       throw new Error(result.error || 'Transaction failed');

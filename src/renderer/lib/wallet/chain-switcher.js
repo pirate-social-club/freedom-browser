@@ -7,7 +7,7 @@
 import { walletState } from './wallet-state.js';
 import { escapeHtml } from './wallet-utils.js';
 import { renderAssetList } from './balance-display.js';
-import { getActiveWebview, emitChainChanged } from '../dapp-provider.js';
+import { broadcastProviderEvent } from '../dapp-provider.js';
 
 // DOM references
 let chainSwitcherBtn;
@@ -152,14 +152,11 @@ function selectChain(chainId) {
   updateChainSwitcherDisplay();
   renderAssetList();
 
-  // Emit chainChanged event to active webview if chain actually changed
+  // Emit chainChanged event to all provider-enabled webviews if chain actually changed
   if (previousChainId !== chainId && chainId !== null) {
-    const webview = getActiveWebview();
-    if (webview) {
-      const chainIdHex = '0x' + chainId.toString(16);
-      emitChainChanged(webview, chainIdHex);
-      console.log('[WalletUI] Emitted chainChanged to dApp:', chainIdHex);
-    }
+    const chainIdHex = '0x' + chainId.toString(16);
+    broadcastProviderEvent('chainChanged', chainIdHex);
+    console.log('[WalletUI] Broadcast chainChanged to dApps:', chainIdHex);
   }
 }
 

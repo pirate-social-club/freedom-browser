@@ -1,5 +1,5 @@
 const log = require('./logger');
-const { BrowserWindow, app } = require('electron');
+const { app } = require('electron');
 const { activeBzzBases, activeIpfsBases, activeRadBases } = require('./state');
 
 const sanitizeUrlForLog = (rawUrl) => {
@@ -29,6 +29,15 @@ const sanitizeUrlForLog = (rawUrl) => {
     }
     return 'unknown';
   }
+};
+
+const sendToHostWebContents = (contents, channel, ...args) => {
+  const hostWebContents = contents.hostWebContents;
+  if (!hostWebContents || hostWebContents.isDestroyed?.()) {
+    return false;
+  }
+  hostWebContents.send(channel, ...args);
+  return true;
 };
 
 function registerWebContentsHandlers() {
@@ -66,16 +75,10 @@ function registerWebContentsHandlers() {
         log.info(
           `${tag} intercepted new window request: ${sanitizeUrlForLog(url)} (target: ${frameName || 'none'})`
         );
-        // Send message to the parent BrowserWindow to open URL in new tab
-        const parentWindow = BrowserWindow.getAllWindows().find((win) => {
-          return win.webContents.id !== contents.id;
-        });
-        if (parentWindow) {
-          // Pass targetName for named link targets (e.g. target="mywindow")
-          // Skip special targets (_blank, _self, _parent, _top) - they should use default behavior
-          const isNamedTarget = frameName && !frameName.startsWith('_');
-          parentWindow.webContents.send('tab:new-with-url', url, isNamedTarget ? frameName : null);
-        }
+        // Pass targetName for named link targets (e.g. target="mywindow")
+        // Skip special targets (_blank, _self, _parent, _top) - they should use default behavior
+        const isNamedTarget = frameName && !frameName.startsWith('_');
+        sendToHostWebContents(contents, 'tab:new-with-url', url, isNamedTarget ? frameName : null);
         return { action: 'deny' };
       });
 
@@ -90,13 +93,7 @@ function registerWebContentsHandlers() {
         ) {
           log.info(`${tag} intercepted custom protocol navigation: ${sanitizeUrlForLog(url)}`);
           event.preventDefault();
-          // Send to parent window to handle via the browser's navigation system
-          const parentWindow = BrowserWindow.getAllWindows().find((win) => {
-            return win.webContents.id !== contents.id;
-          });
-          if (parentWindow) {
-            parentWindow.webContents.send('navigate-to-url', url);
-          }
+          sendToHostWebContents(contents, 'navigate-to-url', url);
         }
       });
     }
@@ -129,4 +126,5 @@ function registerWebContentsHandlers() {
 
 module.exports = {
   registerWebContentsHandlers,
+  sendToHostWebContents,
 };

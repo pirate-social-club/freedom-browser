@@ -11,6 +11,7 @@
  */
 
 import { showDappConnect, getSelectedChainId, setSelectedChainId, updateConnectionBanner, showDappTxApproval, showDappSignApproval } from './wallet-ui.js';
+import { getPermissionContext } from './dapp-permission-key.js';
 
 // Feature flag state
 let identityWalletEnabled = false;
@@ -29,8 +30,8 @@ const providerStates = new WeakMap();
 // Current active webview reference (set by tabs.js)
 let activeWebview = null;
 
-// Callback for showing connection approval UI (legacy, kept for compatibility)
-let showConnectionApproval = null;
+// All webviews with provider wiring, for provider-wide chain/account events.
+const providerWebviews = new Set();
 
 /**
  * EIP-1193 error codes
@@ -44,66 +45,6 @@ const ERRORS = {
   INVALID_PARAMS: { code: -32602, message: 'Invalid parameters' },
   INTERNAL_ERROR: { code: -32603, message: 'Internal error' },
 };
-
-/**
- * Get the display URL from the address bar
- * This is what the user sees (e.g., ipfs://QmXxx, vitalik.eth, https://example.com)
- */
-function getDisplayUrl() {
-  const addressInput = document.getElementById('address-input');
-  return addressInput?.value || '';
-}
-
-/**
- * Extract the permission key from a display URL
- * This strips the URL to its "root" identifier:
- * - ipfs://QmABC123/path → ipfs://QmABC123
- * - bzz://abc123/page → bzz://abc123
- * - vitalik.eth/blog → vitalik.eth
- * - ipns://docs.ipfs.tech/guide → ipns://docs.ipfs.tech
- * - https://app.uniswap.org/swap → https://app.uniswap.org
- */
-function getPermissionKey(displayUrl) {
-  if (!displayUrl) return null;
-
-  const trimmed = displayUrl.trim();
-
-  // ENS name without protocol (e.g., 1inch.eth/path)
-  if (/^[a-z0-9-]+\.(eth|box)/i.test(trimmed)) {
-    return trimmed.split('/')[0].toLowerCase();
-  }
-
-  // ens:// protocol → extract ENS name (e.g., ens://1inch.eth/#/path → 1inch.eth)
-  const ensMatch = trimmed.match(/^ens:\/\/([^/#]+)/i);
-  if (ensMatch) {
-    return ensMatch[1].toLowerCase();
-  }
-
-  // dweb protocols: ipfs://CID/path → ipfs://CID
-  const dwebMatch = trimmed.match(/^(ipfs|bzz|ipns):\/\/([^/]+)/i);
-  if (dwebMatch) {
-    return `${dwebMatch[1].toLowerCase()}://${dwebMatch[2]}`;
-  }
-
-  // rad:// protocol
-  const radMatch = trimmed.match(/^rad:\/\/([^/]+)/i);
-  if (radMatch) {
-    return `rad://${radMatch[1]}`;
-  }
-
-  // Regular URL (https://host/path → https://host)
-  try {
-    const url = new URL(trimmed);
-    // Non-standard protocols return "null" for origin, fall back to trimmed
-    if (url.origin === 'null') {
-      return trimmed;
-    }
-    return url.origin;
-  } catch {
-    // If parsing fails, return as-is
-    return trimmed;
-  }
-}
 
 /**
  * Methods that can be handled without user approval (read-only)
@@ -134,30 +75,6 @@ const READ_ONLY_METHODS = [
   'eth_uninstallFilter',
   'web3_clientVersion',
   'web3_sha3',
-];
-
-/**
- * Methods that require connection (account access)
- */
-const ACCOUNT_METHODS = [
-  'eth_accounts',
-  'eth_requestAccounts',
-];
-
-/**
- * Methods that require user approval
- */
-const APPROVAL_METHODS = [
-  'eth_sendTransaction',
-  'eth_signTransaction',
-  'personal_sign',
-  'eth_sign',
-  'eth_signTypedData',
-  'eth_signTypedData_v3',
-  'eth_signTypedData_v4',
-  'wallet_addEthereumChain',
-  'wallet_switchEthereumChain',
-  'wallet_watchAsset',
 ];
 
 /**
@@ -205,12 +122,18 @@ async function handleProviderRequest(webview, request) {
 
   console.log('[DappProvider] handleProviderRequest:', { id, method, params });
 
-  // Get the display URL from address bar and derive permission key
-  // This replaces the raw origin (which is 127.0.0.1 for IPFS/Swarm pages)
-  const displayUrl = getDisplayUrl();
-  const permissionKey = getPermissionKey(displayUrl);
+  const webviewUrl = typeof webview?.getURL === 'function' ? webview.getURL() : '';
+  const { displayUrl, permissionKey } = getPermissionContext({
+    webviewUrl,
+    requestOrigin: request.origin,
+  });
 
   console.log('[DappProvider] Using permissionKey:', permissionKey);
+
+  if (!permissionKey) {
+    sendProviderResponse(webview, id, null, ERRORS.UNAUTHORIZED);
+    return;
+  }
 
   try {
     let result;
@@ -401,19 +324,15 @@ function sendProviderEvent(webview, event, data) {
 }
 
 /**
- * Send state update to a webview
- */
-function sendProviderState(webview, state) {
-  if (webview && webview.send) {
-    webview.send('dapp:provider-state', state);
-  }
-}
-
-/**
  * Setup provider request listener for a webview
  */
 export function setupWebviewProvider(webview) {
   if (!webview) return;
+
+  providerWebviews.add(webview);
+  webview.addEventListener('destroyed', () => {
+    providerWebviews.delete(webview);
+  });
 
   webview.addEventListener('ipc-message', (event) => {
     if (event.channel === 'dapp:provider-request') {
@@ -424,6 +343,10 @@ export function setupWebviewProvider(webview) {
 
   // Initialize provider state for this webview
   getProviderState(webview);
+}
+
+export function unregisterWebviewProvider(webview) {
+  providerWebviews.delete(webview);
 }
 
 /**
@@ -443,13 +366,6 @@ export function setActiveWebview(webview) {
  */
 export function getActiveWebview() {
   return activeWebview;
-}
-
-/**
- * Register callback for showing connection approval UI
- */
-export function onConnectionApproval(callback) {
-  showConnectionApproval = callback;
 }
 
 /**
@@ -484,10 +400,8 @@ export function emitDisconnect(webview, error) {
  * Broadcast event to all webviews (when chain changes globally, etc.)
  */
 export function broadcastProviderEvent(event, data) {
-  // This would need access to all webviews
-  // For now, just emit to active webview
-  if (activeWebview) {
-    sendProviderEvent(activeWebview, event, data);
+  for (const webview of providerWebviews) {
+    sendProviderEvent(webview, event, data);
   }
 }
 

@@ -22,6 +22,9 @@ const {
 } = require('./transaction-service');
 const { loadIdentityModule, getActiveWalletIndex } = require('../identity-manager');
 const { getEffectiveRpcUrls } = require('./rpc-manager');
+const { getPermission } = require('./dapp-permissions');
+
+let rpcRequestId = 0;
 
 /**
  * Validate that an RPC URL is a known, trusted endpoint.
@@ -62,6 +65,14 @@ function isAllowedRpcUrl(rpcUrl) {
  */
 function isValidWalletIndex(walletIndex) {
   return typeof walletIndex === 'number' && Number.isInteger(walletIndex) && walletIndex >= 0;
+}
+
+function hasDappPermissionForWallet(permissionKey, walletIndex) {
+  if (!permissionKey || !isValidWalletIndex(walletIndex)) {
+    return false;
+  }
+  const permission = getPermission(permissionKey);
+  return permission?.walletIndex === walletIndex;
 }
 
 /**
@@ -286,10 +297,13 @@ function registerWalletIpc() {
   // ============================================
 
   // Sign and send transaction for a dApp (uses specified wallet index)
-  ipcMain.handle('wallet:dapp-send-transaction', async (_event, params, walletIndex) => {
+  ipcMain.handle('wallet:dapp-send-transaction', async (_event, params, walletIndex, permissionKey) => {
     try {
       if (!isValidWalletIndex(walletIndex)) {
         return { success: false, error: 'Invalid wallet index' };
+      }
+      if (!hasDappPermissionForWallet(permissionKey, walletIndex)) {
+        return { success: false, error: 'Unauthorized dApp wallet access' };
       }
 
       const { to, value, data, gasLimit, maxFeePerGas, maxPriorityFeePerGas, gasPrice, chainId } = params;
@@ -320,10 +334,13 @@ function registerWalletIpc() {
   });
 
   // Sign a personal message (EIP-191) for a dApp
-  ipcMain.handle('wallet:sign-message', async (_event, message, walletIndex) => {
+  ipcMain.handle('wallet:sign-message', async (_event, message, walletIndex, permissionKey) => {
     try {
       if (!isValidWalletIndex(walletIndex)) {
         return { success: false, error: 'Invalid wallet index' };
+      }
+      if (!hasDappPermissionForWallet(permissionKey, walletIndex)) {
+        return { success: false, error: 'Unauthorized dApp wallet access' };
       }
 
       if (!message) {
@@ -347,10 +364,13 @@ function registerWalletIpc() {
   });
 
   // Sign typed data (EIP-712) for a dApp
-  ipcMain.handle('wallet:sign-typed-data', async (_event, typedData, walletIndex) => {
+  ipcMain.handle('wallet:sign-typed-data', async (_event, typedData, walletIndex, permissionKey) => {
     try {
       if (!isValidWalletIndex(walletIndex)) {
         return { success: false, error: 'Invalid wallet index' };
+      }
+      if (!hasDappPermissionForWallet(permissionKey, walletIndex)) {
+        return { success: false, error: 'Unauthorized dApp wallet access' };
       }
 
       if (!typedData) {
@@ -385,7 +405,7 @@ function registerWalletIpc() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           jsonrpc: '2.0',
-          id: Date.now(),
+          id: ++rpcRequestId,
           method,
           params: params || [],
         }),

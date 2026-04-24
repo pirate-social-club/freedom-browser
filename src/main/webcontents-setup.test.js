@@ -11,6 +11,7 @@ function createContentsMock(options = {}) {
     id: options.id || 7,
     getType: jest.fn(() => options.type || 'webview'),
     getURL: jest.fn(() => currentUrl),
+    hostWebContents: options.hostWebContents || null,
     setURL(url) {
       currentUrl = url;
     },
@@ -123,6 +124,7 @@ describe('webcontents-setup', () => {
       id: 22,
       type: 'webview',
       url: 'file:///app/pages/home.html',
+      hostWebContents: parentWindow.webContents,
     });
 
     ctx.mod.registerWebContentsHandlers();
@@ -171,6 +173,7 @@ describe('webcontents-setup', () => {
       id: 33,
       type: 'webview',
       url: 'https://example.com',
+      hostWebContents: parentWindow.webContents,
     });
     const event = {
       preventDefault: jest.fn(),

@@ -2,6 +2,21 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [0.7.3] - 2026-04-24
+
+### Security
+
+- Hardened dApp wallet permissions so requests are attributed to the requesting webview instead of the active address bar, including stable permission keys for local IPFS, IPNS, Swarm, and Radicle gateway URLs.
+- Added main-process permission checks before dApp transaction and signing IPC handlers can use a wallet index.
+- Restricted Radicle rewrite bases to localhost/127.0.0.1, matching the Swarm and IPFS IPC validation boundary.
+
+### Fixed
+
+- Popup and custom-protocol navigation now route back to the owning browser window instead of the first unrelated Freedom window.
+- `window.ethereum` is exposed synchronously from the webview preload so dApps can detect the provider during early page scripts.
+- Chain changes now broadcast to all provider-enabled tabs instead of only the active tab.
+- JSON-RPC proxy calls now use monotonic request IDs instead of millisecond timestamps.
+
 ## [0.7.1] - 2026-04-17
 
 ### Fixed
