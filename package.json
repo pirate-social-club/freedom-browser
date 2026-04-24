@@ -27,6 +27,7 @@
     "check-binaries": "node scripts/check-binaries.js",
     "build": "node scripts/build.js",
     "dist": "node scripts/build.js --dist",
+    "release:smoke": "node scripts/build.js --dist --verify-tools",
     "dist:mac:prepare-notary": "npm run dist -- --mac --no-notarize",
     "dist:mac:submit-notary": "dotenv -- node scripts/macos-notary.js submit",
     "dist:mac:notary-status": "dotenv -- node scripts/macos-notary.js status",

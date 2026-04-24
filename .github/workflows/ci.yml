@@ -59,3 +59,58 @@ jobs:
           name: coverage
           path: freedom-browser/coverage/
           if-no-files-found: error
+
+  release-smoke:
+    name: Release smoke (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux x64
+            args: --linux --x64
+          - os: macos-14
+            label: macOS x64 unsigned
+            args: --mac --x64 --unsigned --no-notarize
+          - os: windows-latest
+            label: Windows x64
+            args: --win --x64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          path: freedom-browser
+
+      - name: Check out sentinel-ai-connect dependency
+        uses: actions/checkout@v6
+        with:
+          repository: Sentinel-Autonomybuilder/blue-ai-connect
+          path: blue-ai-connect
+
+      - name: Prepare sentinel-ai-connect file dependency
+        if: runner.os != 'Windows'
+        shell: bash
+        run: cp -R blue-ai-connect ../blue-ai-connect
+
+      - name: Prepare sentinel-ai-connect file dependency (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Copy-Item -Path blue-ai-connect -Destination .. -Recurse -Force
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: freedom-browser/package-lock.json
+
+      - name: Install dependencies
+        working-directory: freedom-browser
+        run: npm ci --ignore-scripts
+
+      - name: Verify release toolchain
+        working-directory: freedom-browser
+        run: npm run release:smoke -- ${{ matrix.args }}

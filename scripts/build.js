@@ -14,6 +14,7 @@
  *   --dist                  Create distributable (default: unpacked build via --dir)
  *   --unsigned              Skip code signing (macOS only)
  *   --no-notarize           Disable built-in notarization (macOS dist only)
+ *   --verify-tools          Verify release CLIs resolve without building
  *   --verbose               Enable electron-builder debug output
  *
  * Examples:
@@ -35,6 +36,7 @@ const archs = ['arm64', 'x64'].filter((a) => args.includes(`--${a}`));
 const dist = args.includes('--dist');
 const unsigned = args.includes('--unsigned');
 const noNotarize = args.includes('--no-notarize');
+const verifyTools = args.includes('--verify-tools');
 const verbose = args.includes('--verbose');
 
 if (platforms.length === 0) {
@@ -58,8 +60,10 @@ if (archs.length === 0) {
 
 // 1. Check binaries for the target platform/arch
 const checkArgs = [`--${platform}`, ...archs.map((a) => `--${a}`)].join(' ');
-console.log(`\n→ Checking binaries: npm run check-binaries -- ${checkArgs}\n`);
-execSync(`npm run check-binaries -- ${checkArgs}`, { stdio: 'inherit' });
+if (!verifyTools) {
+  console.log(`\n→ Checking binaries: npm run check-binaries -- ${checkArgs}\n`);
+  execSync(`npm run check-binaries -- ${checkArgs}`, { stdio: 'inherit' });
+}
 
 // 2. Build electron-builder command
 const builderArgs = [`--${platform}`, ...archs.map((a) => `--${a}`)];
@@ -105,6 +109,16 @@ const useDotenv = platform === 'mac' && !unsigned;
 const cmd = useDotenv
   ? `dotenv -- electron-builder ${builderArgs.join(' ')}`
   : `electron-builder ${builderArgs.join(' ')}`;
+
+if (verifyTools) {
+  console.log('\n→ Verifying release toolchain\n');
+  if (useDotenv) {
+    execSync('dotenv --version', { stdio: 'inherit', env });
+  }
+  execSync('electron-builder --version', { stdio: 'inherit', env });
+  console.log(`\n→ Release command: ${cmd}\n`);
+  process.exit(0);
+}
 
 console.log(`\n→ Running: ${cmd}\n`);
 execSync(cmd, { stdio: 'inherit', env });
