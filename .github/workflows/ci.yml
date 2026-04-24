@@ -29,6 +29,10 @@ jobs:
           repository: Sentinel-Autonomybuilder/blue-ai-connect
           path: blue-ai-connect
 
+      - name: Prepare sentinel-ai-connect file dependency
+        shell: bash
+        run: cp -R blue-ai-connect ../blue-ai-connect
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
