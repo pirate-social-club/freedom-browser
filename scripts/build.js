@@ -25,6 +25,7 @@
  */
 
 const { execSync } = require('child_process');
+const path = require('path');
 
 const args = process.argv.slice(2);
 
@@ -83,6 +84,14 @@ if (dist && platform === 'win') {
 
 // 3. Environment
 const env = { ...process.env };
+const localBin = path.resolve(__dirname, '..', 'node_modules', '.bin');
+const pathKey =
+  Object.keys(env).find((key) => key.toLowerCase() === 'path') || 'PATH';
+const originalPath = env[pathKey];
+for (const key of Object.keys(env)) {
+  if (key.toLowerCase() === 'path') delete env[key];
+}
+env[pathKey] = [localBin, originalPath].filter(Boolean).join(path.delimiter);
 
 if (verbose) {
   env.DEBUG =
