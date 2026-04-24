@@ -172,8 +172,9 @@ function loadMainModule(modulePath, options = {}) {
   }));
 
   if (options.extraMocks) {
+    const virtualMocks = new Set(options.virtualMocks || []);
     for (const [request, mockFactory] of Object.entries(options.extraMocks)) {
-      jest.doMock(request, mockFactory);
+      jest.doMock(request, mockFactory, virtualMocks.has(request) ? { virtual: true } : undefined);
     }
   }
 

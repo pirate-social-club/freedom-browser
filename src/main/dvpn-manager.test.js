@@ -118,6 +118,7 @@ function loadDvpnManagerModule(options = {}) {
     app,
     ipcMain,
     BrowserWindow,
+    virtualMocks: ['sentinel-ai-connect'],
     extraMocks: {
       electron: () => ({
         app,
