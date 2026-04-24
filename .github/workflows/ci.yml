@@ -113,4 +113,4 @@ jobs:
 
       - name: Verify release toolchain
         working-directory: freedom-browser
-        run: npm run release:smoke -- ${{ matrix.args }}
+        run: node scripts/build.js --dist --verify-tools ${{ matrix.args }}
