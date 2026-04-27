@@ -39,6 +39,12 @@ module.exports = {
   HNS_GET_STATUS: 'hns:getStatus',
   HNS_STATUS_UPDATE: 'hns:statusUpdate',
 
+  // Anyone management
+  ANYONE_START: 'anyone:start',
+  ANYONE_STOP: 'anyone:stop',
+  ANYONE_GET_STATUS: 'anyone:getStatus',
+  ANYONE_STATUS_UPDATE: 'anyone:statusUpdate',
+
   // dVPN management
   DVPN_START: 'dvpn:start',
   DVPN_STOP: 'dvpn:stop',

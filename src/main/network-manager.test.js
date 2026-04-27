@@ -1,6 +1,7 @@
 const {
   loadMainModule,
 } = require('../../test/helpers/main-process-test-utils');
+const { HNS_PUBLIC_SUFFIXES } = require('../shared/hns-hosts');
 
 function loadNetworkManagerModule(options = {}) {
   const log = {
@@ -55,6 +56,7 @@ function loadNetworkManagerModule(options = {}) {
 }
 
 const REPRESENTATIVE_PIRATE_HOST = 'sable-harbor-4143.pirate';
+const REPRESENTATIVE_UNKNOWN_HNSISH_HOST = 'night-signal.clawitzer';
 
 describe('network-manager', () => {
   afterEach(() => {
@@ -62,7 +64,7 @@ describe('network-manager', () => {
     jest.restoreAllMocks();
   });
 
-  test('HNS-only PAC: single-label and .pirate hosts go PROXY, others go DIRECT', () => {
+  test('HNS-only PAC: single-label and configured public suffix hosts go PROXY, others go DIRECT', () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
 
@@ -72,9 +74,10 @@ describe('network-manager', () => {
     expect(pac).toContain('return "DIRECT"');
     expect(pac).toContain('dnsDomainLevels(host) === 0');
     expect(pac).toContain('dnsDomainIs(host, ".pirate")');
+    expect(pac).not.toContain('dnsDomainIs(host, ".clawitzer")');
   });
 
-  test('HNS + dVPN PAC composition: single-label and .pirate → PROXY, others → SOCKS5', () => {
+  test('HNS + dVPN PAC composition: single-label and configured public suffix hosts → PROXY, others → SOCKS5', () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
     ctx.mod.setDvpnProxy('127.0.0.1', 10808);
@@ -83,8 +86,24 @@ describe('network-manager', () => {
 
     expect(pac).toContain('dnsDomainLevels(host) === 0');
     expect(pac).toContain('dnsDomainIs(host, ".pirate")');
+    expect(pac).not.toContain('dnsDomainIs(host, ".clawitzer")');
     expect(pac).toContain('PROXY 127.0.0.1:5380');
     expect(pac).toContain('SOCKS5 127.0.0.1:10808');
+  });
+
+  test('HNS + Anyone + dVPN PAC composition preserves HNS and orders Anyone before dVPN', () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+    ctx.mod.setAnyoneProxy('127.0.0.1', 9050);
+    ctx.mod.setDvpnProxy('127.0.0.1', 10808);
+
+    const pac = ctx.mod.buildPacScript();
+
+    expect(pac).toContain('PROXY 127.0.0.1:5380');
+    expect(pac).toContain('SOCKS5 127.0.0.1:9050');
+    expect(pac).toContain('SOCKS 127.0.0.1:9050');
+    expect(pac).toContain('SOCKS5 127.0.0.1:10808');
+    expect(pac.indexOf('SOCKS5 127.0.0.1:9050')).toBeLessThan(pac.indexOf('SOCKS5 127.0.0.1:10808'));
   });
 
   test('loopback always DIRECT regardless of proxy config', () => {
@@ -109,14 +128,16 @@ describe('network-manager', () => {
     expect(pac).toMatch(/dnsDomainLevels\(host\) === 0[^}]*PROXY 127\.0\.0\.1:5380/);
   });
 
-  test('representative .pirate hosts go to HNS proxy when set', () => {
+  test('representative configured public suffix hosts go to HNS proxy when set', () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
 
     const pac = ctx.mod.buildPacScript();
 
     expect(pac).toContain('dnsDomainIs(host, ".pirate")');
+    expect(HNS_PUBLIC_SUFFIXES).toEqual(['.pirate']);
     expect(REPRESENTATIVE_PIRATE_HOST.endsWith('.pirate')).toBe(true);
+    expect(REPRESENTATIVE_UNKNOWN_HNSISH_HOST.endsWith('.clawitzer')).toBe(true);
   });
 
   test('ordinary hosts go SOCKS5 when dVPN is connected', () => {
@@ -127,6 +148,17 @@ describe('network-manager', () => {
 
     expect(pac).toContain('SOCKS5 127.0.0.1:10808');
     expect(pac).toContain('SOCKS 127.0.0.1:10808');
+  });
+
+  test('Anyone-only PAC: ordinary hosts go SOCKS5 through Anyone', () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setAnyoneProxy('127.0.0.1', 9050);
+
+    const pac = ctx.mod.buildPacScript();
+
+    expect(pac).toContain('SOCKS5 127.0.0.1:9050');
+    expect(pac).toContain('SOCKS 127.0.0.1:9050');
+    expect(pac).not.toContain('127.0.0.1:10808');
   });
 
   test('ordinary hosts go DIRECT when dVPN is off', () => {
@@ -150,7 +182,7 @@ describe('network-manager', () => {
     expect(pac).toContain('return "DIRECT"');
   });
 
-  test('HNS not regressed by dVPN: single-label and .pirate still go to HNS PROXY', () => {
+  test('HNS not regressed by dVPN: single-label and configured public suffix hosts still go to HNS PROXY', () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
     ctx.mod.setDvpnProxy('127.0.0.1', 10808);
@@ -161,8 +193,22 @@ describe('network-manager', () => {
     const socksStart = pac.indexOf('SOCKS5');
 
     expect(hnsBlockStart).toBeGreaterThan(-1);
+    expect(pac).toContain('dnsDomainIs(host, ".pirate")');
     expect(socksStart).toBeGreaterThan(-1);
     expect(hnsBlockStart).toBeLessThan(socksStart);
+  });
+
+  test('.eth and .box hosts are not treated as HNS candidates', () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+    ctx.mod.setAnyoneProxy('127.0.0.1', 9050);
+
+    const pac = ctx.mod.buildPacScript();
+
+    expect(pac).not.toContain('dnsDomainIs(host, ".eth")');
+    expect(pac).not.toContain('dnsDomainIs(host, ".box")');
+    expect(pac).not.toContain('dnsDomainIs(host, ".clawitzer")');
+    expect(pac).toContain('SOCKS5 127.0.0.1:9050');
   });
 
   test('clearDvpnProxy removes dVPN proxy settings', () => {
@@ -172,6 +218,15 @@ describe('network-manager', () => {
     ctx.mod.clearDvpnProxy();
 
     expect(ctx.mod.getDvpnProxy()).toBeNull();
+  });
+
+  test('clearAnyoneProxy removes Anyone proxy settings', () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setAnyoneProxy('127.0.0.1', 9050);
+
+    ctx.mod.clearAnyoneProxy();
+
+    expect(ctx.mod.getAnyoneProxy()).toBeNull();
   });
 
   test('getDvpnProxy returns null when no dVPN proxy set', () => {
@@ -185,6 +240,13 @@ describe('network-manager', () => {
     ctx.mod.setDvpnProxy('127.0.0.1', 10808);
 
     expect(ctx.mod.getDvpnProxy()).toEqual({ host: '127.0.0.1', port: 10808 });
+  });
+
+  test('getAnyoneProxy returns host and port when set', () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setAnyoneProxy('127.0.0.1', 9050);
+
+    expect(ctx.mod.getAnyoneProxy()).toEqual({ host: '127.0.0.1', port: 9050 });
   });
 
   test('setHnsProxy stores the proxy address', () => {

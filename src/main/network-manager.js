@@ -1,21 +1,35 @@
 const log = require('./logger');
 const { session } = require('electron');
 const http = require('http');
+const { HNS_PUBLIC_SUFFIXES } = require('../shared/hns-hosts');
 
 let hnsProxyAddr = null;
+let anyoneProxyHost = null;
+let anyoneProxyPort = null;
 let dvpnProxyHost = null;
 let dvpnProxyPort = null;
 
 let pacServer = null;
 let pacPort = null;
 
-function buildPacScript() {
-  const hnsLine = hnsProxyAddr
-    ? `  if (dnsDomainLevels(host) === 0 || host === "pirate" || dnsDomainIs(host, ".pirate")) {\n    return "PROXY ${hnsProxyAddr}";\n  }`
-    : `  if (dnsDomainLevels(host) === 0 || host === "pirate" || dnsDomainIs(host, ".pirate")) {\n    return "DIRECT";\n  }`;
+function buildHnsHostPredicate() {
+  const suffixChecks = HNS_PUBLIC_SUFFIXES
+    .map((suffix) => `dnsDomainIs(host, "${suffix}")`)
+    .join(' || ');
+  return suffixChecks
+    ? `dnsDomainLevels(host) === 0 || ${suffixChecks}`
+    : 'dnsDomainLevels(host) === 0';
+}
 
-  const dvpnLine = dvpnProxyHost && dvpnProxyPort
-    ? `  return "SOCKS5 ${dvpnProxyHost}:${dvpnProxyPort}; SOCKS ${dvpnProxyHost}:${dvpnProxyPort}; DIRECT";`
+function buildPacScript() {
+  const hnsHostPredicate = buildHnsHostPredicate();
+  const hnsLine = hnsProxyAddr
+    ? `  if (${hnsHostPredicate}) {\n    return "PROXY ${hnsProxyAddr}";\n  }`
+    : `  if (${hnsHostPredicate}) {\n    return "DIRECT";\n  }`;
+
+  const transportChain = buildTransportChain();
+  const transportLine = transportChain
+    ? `  return "${transportChain}; DIRECT";`
     : `  return "DIRECT";`;
 
   return `function FindProxyForURL(url, host) {
@@ -23,8 +37,21 @@ function buildPacScript() {
     return "DIRECT";
   }
 ${hnsLine}
-${dvpnLine}
+${transportLine}
 }`;
+}
+
+function buildTransportChain() {
+  const orderedProxies = [
+    anyoneProxyHost && anyoneProxyPort ? `${anyoneProxyHost}:${anyoneProxyPort}` : null,
+    dvpnProxyHost && dvpnProxyPort ? `${dvpnProxyHost}:${dvpnProxyPort}` : null,
+  ].filter(Boolean);
+
+  if (orderedProxies.length === 0) return null;
+
+  return orderedProxies
+    .flatMap((proxy) => [`SOCKS5 ${proxy}`, `SOCKS ${proxy}`])
+    .join('; ');
 }
 
 async function startPacServer(pacContent) {
@@ -89,6 +116,18 @@ function clearHnsProxy() {
   log.info('[Network] HNS proxy cleared');
 }
 
+function setAnyoneProxy(host, port) {
+  anyoneProxyHost = host;
+  anyoneProxyPort = port;
+  log.info(`[Network] Anyone proxy set to ${host}:${port}`);
+}
+
+function clearAnyoneProxy() {
+  anyoneProxyHost = null;
+  anyoneProxyPort = null;
+  log.info('[Network] Anyone proxy cleared');
+}
+
 function setDvpnProxy(host, port) {
   dvpnProxyHost = host;
   dvpnProxyPort = port;
@@ -102,7 +141,7 @@ function clearDvpnProxy() {
 }
 
 async function rebuild() {
-  if (!hnsProxyAddr && !dvpnProxyHost) {
+  if (!hnsProxyAddr && !anyoneProxyHost && !dvpnProxyHost) {
     await clearProxy();
     return;
   }
@@ -118,14 +157,22 @@ function getDvpnProxy() {
   return { host: dvpnProxyHost, port: dvpnProxyPort };
 }
 
+function getAnyoneProxy() {
+  if (!anyoneProxyHost || !anyoneProxyPort) return null;
+  return { host: anyoneProxyHost, port: anyoneProxyPort };
+}
+
 module.exports = {
   setHnsProxy,
   clearHnsProxy,
+  setAnyoneProxy,
+  clearAnyoneProxy,
   setDvpnProxy,
   clearDvpnProxy,
   rebuild,
   clearProxy,
   getHnsProxyAddr,
+  getAnyoneProxy,
   getDvpnProxy,
   buildPacScript,
 };

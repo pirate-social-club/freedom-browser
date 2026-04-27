@@ -50,6 +50,7 @@ const { registerBeeIpc, stopBee, startBee, setUseInjectedIdentity: setBeeInjecte
 const { registerIpfsIpc, stopIpfs, startIpfs, setUseInjectedIdentity: setIpfsInjectedIdentity } = require('./ipfs-manager');
 const { registerRadicleIpc, stopRadicle, startRadicle, setUseInjectedIdentity: setRadicleInjectedIdentity } = require('./radicle-manager');
 const { registerHnsIpc, stopHns, startHns } = require('./hns-manager');
+const { registerAnyoneIpc, initAnyone, stopAnyone, startAnyone } = require('./anyone-manager');
 const { registerDvpnIpc, initDvpn, stopDvpn } = require('./dvpn-manager');
 const { registerIdentityIpc, hasVault, isBeeIdentityInjected, isIpfsIdentityInjected, isRadicleIdentityInjected } = require('./identity-manager');
 const { registerQuickUnlockIpc } = require('./quick-unlock');
@@ -105,6 +106,7 @@ async function bootstrap() {
   registerIpfsIpc();
   registerRadicleIpc();
   registerHnsIpc();
+  registerAnyoneIpc();
   registerDvpnIpc();
   registerGithubBridgeIpc();
   registerServiceRegistryIpc();
@@ -170,7 +172,12 @@ async function bootstrap() {
   if (settings.enableHnsIntegration && settings.startHnsAtLaunch) {
     startHns();
   }
-  await initDvpn();
+  await Promise.all([initAnyone(), initDvpn()]);
+  if (settings.anyoneAutoStart) {
+    startAnyone().catch((err) => {
+      log.error('[Anyone] Auto-start failed:', err.message);
+    });
+  }
 
   const mainWindow = createMainWindow();
 
@@ -242,8 +249,8 @@ app.on('before-quit', async (event) => {
   // Clean up any GitHub bridge temp directories
   cleanupTempDirs();
 
-  log.info('[App] Waiting for Bee, IPFS, Radicle, HNS, and dVPN to stop...');
-  await Promise.all([stopBee(), stopIpfs(), stopRadicle(), stopHns(), stopDvpn()]);
+  log.info('[App] Waiting for Bee, IPFS, Radicle, HNS, Anyone, and dVPN to stop...');
+  await Promise.all([stopBee(), stopIpfs(), stopRadicle(), stopHns(), stopAnyone(), stopDvpn()]);
   log.info('[App] All processes stopped, quitting...');
 
 

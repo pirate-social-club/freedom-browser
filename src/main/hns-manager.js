@@ -16,6 +16,7 @@ const {
   clearService,
 } = require('./service-registry');
 const networkManager = require('./network-manager');
+const { isHnsHost } = require('../shared/hns-hosts');
 
 const STATUS = {
   STOPPED: 'stopped',
@@ -46,27 +47,13 @@ let lastHeightChangeAt = 0;
 let rootAddr = null;
 let recursiveAddr = null;
 let lastProcessError = null;
-
 function isLoopbackHostname(hostname = '') {
   return hostname === 'localhost' || hostname === '::1' || /^127\./.test(hostname);
 }
 
 function isHnsHostname(hostname = '') {
-  if (!hostname || typeof hostname !== 'string') return false;
-
-  const normalized = hostname.trim().toLowerCase();
-  if (!normalized) return false;
-  if (isLoopbackHostname(normalized)) return false;
-
-  if (!normalized.includes('.')) {
-    return /^[a-z0-9-]+$/.test(normalized);
-  }
-
-  const labels = normalized.split('.');
-  if (labels.length !== 2) return false;
-  if (labels[1] !== 'pirate') return false;
-
-  return /^[a-z0-9-]+$/.test(labels[0]);
+  if (isLoopbackHostname(hostname)) return false;
+  return isHnsHost(hostname);
 }
 
 function getHelperBinaryPath() {
@@ -583,5 +570,6 @@ module.exports = {
   stopHns,
   getHnsStatus,
   checkBinary,
+  isHnsHostname,
   STATUS,
 };

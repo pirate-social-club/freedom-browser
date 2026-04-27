@@ -27,6 +27,10 @@ const DEFAULT_SETTINGS = {
   startHnsAtLaunch: true,
   autoUpdate: true,
   showBookmarkBar: false,
+  enableAnyone: false,
+  // Legacy compatibility key for pre-toggle Anyone builds.
+  showAnyoneControls: false,
+  anyoneAutoStart: false,
   showDvpnControls: false,
   dvpnMaxSpendP2P: 1.0,
   dvpnLowBalanceStop: 0.5,
@@ -51,6 +55,10 @@ function loadSettings() {
     if (fs.existsSync(filePath)) {
       const data = fs.readFileSync(filePath, 'utf-8');
       cachedSettings = { ...DEFAULT_SETTINGS, ...JSON.parse(data) };
+      // Migrate legacy Anyone visibility into the real enable flag.
+      if (cachedSettings.enableAnyone === undefined) {
+        cachedSettings.enableAnyone = cachedSettings.showAnyoneControls === true;
+      }
     } else {
       cachedSettings = { ...DEFAULT_SETTINGS };
     }
@@ -68,6 +76,12 @@ function loadSettings() {
 function saveSettings(newSettings) {
   try {
     const merged = { ...loadSettings(), ...newSettings };
+    // Keep the legacy key mirrored so older local state continues to round-trip.
+    if (newSettings.enableAnyone !== undefined) {
+      merged.showAnyoneControls = newSettings.enableAnyone;
+    } else if (newSettings.showAnyoneControls !== undefined) {
+      merged.enableAnyone = newSettings.showAnyoneControls;
+    }
     const filePath = getSettingsPath();
     fs.writeFileSync(filePath, JSON.stringify(merged, null, 2), 'utf-8');
     cachedSettings = merged;

@@ -1802,9 +1802,55 @@
                 <span class="hns-status-value hns-error-text" id="hns-error-value"></span>
               </div>
             </div>
-            <div class="hns-controls" id="hns-controls">
-              <button type="button" class="hns-control-btn" id="hns-start-btn">Start</button>
-              <button type="button" class="hns-control-btn" id="hns-stop-btn" disabled>Stop</button>
+          </section>
+
+          <section class="settings-section">
+            <h3 class="settings-section-header">Anyone Network</h3>
+            <div class="settings-toggle-row">
+              <span class="toggle-label">Enable Anyone Network</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="enable-anyone" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div id="anyone-content" class="settings-subsection">
+              <div class="settings-toggle-row sub-toggle" id="start-anyone-row">
+                <span class="toggle-label">Start Anyone when Freedom opens</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="anyone-auto-start" />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="hns-status-display">
+                <div class="hns-status-row" id="anyone-status-row">
+                  <span class="hns-status-label">Status</span>
+                  <span class="hns-status-value" id="anyone-status-value">Off</span>
+                </div>
+                <div class="hns-status-row" id="anyone-proxy-row" style="display: none;">
+                  <span class="hns-status-label">Proxy</span>
+                  <span class="hns-status-value" id="anyone-proxy-value"></span>
+                </div>
+                <div class="hns-status-row" id="anyone-socks-port-row" style="display: none;">
+                  <span class="hns-status-label">SOCKS Port</span>
+                  <span class="hns-status-value" id="anyone-socks-port-value"></span>
+                </div>
+                <div class="hns-status-row" id="anyone-control-port-row" style="display: none;">
+                  <span class="hns-status-label">Control Port</span>
+                  <span class="hns-status-value" id="anyone-control-port-value"></span>
+                </div>
+                <div class="hns-status-row" id="anyone-circuit-row" style="display: none;">
+                  <span class="hns-status-label">Circuit</span>
+                  <span class="hns-status-value" id="anyone-circuit-value"></span>
+                </div>
+                <div class="hns-status-row" id="anyone-ip-row" style="display: none;">
+                  <span class="hns-status-label">IP</span>
+                  <span class="hns-status-value" id="anyone-ip-value"></span>
+                </div>
+                <div class="hns-status-row" id="anyone-error-row" style="display: none;">
+                  <span class="hns-status-label">Error</span>
+                  <span class="hns-status-value hns-error-text" id="anyone-error-value"></span>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -2261,6 +2307,7 @@
       </div>
     </dialog>
 
+    <script src="../shared/hns-hosts.js"></script>
     <script type="module" src="./index.js"></script>
   </body>
 </html>

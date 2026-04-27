@@ -181,6 +181,36 @@ describe('service-registry', () => {
     });
   });
 
+  test('clearService preserves Anyone-specific fields', () => {
+    const { mod } = loadServiceRegistry();
+
+    mod.updateService('anyone', {
+      proxy: '127.0.0.1:9050',
+      mode: mod.MODE.BUNDLED,
+      connected: true,
+      socksPort: 9050,
+      controlPort: 9051,
+      circuitState: 'BUILT',
+      error: null,
+    });
+
+    mod.clearService('anyone');
+
+    const anyone = mod.getService('anyone');
+    expect(anyone).toEqual({
+      proxy: null,
+      mode: mod.MODE.NONE,
+      statusMessage: null,
+      tempMessage: null,
+      tempMessageTimeout: null,
+      connected: false,
+      socksPort: null,
+      controlPort: null,
+      circuitState: null,
+      error: null,
+    });
+  });
+
   test('registers an IPC handler that returns the current registry state', async () => {
     const ipcMain = createIpcMainMock();
     const { mod } = loadServiceRegistry({ ipcMain });

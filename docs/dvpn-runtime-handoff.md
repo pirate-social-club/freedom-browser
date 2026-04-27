@@ -150,12 +150,12 @@ Then execute this test sequence manually:
 | 7 | Click refresh balance again | Balance updates, funded=true |
 | 8 | Click Connect | Status changes to "Connecting..." then "Connected" |
 | 9 | Browse to https://api.ipify.org | Shows VPN IP (not your real IP) |
-| 10 | Browse to a shakestation/ URL (e.g. `nameweb.shakestation/`) | Still resolves via HNS proxy — proves composed PAC works, not just SOCKS5 |
+| 10 | Browse to a single-label HNS URL (e.g. `pirate/`) | Still resolves via HNS proxy — proves composed PAC works, not just SOCKS5 |
 | 11 | Browse to http://127.0.0.1:1633 | Still DIRECT (loopback bypass) |
 | 12 | Check Bee/IPFS/Radicle services still work | No regression |
 | 13 | Click Disconnect | Status returns to "Stopped — user" |
 | 14 | Browse to https://api.ipify.org | Shows your real IP again — proves PAC rebuild on disconnect removed SOCKS5 |
-| 15 | Browse to a shakestation/ URL | Still resolves via HNS proxy — proves PAC rebuild preserved HNS routing after dVPN disconnect |
+| 15 | Browse to a single-label HNS URL | Still resolves via HNS proxy — proves PAC rebuild preserved HNS routing after dVPN disconnect |
 
 ### Step 5: Classify Any Failures Precisely
 
@@ -440,7 +440,7 @@ The task is done when ALL of these are true:
 - [ ] User can fund and see balance from settings
 - [ ] User can connect/disconnect dVPN from settings
 - [ ] Ordinary web traffic routes through dVPN when connected (verified via ipify)
-- [ ] HNS single-label browsing still works with dVPN on (verified via shakestation/ in same session)
+- [ ] HNS single-label browsing still works with dVPN on (verified via `pirate/` in same session)
 - [ ] Loopback and local services bypass proxy correctly
 - [ ] Low-balance auto-disconnect works
 - [ ] Max-duration auto-disconnect works

@@ -43,6 +43,8 @@ describe('url-utils', () => {
     test('rejects ordinary dotted web domains', () => {
       expect(normalizeHnsHostInput('pirate.sc')).toBeNull();
       expect(normalizeHnsHostInput('example.com')).toBeNull();
+      expect(normalizeHnsHostInput('night-signal.clawitzer')).toBeNull();
+      expect(normalizeHnsHostInput('vitalik.eth')).toBeNull();
     });
   });
 

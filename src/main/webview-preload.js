@@ -7,7 +7,26 @@
  */
 
 const { contextBridge, ipcRenderer } = require('electron');
-const IPC = require('../shared/ipc-channels');
+
+// Note: sandboxed webview preloads cannot rely on nearby relative requires.
+// Keep these in sync with src/shared/ipc-channels.js.
+const IPC = {
+  HISTORY_GET: 'history:get',
+  HISTORY_ADD: 'history:add',
+  HISTORY_REMOVE: 'history:remove',
+  HISTORY_CLEAR: 'history:clear',
+  SETTINGS_GET: 'settings:get',
+  SERVICE_REGISTRY_GET: 'service-registry:get',
+  SERVICE_REGISTRY_UPDATE: 'service-registry:update',
+  BOOKMARKS_GET: 'bookmarks:get',
+  OPEN_URL_IN_NEW_TAB: 'internal:open-url-in-new-tab',
+  FAVICON_GET_CACHED: 'favicon:get-cached',
+  RADICLE_SEED: 'radicle:seed',
+  RADICLE_GET_STATUS: 'radicle:getStatus',
+  RADICLE_GET_REPO_PAYLOAD: 'radicle:getRepoPayload',
+  RADICLE_SYNC_REPO: 'radicle:syncRepo',
+  GET_INTERNAL_PAGES: 'internal:get-pages',
+};
 
 // Internal pages list — canonical source is src/shared/internal-pages.json,
 // served by the main process via sync IPC so preloads don't need require().

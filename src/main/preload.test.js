@@ -28,6 +28,7 @@ function loadPreloadModule(options = {}) {
         [IPC.BEE_GET_STATUS]: { status: 'running', error: null },
         [IPC.IPFS_GET_STATUS]: { status: 'stopped', error: null },
         [IPC.RADICLE_GET_STATUS]: { status: 'error', error: 'offline' },
+        [IPC.ANYONE_GET_STATUS]: { state: 'off', connected: false, error: null },
         ...(options.invokeResponses || {}),
       },
     });
@@ -85,7 +86,7 @@ describe('preload', () => {
       ipfsGatewayEnv: 'http://127.0.0.1:9090',
     });
 
-    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledTimes(16);
+    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledTimes(17);
     expect(Object.keys(exposures)).toEqual([
       'nodeConfig',
       'internalPages',
@@ -94,6 +95,7 @@ describe('preload', () => {
       'ipfs',
       'radicle',
       'hns',
+      'anyone',
       'githubBridge',
       'serviceRegistry',
       'identity',
@@ -152,6 +154,9 @@ describe('preload', () => {
       [exposures.radicle, 'getStatus', [], IPC.RADICLE_GET_STATUS, []],
       [exposures.radicle, 'checkBinary', [], IPC.RADICLE_CHECK_BINARY, []],
       [exposures.radicle, 'getConnections', [], IPC.RADICLE_GET_CONNECTIONS, []],
+      [exposures.anyone, 'start', [], IPC.ANYONE_START, []],
+      [exposures.anyone, 'stop', [], IPC.ANYONE_STOP, []],
+      [exposures.anyone, 'getStatus', [], IPC.ANYONE_GET_STATUS, []],
       [exposures.githubBridge, 'import', ['https://github.com/openai/project'], IPC.GITHUB_BRIDGE_IMPORT, ['https://github.com/openai/project']],
       [exposures.githubBridge, 'checkGit', [], IPC.GITHUB_BRIDGE_CHECK_GIT, []],
       [exposures.githubBridge, 'checkPrerequisites', [], IPC.GITHUB_BRIDGE_CHECK_PREREQUISITES, []],
@@ -245,6 +250,7 @@ describe('preload', () => {
       [exposures.bee, IPC.BEE_STATUS_UPDATE, IPC.BEE_GET_STATUS, beeStatus, { status: 'starting', error: null }],
       [exposures.ipfs, IPC.IPFS_STATUS_UPDATE, IPC.IPFS_GET_STATUS, ipfsStatus, { status: 'running', error: null }],
       [exposures.radicle, IPC.RADICLE_STATUS_UPDATE, IPC.RADICLE_GET_STATUS, radicleStatus, { status: 'running', error: null }],
+      [exposures.anyone, IPC.ANYONE_STATUS_UPDATE, IPC.ANYONE_GET_STATUS, { state: 'off', connected: false, error: null }, { state: 'connected' }],
     ];
 
     for (const [target, updateChannel, getStatusChannel, initialStatus, pushedStatus] of statusCases) {

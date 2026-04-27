@@ -226,6 +226,21 @@ describe('hns-manager', () => {
     });
   });
 
+  test('isHnsHostname accepts supported HNS public host suffixes', () => {
+    const ctx = loadHnsManagerModule();
+    expect(ctx.mod.isHnsHostname('captain.pirate')).toBe(true);
+    expect(ctx.mod.isHnsHostname('night-signal.clawitzer')).toBe(false);
+    expect(ctx.mod.isHnsHostname('localhost')).toBe(false);
+    expect(ctx.mod.isHnsHostname('night-signal.pirate.sc')).toBe(false);
+  });
+
+  test('isHnsHostname still accepts bare Handshake roots and rejects unsupported suffixes', () => {
+    const ctx = loadHnsManagerModule();
+    expect(ctx.mod.isHnsHostname('clawitzer')).toBe(true);
+    expect(ctx.mod.isHnsHostname('captain.example')).toBe(false);
+    expect(ctx.mod.isHnsHostname('captain.foo.bar')).toBe(false);
+  });
+
   test('checkBinary returns true when fingertipd exists', () => {
     const ctx = loadHnsManagerModule({ fingertipdExists: true });
     expect(ctx.mod.checkBinary()).toBe(true);

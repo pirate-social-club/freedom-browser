@@ -223,6 +223,18 @@ contextBridge.exposeInMainWorld('hns', {
   },
 });
 
+contextBridge.exposeInMainWorld('anyone', {
+  start: () => ipcRenderer.invoke('anyone:start'),
+  stop: () => ipcRenderer.invoke('anyone:stop'),
+  getStatus: () => ipcRenderer.invoke('anyone:getStatus'),
+  onStatusUpdate: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('anyone:statusUpdate', handler);
+    ipcRenderer.invoke('anyone:getStatus').then(callback);
+    return () => ipcRenderer.removeListener('anyone:statusUpdate', handler);
+  },
+});
+
 contextBridge.exposeInMainWorld('githubBridge', {
   import: (url) => ipcRenderer.invoke('github-bridge:import', url),
   checkGit: () => ipcRenderer.invoke('github-bridge:check-git'),

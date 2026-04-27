@@ -28,6 +28,8 @@ const loadSettingsModule = async (options = {}) => {
         startHnsAtLaunch: true,
         enableIdentityWallet: false,
         autoUpdate: true,
+        enableAnyone: false,
+        anyoneAutoStart: false,
         showDvpnControls: false,
         dvpnMaxSpendP2P: 1.0,
         dvpnLowBalanceStop: 0.5,
@@ -54,6 +56,24 @@ const loadSettingsModule = async (options = {}) => {
   const startHnsRow = createElement('div');
   const startHnsAtLaunchCheckbox = createCheckbox();
   const enableIdentityWalletCheckbox = createCheckbox();
+  const enableAnyoneCheckbox = createCheckbox();
+  const startAnyoneRow = createElement('div');
+  const anyoneAutoStartCheckbox = createCheckbox();
+  const anyoneContent = createElement('div');
+  const anyoneStatusRow = createElement('div');
+  const anyoneStatusValue = createElement('span');
+  const anyoneProxyRow = createElement('div');
+  const anyoneProxyValue = createElement('span');
+  const anyoneSocksPortRow = createElement('div');
+  const anyoneSocksPortValue = createElement('span');
+  const anyoneControlPortRow = createElement('div');
+  const anyoneControlPortValue = createElement('span');
+  const anyoneCircuitRow = createElement('div');
+  const anyoneCircuitValue = createElement('span');
+  const anyoneIpRow = createElement('div');
+  const anyoneIpValue = createElement('span');
+  const anyoneErrorRow = createElement('div');
+  const anyoneErrorValue = createElement('span');
   const showDvpnControlsCheckbox = createCheckbox();
   const dvpnContent = createElement('div');
   const dvpnCreateWalletBtn = createElement('button');
@@ -89,8 +109,6 @@ const loadSettingsModule = async (options = {}) => {
   const hnsProxyValue = createElement('span');
   const hnsErrorRow = createElement('div');
   const hnsErrorValue = createElement('span');
-  const hnsStartBtn = createElement('button');
-  const hnsStopBtn = createElement('button');
   const mediaQueryList = {
     matches: prefersDark,
     addEventListener: jest.fn(),
@@ -112,6 +130,24 @@ const loadSettingsModule = async (options = {}) => {
       'start-hns-row': startHnsRow,
       'start-hns-at-launch': startHnsAtLaunchCheckbox,
       'enable-identity-wallet': enableIdentityWalletCheckbox,
+      'enable-anyone': enableAnyoneCheckbox,
+      'start-anyone-row': startAnyoneRow,
+      'anyone-auto-start': anyoneAutoStartCheckbox,
+      'anyone-content': anyoneContent,
+      'anyone-status-row': anyoneStatusRow,
+      'anyone-status-value': anyoneStatusValue,
+      'anyone-proxy-row': anyoneProxyRow,
+      'anyone-proxy-value': anyoneProxyValue,
+      'anyone-socks-port-row': anyoneSocksPortRow,
+      'anyone-socks-port-value': anyoneSocksPortValue,
+      'anyone-control-port-row': anyoneControlPortRow,
+      'anyone-control-port-value': anyoneControlPortValue,
+      'anyone-circuit-row': anyoneCircuitRow,
+      'anyone-circuit-value': anyoneCircuitValue,
+      'anyone-ip-row': anyoneIpRow,
+      'anyone-ip-value': anyoneIpValue,
+      'anyone-error-row': anyoneErrorRow,
+      'anyone-error-value': anyoneErrorValue,
       'show-dvpn-controls': showDvpnControlsCheckbox,
       'dvpn-content': dvpnContent,
       'dvpn-create-wallet-btn': dvpnCreateWalletBtn,
@@ -147,8 +183,6 @@ const loadSettingsModule = async (options = {}) => {
       'hns-proxy-value': hnsProxyValue,
       'hns-error-row': hnsErrorRow,
       'hns-error-value': hnsErrorValue,
-      'hns-start-btn': hnsStartBtn,
-      'hns-stop-btn': hnsStopBtn,
     },
   });
   const settingsUpdatedEvents = [];
@@ -190,9 +224,24 @@ const loadSettingsModule = async (options = {}) => {
       stop: jest.fn(() => radicleStopResult),
     },
     hns: {
-      start: jest.fn(),
+      start: jest.fn(() => ({ catch: jest.fn() })),
       stop: jest.fn(() => ({ catch: jest.fn() })),
       getStatus: jest.fn().mockResolvedValue({ status: 'stopped', height: 0, synced: false, error: null }),
+      onStatusUpdate: jest.fn(),
+    },
+    anyone: {
+      start: jest.fn(() => ({ catch: jest.fn() })),
+      stop: jest.fn(() => ({ catch: jest.fn() })),
+      getStatus: jest.fn().mockResolvedValue({
+        state: 'off',
+        connected: false,
+        proxy: null,
+        socksPort: null,
+        controlPort: null,
+        circuitState: null,
+        ip: null,
+        error: null,
+      }),
       onStatusUpdate: jest.fn(),
     },
     dvpn: {
@@ -245,6 +294,9 @@ const loadSettingsModule = async (options = {}) => {
       enableHnsIntegrationCheckbox,
       startHnsAtLaunchCheckbox,
       enableIdentityWalletCheckbox,
+      enableAnyoneCheckbox,
+      startAnyoneRow,
+      anyoneAutoStartCheckbox,
       showDvpnControlsCheckbox,
       dvpnWalletAddress,
       dvpnCopyAddress,
@@ -255,8 +307,6 @@ const loadSettingsModule = async (options = {}) => {
       hnsProxyValue,
       hnsErrorRow,
       hnsErrorValue,
-      hnsStartBtn,
-      hnsStopBtn,
     },
     electronAPI,
     mediaQueryList,
@@ -321,6 +371,8 @@ describe('settings-ui', () => {
             enableHnsIntegration: true,
             startHnsAtLaunch: true,
             enableIdentityWallet: false,
+            enableAnyone: false,
+            anyoneAutoStart: false,
             showDvpnControls: false,
             dvpnMaxSpendP2P: 1.0,
             dvpnLowBalanceStop: 0.5,
@@ -336,6 +388,8 @@ describe('settings-ui', () => {
             startHnsAtLaunch: true,
             enableIdentityWallet: false,
             autoUpdate: false,
+            enableAnyone: true,
+            anyoneAutoStart: true,
             showDvpnControls: false,
             dvpnMaxSpendP2P: 1.0,
             dvpnLowBalanceStop: 0.5,
@@ -362,6 +416,8 @@ describe('settings-ui', () => {
     expect(elements.enableHnsIntegrationCheckbox.checked).toBe(true);
     expect(elements.startHnsAtLaunchCheckbox.checked).toBe(true);
     expect(elements.enableIdentityWalletCheckbox.checked).toBe(false);
+    expect(elements.enableAnyoneCheckbox.checked).toBe(true);
+    expect(elements.anyoneAutoStartCheckbox.checked).toBe(true);
     expect(elements.autoUpdateCheckbox.checked).toBe(false);
     expect(elements.startRadicleAtLaunchCheckbox.disabled).toBe(false);
     expect(elements.startHnsAtLaunchCheckbox.disabled).toBe(false);
@@ -375,6 +431,8 @@ describe('settings-ui', () => {
     elements.enableHnsIntegrationCheckbox.checked = true;
     elements.startHnsAtLaunchCheckbox.checked = true;
     elements.enableIdentityWalletCheckbox.checked = false;
+    elements.enableAnyoneCheckbox.checked = true;
+    elements.anyoneAutoStartCheckbox.checked = true;
     elements.autoUpdateCheckbox.checked = true;
     elements.enableRadicleIntegrationCheckbox.dispatch('change');
     await Promise.resolve();
@@ -391,6 +449,8 @@ describe('settings-ui', () => {
       startHnsAtLaunch: true,
       enableIdentityWallet: false,
       autoUpdate: true,
+      enableAnyone: true,
+      anyoneAutoStart: true,
       showDvpnControls: false,
       dvpnMaxSpendP2P: 1,
       dvpnLowBalanceStop: 0.5,
@@ -412,6 +472,8 @@ describe('settings-ui', () => {
         startHnsAtLaunch: true,
         enableIdentityWallet: false,
         autoUpdate: true,
+        enableAnyone: true,
+        anyoneAutoStart: true,
         showDvpnControls: false,
         dvpnMaxSpendP2P: 1,
         dvpnLowBalanceStop: 0.5,
@@ -428,29 +490,33 @@ describe('settings-ui', () => {
         {
           theme: 'system',
           enableRadicleIntegration: false,
-            enableHnsIntegration: true,
-            startHnsAtLaunch: true,
-            enableIdentityWallet: false,
-            showDvpnControls: false,
-            dvpnMaxSpendP2P: 1.0,
-            dvpnLowBalanceStop: 0.5,
-            dvpnMaxDurationMinutes: 120,
-          },
-          {
-            theme: 'system',
+          enableHnsIntegration: true,
+          startHnsAtLaunch: true,
+          enableIdentityWallet: false,
+          enableAnyone: false,
+          anyoneAutoStart: false,
+          showDvpnControls: false,
+          dvpnMaxSpendP2P: 1.0,
+          dvpnLowBalanceStop: 0.5,
+          dvpnMaxDurationMinutes: 120,
+        },
+        {
+          theme: 'system',
           startBeeAtLaunch: false,
           startIpfsAtLaunch: false,
           enableRadicleIntegration: true,
           startRadicleAtLaunch: true,
           enableHnsIntegration: true,
-            startHnsAtLaunch: true,
-            enableIdentityWallet: false,
-            autoUpdate: true,
-            showDvpnControls: false,
-            dvpnMaxSpendP2P: 1.0,
-            dvpnLowBalanceStop: 0.5,
-            dvpnMaxDurationMinutes: 120,
-          },
+          startHnsAtLaunch: true,
+          enableIdentityWallet: false,
+          autoUpdate: true,
+          enableAnyone: false,
+          anyoneAutoStart: false,
+          showDvpnControls: false,
+          dvpnMaxSpendP2P: 1.0,
+          dvpnLowBalanceStop: 0.5,
+          dvpnMaxDurationMinutes: 120,
+        },
         ],
       saveSettingsResult: false,
       prefersDark: false,
@@ -480,6 +546,8 @@ describe('settings-ui', () => {
       startHnsAtLaunch: true,
       enableIdentityWallet: false,
       autoUpdate: false,
+      enableAnyone: false,
+      anyoneAutoStart: false,
       showDvpnControls: false,
       dvpnMaxSpendP2P: 1,
       dvpnLowBalanceStop: 0.5,
@@ -507,6 +575,8 @@ describe('settings-ui', () => {
           startHnsAtLaunch: true,
           enableIdentityWallet: false,
           autoUpdate: true,
+          enableAnyone: false,
+          anyoneAutoStart: false,
           showDvpnControls: true,
           dvpnMaxSpendP2P: 1.0,
           dvpnLowBalanceStop: 0.5,
@@ -523,5 +593,46 @@ describe('settings-ui', () => {
     await Promise.resolve();
 
     expect(electronAPI.copyText).toHaveBeenCalledWith('sent1testaddress');
+  });
+
+  test('connects and disconnects Anyone through the settings controls', async () => {
+    const { mod, elements } = await loadSettingsModule({
+      settingsResponses: [
+        {
+          theme: 'system',
+          startBeeAtLaunch: true,
+          startIpfsAtLaunch: true,
+          enableRadicleIntegration: false,
+          startRadicleAtLaunch: false,
+          enableHnsIntegration: true,
+          startHnsAtLaunch: true,
+          enableIdentityWallet: false,
+          autoUpdate: true,
+          enableAnyone: true,
+          anyoneAutoStart: false,
+          showDvpnControls: false,
+          dvpnMaxSpendP2P: 1.0,
+          dvpnLowBalanceStop: 0.5,
+          dvpnMaxDurationMinutes: 120,
+        },
+      ],
+    });
+
+    await mod.initTheme();
+    await mod.initSettings();
+
+    elements.settingsBtn.dispatch('click');
+    await Promise.resolve();
+
+    elements.enableAnyoneCheckbox.checked = false;
+    elements.enableAnyoneCheckbox.dispatch('change');
+    await Promise.resolve();
+
+    elements.enableAnyoneCheckbox.checked = true;
+    elements.enableAnyoneCheckbox.dispatch('change');
+    await Promise.resolve();
+
+    expect(window.anyone.stop).toHaveBeenCalled();
+    expect(window.anyone.start).toHaveBeenCalled();
   });
 });

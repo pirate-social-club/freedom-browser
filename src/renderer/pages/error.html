@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src http://127.0.0.1:*;"
+      content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src http://127.0.0.1:*;"
     />
     <style>
       html,
@@ -105,6 +105,7 @@
       <button id="retry-btn">Try Again</button>
     </div>
 
+    <script src="../../shared/hns-hosts.js"></script>
     <script>
       // Nodes menu icon (same as toolbar)
       const NODES_ICON =
@@ -154,12 +155,15 @@
       const detailsEl = document.getElementById('details');
       const descriptionEl = document.getElementById('description');
       const titleEl = document.querySelector('h1');
+      const { isHnsHost: sharedIsHnsHost } = globalThis.FREEDOM_HNS_HOSTS || {
+        isHnsHost: () => false,
+      };
 
-      function isSingleLabelHost(urlValue) {
+      function isHnsHost(urlValue) {
         if (!urlValue) return false;
         try {
           const parsed = new URL(urlValue);
-          return parsed.hostname && !parsed.hostname.includes('.');
+          return sharedIsHnsHost(parsed.hostname || '');
         } catch (e) {
           return false;
         }
@@ -195,7 +199,7 @@
           return;
         }
 
-        if (error === 'HNS_LOOKUP_FAILED' || (error === 'ERR_TUNNEL_CONNECTION_FAILED' && isSingleLabelHost(url))) {
+        if (error === 'HNS_LOOKUP_FAILED' || (error === 'ERR_TUNNEL_CONNECTION_FAILED' && isHnsHost(url))) {
           titleEl.textContent = 'Handshake Site Unavailable';
           descriptionEl.textContent =
             'Freedom could not resolve this Handshake site yet. The resolver may still be syncing, or the name may not exist.';

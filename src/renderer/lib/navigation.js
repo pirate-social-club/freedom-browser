@@ -56,7 +56,9 @@ const getNavState = () => getActiveTabState() || {};
 const electronAPI = window.electronAPI;
 const RADICLE_DISABLED_MESSAGE =
   'Radicle integration is disabled. Enable it in Settings > Experimental';
-
+const { isHnsHost } = globalThis.FREEDOM_HNS_HOSTS || {
+  isHnsHost: () => false,
+};
 // DOM elements (initialized in initNavigation)
 let addressInput = null;
 let navForm = null;
@@ -87,11 +89,10 @@ export const setOnHistoryRecorded = (callback) => {
   onHistoryRecorded = callback;
 };
 
-const isSingleLabelHostname = (value = '') => {
+const isHnsFailureUrl = (value = '') => {
   try {
     const parsed = new URL(value);
-    const hostname = parsed.hostname || '';
-    return Boolean(hostname) && !hostname.includes('.');
+    return isHnsHost(parsed.hostname || '');
   } catch {
     return false;
   }
@@ -1410,7 +1411,7 @@ export const initNavigation = () => {
           const failedUrl = data.event.validatedURL || data.event.url || '';
           const failedError = data.event.errorDescription || data.event.errorCode;
           const isHnsLookupFailure =
-            failedError === 'ERR_TUNNEL_CONNECTION_FAILED' && isSingleLabelHostname(failedUrl);
+            failedError === 'ERR_TUNNEL_CONNECTION_FAILED' && isHnsFailureUrl(failedUrl);
 
           if (isHnsLookupFailure && !isBundledHnsReady()) {
             errorUrl.searchParams.set('error', 'HNS_NOT_READY');

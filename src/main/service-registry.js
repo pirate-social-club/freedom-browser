@@ -53,6 +53,18 @@ const registry = {
     canaryReady: false,
     height: 0,
   },
+  anyone: {
+    proxy: null,
+    mode: MODE.NONE,
+    statusMessage: null,
+    tempMessage: null,
+    tempMessageTimeout: null,
+    connected: false,
+    socksPort: null,
+    controlPort: null,
+    circuitState: null,
+    error: null,
+  },
   dvpn: {
     api: null,
     proxy: null,
@@ -110,6 +122,7 @@ function getRegistry() {
     bee: { ...registry.bee },
     radicle: { ...registry.radicle },
     hns: { ...registry.hns },
+    anyone: { ...registry.anyone },
     dvpn: { ...registry.dvpn },
   };
 }
@@ -230,6 +243,18 @@ const SERVICE_DEFAULTS = {
     synced: false,
     canaryReady: false,
     height: 0,
+  },
+  anyone: {
+    proxy: null,
+    mode: MODE.NONE,
+    statusMessage: null,
+    tempMessage: null,
+    tempMessageTimeout: null,
+    connected: false,
+    socksPort: null,
+    controlPort: null,
+    circuitState: null,
+    error: null,
   },
   dvpn: {
     api: null,

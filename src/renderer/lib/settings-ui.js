@@ -27,9 +27,26 @@ let hnsProxyRow = null;
 let hnsProxyValue = null;
 let hnsErrorRow = null;
 let hnsErrorValue = null;
-let hnsStartBtn = null;
-let hnsStopBtn = null;
 let isWindows = false;
+
+let enableAnyoneCheckbox = null;
+let startAnyoneRow = null;
+let anyoneAutoStartCheckbox = null;
+let anyoneStatusRow = null;
+let anyoneStatusValue = null;
+let anyoneProxyRow = null;
+let anyoneProxyValue = null;
+let anyoneSocksPortRow = null;
+let anyoneSocksPortValue = null;
+let anyoneControlPortRow = null;
+let anyoneControlPortValue = null;
+let anyoneCircuitRow = null;
+let anyoneCircuitValue = null;
+let anyoneIpRow = null;
+let anyoneIpValue = null;
+let anyoneErrorRow = null;
+let anyoneErrorValue = null;
+let _anyoneStatusUnsubscribe = null;
 
 let showDvpnControlsCheckbox = null;
 let dvpnContent = null;
@@ -64,6 +81,7 @@ let _dvpnStatusUnsubscribe = null;
 let currentThemeMode = 'system';
 let currentRadicleIntegrationEnabled = false;
 let currentHnsIntegrationEnabled = false;
+let currentAnyoneEnabled = false;
 let _hnsStatusUnsubscribe = null;
 
 let onSettingsChanged = null;
@@ -92,12 +110,54 @@ const updateHnsSettingsVisibility = () => {
   }
 };
 
+const updateAnyoneSettingsVisibility = () => {
+  const enabled = enableAnyoneCheckbox?.checked === true;
+  startAnyoneRow?.classList.toggle('disabled', !enabled);
+  if (anyoneAutoStartCheckbox) {
+    anyoneAutoStartCheckbox.disabled = !enabled;
+  }
+};
+
 const updateDvpnSettingsVisibility = () => {
   const show = showDvpnControlsCheckbox?.checked === true;
   if (dvpnContent) dvpnContent.style.display = show ? '' : 'none';
   if (!show && window.dvpn) {
     window.dvpn.stop?.().catch(() => {});
   }
+};
+
+const updateAnyoneStatusDisplay = (status) => {
+  if (!status) return;
+
+  if (anyoneStatusRow) anyoneStatusRow.style.display = '';
+  if (anyoneStatusValue) {
+    const stateLabels = {
+      off: 'Off',
+      starting: 'Connecting...',
+      connected: 'Connected',
+      stopping: 'Disconnecting...',
+      error: 'Error',
+    };
+    anyoneStatusValue.textContent = stateLabels[status.state] || status.state || 'Off';
+  }
+
+  if (anyoneProxyRow) anyoneProxyRow.style.display = status.proxy ? '' : 'none';
+  if (anyoneProxyValue) anyoneProxyValue.textContent = status.proxy || '';
+
+  if (anyoneSocksPortRow) anyoneSocksPortRow.style.display = status.socksPort ? '' : 'none';
+  if (anyoneSocksPortValue) anyoneSocksPortValue.textContent = status.socksPort ? String(status.socksPort) : '';
+
+  if (anyoneControlPortRow) anyoneControlPortRow.style.display = status.controlPort ? '' : 'none';
+  if (anyoneControlPortValue) anyoneControlPortValue.textContent = status.controlPort ? String(status.controlPort) : '';
+
+  if (anyoneCircuitRow) anyoneCircuitRow.style.display = status.circuitState ? '' : 'none';
+  if (anyoneCircuitValue) anyoneCircuitValue.textContent = status.circuitState || '';
+
+  if (anyoneIpRow) anyoneIpRow.style.display = status.ip ? '' : 'none';
+  if (anyoneIpValue) anyoneIpValue.textContent = status.ip || '';
+
+  if (anyoneErrorRow) anyoneErrorRow.style.display = status.error ? '' : 'none';
+  if (anyoneErrorValue) anyoneErrorValue.textContent = status.error || '';
 };
 
 const copyText = async (text) => {
@@ -229,11 +289,6 @@ const updateHnsStatusDisplay = (status) => {
     hnsErrorValue.textContent = status.error || '';
   }
 
-  if (hnsStartBtn && hnsStopBtn) {
-    const isRunning = status.status === 'running' || status.status === 'starting';
-    hnsStartBtn.disabled = isRunning;
-    hnsStopBtn.disabled = !isRunning;
-  }
 };
 
 export const applyTheme = (mode) => {
@@ -256,6 +311,7 @@ export const initTheme = async () => {
   currentThemeMode = settings?.theme || 'system';
   currentRadicleIntegrationEnabled = settings?.enableRadicleIntegration === true;
   currentHnsIntegrationEnabled = settings?.enableHnsIntegration !== false;
+  currentAnyoneEnabled = settings?.enableAnyone === true || settings?.showAnyoneControls === true;
   applyTheme(currentThemeMode);
 
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
@@ -268,6 +324,7 @@ export const initTheme = async () => {
 const saveSettings = async () => {
   const wasRadicleIntegrationEnabled = currentRadicleIntegrationEnabled;
   const wasHnsIntegrationEnabled = currentHnsIntegrationEnabled;
+  const wasAnyoneEnabled = currentAnyoneEnabled;
   const newSettings = {
     theme: themeModeSelect?.value || 'system',
     startBeeAtLaunch: startBeeAtLaunchCheckbox?.checked ?? true,
@@ -278,6 +335,8 @@ const saveSettings = async () => {
     startHnsAtLaunch: startHnsAtLaunchCheckbox?.checked ?? true,
     enableIdentityWallet: enableIdentityWalletCheckbox?.checked ?? false,
     autoUpdate: autoUpdateCheckbox?.checked ?? true,
+    enableAnyone: enableAnyoneCheckbox?.checked ?? false,
+    anyoneAutoStart: anyoneAutoStartCheckbox?.checked ?? false,
     showDvpnControls: showDvpnControlsCheckbox?.checked ?? false,
     dvpnMaxSpendP2P: Math.max(0.1, parseFloat(dvpnMaxSpendInput?.value || '1') || 1),
     dvpnLowBalanceStop: Math.max(0.1, parseFloat(dvpnLowBalanceStopInput?.value || '0.5') || 0.5),
@@ -292,10 +351,20 @@ const saveSettings = async () => {
     if (wasHnsIntegrationEnabled && !newSettings.enableHnsIntegration) {
       window.hns?.stop?.().catch(() => {});
     }
+    if (!wasHnsIntegrationEnabled && newSettings.enableHnsIntegration) {
+      window.hns?.start?.().catch(() => {});
+    }
+    if (wasAnyoneEnabled && !newSettings.enableAnyone) {
+      window.anyone?.stop?.().catch(() => {});
+    }
+    if (!wasAnyoneEnabled && newSettings.enableAnyone) {
+      window.anyone?.start?.().catch(() => {});
+    }
     pushDebug('Settings saved');
     currentThemeMode = newSettings.theme;
     currentRadicleIntegrationEnabled = newSettings.enableRadicleIntegration;
     currentHnsIntegrationEnabled = newSettings.enableHnsIntegration;
+    currentAnyoneEnabled = newSettings.enableAnyone;
     applyTheme(currentThemeMode);
     window.dispatchEvent(
       new CustomEvent('settings:updated', {
@@ -333,8 +402,24 @@ export const initSettings = async () => {
   hnsProxyValue = document.getElementById('hns-proxy-value');
   hnsErrorRow = document.getElementById('hns-error-row');
   hnsErrorValue = document.getElementById('hns-error-value');
-  hnsStartBtn = document.getElementById('hns-start-btn');
-  hnsStopBtn = document.getElementById('hns-stop-btn');
+
+  enableAnyoneCheckbox = document.getElementById('enable-anyone');
+  startAnyoneRow = document.getElementById('start-anyone-row');
+  anyoneAutoStartCheckbox = document.getElementById('anyone-auto-start');
+  anyoneStatusRow = document.getElementById('anyone-status-row');
+  anyoneStatusValue = document.getElementById('anyone-status-value');
+  anyoneProxyRow = document.getElementById('anyone-proxy-row');
+  anyoneProxyValue = document.getElementById('anyone-proxy-value');
+  anyoneSocksPortRow = document.getElementById('anyone-socks-port-row');
+  anyoneSocksPortValue = document.getElementById('anyone-socks-port-value');
+  anyoneControlPortRow = document.getElementById('anyone-control-port-row');
+  anyoneControlPortValue = document.getElementById('anyone-control-port-value');
+  anyoneCircuitRow = document.getElementById('anyone-circuit-row');
+  anyoneCircuitValue = document.getElementById('anyone-circuit-value');
+  anyoneIpRow = document.getElementById('anyone-ip-row');
+  anyoneIpValue = document.getElementById('anyone-ip-value');
+  anyoneErrorRow = document.getElementById('anyone-error-row');
+  anyoneErrorValue = document.getElementById('anyone-error-value');
 
   showDvpnControlsCheckbox = document.getElementById('show-dvpn-controls');
   dvpnContent = document.getElementById('dvpn-content');
@@ -384,6 +469,11 @@ export const initSettings = async () => {
     saveSettings();
   });
   startHnsAtLaunchCheckbox?.addEventListener('change', saveSettings);
+  enableAnyoneCheckbox?.addEventListener('change', () => {
+    updateAnyoneSettingsVisibility();
+    saveSettings();
+  });
+  anyoneAutoStartCheckbox?.addEventListener('change', saveSettings);
   showDvpnControlsCheckbox?.addEventListener('change', () => {
     updateDvpnSettingsVisibility();
     saveSettings();
@@ -423,16 +513,12 @@ export const initSettings = async () => {
   enableIdentityWalletCheckbox?.addEventListener('change', saveSettings);
   autoUpdateCheckbox?.addEventListener('change', saveSettings);
 
-  hnsStartBtn?.addEventListener('click', () => {
-    window.hns?.start?.().catch(() => {});
-  });
-
-  hnsStopBtn?.addEventListener('click', () => {
-    window.hns?.stop?.().catch(() => {});
-  });
-
   if (window.hns?.onStatusUpdate) {
     _hnsStatusUnsubscribe = window.hns.onStatusUpdate(updateHnsStatusDisplay);
+  }
+
+  if (window.anyone?.onStatusUpdate) {
+    _anyoneStatusUnsubscribe = window.anyone.onStatusUpdate(updateAnyoneStatusDisplay);
   }
 
   if (window.dvpn?.onStatusUpdate) {
@@ -458,6 +544,12 @@ export const initSettings = async () => {
       currentHnsIntegrationEnabled = settings.enableHnsIntegration !== false;
       if (startHnsAtLaunchCheckbox)
         startHnsAtLaunchCheckbox.checked = settings.startHnsAtLaunch !== false;
+      const enableAnyone = settings.enableAnyone === true || settings.showAnyoneControls === true;
+      if (enableAnyoneCheckbox)
+        enableAnyoneCheckbox.checked = enableAnyone;
+      currentAnyoneEnabled = enableAnyone;
+      if (anyoneAutoStartCheckbox)
+        anyoneAutoStartCheckbox.checked = settings.anyoneAutoStart === true;
       if (showDvpnControlsCheckbox)
         showDvpnControlsCheckbox.checked = settings.showDvpnControls === true;
       if (dvpnMaxSpendInput)
@@ -471,10 +563,12 @@ export const initSettings = async () => {
       if (autoUpdateCheckbox) autoUpdateCheckbox.checked = settings.autoUpdate !== false;
       updateRadicleSettingsVisibility();
       updateHnsSettingsVisibility();
+      updateAnyoneSettingsVisibility();
       updateDvpnSettingsVisibility();
     }
 
     window.hns?.getStatus?.().then(updateHnsStatusDisplay).catch(() => {});
+    window.anyone?.getStatus?.().then(updateAnyoneStatusDisplay).catch(() => {});
 
     window.dvpn?.getStatus?.().then(async (status) => {
       updateDvpnStatusDisplay(status);

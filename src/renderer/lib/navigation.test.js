@@ -261,8 +261,19 @@ const loadNavigationModule = async (options = {}) => {
   document.activeElement = null;
 
   const windowHandlers = {};
+  const hnsHosts = {
+    HNS_PUBLIC_SUFFIXES: ['.pirate'],
+    isHnsHost: (hostname = '') => {
+      if (!hostname || hostname === 'localhost' || hostname === '::1' || /^127\./.test(hostname)) {
+        return false;
+      }
+      return !hostname.includes('.') || hostname.endsWith('.pirate');
+    },
+  };
+  global.FREEDOM_HNS_HOSTS = hnsHosts;
   global.window = {
     electronAPI,
+    FREEDOM_HNS_HOSTS: hnsHosts,
     location: {
       href: 'file:///app/index.html',
     },
@@ -332,6 +343,7 @@ describe('navigation', () => {
     global.document = originalDocument;
     global.alert = originalAlert;
     global.HTMLElement = originalHTMLElement;
+    delete global.FREEDOM_HNS_HOSTS;
     jest.restoreAllMocks();
   });
 
@@ -496,15 +508,29 @@ describe('navigation', () => {
       'file:///app/pages/error.html?error=ERR_NAME_NOT_RESOLVED&url=https%3A%2F%2Fbad.example'
     );
 
+    ctx.state.enableHnsIntegration = true;
     ctx.tabsMocks.webviewEventHandler('did-fail-load', {
       event: {
         errorCode: -111,
         errorDescription: 'ERR_TUNNEL_CONNECTION_FAILED',
-        validatedURL: 'https://shakestation/',
+        validatedURL: 'https://captain/',
       },
     });
     expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
-      'file:///app/pages/error.html?error=HNS_NOT_READY&url=https%3A%2F%2Fshakestation%2F'
+      'file:///app/pages/error.html?error=HNS_NOT_READY&url=https%3A%2F%2Fcaptain%2F'
+    );
+
+    ctx.state.registry.hns.canaryReady = true;
+    ctx.state.registry.hns.synced = true;
+    ctx.tabsMocks.webviewEventHandler('did-fail-load', {
+      event: {
+        errorCode: -111,
+        errorDescription: 'ERR_TUNNEL_CONNECTION_FAILED',
+        validatedURL: 'https://night-signal.clawitzer/',
+      },
+    });
+    expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
+      'file:///app/pages/error.html?error=ERR_TUNNEL_CONNECTION_FAILED&url=https%3A%2F%2Fnight-signal.clawitzer%2F'
     );
 
     ctx.tabsMocks.webviewEventHandler('certificate-error', {
@@ -530,15 +556,15 @@ describe('navigation', () => {
       synced: false,
       height: 325297,
     };
-    ctx.urlUtilsMocks.normalizeHnsHostInput.mockReturnValue('https://shakestation/');
+    ctx.urlUtilsMocks.normalizeHnsHostInput.mockReturnValue('https://captain/');
 
     await ctx.mod.initNavigation();
 
-    ctx.elements.addressInput.value = 'shakestation/';
+    ctx.elements.addressInput.value = 'captain/';
     ctx.elements.navForm.dispatch('submit', { preventDefault: jest.fn() });
 
     expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
-      'file:///app/pages/error.html?error=HNS_NOT_READY&url=https%3A%2F%2Fshakestation%2F&height=325297'
+      'file:///app/pages/error.html?error=HNS_NOT_READY&url=https%3A%2F%2Fcaptain%2F&height=325297'
     );
   });
 
@@ -556,19 +582,19 @@ describe('navigation', () => {
       height: 325297,
     };
     ctx.urlUtilsMocks.normalizeHnsHostInput.mockImplementation((input) => {
-      if (input === 'shakestation/' || input === 'shakestation') {
-        return 'https://shakestation/';
+      if (input === 'captain/' || input === 'captain') {
+        return 'https://captain/';
       }
       return null;
     });
 
     await ctx.mod.initNavigation();
 
-    ctx.elements.addressInput.value = 'https://shakestation/';
+    ctx.elements.addressInput.value = 'https://captain/';
     ctx.elements.navForm.dispatch('submit', { preventDefault: jest.fn() });
 
     expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
-      'file:///app/pages/error.html?error=HNS_NOT_READY&url=https%3A%2F%2Fshakestation%2F&height=325297'
+      'file:///app/pages/error.html?error=HNS_NOT_READY&url=https%3A%2F%2Fcaptain%2F&height=325297'
     );
   });
 
