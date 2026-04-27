@@ -1,13 +1,13 @@
 {
   "name": "freedom-browser",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "license": "MPL-2.0",
   "description": "Freedom – A browser for the decentralized web, with Swarm, IPFS, and ENS as first-class protocols.",
   "author": {
     "name": "Freedom Team",
     "email": "browser@freedom.baby"
   },
-  "homepage": "https://freedombrowser.eth.limo/",
+  "homepage": "https://github.com/pirate-social-club/freedom-browser",
   "repository": {
     "type": "git",
     "url": "https://github.com/pirate-social-club/freedom-browser"

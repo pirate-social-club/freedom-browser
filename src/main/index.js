@@ -21,7 +21,7 @@ app.setAboutPanelOptions({
   version: `Electron ${process.versions.electron} · Chromium ${process.versions.chrome} · Node ${process.versions.node}`,
   copyright: '© 2025-2026 Freedom Team\nCopyleft — MPL-2.0',
   credits: 'A browser for the decentralized web\nSwarm · IPFS · ENS',
-  website: 'https://freedombrowser.eth.limo/',
+  website: 'https://github.com/pirate-social-club/freedom-browser',
   iconPath,
 });
 
