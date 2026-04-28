@@ -11,7 +11,7 @@ All notable changes to Freedom will be documented in this file.
 ### Changed
 
 - Aligned HNS routing policy with the Anyone transport path.
-- Updated visible project links to point at the `pirate-social-club/freedom-browser` fork.
+- Updated visible project links to point at the `pirate/freedom-browser` fork.
 
 ## [0.7.3] - 2026-04-24
 
