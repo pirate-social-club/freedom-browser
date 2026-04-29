@@ -53,6 +53,29 @@ describe('bookmarks-store', () => {
     await expect(ipcMain.invoke(IPC.BOOKMARKS_GET)).resolves.toEqual(customBookmarks);
   });
 
+  test('prunes removed bundled bookmarks from existing user bookmark files', async () => {
+    const ipcMain = createIpcMainMock();
+    const userBookmark = { label: 'Keep', target: 'https://keep.example' };
+    const oldDefaultBookmark = {
+      label: 'Swarm: OSM',
+      target: 'bzz://ab77201f6541a9ceafb98a46c643273cfa397a87798273dd17feb2aa366ce2e6',
+    };
+
+    fs.writeFileSync(
+      getUserBookmarksPath(userDataDir),
+      JSON.stringify([oldDefaultBookmark, userBookmark], null, 2),
+      'utf-8'
+    );
+
+    const { mod } = loadBookmarksStore({ userDataDir, ipcMain });
+    mod.registerBookmarksIpc();
+
+    await expect(ipcMain.invoke(IPC.BOOKMARKS_GET)).resolves.toEqual([userBookmark]);
+    expect(JSON.parse(fs.readFileSync(getUserBookmarksPath(userDataDir), 'utf-8'))).toEqual([
+      userBookmark,
+    ]);
+  });
+
   test('adds bookmarks and prevents duplicate targets', async () => {
     const ipcMain = createIpcMainMock();
     const bookmark = { label: 'Example', target: 'https://example.com' };

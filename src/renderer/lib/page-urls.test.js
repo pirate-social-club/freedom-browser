@@ -94,12 +94,13 @@ describe('page-urls', () => {
     expect(mod.isHnsHomeReady()).toBe(false);
   });
 
-  test('isHomeUrl treats both ICANN and HNS homepages as equivalent', async () => {
+  test('isHomeUrl treats the internal page and both landing targets as home', async () => {
     const mod = await loadModule();
 
     expect(mod.isHomeUrl('file:///app/pages/home.html')).toBe(true);
+    expect(mod.isHomeUrl('https://app.pirate/')).toBe(true);
     expect(mod.isHomeUrl('https://pirate.sc/')).toBe(true);
-    expect(mod.isHomeUrl('https://pirate/')).toBe(true);
+    expect(mod.isHomeUrl('https://pirate/')).toBe(false);
     expect(mod.isHomeUrl('https://pirate.sc/docs')).toBe(false);
     expect(mod.isHomeUrl('https://example.com')).toBe(false);
   });
@@ -152,7 +153,7 @@ describe('page-urls', () => {
     delete global.window.__rendererState;
   });
 
-  test('updateHomeUrl switches to HNS URL when ready', async () => {
+  test('updateHomeUrl switches to app.pirate when HNS is ready', async () => {
     const mod = await loadModule();
     global.window.__rendererState = {
       enableHnsIntegration: true,
@@ -164,12 +165,12 @@ describe('page-urls', () => {
     expect(changed).toBe(true);
     expect(mod.homeUrl).toBe('file:///app/pages/home.html');
     expect(mod.homeUrlNormalized).toBe('file:///app/pages/home.html');
-    expect(mod.landingUrl).toBe('https://pirate/');
-    expect(mod.landingUrlNormalized).toBe('https://pirate/');
+    expect(mod.landingUrl).toBe('https://app.pirate/');
+    expect(mod.landingUrlNormalized).toBe('https://app.pirate/');
     delete global.window.__rendererState;
   });
 
-  test('updateHomeUrl keeps ICANN URL when not ready', async () => {
+  test('updateHomeUrl keeps pirate.sc when HNS is not ready', async () => {
     const mod = await loadModule();
     global.window.__rendererState = {
       enableHnsIntegration: true,
@@ -198,7 +199,7 @@ describe('page-urls', () => {
     delete global.window.__rendererState;
   });
 
-  test('updateHomeUrl reverts to ICANN when HNS becomes unavailable', async () => {
+  test('updateHomeUrl falls back to pirate.sc when HNS becomes unavailable', async () => {
     const mod = await loadModule();
     global.window.__rendererState = {
       enableHnsIntegration: true,
@@ -208,7 +209,7 @@ describe('page-urls', () => {
     };
     mod.updateHomeUrl();
     expect(mod.homeUrl).toBe('file:///app/pages/home.html');
-    expect(mod.landingUrl).toBe('https://pirate/');
+    expect(mod.landingUrl).toBe('https://app.pirate/');
 
     global.window.__rendererState = {
       enableHnsIntegration: true,

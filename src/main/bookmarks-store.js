@@ -9,6 +9,15 @@ const IPC = require('../shared/ipc-channels');
 // To preserve existing behavior, I'll look in userData first, then fallback to app root.
 
 const BOOKMARKS_FILE = 'user-bookmarks.json';
+const REMOVED_DEFAULT_BOOKMARK_TARGETS = new Set([
+  'bzz://ab77201f6541a9ceafb98a46c643273cfa397a87798273dd17feb2aa366ce2e6',
+  'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
+  'ipns://docs.ipfs.tech',
+  'ens://vitalik.eth',
+  'ipfs://bafybeibod3h35zt43dwzz74ji6kqrhdlbhwzy7zol66lrtnqhj63vyzrgy',
+  'ens://meinhard.eth',
+  'rad://z3gqcJUoA1n9HaHKufZs5FCSGazv5',
+]);
 
 function getBookmarksPath() {
   return path.join(app.getPath('userData'), BOOKMARKS_FILE);
@@ -19,7 +28,17 @@ function loadBookmarks() {
   try {
     if (fs.existsSync(filePath)) {
       const data = fs.readFileSync(filePath, 'utf-8');
-      return JSON.parse(data);
+      const bookmarks = JSON.parse(data);
+      if (!Array.isArray(bookmarks)) {
+        return [];
+      }
+      const filtered = bookmarks.filter(
+        (bookmark) => !REMOVED_DEFAULT_BOOKMARK_TARGETS.has(bookmark?.target)
+      );
+      if (filtered.length !== bookmarks.length) {
+        saveBookmarks(filtered);
+      }
+      return filtered;
     }
   } catch (err) {
     log.error('Failed to load user bookmarks:', err);
@@ -97,4 +116,5 @@ function registerBookmarksIpc() {
 
 module.exports = {
   registerBookmarksIpc,
+  REMOVED_DEFAULT_BOOKMARK_TARGETS,
 };

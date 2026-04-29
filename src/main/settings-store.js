@@ -27,12 +27,12 @@ const DEFAULT_SETTINGS = {
   startHnsAtLaunch: true,
   autoUpdate: true,
   showBookmarkBar: false,
-  enableAnyone: false,
+  enableAnyone: true,
   // Legacy compatibility key for pre-toggle Anyone builds.
   showAnyoneControls: false,
-  anyoneAutoStart: false,
+  anyoneAutoStart: true,
   showDvpnControls: false,
-  dvpnMaxSpendP2P: 1.0,
+  dvpnMaxSpendP2P: 50.0,
   dvpnLowBalanceStop: 0.5,
   dvpnMaxDurationMinutes: 120,
   sidebarOpen: false,
@@ -58,6 +58,9 @@ function loadSettings() {
       // Migrate legacy Anyone visibility into the real enable flag.
       if (cachedSettings.enableAnyone === undefined) {
         cachedSettings.enableAnyone = cachedSettings.showAnyoneControls === true;
+      }
+      if (cachedSettings.dvpnMaxSpendP2P === undefined || cachedSettings.dvpnMaxSpendP2P <= 1.0) {
+        cachedSettings.dvpnMaxSpendP2P = DEFAULT_SETTINGS.dvpnMaxSpendP2P;
       }
     } else {
       cachedSettings = { ...DEFAULT_SETTINGS };

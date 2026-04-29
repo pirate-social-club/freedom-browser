@@ -343,7 +343,17 @@ describe('hns-manager', () => {
     const ctx = loadHnsManagerModule({ fingertipdExists: false });
     ctx.mod.registerHnsIpc();
     const result = await ctx.ipcMain.invoke(IPC.HNS_START);
-    expect(result).toHaveProperty('status');
+    expect(result).toMatchObject({
+      status: 'error',
+      synced: false,
+      canaryReady: false,
+      height: 0,
+      proxyAddr: null,
+      caPemPath: null,
+      rootAddr: null,
+      recursiveAddr: null,
+    });
+    expect(result.error).toContain('Helper binary not found');
   });
 
   test('HNS_GET_STATUS IPC handler returns current status', async () => {

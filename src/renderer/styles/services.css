@@ -327,3 +327,259 @@
     opacity: 1;
   }
 }
+
+/* ── Network Popover: Privacy & Routing ── */
+
+.network-section-header {
+  padding: 6px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+/* Anyone Toggle */
+.anyone-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+
+.anyone-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  width: 100%;
+  justify-content: space-between;
+}
+
+.anyone-toggle-switch {
+  width: 36px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--border);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  transition: background 0.2s ease;
+}
+
+.anyone-toggle-knob {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  transition: transform 0.2s ease;
+}
+
+.anyone-toggle-switch.running {
+  background: #4caf50;
+}
+
+.anyone-toggle-switch.starting {
+  background: #ffcc00;
+}
+
+.anyone-toggle-switch.running .anyone-toggle-knob {
+  transform: translateX(18px);
+}
+
+.anyone-info {
+  padding: 8px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+.anyone-info:not(.visible) {
+  display: none;
+}
+
+.anyone-info-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.anyone-info-label {
+  color: var(--muted);
+}
+
+.anyone-toggle:hover {
+  background: transparent;
+}
+
+/* Handshake menu row */
+.hns-menu-row {
+  cursor: default;
+}
+
+.hns-menu-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.hns-open-btn {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.hns-open-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Sentinel menu */
+.sentinel-menu-row {
+  padding: 4px 0;
+}
+
+.sentinel-menu-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sentinel-menu-actions {
+  padding: 4px 12px 8px;
+  display: flex;
+  gap: 8px;
+}
+
+.sentinel-action-btn {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  cursor: default;
+  transition: background 0.15s ease;
+}
+
+.sentinel-action-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.sentinel-action-btn:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.sentinel-menu-detail {
+  padding: 0 12px 8px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Sentinel Funding Modal */
+.sentinel-funding-address-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.sentinel-funding-address {
+  flex: 1;
+  display: block;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 13px;
+  word-break: break-all;
+  text-align: left;
+}
+
+.sentinel-funding-qr-row {
+  display: flex;
+  justify-content: center;
+  margin: 16px 0;
+}
+
+.sentinel-funding-qr {
+  width: 192px;
+  height: 192px;
+  border-radius: 8px;
+}
+
+.sentinel-funding-balance-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.sentinel-funding-balance-row .sentinel-info-label {
+  color: var(--muted);
+}
+
+.modal-text {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+.sentinel-backup-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.sentinel-backup-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.sentinel-backup-warning {
+  margin: 0;
+  padding: 10px;
+  border-radius: 6px;
+  background: rgba(255, 204, 0, 0.12);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sentinel-backup-words {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.sentinel-backup-word {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.sentinel-backup-index {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sentinel-backup-actions {
+  display: flex;
+}

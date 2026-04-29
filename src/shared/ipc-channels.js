@@ -54,6 +54,8 @@ module.exports = {
   DVPN_CREATE_WALLET: 'dvpn:createWallet',
   DVPN_GET_WALLET_ADDRESS: 'dvpn:getWalletAddress',
   DVPN_GENERATE_QR: 'dvpn:generateQr',
+  DVPN_EXPORT_MNEMONIC: 'dvpn:exportMnemonic',
+  DVPN_CHECK_PREREQUISITES: 'dvpn:checkPrerequisites',
 
   // ENS resolution
   ENS_RESOLVE: 'ens:resolve',

@@ -4,204 +4,352 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; script-src 'self'; connect-src 'self';"
+      content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; script-src 'self'; connect-src 'self';"
     />
     <style>
       html,
       body {
-        height: 100%;
+        min-height: 100%;
         margin: 0;
-      }
-      body {
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        padding: 48px;
-        box-sizing: border-box;
-        position: relative;
       }
 
-      /* Dark theme (default) */
       body {
-        background: #1f2020;
-        color: #c7c7c7;
-      }
-      body::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: url('images/home.png') no-repeat center center;
-        background-size: cover;
-        opacity: 0.6;
-        z-index: -1;
-      }
-      h1 {
-        font-size: 32px;
-        margin-bottom: 16px;
-      }
-      p {
-        max-width: 640px;
-        line-height: 1.6;
-        margin-bottom: 12px;
-      }
-      .status-card {
-        margin-top: 28px;
-        display: inline-flex;
-        flex-direction: column;
-        gap: 10px;
-        min-width: 320px;
-        padding: 18px 20px;
-        border-radius: 14px;
-        background: rgba(19, 20, 20, 0.76);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        backdrop-filter: blur(8px);
-      }
-      .status-row {
-        display: flex;
-        justify-content: space-between;
-        gap: 24px;
-      }
-      .status-label {
-        color: #999;
-      }
-      .status-value {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background: #171918;
         color: #f2f2f2;
+        box-sizing: border-box;
+        padding: 40px;
       }
-      .status-actions {
-        display: flex;
-        gap: 12px;
-        margin-top: 8px;
+
+      .page {
+        max-width: 760px;
       }
-      .status-link {
-        color: #f2f2f2;
-        text-decoration: none;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.25);
+
+      .logo-dark,
+      .logo-light {
+        height: 42px;
+        margin-bottom: 28px;
       }
-      .status-link:hover {
-        border-bottom-color: rgba(255, 255, 255, 0.65);
-      }
-      .muted {
-        color: #999;
-      }
-      h2 {
-        font-size: 18px;
-        margin-top: 32px;
-        margin-bottom: 12px;
-        color: #999;
-      }
-      code {
-        background: #2a2a2a;
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-family: 'SF Mono', Menlo, monospace;
-        font-size: 13px;
-      }
-      ul {
-        margin: 0;
-        padding-left: 20px;
-        line-height: 1.8;
-      }
-      li {
-        margin-bottom: 4px;
-      }
-      a.protocol-link {
-        color: #6eb5ff;
-        text-decoration: none;
-        background: #2a2a2a;
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-family: 'SF Mono', Menlo, monospace;
-        font-size: 13px;
-        cursor: pointer;
-        transition:
-          background 0.15s ease,
-          color 0.15s ease;
-      }
-      a.protocol-link:hover {
-        background: #3a3a4a;
-        color: #8ecfff;
-      }
-      .logo-dark {
-        display: block;
-      }
+
       .logo-light {
         display: none;
       }
 
-      /* Light theme */
+      .panel {
+        display: grid;
+        gap: 12px;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: minmax(150px, 1fr) auto;
+        gap: 14px;
+        align-items: center;
+        padding: 16px 18px;
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        background: rgba(255, 255, 255, 0.045);
+        border-radius: 8px;
+      }
+
+      .row-main {
+        display: grid;
+        gap: 4px;
+      }
+
+      .row-title {
+        font-size: 15px;
+        font-weight: 600;
+      }
+
+      .row-status {
+        color: #a7ada8;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+
+      .actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+      }
+
+      button,
+      .link-button {
+        min-height: 34px;
+        padding: 0 13px;
+        border-radius: 7px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.08);
+        color: #f2f2f2;
+        font: inherit;
+        font-size: 13px;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: default;
+      }
+
+      button.primary,
+      .link-button.primary {
+        background: #e7ece7;
+        color: #171918;
+        border-color: #e7ece7;
+      }
+
+      button:disabled {
+        opacity: 0.55;
+      }
+
+      .funding {
+        display: none;
+        margin-top: 12px;
+        padding: 14px;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.16);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .funding.visible {
+        display: grid;
+        gap: 12px;
+      }
+
+      .funding-copy {
+        margin: 0;
+        color: #b8beb9;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .funding-address-row,
+      .funding-balance-row,
+      .backup-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .funding-address-row {
+        align-items: stretch;
+      }
+
+      .address {
+        flex: 1;
+        min-width: 0;
+        overflow-wrap: anywhere;
+        color: #dfe5df;
+        background: rgba(255, 255, 255, 0.07);
+        border-radius: 6px;
+        padding: 8px;
+        font-family: 'SF Mono', Menlo, monospace;
+        font-size: 12px;
+      }
+
+      .balance-label {
+        color: #a7ada8;
+        font-size: 13px;
+      }
+
+      .balance-value {
+        color: #f2f2f2;
+        font-size: 13px;
+      }
+
+      .backup-panel {
+        display: grid;
+        gap: 10px;
+        padding-top: 12px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .backup-panel[hidden] {
+        display: none;
+      }
+
+      .backup-warning {
+        margin: 0;
+        padding: 10px;
+        border-radius: 6px;
+        background: rgba(255, 204, 0, 0.12);
+        color: #f2f2f2;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .backup-words {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 6px;
+      }
+
+      .backup-word {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        min-width: 0;
+        padding: 6px 8px;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.07);
+        font-family: 'SF Mono', Menlo, monospace;
+        font-size: 12px;
+      }
+
+      .backup-index {
+        color: #a7ada8;
+        font-size: 11px;
+      }
+
+      .qr {
+        width: 168px;
+        height: 168px;
+        background: #fff;
+        border-radius: 6px;
+      }
+
+      @media (max-width: 640px) {
+        body {
+          padding: 24px;
+        }
+
+        .row {
+          grid-template-columns: 1fr;
+        }
+
+        .actions {
+          justify-content: flex-start;
+        }
+      }
+
       @media (prefers-color-scheme: light) {
         body {
-          background: #ffffff;
+          background: #f7f8f6;
           color: #202124;
         }
-        .status-card {
-          background: rgba(255, 255, 255, 0.92);
-          border-color: rgba(0, 0, 0, 0.08);
-        }
-        .status-value {
-          color: #202124;
-        }
-        .muted {
-          color: #5f6368;
-        }
-        h2 {
-          color: #5f6368;
-        }
-        code {
-          background: #f1f3f4;
-        }
-        a.protocol-link {
-          color: #1a73e8;
-          background: #f1f3f4;
-        }
-        a.protocol-link:hover {
-          background: #e8eaed;
-          color: #1558b0;
-        }
+
         .logo-dark {
           display: none;
         }
+
         .logo-light {
           display: block;
+        }
+
+        .row {
+          background: rgba(255, 255, 255, 0.72);
+          border-color: rgba(0, 0, 0, 0.08);
+        }
+
+        .row-status {
+          color: #5f675f;
+        }
+
+        button,
+        .link-button {
+          color: #202124;
+          background: rgba(0, 0, 0, 0.04);
+          border-color: rgba(0, 0, 0, 0.12);
+        }
+
+        button.primary,
+        .link-button.primary {
+          background: #202421;
+          color: #fff;
+          border-color: #202421;
+        }
+
+        .funding {
+          background: rgba(0, 0, 0, 0.035);
+          border-color: rgba(0, 0, 0, 0.08);
+        }
+
+        .address {
+          color: #202124;
+          background: rgba(0, 0, 0, 0.05);
+        }
+
+        .funding-copy,
+        .balance-label {
+          color: #5f675f;
+        }
+
+        .balance-value {
+          color: #202124;
+        }
+
+        .backup-warning {
+          color: #202124;
+          background: rgba(181, 132, 0, 0.12);
+        }
+
+        .backup-word {
+          background: rgba(0, 0, 0, 0.05);
         }
       }
     </style>
   </head>
   <body>
-    <img
-      class="logo-dark"
-      src="images/freedom-logo-white.svg"
-      alt="Freedom"
-      style="height: 48px; margin-bottom: 24px"
-    />
-    <img
-      class="logo-light"
-      src="images/freedom-logo-black.svg"
-      alt="Freedom"
-      style="height: 48px; margin-bottom: 24px"
-    />
-    <p>
-      Freedom starts on the open web and upgrades to HNS once the bundled resolver is ready.
-    </p>
-    <section class="status-card" aria-live="polite">
-      <div class="status-row">
-        <span class="status-label">Destination</span>
-        <span class="status-value" id="home-destination">pirate.sc</span>
-      </div>
-      <div class="status-row">
-        <span class="status-label">Status</span>
-        <span class="status-value" id="home-status">Checking HNS</span>
-      </div>
-      <div class="status-row" id="home-height-row" hidden>
-        <span class="status-label">Height</span>
-        <span class="status-value" id="home-height">0</span>
-      </div>
-      <div class="status-actions">
-        <a id="home-open-link" class="status-link" href="https://pirate.sc/">Open pirate.sc</a>
-        <span id="home-note" class="muted">Waiting for bundled HNS.</span>
-      </div>
-    </section>
+    <main class="page">
+      <img class="logo-dark" src="images/freedom-logo-white.svg" alt="Freedom" />
+      <img class="logo-light" src="images/freedom-logo-black.svg" alt="Freedom" />
+
+      <section class="panel" aria-live="polite">
+        <div class="row">
+          <div class="row-main">
+            <div class="row-title">Anyone</div>
+            <div class="row-status" id="anyone-status">Checking...</div>
+          </div>
+          <div class="actions">
+            <button id="anyone-toggle" class="primary" type="button">Turn on</button>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="row-main">
+            <div class="row-title">Sentinel dVPN</div>
+            <div class="row-status" id="sentinel-status">Checking...</div>
+            <div class="funding" id="sentinel-funding">
+              <p class="funding-copy">
+                Sentinel dVPN uses P2P, the Sentinel network token. Send P2P to this wallet address, then connect once the balance updates.
+              </p>
+              <div class="funding-address-row">
+                <code class="address" id="sentinel-address"></code>
+                <button id="sentinel-copy" type="button">Copy</button>
+              </div>
+              <img class="qr" id="sentinel-qr" alt="Sentinel wallet QR code" />
+              <div class="funding-balance-row">
+                <span class="balance-label">Balance:</span>
+                <span class="balance-value" id="sentinel-balance">-</span>
+                <button id="sentinel-refresh" type="button">Refresh</button>
+              </div>
+              <button id="sentinel-backup-reveal" type="button">Backup wallet</button>
+              <div id="sentinel-backup-panel" class="backup-panel" hidden>
+                <p class="backup-warning">
+                  Back up this recovery phrase before funding. Anyone with this phrase can spend your Sentinel funds.
+                </p>
+                <div id="sentinel-backup-words" class="backup-words"></div>
+                <div class="backup-actions">
+                  <button id="sentinel-backup-copy" type="button">Copy recovery phrase</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="actions">
+            <button id="sentinel-fund" type="button">Setup Wallet</button>
+            <button id="sentinel-connect" class="primary" type="button">Connect</button>
+            <button id="sentinel-disconnect" type="button">Disconnect</button>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="row-main">
+            <div class="row-title">Handshake</div>
+            <div class="row-status" id="handshake-status">Checking...</div>
+          </div>
+        </div>
+      </section>
+    </main>
     <script src="scripts/home.js"></script>
   </body>
 </html>

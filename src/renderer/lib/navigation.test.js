@@ -189,7 +189,7 @@ const loadNavigationModule = async (options = {}) => {
     homeUrlNormalized: homeUrl,
     landingUrl,
     landingUrlNormalized: landingUrl,
-    isHomeUrl: jest.fn((url) => url === homeUrl || url === landingUrl || url === 'https://pirate/'),
+    isHomeUrl: jest.fn((url) => url === homeUrl || url === landingUrl || url === 'https://app.pirate/'),
     isHnsHomeReady: jest.fn(() => false),
     errorUrlBase,
     internalPages: {
@@ -659,7 +659,7 @@ describe('navigation', () => {
 
   test('upgrades all untouched home tabs when the canonical homepage changes', async () => {
     const oldHomeUrl = 'https://pirate.sc/';
-    const newHomeUrl = 'https://pirate/';
+    const newHomeUrl = 'https://app.pirate/';
     const activeTab = createTab(1, oldHomeUrl, {
       title: 'New Tab',
       webview: createWebview(oldHomeUrl, {

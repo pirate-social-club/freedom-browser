@@ -107,6 +107,12 @@ export const state = {
   // Feature flags
   enableRadicleIntegration: false,
   enableHnsIntegration: false,
+
+  // Anyone state
+  currentAnyoneStatus: 'off',
+
+  // DVPN state
+  currentDvpnStatus: 'off',
 };
 
 // Build Bee URL using registry or fallback to defaults

@@ -118,7 +118,7 @@ function loadDvpnManagerModule(options = {}) {
     app,
     ipcMain,
     BrowserWindow,
-    virtualMocks: ['sentinel-ai-connect'],
+    virtualMocks: ['sentinel-ai-connect', 'sentinel-ai-connect/package.json'],
     extraMocks: {
       electron: () => ({
         app,
@@ -144,6 +144,7 @@ function loadDvpnManagerModule(options = {}) {
         loadSettings,
       }),
       'sentinel-ai-connect': () => sdkMock,
+      'sentinel-ai-connect/package.json': () => ({ version: '1.2.2' }),
     },
   });
 
@@ -179,17 +180,32 @@ describe('dvpn-manager', () => {
   test('init with no wallet sets state to OFF', async () => {
     const ctx = loadDvpnManagerModule({
       walletExists: false,
+      existsSync: (target) => {
+        if (target.includes('dvpn-bin') && target.includes('v2ray')) return true;
+        if (target.endsWith('/dvpn')) return true;
+        return false;
+      },
     });
 
     await ctx.mod.initDvpn();
 
     expect(ctx.mod.getStatus().state).toBe('off');
     expect(ctx.mod.getStatus().walletAddress).toBeNull();
+    expect(ctx.mod.getStatus().prerequisites).toEqual(expect.objectContaining({
+      ok: true,
+      v2rayFound: true,
+      sdkFound: true,
+    }));
   });
 
   test('wallet creation via IPC calls SDK and returns address', async () => {
     const ctx = loadDvpnManagerModule({
       walletExists: false,
+      existsSync: (target) => {
+        if (target.includes('dvpn-bin') && target.includes('v2ray')) return true;
+        if (target.includes('dvpn')) return true;
+        return false;
+      },
     });
     ctx.mod.registerDvpnIpc();
 
@@ -408,19 +424,21 @@ describe('dvpn-manager', () => {
 
     const status = ctx.mod.getStatus();
 
-    expect(status).toHaveProperty('state');
-    expect(status).toHaveProperty('walletAddress');
-    expect(status).toHaveProperty('connected');
-    expect(status).toHaveProperty('balance');
-    expect(status).toHaveProperty('funded');
-    expect(status).toHaveProperty('error');
-    expect(status).toHaveProperty('lastDisconnectReason');
-    expect(status).toHaveProperty('sessionId');
-    expect(status).toHaveProperty('protocol');
-    expect(status).toHaveProperty('nodeAddress');
-    expect(status).toHaveProperty('country');
-    expect(status).toHaveProperty('ip');
-    expect(status).toHaveProperty('socksPort');
+    expect(status).toMatchObject({
+      state: 'wallet_ready',
+      walletAddress: 'sent1testaddress',
+      connected: false,
+      balance: 10,
+      funded: true,
+      error: null,
+      lastDisconnectReason: null,
+      sessionId: null,
+      protocol: null,
+      nodeAddress: null,
+      country: null,
+      ip: null,
+      socksPort: null,
+    });
   });
 
   test('low-balance auto-disconnect triggers when balance drops below threshold', async () => {
@@ -488,6 +506,8 @@ describe('dvpn-manager', () => {
 
     expect([...ctx.ipcMain.handlers.keys()].sort()).toEqual([
       IPC.DVPN_CREATE_WALLET,
+      IPC.DVPN_CHECK_PREREQUISITES,
+      IPC.DVPN_EXPORT_MNEMONIC,
       IPC.DVPN_GENERATE_QR,
       IPC.DVPN_GET_BALANCE,
       IPC.DVPN_GET_STATUS,
@@ -495,6 +515,56 @@ describe('dvpn-manager', () => {
       IPC.DVPN_START,
       IPC.DVPN_STOP,
     ].sort());
+  });
+
+  test('checks prerequisites before wallet funding flow', async () => {
+    const okCtx = loadDvpnManagerModule({
+      walletExists: false,
+      existsSync: (target) => {
+        if (target.includes('dvpn-bin') && target.includes('v2ray')) return true;
+        if (target.includes('dvpn')) return true;
+        return false;
+      },
+    });
+    okCtx.mod.registerDvpnIpc();
+
+    await expect(okCtx.ipcMain.invoke(IPC.DVPN_CHECK_PREREQUISITES)).resolves.toEqual(
+      expect.objectContaining({
+        success: true,
+        ok: true,
+        v2rayFound: true,
+        sdkFound: true,
+      })
+    );
+
+    const missingCtx = loadDvpnManagerModule({
+      walletExists: false,
+    });
+    missingCtx.mod.registerDvpnIpc();
+
+    const result = await missingCtx.ipcMain.invoke(IPC.DVPN_CHECK_PREREQUISITES);
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      ok: false,
+      v2rayFound: false,
+      sdkFound: true,
+    }));
+  });
+
+  test('exports Sentinel mnemonic for wallet backup', async () => {
+    const ctx = loadDvpnManagerModule({
+      walletExists: true,
+      stateExists: false,
+    });
+    ctx.mod.registerDvpnIpc();
+    await ctx.mod.initDvpn();
+
+    const result = await ctx.ipcMain.invoke(IPC.DVPN_EXPORT_MNEMONIC);
+
+    expect(result).toEqual({
+      success: true,
+      mnemonic: 'word word word word word word word word word word word word',
+    });
   });
 
   test('walletExists returns false when no wallet file', async () => {

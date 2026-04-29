@@ -190,6 +190,7 @@ const renderBookmarks = async (items = []) => {
   if (!bookmarksInner) return;
   bookmarksInner.innerHTML = '';
   allBookmarks = items;
+  updateBookmarksBarVisibility();
 
   if (!items.length) {
     if (overflowBtn) overflowBtn.classList.remove('visible');
@@ -609,7 +610,7 @@ export const initBookmarks = () => {
  */
 const updateBookmarksBarVisibility = () => {
   if (bookmarksBar) {
-    const shouldShow = isOnHomePage || bookmarksBarVisible;
+    const shouldShow = allBookmarks.length > 0 && (isOnHomePage || bookmarksBarVisible);
     bookmarksBar.classList.toggle('hidden', !shouldShow);
   }
 };

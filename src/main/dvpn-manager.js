@@ -33,6 +33,7 @@ let lastDisconnectReason = null;
 let lastError = null;
 let cachedBalance = null;
 let cachedFunded = false;
+let cachedPrerequisites = null;
 
 let sdk = null;
 let sdkHttpHardened = false;
@@ -60,6 +61,30 @@ function walletExists() {
   return fs.existsSync(getWalletPath());
 }
 
+function checkPrerequisites() {
+  const v2rayPath = getV2RayPath();
+  const sdkStatus = checkSdkAvailable();
+
+  const missing = [];
+  if (!v2rayPath) missing.push('V2Ray');
+  if (!sdkStatus.found) missing.push('Sentinel SDK');
+
+  cachedPrerequisites = {
+    ok: missing.length === 0,
+    v2rayFound: Boolean(v2rayPath),
+    v2rayPath: v2rayPath || null,
+    sdkFound: sdkStatus.found,
+    missing,
+    error: missing.length > 0
+      ? `${missing.join(' and ')} ${missing.length === 1 ? 'is' : 'are'} missing`
+      : null,
+    sdkError: sdkStatus.error,
+  };
+
+  updateService('dvpn', { prerequisites: cachedPrerequisites });
+  return { success: true, ...cachedPrerequisites };
+}
+
 async function loadSdk() {
   if (sdk) return sdk;
   try {
@@ -76,6 +101,25 @@ async function loadSdk() {
 
 function getSdkPackageRoot() {
   return path.dirname(require.resolve('sentinel-ai-connect/package.json'));
+}
+
+function checkSdkAvailable() {
+  try {
+    getSdkPackageRoot();
+    return { found: true, error: null };
+  } catch (packageErr) {
+    try {
+      require.resolve('sentinel-ai-connect');
+      return { found: true, error: null };
+    } catch {
+      try {
+        require('sentinel-ai-connect');
+        return { found: true, error: null };
+      } catch (sdkErr) {
+        return { found: false, error: sdkErr?.message || packageErr.message };
+      }
+    }
+  }
 }
 
 async function importModuleFromFile(modulePath) {
@@ -269,6 +313,7 @@ function getStatus() {
     socksPort: connectResult?.socksPort || null,
     balance: cachedBalance,
     funded: cachedFunded,
+    prerequisites: cachedPrerequisites,
     lastDisconnectReason,
     error: lastError,
   };
@@ -277,6 +322,11 @@ function getStatus() {
 async function createWallet() {
   if (!safeStorage.isEncryptionAvailable()) {
     return { success: false, error: 'Device encryption not available' };
+  }
+
+  const prerequisites = checkPrerequisites();
+  if (!prerequisites.ok) {
+    return { success: false, error: prerequisites.error, prerequisites };
   }
 
   const sdkModule = await loadSdk();
@@ -299,6 +349,14 @@ async function createWallet() {
   log.info(`[dVPN] Wallet created: ${walletAddress}`);
 
   return { success: true, address: walletAddress };
+}
+
+function exportMnemonic() {
+  const mnemonic = loadMnemonic();
+  if (!mnemonic) {
+    return { success: false, error: 'No Sentinel wallet to back up' };
+  }
+  return { success: true, mnemonic };
 }
 
 async function getBalance() {
@@ -562,6 +620,7 @@ async function initDvpn() {
     log.info('[dVPN] No wallet found, state=OFF');
     cachedBalance = null;
     cachedFunded = false;
+    checkPrerequisites();
     updateState(STATES.OFF, null);
     return;
   }
@@ -654,6 +713,14 @@ function registerDvpnIpc() {
     return { success: true, address: walletAddress };
   });
 
+  ipcMain.handle(IPC.DVPN_EXPORT_MNEMONIC, () => {
+    return exportMnemonic();
+  });
+
+  ipcMain.handle(IPC.DVPN_CHECK_PREREQUISITES, () => {
+    return checkPrerequisites();
+  });
+
   ipcMain.handle(IPC.DVPN_GENERATE_QR, async (_event, text, options = {}) => {
     try {
       const dataUrl = await QRCode.toDataURL(text, {
@@ -679,6 +746,8 @@ module.exports = {
   startDvpn,
   getStatus,
   walletExists,
+  checkPrerequisites,
+  exportMnemonic,
   STATES,
   resolveConnectedIp,
   withMutedSdkWarnings,

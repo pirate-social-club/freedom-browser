@@ -6,20 +6,20 @@
 const ROUTABLE_PAGES = window.internalPages?.routable || {};
 
 const INTERNAL_HOME_URL = new URL(`pages/${ROUTABLE_PAGES.home || 'home.html'}`, window.location.href).toString();
-const HOME_ICANN_URL = 'https://pirate.sc/';
-const HOME_HNS_URL = 'https://pirate/';
+const APP_HOME_URL = 'https://app.pirate/';
+const APP_FALLBACK_URL = 'https://pirate.sc/';
 
 export let homeUrl = INTERNAL_HOME_URL;
 export let homeUrlNormalized = INTERNAL_HOME_URL;
-export let landingUrl = HOME_ICANN_URL;
-export let landingUrlNormalized = HOME_ICANN_URL;
+export let landingUrl = APP_FALLBACK_URL;
+export let landingUrlNormalized = APP_FALLBACK_URL;
 
 export const isHomeUrl = (url = '') => {
   const normalizedUrl = url.replace(/\/$/, '');
   const knownHomeUrls = [
     INTERNAL_HOME_URL,
-    HOME_ICANN_URL,
-    HOME_HNS_URL,
+    APP_HOME_URL,
+    APP_FALLBACK_URL,
     landingUrl,
     landingUrlNormalized,
   ].map((value) => value.replace(/\/$/, ''));
@@ -37,7 +37,7 @@ export const isHnsHomeReady = () => {
 };
 
 export const updateHomeUrl = () => {
-  const newUrl = isHnsHomeReady() ? HOME_HNS_URL : HOME_ICANN_URL;
+  const newUrl = isHnsHomeReady() ? APP_HOME_URL : APP_FALLBACK_URL;
   if (newUrl === landingUrl) return false;
   landingUrl = newUrl;
   landingUrlNormalized = newUrl;

@@ -380,36 +380,80 @@
           id="bee-menu-button"
           class="menu-button bee-menu-button"
           type="button"
-          aria-label="Nodes Menu"
+          aria-label="Network Menu"
+          title="Network: Handshake, Anyone, Sentinel, Swarm, IPFS, Radicle"
           aria-haspopup="true"
           aria-expanded="false"
         >
-          <svg width="200" height="200" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-              <style>
-                .net-line {
-                  stroke: white;
-                  stroke-width: 8;
-                  stroke-linecap: round;
-                }
-                .net-node {
-                  fill: none;
-                  stroke: white;
-                  stroke-width: 8;
-                }
-              </style>
-            </defs>
-            <!-- Lines -->
-            <line x1="44.5" y1="33.5" x2="25.5" y2="66.5" class="net-line" />
-            <line x1="55.5" y1="33.5" x2="74.5" y2="66.5" class="net-line" />
-            <line x1="31" y1="76" x2="69" y2="76" class="net-line" />
-            <!-- Nodes -->
-            <circle cx="50" cy="24" r="11" class="net-node" />
-            <circle cx="20" cy="76" r="11" class="net-node" />
-            <circle cx="80" cy="76" r="11" class="net-node" />
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
           </svg>
         </button>
         <div id="bee-menu-dropdown" class="bee-dropdown" role="menu">
+          <!-- Privacy & Routing Section -->
+          <div class="network-section-header">Privacy &amp; Routing</div>
+
+          <!-- Handshake -->
+          <div class="menu-item hns-menu-row">
+            <span class="menu-item-label">Handshake</span>
+            <span class="hns-menu-status" id="hns-menu-status">--</span>
+          </div>
+          <button id="hns-open-pirate-btn" class="menu-item hns-open-btn" type="button" style="display: none;">
+            <span class="menu-item-label">Open app.pirate</span>
+          </button>
+
+          <!-- Anyone -->
+          <button id="anyone-toggle-btn" class="menu-item anyone-toggle" type="button">
+            <span class="anyone-toggle-label">
+              Anyone
+              <span class="anyone-toggle-switch" id="anyone-toggle-switch">
+                <span class="anyone-toggle-knob"></span>
+              </span>
+            </span>
+          </button>
+          <div class="anyone-info" id="anyone-info-panel">
+            <div class="anyone-info-row node-status-row" id="anyone-menu-status-row">
+              <span class="anyone-info-label">Status:</span>
+              <span id="anyone-menu-status-value">Off</span>
+            </div>
+            <div class="anyone-info-row" id="anyone-menu-ip-row">
+              <span class="anyone-info-label">Exit IP:</span>
+              <span id="anyone-menu-ip-value">--</span>
+            </div>
+            <div class="anyone-info-row" id="anyone-menu-error-row" style="display: none;">
+              <span class="anyone-info-label">Error:</span>
+              <span id="anyone-menu-error-value"></span>
+            </div>
+          </div>
+
+          <!-- Sentinel -->
+          <div class="sentinel-menu-row" id="sentinel-menu-row">
+            <div class="menu-item">
+              <span class="menu-item-label">Sentinel dVPN</span>
+              <span class="sentinel-menu-status" id="sentinel-menu-status">Off</span>
+            </div>
+            <div class="sentinel-menu-actions" id="sentinel-menu-actions">
+              <button id="sentinel-fund-btn" class="sentinel-action-btn" type="button">Fund Wallet</button>
+              <button id="sentinel-connect-btn" class="sentinel-action-btn" type="button" style="display: none;">Connect</button>
+              <button id="sentinel-disconnect-btn" class="sentinel-action-btn" type="button" style="display: none;">Disconnect</button>
+            </div>
+            <div class="sentinel-menu-detail" id="sentinel-menu-balance-row" style="display: none;">
+              <span class="sentinel-info-label">Balance:</span>
+              <span id="sentinel-menu-balance">--</span>
+            </div>
+          </div>
+
+          <div class="nodes-divider"></div>
+
           <!-- Swarm Section -->
           <button id="bee-toggle-btn" class="menu-item bee-toggle" type="button">
             <span class="bee-toggle-label">
@@ -1784,24 +1828,7 @@
                 <span class="toggle-slider"></span>
               </label>
             </div>
-            <div class="hns-status-display" id="hns-status-display">
-              <div class="hns-status-row">
-                <span class="hns-status-label">Status</span>
-                <span class="hns-status-value" id="hns-status-value">Stopped</span>
-              </div>
-              <div class="hns-status-row" id="hns-height-row" style="display: none;">
-                <span class="hns-status-label">Height</span>
-                <span class="hns-status-value" id="hns-height-value">0</span>
-              </div>
-              <div class="hns-status-row" id="hns-proxy-row" style="display: none;">
-                <span class="hns-status-label">Proxy</span>
-                <span class="hns-status-value" id="hns-proxy-value"></span>
-              </div>
-              <div class="hns-status-row" id="hns-error-row" style="display: none;">
-                <span class="hns-status-label">Error</span>
-                <span class="hns-status-value hns-error-text" id="hns-error-value"></span>
-              </div>
-            </div>
+
           </section>
 
           <section class="settings-section">
@@ -1813,124 +1840,12 @@
                 <span class="toggle-slider"></span>
               </label>
             </div>
-            <div id="anyone-content" class="settings-subsection">
-              <div class="settings-toggle-row sub-toggle" id="start-anyone-row">
-                <span class="toggle-label">Start Anyone when Freedom opens</span>
-                <label class="toggle-switch">
-                  <input type="checkbox" id="anyone-auto-start" />
-                  <span class="toggle-slider"></span>
-                </label>
-              </div>
-              <div class="hns-status-display">
-                <div class="hns-status-row" id="anyone-status-row">
-                  <span class="hns-status-label">Status</span>
-                  <span class="hns-status-value" id="anyone-status-value">Off</span>
-                </div>
-                <div class="hns-status-row" id="anyone-proxy-row" style="display: none;">
-                  <span class="hns-status-label">Proxy</span>
-                  <span class="hns-status-value" id="anyone-proxy-value"></span>
-                </div>
-                <div class="hns-status-row" id="anyone-socks-port-row" style="display: none;">
-                  <span class="hns-status-label">SOCKS Port</span>
-                  <span class="hns-status-value" id="anyone-socks-port-value"></span>
-                </div>
-                <div class="hns-status-row" id="anyone-control-port-row" style="display: none;">
-                  <span class="hns-status-label">Control Port</span>
-                  <span class="hns-status-value" id="anyone-control-port-value"></span>
-                </div>
-                <div class="hns-status-row" id="anyone-circuit-row" style="display: none;">
-                  <span class="hns-status-label">Circuit</span>
-                  <span class="hns-status-value" id="anyone-circuit-value"></span>
-                </div>
-                <div class="hns-status-row" id="anyone-ip-row" style="display: none;">
-                  <span class="hns-status-label">IP</span>
-                  <span class="hns-status-value" id="anyone-ip-value"></span>
-                </div>
-                <div class="hns-status-row" id="anyone-error-row" style="display: none;">
-                  <span class="hns-status-label">Error</span>
-                  <span class="hns-status-value hns-error-text" id="anyone-error-value"></span>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section class="settings-section">
-            <h3 class="settings-section-header">Sentinel DVPN</h3>
-            <div class="settings-toggle-row">
-              <span class="toggle-label">Show dVPN controls</span>
+            <div class="settings-toggle-row sub-toggle" id="start-anyone-row">
+              <span class="toggle-label">Start Anyone when Freedom opens</span>
               <label class="toggle-switch">
-                <input type="checkbox" id="show-dvpn-controls" />
+                <input type="checkbox" id="anyone-auto-start" />
                 <span class="toggle-slider"></span>
               </label>
-            </div>
-            <div id="dvpn-content" class="settings-subsection" style="display: none;">
-              <div class="settings-action-row" id="dvpn-wallet-setup">
-                <span class="toggle-label">Wallet</span>
-                <button type="button" class="hns-control-btn" id="dvpn-create-wallet-btn">Create Wallet</button>
-              </div>
-
-              <div id="dvpn-wallet-display" style="display: none;">
-                <div class="hns-status-display">
-                  <div class="hns-status-row">
-                    <span class="hns-status-label">Address</span>
-                    <button type="button" class="hns-control-btn hns-control-btn-compact" id="dvpn-copy-address">Copy</button>
-                  </div>
-                  <span class="hns-status-value dvpn-wallet-address" id="dvpn-wallet-address"></span>
-                  <div class="hns-status-row" id="dvpn-qr-row" style="display: none;">
-                    <span class="hns-status-label">QR</span>
-                    <img id="dvpn-qr-image" class="dvpn-qr-image" alt="dVPN wallet QR code" />
-                  </div>
-                  <div class="hns-status-row" id="dvpn-balance-row" style="display: none;">
-                    <span class="hns-status-label">Balance</span>
-                    <span class="hns-status-value" id="dvpn-balance-value">—</span>
-                    <button type="button" class="icon-btn dvpn-inline-icon-btn" id="dvpn-refresh-balance" aria-label="Refresh balance">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21 2v6h-6" />
-                        <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
-                        <path d="M3 22v-6h6" />
-                        <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
-                      </svg>
-                    </button>
-                  </div>
-                  <div class="hns-status-row" id="dvpn-status-row" style="display: none;">
-                    <span class="hns-status-label">Status</span>
-                    <span class="hns-status-value" id="dvpn-status-value">Off</span>
-                  </div>
-                  <div class="hns-status-row" id="dvpn-node-row" style="display: none;">
-                    <span class="hns-status-label">Node</span>
-                    <span class="hns-status-value" id="dvpn-node-value"></span>
-                  </div>
-                  <div class="hns-status-row" id="dvpn-country-row" style="display: none;">
-                    <span class="hns-status-label">Country</span>
-                    <span class="hns-status-value" id="dvpn-country-value"></span>
-                  </div>
-                  <div class="hns-status-row" id="dvpn-ip-row" style="display: none;">
-                    <span class="hns-status-label">IP</span>
-                    <span class="hns-status-value" id="dvpn-ip-value"></span>
-                  </div>
-                  <div class="hns-status-row" id="dvpn-error-row" style="display: none;">
-                    <span class="hns-status-label">Error</span>
-                    <span class="hns-status-value hns-error-text" id="dvpn-error-value"></span>
-                  </div>
-                </div>
-              </div>
-
-              <div class="settings-toggle-row settings-input-row" id="dvpn-max-spend-row">
-                <span class="toggle-label">Max spend per session (P2P)</span>
-                <input type="number" id="dvpn-max-spend" class="settings-input settings-inline-input" step="0.1" min="0.1" />
-              </div>
-              <div class="settings-toggle-row settings-input-row" id="dvpn-low-balance-row">
-                <span class="toggle-label">Low balance stop (P2P)</span>
-                <input type="number" id="dvpn-low-balance-stop" class="settings-input settings-inline-input" step="0.1" min="0.1" />
-              </div>
-              <div class="settings-toggle-row settings-input-row" id="dvpn-max-duration-row">
-                <span class="toggle-label">Auto disconnect after (minutes)</span>
-                <input type="number" id="dvpn-max-duration" class="settings-input settings-inline-input" step="30" min="30" />
-              </div>
-              <div class="hns-controls" id="dvpn-controls" style="display: none;">
-                <button type="button" class="hns-control-btn" id="dvpn-connect-btn" disabled>Connect</button>
-                <button type="button" class="hns-control-btn" id="dvpn-disconnect-btn" disabled>Disconnect</button>
-              </div>
             </div>
           </section>
 
@@ -2009,6 +1924,59 @@
             <button type="submit" id="bookmark-submit-btn" class="primary-btn">Add Bookmark</button>
           </div>
         </form>
+      </div>
+    </dialog>
+
+    <dialog id="sentinel-funding-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Fund Sentinel</h2>
+          <button id="close-sentinel-funding" class="icon-btn close-modal" aria-label="Close">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M18 6 6 18" />
+              <path d="M6 6 18 18" />
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <p class="modal-text">
+            Sentinel dVPN uses P2P, the Sentinel network token. Send P2P to this wallet address, then return here and connect.
+          </p>
+          <div class="sentinel-funding-address-row">
+            <code id="sentinel-funding-address" class="sentinel-funding-address"></code>
+            <button id="sentinel-funding-copy" class="sentinel-action-btn" type="button">Copy</button>
+          </div>
+          <div class="sentinel-funding-qr-row">
+            <img id="sentinel-funding-qr" class="sentinel-funding-qr" alt="Sentinel wallet QR code" />
+          </div>
+          <div class="sentinel-funding-balance-row">
+            <span class="sentinel-info-label">Balance:</span>
+            <span id="sentinel-funding-balance">-</span>
+            <button id="sentinel-funding-refresh" class="sentinel-action-btn" type="button">Refresh</button>
+          </div>
+          <div class="sentinel-backup-section">
+            <button id="sentinel-backup-reveal" class="sentinel-action-btn" type="button">Backup wallet</button>
+            <div id="sentinel-backup-panel" class="sentinel-backup-panel" hidden>
+              <p class="sentinel-backup-warning">
+                Back up this recovery phrase before funding. Anyone with this phrase can spend your Sentinel funds.
+              </p>
+              <div id="sentinel-backup-words" class="sentinel-backup-words"></div>
+              <div class="sentinel-backup-actions">
+                <button id="sentinel-backup-copy" class="sentinel-action-btn" type="button">Copy recovery phrase</button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </dialog>
 

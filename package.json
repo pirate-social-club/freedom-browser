@@ -1,6 +1,6 @@
 {
   "name": "freedom-browser",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "license": "MPL-2.0",
   "description": "Freedom – A browser for the decentralized web, with Swarm, IPFS, and ENS as first-class protocols.",
   "author": {
@@ -21,6 +21,7 @@
     "test": "npm run test:unit",
     "test:unit": "jest",
     "test:coverage": "jest --coverage --runInBand --forceExit",
+    "smoke:sentinel": "node scripts/smoke-sentinel.js",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

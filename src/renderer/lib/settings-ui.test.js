@@ -30,8 +30,7 @@ const loadSettingsModule = async (options = {}) => {
         autoUpdate: true,
         enableAnyone: false,
         anyoneAutoStart: false,
-        showDvpnControls: false,
-        dvpnMaxSpendP2P: 1.0,
+        dvpnMaxSpendP2P: 50.0,
         dvpnLowBalanceStop: 0.5,
         dvpnMaxDurationMinutes: 120,
       },
@@ -59,56 +58,9 @@ const loadSettingsModule = async (options = {}) => {
   const enableAnyoneCheckbox = createCheckbox();
   const startAnyoneRow = createElement('div');
   const anyoneAutoStartCheckbox = createCheckbox();
-  const anyoneContent = createElement('div');
-  const anyoneStatusRow = createElement('div');
-  const anyoneStatusValue = createElement('span');
-  const anyoneProxyRow = createElement('div');
-  const anyoneProxyValue = createElement('span');
-  const anyoneSocksPortRow = createElement('div');
-  const anyoneSocksPortValue = createElement('span');
-  const anyoneControlPortRow = createElement('div');
-  const anyoneControlPortValue = createElement('span');
-  const anyoneCircuitRow = createElement('div');
-  const anyoneCircuitValue = createElement('span');
-  const anyoneIpRow = createElement('div');
-  const anyoneIpValue = createElement('span');
-  const anyoneErrorRow = createElement('div');
-  const anyoneErrorValue = createElement('span');
-  const showDvpnControlsCheckbox = createCheckbox();
-  const dvpnContent = createElement('div');
-  const dvpnCreateWalletBtn = createElement('button');
-  const dvpnWalletSetup = createElement('div');
-  const dvpnWalletDisplay = createElement('div');
-  const dvpnWalletAddress = createElement('span');
-  const dvpnCopyAddress = createElement('button');
-  const dvpnQrRow = createElement('div');
-  const dvpnQrImage = createElement('img');
-  const dvpnBalanceRow = createElement('div');
-  const dvpnBalanceValue = createElement('span');
-  const dvpnRefreshBalance = createElement('button');
-  const dvpnStatusRow = createElement('div');
-  const dvpnStatusValue = createElement('span');
-  const dvpnNodeRow = createElement('div');
-  const dvpnNodeValue = createElement('span');
-  const dvpnCountryRow = createElement('div');
-  const dvpnCountryValue = createElement('span');
-  const dvpnIpRow = createElement('div');
-  const dvpnIpValue = createElement('span');
-  const dvpnErrorRow = createElement('div');
-  const dvpnErrorValue = createElement('span');
-  const dvpnConnectBtn = createElement('button');
-  const dvpnDisconnectBtn = createElement('button');
-  const dvpnControls = createElement('div');
   const dvpnMaxSpend = createElement('input');
   const dvpnLowBalanceStop = createElement('input');
   const dvpnMaxDuration = createElement('input');
-  const hnsStatusValue = createElement('span');
-  const hnsHeightRow = createElement('div');
-  const hnsHeightValue = createElement('span');
-  const hnsProxyRow = createElement('div');
-  const hnsProxyValue = createElement('span');
-  const hnsErrorRow = createElement('div');
-  const hnsErrorValue = createElement('span');
   const mediaQueryList = {
     matches: prefersDark,
     addEventListener: jest.fn(),
@@ -133,56 +85,9 @@ const loadSettingsModule = async (options = {}) => {
       'enable-anyone': enableAnyoneCheckbox,
       'start-anyone-row': startAnyoneRow,
       'anyone-auto-start': anyoneAutoStartCheckbox,
-      'anyone-content': anyoneContent,
-      'anyone-status-row': anyoneStatusRow,
-      'anyone-status-value': anyoneStatusValue,
-      'anyone-proxy-row': anyoneProxyRow,
-      'anyone-proxy-value': anyoneProxyValue,
-      'anyone-socks-port-row': anyoneSocksPortRow,
-      'anyone-socks-port-value': anyoneSocksPortValue,
-      'anyone-control-port-row': anyoneControlPortRow,
-      'anyone-control-port-value': anyoneControlPortValue,
-      'anyone-circuit-row': anyoneCircuitRow,
-      'anyone-circuit-value': anyoneCircuitValue,
-      'anyone-ip-row': anyoneIpRow,
-      'anyone-ip-value': anyoneIpValue,
-      'anyone-error-row': anyoneErrorRow,
-      'anyone-error-value': anyoneErrorValue,
-      'show-dvpn-controls': showDvpnControlsCheckbox,
-      'dvpn-content': dvpnContent,
-      'dvpn-create-wallet-btn': dvpnCreateWalletBtn,
-      'dvpn-wallet-setup': dvpnWalletSetup,
-      'dvpn-wallet-display': dvpnWalletDisplay,
-      'dvpn-wallet-address': dvpnWalletAddress,
-      'dvpn-copy-address': dvpnCopyAddress,
-      'dvpn-qr-row': dvpnQrRow,
-      'dvpn-qr-image': dvpnQrImage,
-      'dvpn-balance-row': dvpnBalanceRow,
-      'dvpn-balance-value': dvpnBalanceValue,
-      'dvpn-refresh-balance': dvpnRefreshBalance,
-      'dvpn-status-row': dvpnStatusRow,
-      'dvpn-status-value': dvpnStatusValue,
-      'dvpn-node-row': dvpnNodeRow,
-      'dvpn-node-value': dvpnNodeValue,
-      'dvpn-country-row': dvpnCountryRow,
-      'dvpn-country-value': dvpnCountryValue,
-      'dvpn-ip-row': dvpnIpRow,
-      'dvpn-ip-value': dvpnIpValue,
-      'dvpn-error-row': dvpnErrorRow,
-      'dvpn-error-value': dvpnErrorValue,
-      'dvpn-connect-btn': dvpnConnectBtn,
-      'dvpn-disconnect-btn': dvpnDisconnectBtn,
-      'dvpn-controls': dvpnControls,
       'dvpn-max-spend': dvpnMaxSpend,
       'dvpn-low-balance-stop': dvpnLowBalanceStop,
       'dvpn-max-duration': dvpnMaxDuration,
-      'hns-status-value': hnsStatusValue,
-      'hns-height-row': hnsHeightRow,
-      'hns-height-value': hnsHeightValue,
-      'hns-proxy-row': hnsProxyRow,
-      'hns-proxy-value': hnsProxyValue,
-      'hns-error-row': hnsErrorRow,
-      'hns-error-value': hnsErrorValue,
     },
   });
   const settingsUpdatedEvents = [];
@@ -198,7 +103,7 @@ const loadSettingsModule = async (options = {}) => {
     }),
     saveSettings: jest.fn().mockImplementation(async () => saveSettingsResult),
     getPlatform: jest.fn().mockResolvedValue(platform),
-    copyText: jest.fn().mockResolvedValue({ success: true }),
+
   };
   const debugMocks = {
     pushDebug: jest.fn(),
@@ -256,8 +161,6 @@ const loadSettingsModule = async (options = {}) => {
         lastDisconnectReason: null,
         error: null,
       }),
-      getBalance: jest.fn().mockResolvedValue({ success: false, error: 'No wallet' }),
-      createWallet: jest.fn(),
       onStatusUpdate: jest.fn(),
     },
   };
@@ -297,16 +200,7 @@ const loadSettingsModule = async (options = {}) => {
       enableAnyoneCheckbox,
       startAnyoneRow,
       anyoneAutoStartCheckbox,
-      showDvpnControlsCheckbox,
-      dvpnWalletAddress,
-      dvpnCopyAddress,
-      hnsStatusValue,
-      hnsHeightRow,
-      hnsHeightValue,
-      hnsProxyRow,
-      hnsProxyValue,
-      hnsErrorRow,
-      hnsErrorValue,
+
     },
     electronAPI,
     mediaQueryList,
@@ -373,8 +267,7 @@ describe('settings-ui', () => {
             enableIdentityWallet: false,
             enableAnyone: false,
             anyoneAutoStart: false,
-            showDvpnControls: false,
-            dvpnMaxSpendP2P: 1.0,
+                dvpnMaxSpendP2P: 50.0,
             dvpnLowBalanceStop: 0.5,
             dvpnMaxDurationMinutes: 120,
           },
@@ -390,8 +283,7 @@ describe('settings-ui', () => {
             autoUpdate: false,
             enableAnyone: true,
             anyoneAutoStart: true,
-            showDvpnControls: false,
-            dvpnMaxSpendP2P: 1.0,
+                dvpnMaxSpendP2P: 50.0,
             dvpnLowBalanceStop: 0.5,
             dvpnMaxDurationMinutes: 120,
           },
@@ -451,8 +343,7 @@ describe('settings-ui', () => {
       autoUpdate: true,
       enableAnyone: true,
       anyoneAutoStart: true,
-      showDvpnControls: false,
-      dvpnMaxSpendP2P: 1,
+      dvpnMaxSpendP2P: 50,
       dvpnLowBalanceStop: 0.5,
       dvpnMaxDurationMinutes: 120,
     });
@@ -474,8 +365,7 @@ describe('settings-ui', () => {
         autoUpdate: true,
         enableAnyone: true,
         anyoneAutoStart: true,
-        showDvpnControls: false,
-        dvpnMaxSpendP2P: 1,
+        dvpnMaxSpendP2P: 50,
         dvpnLowBalanceStop: 0.5,
         dvpnMaxDurationMinutes: 120,
       },
@@ -495,8 +385,7 @@ describe('settings-ui', () => {
           enableIdentityWallet: false,
           enableAnyone: false,
           anyoneAutoStart: false,
-          showDvpnControls: false,
-          dvpnMaxSpendP2P: 1.0,
+            dvpnMaxSpendP2P: 50.0,
           dvpnLowBalanceStop: 0.5,
           dvpnMaxDurationMinutes: 120,
         },
@@ -512,8 +401,7 @@ describe('settings-ui', () => {
           autoUpdate: true,
           enableAnyone: false,
           anyoneAutoStart: false,
-          showDvpnControls: false,
-          dvpnMaxSpendP2P: 1.0,
+            dvpnMaxSpendP2P: 50.0,
           dvpnLowBalanceStop: 0.5,
           dvpnMaxDurationMinutes: 120,
         },
@@ -548,8 +436,7 @@ describe('settings-ui', () => {
       autoUpdate: false,
       enableAnyone: false,
       anyoneAutoStart: false,
-      showDvpnControls: false,
-      dvpnMaxSpendP2P: 1,
+      dvpnMaxSpendP2P: 50,
       dvpnLowBalanceStop: 0.5,
       dvpnMaxDurationMinutes: 120,
     });
@@ -560,39 +447,6 @@ describe('settings-ui', () => {
 
     elements.settingsModal.dispatch('click', { target: elements.settingsModal });
     expect(elements.settingsModal.close).toHaveBeenCalledTimes(2);
-  });
-
-  test('copies the dVPN wallet address through the Electron clipboard bridge', async () => {
-    const { mod, elements, electronAPI } = await loadSettingsModule({
-      settingsResponses: [
-        {
-          theme: 'system',
-          startBeeAtLaunch: true,
-          startIpfsAtLaunch: true,
-          enableRadicleIntegration: false,
-          startRadicleAtLaunch: false,
-          enableHnsIntegration: true,
-          startHnsAtLaunch: true,
-          enableIdentityWallet: false,
-          autoUpdate: true,
-          enableAnyone: false,
-          anyoneAutoStart: false,
-          showDvpnControls: true,
-          dvpnMaxSpendP2P: 1.0,
-          dvpnLowBalanceStop: 0.5,
-          dvpnMaxDurationMinutes: 120,
-        },
-      ],
-    });
-
-    await mod.initTheme();
-    await mod.initSettings();
-
-    elements.dvpnWalletAddress.textContent = 'sent1testaddress';
-    elements.dvpnCopyAddress.dispatch('click');
-    await Promise.resolve();
-
-    expect(electronAPI.copyText).toHaveBeenCalledWith('sent1testaddress');
   });
 
   test('connects and disconnects Anyone through the settings controls', async () => {
@@ -610,8 +464,7 @@ describe('settings-ui', () => {
           autoUpdate: true,
           enableAnyone: true,
           anyoneAutoStart: false,
-          showDvpnControls: false,
-          dvpnMaxSpendP2P: 1.0,
+            dvpnMaxSpendP2P: 50.0,
           dvpnLowBalanceStop: 0.5,
           dvpnMaxDurationMinutes: 120,
         },

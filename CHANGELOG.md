@@ -2,6 +2,24 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [0.7.6] - 2026-04-29
+
+### Added
+
+- Added consolidated Network menu controls for Handshake, Anyone, Sentinel dVPN, Swarm, IPFS, and Radicle.
+- Added Sentinel dVPN wallet funding, balance refresh, connection, disconnect, and recovery phrase backup flows.
+- Added a funded Sentinel smoke-test script for release validation environments.
+
+### Changed
+
+- Moved privacy and routing service controls out of Settings and into the browser network menu and home page.
+- Cleared default packaged bookmarks so new profiles start with an empty bookmark set.
+
+### Fixed
+
+- Sentinel dVPN now reports missing runtime prerequisites before wallet or connection actions.
+- Bookmarks, service status, and internal page URL handling now stay aligned with the updated empty-bookmark and network-control flows.
+
 ## [0.7.5] - 2026-04-27
 
 ### Added

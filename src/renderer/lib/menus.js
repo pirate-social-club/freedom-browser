@@ -3,6 +3,10 @@ import { state } from './state.js';
 import { startBeeInfoPolling, stopBeeInfoPolling } from './bee-ui.js';
 import { startIpfsInfoPolling, stopIpfsInfoPolling } from './ipfs-ui.js';
 import { startRadicleInfoPolling, stopRadicleInfoPolling } from './radicle-ui.js';
+import {
+  startNetworkInfoPolling,
+  stopNetworkInfoPolling,
+} from './network-ui.js';
 import { hideTabContextMenu, getActiveWebview } from './tabs.js';
 import { hideBookmarkContextMenu, hideOverflowMenu } from './bookmarks-ui.js';
 import { showMenuBackdrop, hideMenuBackdrop } from './menu-backdrop.js';
@@ -83,6 +87,7 @@ export const setBeeMenuOpen = (open) => {
     startBeeInfoPolling();
     startIpfsInfoPolling();
     startRadicleInfoPolling();
+    startNetworkInfoPolling();
   } else {
     if (!state.menuOpen) {
       hideMenuBackdrop();
@@ -90,6 +95,7 @@ export const setBeeMenuOpen = (open) => {
     stopBeeInfoPolling();
     stopIpfsInfoPolling();
     stopRadicleInfoPolling();
+    stopNetworkInfoPolling();
     if (beePeersCount) beePeersCount.textContent = '0';
     if (beeNetworkPeers) beeNetworkPeers.textContent = '0';
     if (beeVersionText)

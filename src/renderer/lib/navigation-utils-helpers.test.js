@@ -162,9 +162,9 @@ describe('navigation-utils extracted helpers', () => {
 
     expect(
       mod.deriveSwitchedTabDisplay({
-        url: 'https://pirate.sc/',
+        url: 'https://app.pirate/',
         bzzRoutePrefix: 'http://127.0.0.1:1633/bzz/',
-        homeUrlNormalized: 'https://pirate/',
+        homeUrlNormalized: 'https://app.pirate/',
       })
     ).toBe('');
   });
@@ -186,10 +186,10 @@ describe('navigation-utils extracted helpers', () => {
 
     expect(
       mod.getBookmarkBarState({
-        url: 'https://pirate.sc/',
+        url: 'https://app.pirate/',
         bookmarkBarOverride: false,
-        homeUrl: 'https://pirate/',
-        homeUrlNormalized: 'https://pirate/',
+        homeUrl: 'https://app.pirate/',
+        homeUrlNormalized: 'https://app.pirate/',
       })
     ).toEqual({
       isHomePage: true,

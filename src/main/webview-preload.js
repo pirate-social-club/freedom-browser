@@ -19,6 +19,19 @@ const IPC = {
   SERVICE_REGISTRY_GET: 'service-registry:get',
   SERVICE_REGISTRY_UPDATE: 'service-registry:update',
   BOOKMARKS_GET: 'bookmarks:get',
+  ANYONE_START: 'anyone:start',
+  ANYONE_STOP: 'anyone:stop',
+  ANYONE_GET_STATUS: 'anyone:getStatus',
+  ANYONE_STATUS_UPDATE: 'anyone:statusUpdate',
+  DVPN_START: 'dvpn:start',
+  DVPN_STOP: 'dvpn:stop',
+  DVPN_GET_STATUS: 'dvpn:getStatus',
+  DVPN_STATUS_UPDATE: 'dvpn:statusUpdate',
+  DVPN_GET_BALANCE: 'dvpn:getBalance',
+  DVPN_CREATE_WALLET: 'dvpn:createWallet',
+  DVPN_GENERATE_QR: 'dvpn:generateQr',
+  DVPN_EXPORT_MNEMONIC: 'dvpn:exportMnemonic',
+  DVPN_CHECK_PREREQUISITES: 'dvpn:checkPrerequisites',
   OPEN_URL_IN_NEW_TAB: 'internal:open-url-in-new-tab',
   FAVICON_GET_CACHED: 'favicon:get-cached',
   RADICLE_SEED: 'radicle:seed',
@@ -83,6 +96,38 @@ contextBridge.exposeInMainWorld('freedomAPI', {
 
   // Bookmarks (read-only for internal pages)
   getBookmarks: guardInternal('getBookmarks', () => ipcRenderer.invoke('bookmarks:get')),
+
+  // Privacy and routing controls for the internal new-tab page
+  startAnyone: guardInternal('startAnyone', () => ipcRenderer.invoke(IPC.ANYONE_START)),
+  stopAnyone: guardInternal('stopAnyone', () => ipcRenderer.invoke(IPC.ANYONE_STOP)),
+  getAnyoneStatus: guardInternal('getAnyoneStatus', () => ipcRenderer.invoke(IPC.ANYONE_GET_STATUS)),
+  onAnyoneStatusUpdate: guardInternal('onAnyoneStatusUpdate', (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, status) => callback(status);
+    ipcRenderer.on(IPC.ANYONE_STATUS_UPDATE, handler);
+    return () => ipcRenderer.removeListener(IPC.ANYONE_STATUS_UPDATE, handler);
+  }),
+  startDvpn: guardInternal('startDvpn', () => ipcRenderer.invoke(IPC.DVPN_START)),
+  stopDvpn: guardInternal('stopDvpn', () => ipcRenderer.invoke(IPC.DVPN_STOP)),
+  getDvpnStatus: guardInternal('getDvpnStatus', () => ipcRenderer.invoke(IPC.DVPN_GET_STATUS)),
+  getDvpnBalance: guardInternal('getDvpnBalance', () => ipcRenderer.invoke(IPC.DVPN_GET_BALANCE)),
+  createDvpnWallet: guardInternal('createDvpnWallet', () => ipcRenderer.invoke(IPC.DVPN_CREATE_WALLET)),
+  generateDvpnQR: guardInternal('generateDvpnQR', (text, options) =>
+    ipcRenderer.invoke(IPC.DVPN_GENERATE_QR, text, options)
+  ),
+  exportDvpnMnemonic: guardInternal('exportDvpnMnemonic', () =>
+    ipcRenderer.invoke(IPC.DVPN_EXPORT_MNEMONIC)
+  ),
+  checkDvpnPrerequisites: guardInternal('checkDvpnPrerequisites', () =>
+    ipcRenderer.invoke(IPC.DVPN_CHECK_PREREQUISITES)
+  ),
+  copyText: guardInternal('copyText', (text) => ipcRenderer.invoke('clipboard:copy-text', text)),
+  onDvpnStatusUpdate: guardInternal('onDvpnStatusUpdate', (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, status) => callback(status);
+    ipcRenderer.on(IPC.DVPN_STATUS_UPDATE, handler);
+    return () => ipcRenderer.removeListener(IPC.DVPN_STATUS_UPDATE, handler);
+  }),
 
   // Navigation
   openInNewTab: guardInternal('openInNewTab', (url) =>

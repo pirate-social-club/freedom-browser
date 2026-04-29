@@ -49,6 +49,7 @@ import {
   hide as hideAutocomplete,
 } from './lib/autocomplete.js';
 import { initGithubBridgeUi, setOnOpenRadicleUrl } from './lib/github-bridge-ui.js';
+import { initNetworkUi, setOnOpenPirate } from './lib/network-ui.js';
 import { initMenuBackdrop } from './lib/menu-backdrop.js';
 import { initPageContextMenu, hidePageContextMenu } from './lib/page-context-menu.js';
 import { pushDebug } from './lib/debug.js';
@@ -104,6 +105,7 @@ setOnHistoryRecorded(refreshAutocompleteCache);
 setOnOpenHistory(() => loadTarget('freedom://history'));
 setOnNewTab(() => createTab());
 setOnOpenRadicleUrl((url) => loadTarget(url));
+setOnOpenPirate(() => loadTarget('https://app.pirate/'));
 setOnMenuOpening(hideAutocomplete);
 setOnTabContextMenuOpening(hideAutocomplete);
 setOnBookmarkContextMenuOpening(hideAutocomplete);
@@ -218,6 +220,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   initIpfsUi();
   initRadicleUi();
   initGithubBridgeUi();
+  initNetworkUi();
   initSettings();
   initBookmarks();
   initNavigation(); // Sets up event handler with tabs module

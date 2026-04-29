@@ -382,4 +382,6 @@ contextBridge.exposeInMainWorld('dvpn', {
   createWallet: () => ipcRenderer.invoke('dvpn:createWallet'),
   getWalletAddress: () => ipcRenderer.invoke('dvpn:getWalletAddress'),
   generateQR: (text, options) => ipcRenderer.invoke('dvpn:generateQr', text, options),
+  exportMnemonic: () => ipcRenderer.invoke('dvpn:exportMnemonic'),
+  checkPrerequisites: () => ipcRenderer.invoke('dvpn:checkPrerequisites'),
 });
