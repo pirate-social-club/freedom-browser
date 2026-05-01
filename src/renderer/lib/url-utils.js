@@ -109,8 +109,9 @@ export const normalizeHnsHostInput = (str) => {
   const parts = trimmed.split(/[/?#]/);
   const host = parts[0];
   const rest = trimmed.slice(host.length);
+  const scheme = host.includes('.') ? 'https' : 'http';
 
-  return `https://${host}${rest || '/'}`;
+  return `${scheme}://${host}${rest || '/'}`;
 };
 
 export const parseSpacesRootInput = (str) => {
