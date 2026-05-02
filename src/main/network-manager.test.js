@@ -1,7 +1,7 @@
 const {
   loadMainModule,
 } = require('../../test/helpers/main-process-test-utils');
-const { HNS_PUBLIC_SUFFIXES } = require('../shared/hns-hosts');
+const { HNS_PUBLIC_SUFFIXES, setDynamicHnsPublicSuffixes } = require('../shared/hns-hosts');
 
 function loadNetworkManagerModule(options = {}) {
   const log = {
@@ -60,6 +60,7 @@ const REPRESENTATIVE_UNKNOWN_HNSISH_HOST = 'night-signal.clawitzer';
 
 describe('network-manager', () => {
   afterEach(() => {
+    setDynamicHnsPublicSuffixes([]);
     jest.clearAllMocks();
     jest.restoreAllMocks();
   });
@@ -209,6 +210,21 @@ describe('network-manager', () => {
     expect(pac).not.toContain('dnsDomainIs(host, ".box")');
     expect(pac).not.toContain('dnsDomainIs(host, ".clawitzer")');
     expect(pac).toContain('SOCKS5 127.0.0.1:9050');
+  });
+
+  test('imported namespace suffixes are routed to the HNS proxy after refresh', async () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+
+    await ctx.mod.refreshImportedHnsSuffixes(async () => Response.json({
+      namespaces: [
+        { root_label: 'xn--pokmon-dva' },
+      ],
+    }));
+
+    const pac = ctx.mod.buildPacScript();
+    expect(pac).toContain('dnsDomainIs(host, ".xn--pokmon-dva")');
+    expect(pac).toMatch(/dnsDomainIs\(host, "\.xn--pokmon-dva"\)[^}]*PROXY 127\.0\.0\.1:5380/);
   });
 
   test('clearDvpnProxy removes dVPN proxy settings', () => {

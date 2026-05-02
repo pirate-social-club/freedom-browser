@@ -1,7 +1,12 @@
 const log = require('./logger');
 const { session } = require('electron');
 const http = require('http');
-const { HNS_PUBLIC_SUFFIXES } = require('../shared/hns-hosts');
+const {
+  getHnsPublicSuffixes,
+  setDynamicHnsPublicSuffixes,
+} = require('../shared/hns-hosts');
+
+const PUBLIC_NAMESPACES_URL = process.env.PIRATE_PUBLIC_NAMESPACES_URL || 'https://api.pirate.sc/public-namespaces';
 
 let hnsProxyAddr = null;
 let anyoneProxyHost = null;
@@ -13,12 +18,19 @@ let pacServer = null;
 let pacPort = null;
 
 function buildHnsHostPredicate() {
-  const suffixChecks = HNS_PUBLIC_SUFFIXES
+  const suffixChecks = getHnsPublicSuffixes()
     .map((suffix) => `dnsDomainIs(host, "${suffix}")`)
     .join(' || ');
   return suffixChecks
     ? `dnsDomainLevels(host) === 0 || ${suffixChecks}`
     : 'dnsDomainLevels(host) === 0';
+}
+
+function extractNamespaceSuffixes(payload) {
+  const namespaces = Array.isArray(payload?.namespaces) ? payload.namespaces : [];
+  return namespaces
+    .map((entry) => entry?.root_label)
+    .filter((value) => typeof value === 'string' && value.trim());
 }
 
 function buildPacScript() {
@@ -148,6 +160,35 @@ async function rebuild() {
   await applyProxy();
 }
 
+async function refreshImportedHnsSuffixes(fetchImpl = fetch, url = PUBLIC_NAMESPACES_URL) {
+  let timeout = null;
+  try {
+    const controller = new AbortController();
+    timeout = setTimeout(() => controller.abort(), 3000);
+    const response = await fetchImpl(url, {
+      headers: { accept: 'application/json' },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!response.ok) {
+      throw new Error(`public namespace fetch failed with ${response.status}`);
+    }
+    const suffixes = setDynamicHnsPublicSuffixes(extractNamespaceSuffixes(await response.json()));
+    log.info(`[Network] Imported HNS suffixes loaded: ${suffixes.join(', ')}`);
+    if (hnsProxyAddr || anyoneProxyHost || dvpnProxyHost) {
+      await rebuild();
+    }
+    return suffixes;
+  } catch (err) {
+    log.warn(`[Network] Imported HNS suffix refresh failed: ${err.message}`);
+    return getHnsPublicSuffixes();
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 function getHnsProxyAddr() {
   return hnsProxyAddr;
 }
@@ -175,4 +216,5 @@ module.exports = {
   getAnyoneProxy,
   getDvpnProxy,
   buildPacScript,
+  refreshImportedHnsSuffixes,
 };

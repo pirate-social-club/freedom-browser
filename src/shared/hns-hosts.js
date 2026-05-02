@@ -1,5 +1,29 @@
 (function attachHnsHosts(globalScope) {
-  const HNS_PUBLIC_SUFFIXES = Object.freeze(['.pirate']);
+  const DEFAULT_HNS_PUBLIC_SUFFIXES = Object.freeze(['.pirate']);
+  let dynamicHnsPublicSuffixes = [];
+
+  function normalizeHnsPublicSuffix(value = '') {
+    const normalized = String(value).trim().toLowerCase().replace(/\.+$/g, '');
+    if (!normalized) return null;
+    const suffix = normalized.startsWith('.') ? normalized : `.${normalized}`;
+    return /^\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(suffix) ? suffix : null;
+  }
+
+  function getHnsPublicSuffixes() {
+    return Object.freeze(Array.from(new Set([
+      ...DEFAULT_HNS_PUBLIC_SUFFIXES,
+      ...dynamicHnsPublicSuffixes,
+    ])));
+  }
+
+  function setDynamicHnsPublicSuffixes(values = []) {
+    dynamicHnsPublicSuffixes = Array.from(new Set(
+      values
+        .map(normalizeHnsPublicSuffix)
+        .filter(Boolean),
+    ));
+    return getHnsPublicSuffixes();
+  }
 
   function isLoopbackHostname(hostname = '') {
     return hostname === 'localhost' || hostname === '::1' || /^127\./.test(hostname);
@@ -16,12 +40,14 @@
       return true;
     }
 
-    return HNS_PUBLIC_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
+    return getHnsPublicSuffixes().some((suffix) => normalized.endsWith(suffix));
   }
 
   const api = {
-    HNS_PUBLIC_SUFFIXES,
+    HNS_PUBLIC_SUFFIXES: DEFAULT_HNS_PUBLIC_SUFFIXES,
+    getHnsPublicSuffixes,
     isHnsHost,
+    setDynamicHnsPublicSuffixes,
   };
 
   if (typeof module !== 'undefined' && module.exports) {
