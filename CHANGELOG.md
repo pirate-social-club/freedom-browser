@@ -2,6 +2,13 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [0.7.7] - 2026-05-02
+
+### Fixed
+
+- HNS address bar navigation now opens single-label roots over HTTPS.
+- Imported HNS namespace suffixes are refreshed from Pirate's public namespace API so delegated imported-root subdomains route through the HNS proxy.
+
 ## [0.7.3] - 2026-04-24
 
 ### Security
