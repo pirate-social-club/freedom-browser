@@ -26,6 +26,10 @@ const REPRESENTATIVE_PIRATE_HOST = 'sable-harbor-4143.pirate';
 
 describe('url-utils', () => {
   describe('normalizeHnsHostInput', () => {
+    afterEach(() => {
+      delete globalThis.FREEDOM_HNS_HOSTS;
+    });
+
     test('normalizes single-label HNS hosts over HTTPS', () => {
       expect(normalizeHnsHostInput('pirate')).toBe('https://pirate/');
       expect(normalizeHnsHostInput('pirate/')).toBe('https://pirate/');
@@ -40,6 +44,14 @@ describe('url-utils', () => {
       expect(normalizeHnsHostInput(`${REPRESENTATIVE_PIRATE_HOST}/about`)).toBe(
         `https://${REPRESENTATIVE_PIRATE_HOST}/about`
       );
+    });
+
+    test('normalizes imported namespace subdomains when suffixes are loaded', () => {
+      globalThis.FREEDOM_HNS_HOSTS = {
+        getHnsPublicSuffixes: () => ['.pirate', '.xn--pokmon-dva'],
+      };
+
+      expect(normalizeHnsHostInput('v.xn--pokmon-dva')).toBe('https://v.xn--pokmon-dva/');
     });
 
     test('rejects ordinary dotted web domains', () => {

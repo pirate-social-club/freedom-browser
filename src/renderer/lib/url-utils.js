@@ -1,5 +1,7 @@
 export const ensureTrailingSlash = (value = '') => (value.endsWith('/') ? value : `${value}/`);
 
+const fallbackHnsPublicSuffixes = ['.pirate'];
+
 // Check if a string looks like a valid Swarm reference (64 or 128 hex characters)
 const isValidSwarmHash = (str) => /^[a-fA-F0-9]{64}([a-fA-F0-9]{64})?$/.test(str);
 
@@ -64,6 +66,11 @@ const looksLikeDomain = (str) => {
 
 const isValidHostLabel = (value) => /^[a-z]([a-z0-9-]*[a-z0-9])?$/.test(value);
 
+const getHnsPublicTlds = () => {
+  const suffixes = globalThis.FREEDOM_HNS_HOSTS?.getHnsPublicSuffixes?.() || fallbackHnsPublicSuffixes;
+  return new Set(suffixes.map((suffix) => String(suffix).replace(/^\./, '')));
+};
+
 const looksLikeHnsHost = (str) => {
   if (!str || typeof str !== 'string') return false;
 
@@ -95,7 +102,7 @@ const looksLikeHnsHost = (str) => {
 
   const labels = hostPart.split('.');
   if (labels.length !== 2) return false;
-  if (labels[1] !== 'pirate') return false;
+  if (!getHnsPublicTlds().has(labels[1])) return false;
 
   return isValidHostLabel(labels[0]);
 };

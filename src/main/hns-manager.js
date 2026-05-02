@@ -269,6 +269,9 @@ async function handleReady(event) {
   try {
     networkManager.setHnsProxy(proxyAddr);
     await networkManager.rebuild();
+    networkManager.refreshImportedHnsSuffixes().catch((err) => {
+      log.warn(`[HNS] Imported namespace suffix refresh failed: ${err.message}`);
+    });
   } catch (err) {
     updateState(STATUS.ERROR, `Proxy configuration failed: ${err.message}`);
     setErrorState('hns', 'Proxy configuration failed');

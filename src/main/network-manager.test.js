@@ -1,6 +1,7 @@
 const {
   loadMainModule,
 } = require('../../test/helpers/main-process-test-utils');
+const { setDynamicHnsPublicSuffixes } = require('../shared/hns-hosts');
 
 function loadNetworkManagerModule(options = {}) {
   const log = {
@@ -58,6 +59,7 @@ const REPRESENTATIVE_PIRATE_HOST = 'sable-harbor-4143.pirate';
 
 describe('network-manager', () => {
   afterEach(() => {
+    setDynamicHnsPublicSuffixes([]);
     jest.clearAllMocks();
     jest.restoreAllMocks();
   });
@@ -165,6 +167,20 @@ describe('network-manager', () => {
     expect(hnsBlockStart).toBeLessThan(socksStart);
   });
 
+  test('imported namespace suffixes are routed to the HNS proxy after refresh', async () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+
+    await ctx.mod.refreshImportedHnsSuffixes(async () => Response.json({
+      namespaces: [
+        { root_label: 'xn--pokmon-dva' },
+      ],
+    }));
+
+    const pac = ctx.mod.buildPacScript();
+    expect(pac).toContain('dnsDomainIs(host, ".xn--pokmon-dva")');
+    expect(pac).toMatch(/dnsDomainIs\(host, "\.xn--pokmon-dva"\)[^}]*PROXY 127\.0\.0\.1:5380/);
+  });
   test('clearDvpnProxy removes dVPN proxy settings', () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setDvpnProxy('127.0.0.1', 10808);

@@ -85,6 +85,7 @@ function loadHnsManagerModule(options = {}) {
   const setHnsProxy = jest.fn();
   const clearHnsProxy = jest.fn();
   const rebuild = jest.fn(() => Promise.resolve());
+  const refreshImportedHnsSuffixes = jest.fn(() => Promise.resolve());
   const spawnedProcesses = [];
   const tcpPorts = [...(options.tcpPorts || [41001, 41002, 41003, 41004])];
   const unavailableUdpPorts = new Set(options.unavailableUdpPorts || []);
@@ -168,6 +169,7 @@ function loadHnsManagerModule(options = {}) {
         setHnsProxy,
         clearHnsProxy,
         rebuild,
+        refreshImportedHnsSuffixes,
       }),
     },
   });
@@ -188,6 +190,7 @@ function loadHnsManagerModule(options = {}) {
     setHnsProxy,
     clearHnsProxy,
     rebuild,
+    refreshImportedHnsSuffixes,
     spawn,
     spawnedProcesses,
     readlineInterface,
