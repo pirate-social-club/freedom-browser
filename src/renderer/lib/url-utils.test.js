@@ -26,9 +26,11 @@ const REPRESENTATIVE_PIRATE_HOST = 'sable-harbor-4143.pirate';
 
 describe('url-utils', () => {
   describe('normalizeHnsHostInput', () => {
-    test('normalizes single-label HNS hosts', () => {
+    test('normalizes single-label HNS hosts over HTTPS', () => {
       expect(normalizeHnsHostInput('pirate')).toBe('https://pirate/');
       expect(normalizeHnsHostInput('pirate/')).toBe('https://pirate/');
+      expect(normalizeHnsHostInput('dankmeme')).toBe('https://dankmeme/');
+      expect(normalizeHnsHostInput('xn--pokmon-dva')).toBe('https://xn--pokmon-dva/');
     });
 
     test('normalizes representative .pirate hosts', () => {

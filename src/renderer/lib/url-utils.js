@@ -107,7 +107,6 @@ export const normalizeHnsHostInput = (str) => {
   const parts = trimmed.split(/[/?#]/);
   const host = parts[0];
   const rest = trimmed.slice(host.length);
-
   return `https://${host}${rest || '/'}`;
 };
 
