@@ -34,6 +34,7 @@ let restartCount = 0;
 const MAX_RESTARTS = 5;
 const RESTART_RESET_MS = 10 * 60 * 1000;
 const HNS_SYNC_QUIET_MS = 20 * 1000;
+const HNS_STDERR_REPEAT_WINDOW_MS = 30 * 1000;
 
 let proxyAddr = null;
 let caPemPath = null;
@@ -46,6 +47,7 @@ let lastHeightChangeAt = 0;
 let rootAddr = null;
 let recursiveAddr = null;
 let lastProcessError = null;
+const hnsStderrLogState = new Map();
 
 function isLoopbackHostname(hostname = '') {
   return hostname === 'localhost' || hostname === '::1' || /^127\./.test(hostname);
@@ -67,6 +69,42 @@ function isHnsHostname(hostname = '') {
   if (labels[1] !== 'pirate') return false;
 
   return /^[a-z0-9-]+$/.test(labels[0]);
+}
+
+function normalizeHnsStderrLine(line) {
+  return line.replace(/^\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2}\s+/, '');
+}
+
+function logHnsStderr(data) {
+  const lines = String(data)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const line of lines) {
+    const now = Date.now();
+    const key = normalizeHnsStderrLine(line);
+    const previous = hnsStderrLogState.get(key);
+
+    if (previous && now - previous.lastLoggedAt < HNS_STDERR_REPEAT_WINDOW_MS) {
+      previous.suppressed += 1;
+      previous.lastSeenAt = now;
+      previous.lastLine = line;
+      continue;
+    }
+
+    if (previous?.suppressed > 0) {
+      log.warn(`[HNS stderr]: suppressed ${previous.suppressed} repeat(s): ${previous.lastLine}`);
+    }
+
+    log.warn(`[HNS stderr]: ${line}`);
+    hnsStderrLogState.set(key, {
+      lastLoggedAt: now,
+      lastSeenAt: now,
+      suppressed: 0,
+      lastLine: line,
+    });
+  }
 }
 
 function getHelperBinaryPath() {
@@ -401,6 +439,7 @@ async function startHns() {
   rootAddr = resolverAddrs.rootAddr;
   recursiveAddr = resolverAddrs.recursiveAddr;
   lastProcessError = null;
+  hnsStderrLogState.clear();
 
   const args = [
     '-data-dir', dataDir,
@@ -417,9 +456,7 @@ async function startHns() {
     const rl = readline.createInterface({ input: helperProcess.stdout });
     rl.on('line', parseStdoutLine);
 
-    helperProcess.stderr.on('data', (data) => {
-      log.error(`[HNS stderr]: ${data}`);
-    });
+    helperProcess.stderr.on('data', logHnsStderr);
 
     helperProcess.on('close', (code) => {
       log.info(`[HNS] Process exited with code ${code}`);
@@ -455,6 +492,7 @@ async function startHns() {
       recursiveAddr = null;
       lastHeightChangeAt = 0;
       lastProcessError = null;
+      hnsStderrLogState.clear();
 
       if (pendingStart) {
         log.info('[HNS] Processing queued start request');

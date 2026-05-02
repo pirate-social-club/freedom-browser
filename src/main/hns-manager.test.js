@@ -8,6 +8,8 @@ const {
 function createProcessMock() {
   const listeners = new Map();
   const onceListeners = new Map();
+  const stdoutListeners = new Map();
+  const stderrListeners = new Map();
 
   const emitAll = (store, event, args) => {
     for (const handler of store.get(event) || []) {
@@ -17,10 +19,20 @@ function createProcessMock() {
 
   return {
     stdout: {
-      on: jest.fn(),
+      on: jest.fn((event, handler) => {
+        if (!stdoutListeners.has(event)) {
+          stdoutListeners.set(event, []);
+        }
+        stdoutListeners.get(event).push(handler);
+      }),
     },
     stderr: {
-      on: jest.fn(),
+      on: jest.fn((event, handler) => {
+        if (!stderrListeners.has(event)) {
+          stderrListeners.set(event, []);
+        }
+        stderrListeners.get(event).push(handler);
+      }),
     },
     on: jest.fn((event, handler) => {
       if (!listeners.has(event)) {
@@ -39,6 +51,12 @@ function createProcessMock() {
       const oneTimeHandlers = onceListeners.get(event) || [];
       onceListeners.delete(event);
       oneTimeHandlers.forEach((handler) => handler(...args));
+    },
+    emitStdout(event, ...args) {
+      emitAll(stdoutListeners, event, args);
+    },
+    emitStderr(event, ...args) {
+      emitAll(stderrListeners, event, args);
     },
     kill: jest.fn(() => true),
   };
@@ -305,6 +323,46 @@ describe('hns-manager', () => {
         '-recursive-addr',
         '127.0.0.1:43003',
       ])
+    );
+  });
+
+  test('startHns rate-limits repeated stderr warnings', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-05-02T12:00:00.000Z'));
+
+    const ctx = loadHnsManagerModule();
+    await ctx.mod.startHns();
+    const proc = ctx.spawnedProcesses[0];
+
+    proc.emitStderr(
+      'data',
+      Buffer.from('2026/05/02 12:00:00 [WARN] tunnel: 502 CONNECT shakestation:443 dns lookup failed (rcode: servfail)\n')
+    );
+    jest.setSystemTime(new Date('2026-05-02T12:00:05.000Z'));
+    proc.emitStderr(
+      'data',
+      Buffer.from('2026/05/02 12:00:05 [WARN] tunnel: 502 CONNECT shakestation:443 dns lookup failed (rcode: servfail)\n')
+    );
+
+    expect(ctx.log.warn).toHaveBeenCalledTimes(1);
+    expect(ctx.log.warn).toHaveBeenLastCalledWith(
+      '[HNS stderr]: 2026/05/02 12:00:00 [WARN] tunnel: 502 CONNECT shakestation:443 dns lookup failed (rcode: servfail)'
+    );
+
+    jest.setSystemTime(new Date('2026-05-02T12:00:31.000Z'));
+    proc.emitStderr(
+      'data',
+      Buffer.from('2026/05/02 12:00:31 [WARN] tunnel: 502 CONNECT shakestation:443 dns lookup failed (rcode: servfail)\n')
+    );
+
+    expect(ctx.log.warn).toHaveBeenCalledTimes(3);
+    expect(ctx.log.warn).toHaveBeenNthCalledWith(
+      2,
+      '[HNS stderr]: suppressed 1 repeat(s): 2026/05/02 12:00:05 [WARN] tunnel: 502 CONNECT shakestation:443 dns lookup failed (rcode: servfail)'
+    );
+    expect(ctx.log.warn).toHaveBeenNthCalledWith(
+      3,
+      '[HNS stderr]: 2026/05/02 12:00:31 [WARN] tunnel: 502 CONNECT shakestation:443 dns lookup failed (rcode: servfail)'
     );
   });
 

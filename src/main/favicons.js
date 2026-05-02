@@ -300,11 +300,11 @@ async function fetchFavicon(pageUrl, cacheKey = null) {
     const stmt = getStatements().upsert;
     stmt.run(domain, dataUrl, result.contentType, Date.now());
 
-    log.info('[Favicons] Cached favicon for:', domain);
+    log.debug('[Favicons] Cached favicon for:', domain);
 
     return dataUrl;
   } catch (err) {
-    log.info('[Favicons] Failed to fetch favicon for:', domain, err.message);
+    log.debug('[Favicons] Failed to fetch favicon for:', domain, err.message);
     return null;
   }
 }
