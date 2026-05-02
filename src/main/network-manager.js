@@ -1,5 +1,5 @@
 const log = require('./logger');
-const { session } = require('electron');
+const { app, session } = require('electron');
 const http = require('http');
 const {
   getHnsPublicSuffixes,
@@ -14,6 +14,77 @@ let dvpnProxyPort = null;
 
 let pacServer = null;
 let pacPort = null;
+let apiRequestDiagnosticsRegistered = false;
+const apiRequestLogState = new Map();
+
+const API_DIAGNOSTICS_REPEAT_WINDOW_MS = 30 * 1000;
+const API_DIAGNOSTICS_URLS = [
+  'https://api.pirate.sc/*',
+  'https://api-staging.pirate.sc/*',
+];
+
+function isApiDiagnosticsEnabled() {
+  return !app?.isPackaged || process.env.FREEDOM_API_DIAGNOSTICS === '1';
+}
+
+function sanitizeApiRequestUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return 'unknown';
+  try {
+    const parsed = new URL(rawUrl);
+    for (const [key] of parsed.searchParams) {
+      if (/(auth|code|secret|session|state|token)/i.test(key)) {
+        parsed.searchParams.set(key, '<redacted>');
+      }
+    }
+    return `${parsed.origin}${parsed.pathname}${parsed.search}`;
+  } catch {
+    return 'unknown';
+  }
+}
+
+function logRateLimitedApiFailure(message) {
+  const now = Date.now();
+  const previous = apiRequestLogState.get(message);
+
+  if (previous && now - previous.lastLoggedAt < API_DIAGNOSTICS_REPEAT_WINDOW_MS) {
+    previous.suppressed += 1;
+    return;
+  }
+
+  if (previous?.suppressed > 0) {
+    log.warn(`[Network] API request diagnostics suppressed ${previous.suppressed} repeat(s): ${message}`);
+  }
+
+  log.warn(message);
+  apiRequestLogState.set(message, {
+    lastLoggedAt: now,
+    suppressed: 0,
+  });
+}
+
+function registerApiRequestDiagnostics(targetSession = session.defaultSession) {
+  if (apiRequestDiagnosticsRegistered || !isApiDiagnosticsEnabled()) return;
+  const webRequest = targetSession?.webRequest;
+  if (!webRequest?.onCompleted || !webRequest?.onErrorOccurred) return;
+
+  apiRequestDiagnosticsRegistered = true;
+  const filter = { urls: API_DIAGNOSTICS_URLS };
+
+  webRequest.onCompleted(filter, (details) => {
+    if (!details || details.statusCode < 400) return;
+    const url = sanitizeApiRequestUrl(details.url);
+    const method = details.method || 'GET';
+    logRateLimitedApiFailure(`[Network] API request failed: ${method} ${url} status=${details.statusCode}`);
+  });
+
+  webRequest.onErrorOccurred(filter, (details) => {
+    if (!details) return;
+    const url = sanitizeApiRequestUrl(details.url);
+    const method = details.method || 'GET';
+    const error = details.error || 'unknown';
+    logRateLimitedApiFailure(`[Network] API request error: ${method} ${url} ${error}`);
+  });
+}
 
 function buildHnsHostPredicate() {
   const suffixChecks = getHnsPublicSuffixes()
@@ -181,4 +252,6 @@ module.exports = {
   getDvpnProxy,
   buildPacScript,
   refreshImportedHnsSuffixes,
+  registerApiRequestDiagnostics,
+  sanitizeApiRequestUrl,
 };

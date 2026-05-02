@@ -40,6 +40,7 @@ const { BrowserWindow, session } = require('electron');
 const path = require('path');
 const { registerBaseIpcHandlers } = require('./ipc-handlers');
 const { registerRequestRewriter } = require('./request-rewriter');
+const { registerApiRequestDiagnostics } = require('./network-manager');
 const { registerSettingsIpc, loadSettings } = require('./settings-store');
 const { registerBookmarksIpc } = require('./bookmarks-store');
 const { registerHistoryIpc, closeDb: closeHistoryDb } = require('./history');
@@ -115,6 +116,7 @@ async function bootstrap() {
   registerRpcManagerIpc();
   registerDappPermissionsIpc();
   registerRequestRewriter(defaultSession);
+  registerApiRequestDiagnostics(defaultSession);
   allowInteractivePermissions(defaultSession);
   registerWebContentsHandlers();
   setupApplicationMenu();

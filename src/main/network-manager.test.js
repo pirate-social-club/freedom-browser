@@ -11,7 +11,11 @@ function loadNetworkManagerModule(options = {}) {
   };
 
   const setProxy = jest.fn(() => Promise.resolve());
-  const defaultSession = { setProxy };
+  const webRequest = {
+    onCompleted: jest.fn(),
+    onErrorOccurred: jest.fn(),
+  };
+  const defaultSession = { setProxy, webRequest };
   const session = { defaultSession };
 
   let pacServerPort = options.pacServerPort || 9999;
@@ -38,7 +42,7 @@ function loadNetworkManagerModule(options = {}) {
     extraMocks: {
       electron: () => ({
         session,
-        app: { isPackaged: false },
+        app: { isPackaged: options.isPackaged ?? false },
       }),
       http: () => httpMock,
       [require.resolve('./logger')]: () => log,
@@ -50,6 +54,7 @@ function loadNetworkManagerModule(options = {}) {
     log,
     setProxy,
     session,
+    webRequest,
     httpMock,
     createServerCalls,
   };
@@ -246,5 +251,48 @@ describe('network-manager', () => {
     const pac = ctx.mod.buildPacScript();
 
     expect(() => new Function(pac)).not.toThrow();
+  });
+
+  test('API diagnostics logs failed API requests without sensitive query values', () => {
+    const ctx = loadNetworkManagerModule();
+
+    ctx.mod.registerApiRequestDiagnostics(ctx.session.defaultSession);
+
+    expect(ctx.webRequest.onCompleted).toHaveBeenCalledWith(
+      { urls: ['https://api.pirate.sc/*', 'https://api-staging.pirate.sc/*'] },
+      expect.any(Function)
+    );
+    expect(ctx.webRequest.onErrorOccurred).toHaveBeenCalledWith(
+      { urls: ['https://api.pirate.sc/*', 'https://api-staging.pirate.sc/*'] },
+      expect.any(Function)
+    );
+
+    const onCompleted = ctx.webRequest.onCompleted.mock.calls[0][1];
+    onCompleted({
+      method: 'GET',
+      statusCode: 200,
+      url: 'https://api.pirate.sc/feed/home',
+    });
+    expect(ctx.log.warn).not.toHaveBeenCalled();
+
+    onCompleted({
+      method: 'GET',
+      statusCode: 401,
+      url: 'https://api.pirate.sc/feed/home?token=secret&view=home',
+    });
+
+    expect(ctx.log.warn).toHaveBeenCalledWith(
+      '[Network] API request failed: GET https://api.pirate.sc/feed/home?token=%3Credacted%3E&view=home status=401'
+    );
+    expect(ctx.log.warn.mock.calls[0][0]).not.toContain('secret');
+  });
+
+  test('API diagnostics stay disabled in packaged builds unless explicitly enabled', () => {
+    const ctx = loadNetworkManagerModule({ isPackaged: true });
+
+    ctx.mod.registerApiRequestDiagnostics(ctx.session.defaultSession);
+
+    expect(ctx.webRequest.onCompleted).not.toHaveBeenCalled();
+    expect(ctx.webRequest.onErrorOccurred).not.toHaveBeenCalled();
   });
 });

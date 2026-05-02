@@ -7,6 +7,12 @@ const net = require('net');
 const dgram = require('dgram');
 const readline = require('readline');
 const IPC = require('../shared/ipc-channels');
+const { getHnsPublicSuffixes } = require('../shared/hns-hosts');
+const {
+  buildHnsHealthProbeHosts,
+  formatHnsHealthSummary,
+  probeHnsResolver,
+} = require('./hns-health');
 const {
   MODE,
   updateService,
@@ -35,6 +41,9 @@ const MAX_RESTARTS = 5;
 const RESTART_RESET_MS = 10 * 60 * 1000;
 const HNS_SYNC_QUIET_MS = 20 * 1000;
 const HNS_STDERR_REPEAT_WINDOW_MS = 30 * 1000;
+const HNS_HEALTH_INITIAL_DELAY_MS = 1000;
+const HNS_HEALTH_RETRY_BASE_MS = 5000;
+const HNS_HEALTH_RETRY_MAX_MS = 60 * 1000;
 
 let proxyAddr = null;
 let caPemPath = null;
@@ -48,6 +57,11 @@ let rootAddr = null;
 let recursiveAddr = null;
 let lastProcessError = null;
 const hnsStderrLogState = new Map();
+let hnsHealthTimer = null;
+let hnsHealthInFlight = false;
+let hnsHealthAttempt = 0;
+let lastHnsHealthOk = null;
+let lastHnsHealthSummary = null;
 
 function isLoopbackHostname(hostname = '') {
   return hostname === 'localhost' || hostname === '::1' || /^127\./.test(hostname);
@@ -104,6 +118,81 @@ function logHnsStderr(data) {
       suppressed: 0,
       lastLine: line,
     });
+  }
+}
+
+function clearHnsHealthState() {
+  if (hnsHealthTimer) {
+    clearTimeout(hnsHealthTimer);
+    hnsHealthTimer = null;
+  }
+  hnsHealthInFlight = false;
+  hnsHealthAttempt = 0;
+  lastHnsHealthOk = null;
+  lastHnsHealthSummary = null;
+}
+
+function canProbeHnsHealth() {
+  return currentState === STATUS.RUNNING && synced && Boolean(recursiveAddr);
+}
+
+function scheduleHnsHealthCheck(reason = 'scheduled', delayMs = HNS_HEALTH_INITIAL_DELAY_MS) {
+  if (!canProbeHnsHealth()) return;
+  if (hnsHealthTimer) return;
+
+  hnsHealthTimer = setTimeout(() => {
+    hnsHealthTimer = null;
+    runHnsHealthCheck(reason).catch((error) => {
+      log.warn(`[HNS] Resolver health probe failed: ${error.message}`);
+    });
+  }, delayMs);
+}
+
+function scheduleHnsHealthRetry() {
+  const delayMs = Math.min(
+    HNS_HEALTH_RETRY_BASE_MS * Math.pow(2, Math.max(0, hnsHealthAttempt - 1)),
+    HNS_HEALTH_RETRY_MAX_MS,
+  );
+  scheduleHnsHealthCheck('retry', delayMs);
+  return delayMs;
+}
+
+async function runHnsHealthCheck(reason = 'manual') {
+  if (!canProbeHnsHealth() || hnsHealthInFlight) return null;
+
+  hnsHealthInFlight = true;
+  try {
+    const hosts = buildHnsHealthProbeHosts(getHnsPublicSuffixes());
+    const result = await probeHnsResolver({
+      hosts,
+      recursiveAddr,
+    });
+    if (!canProbeHnsHealth()) return result;
+
+    const summary = formatHnsHealthSummary(result);
+    const changed = summary !== lastHnsHealthSummary || result.ok !== lastHnsHealthOk;
+    lastHnsHealthSummary = summary;
+    lastHnsHealthOk = result.ok;
+
+    if (result.ok) {
+      hnsHealthAttempt = 0;
+      clearErrorState('hns');
+      setStatusMessage('hns', null);
+      if (changed) {
+        log.info(`[HNS] Resolver health ok (${reason}): ${summary}`);
+      }
+      return result;
+    }
+
+    hnsHealthAttempt += 1;
+    setStatusMessage('hns', 'HNS resolver degraded');
+    const retryDelayMs = scheduleHnsHealthRetry();
+    if (changed) {
+      log.warn(`[HNS] Resolver degraded (${reason}): ${summary}; retrying in ${retryDelayMs}ms`);
+    }
+    return result;
+  } finally {
+    hnsHealthInFlight = false;
   }
 }
 
@@ -307,9 +396,11 @@ async function handleReady(event) {
   try {
     networkManager.setHnsProxy(proxyAddr);
     await networkManager.rebuild();
-    networkManager.refreshImportedHnsSuffixes().catch((err) => {
-      log.warn(`[HNS] Imported namespace suffix refresh failed: ${err.message}`);
-    });
+    networkManager.refreshImportedHnsSuffixes()
+      .then(() => scheduleHnsHealthCheck('suffix refresh'))
+      .catch((err) => {
+        log.warn(`[HNS] Imported namespace suffix refresh failed: ${err.message}`);
+      });
   } catch (err) {
     updateState(STATUS.ERROR, `Proxy configuration failed: ${err.message}`);
     setErrorState('hns', 'Proxy configuration failed');
@@ -373,6 +464,7 @@ function parseStdoutLine(line) {
             lastLoggedHeight = height;
             log.info(`[HNS] Synced at height ${height}`);
           }
+          scheduleHnsHealthCheck('sync');
         } else {
           setStatusMessage('hns', `Syncing block ${height}`);
         }
@@ -480,6 +572,7 @@ async function startHns() {
       networkManager.rebuild().catch((err) => {
         log.error(`[HNS] Failed to rebuild proxy on process exit: ${err.message}`);
       });
+      clearHnsHealthState();
       clearCertVerification(session.defaultSession);
       clearService('hns');
       proxyAddr = null;
@@ -549,6 +642,7 @@ function stopHns() {
       updateState(STATUS.STOPPED);
       clearService('hns');
       networkManager.clearHnsProxy();
+      clearHnsHealthState();
       rootAddr = null;
       recursiveAddr = null;
       lastHeightChangeAt = 0;
@@ -625,4 +719,5 @@ module.exports = {
   getHnsStatus,
   checkBinary,
   STATUS,
+  runHnsHealthCheck,
 };
