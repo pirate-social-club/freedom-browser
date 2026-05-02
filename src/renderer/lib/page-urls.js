@@ -7,7 +7,7 @@ const ROUTABLE_PAGES = window.internalPages?.routable || {};
 
 const INTERNAL_HOME_URL = new URL(`pages/${ROUTABLE_PAGES.home || 'home.html'}`, window.location.href).toString();
 const HOME_ICANN_URL = 'https://pirate.sc/';
-const HOME_HNS_URL = 'https://pirate/';
+const HOME_HNS_URL = 'https://app.pirate/';
 
 export let homeUrl = INTERNAL_HOME_URL;
 export let homeUrlNormalized = INTERNAL_HOME_URL;

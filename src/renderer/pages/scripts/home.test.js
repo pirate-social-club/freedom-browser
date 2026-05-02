@@ -98,7 +98,7 @@ describe('home page bootstrap', () => {
     expect(ctx.replace).not.toHaveBeenCalled();
   });
 
-  test('redirects to pirate once bundled HNS is ready', async () => {
+  test('redirects to app.pirate once bundled HNS is ready', async () => {
     const ctx = loadHomePageModule({
       registry: {
         hns: {
@@ -111,14 +111,14 @@ describe('home page bootstrap', () => {
 
     await ctx.document.handlers.DOMContentLoaded();
 
-    expect(ctx.destination.textContent).toBe('pirate');
+    expect(ctx.destination.textContent).toBe('app.pirate');
     expect(ctx.status.textContent).toBe('Ready');
-    expect(ctx.openLink.href).toBe('https://pirate/');
-    expect(ctx.note.textContent).toBe('Opening pirate/');
+    expect(ctx.openLink.href).toBe('https://app.pirate/');
+    expect(ctx.note.textContent).toBe('Opening app.pirate/');
 
     jest.advanceTimersByTime(350);
 
-    expect(ctx.replace).toHaveBeenCalledWith('https://pirate/');
+    expect(ctx.replace).toHaveBeenCalledWith('https://app.pirate/');
   });
 
   test('stays on pirate.sc when HNS integration is disabled', async () => {

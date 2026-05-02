@@ -164,7 +164,7 @@ const loadTabsModule = async (options = {}) => {
   jest.doMock('./page-context-menu.js', () => pageContextMenuMocks);
   jest.doMock('./page-urls.js', () => ({
     homeUrl: HOME_URL,
-    isHomeUrl: (url) => url === HOME_URL || url === 'https://pirate.sc/' || url === 'https://pirate/',
+    isHomeUrl: (url) => url === HOME_URL || url === 'https://pirate.sc/' || url === 'https://app.pirate/',
   }));
 
   const mod = await import('./tabs.js');

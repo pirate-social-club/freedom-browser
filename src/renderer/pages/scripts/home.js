@@ -1,5 +1,5 @@
 const HOME_ICANN_URL = 'https://pirate.sc/';
-const HOME_HNS_URL = 'https://pirate/';
+const HOME_HNS_URL = 'https://app.pirate/';
 const REDIRECT_DELAY_MS = 350;
 
 let activeSettings = { enableHnsIntegration: true };
@@ -38,11 +38,11 @@ function updateHome(registry = {}) {
   const hns = registry?.hns || {};
   const ready = isHnsReady(registry);
   const destinationUrl = ready ? HOME_HNS_URL : HOME_ICANN_URL;
-  const destinationLabel = ready ? 'pirate' : 'pirate.sc';
+  const destinationLabel = ready ? 'app.pirate' : 'pirate.sc';
 
   destinationEl.textContent = destinationLabel;
   openLinkEl.href = destinationUrl;
-  openLinkEl.textContent = ready ? 'Open pirate' : 'Open pirate.sc';
+  openLinkEl.textContent = ready ? 'Open app.pirate' : 'Open pirate.sc';
 
   if (typeof hns.height === 'number' && hns.height > 0) {
     heightRowEl.hidden = false;
@@ -54,7 +54,7 @@ function updateHome(registry = {}) {
 
   if (ready) {
     statusEl.textContent = 'Ready';
-    noteEl.textContent = 'Opening pirate/';
+    noteEl.textContent = 'Opening app.pirate/';
     scheduleRedirect(HOME_HNS_URL);
     return;
   }

@@ -99,7 +99,7 @@ describe('page-urls', () => {
 
     expect(mod.isHomeUrl('file:///app/pages/home.html')).toBe(true);
     expect(mod.isHomeUrl('https://pirate.sc/')).toBe(true);
-    expect(mod.isHomeUrl('https://pirate/')).toBe(true);
+    expect(mod.isHomeUrl('https://app.pirate/')).toBe(true);
     expect(mod.isHomeUrl('https://pirate.sc/docs')).toBe(false);
     expect(mod.isHomeUrl('https://example.com')).toBe(false);
   });
@@ -164,8 +164,8 @@ describe('page-urls', () => {
     expect(changed).toBe(true);
     expect(mod.homeUrl).toBe('file:///app/pages/home.html');
     expect(mod.homeUrlNormalized).toBe('file:///app/pages/home.html');
-    expect(mod.landingUrl).toBe('https://pirate/');
-    expect(mod.landingUrlNormalized).toBe('https://pirate/');
+    expect(mod.landingUrl).toBe('https://app.pirate/');
+    expect(mod.landingUrlNormalized).toBe('https://app.pirate/');
     delete global.window.__rendererState;
   });
 
@@ -208,7 +208,7 @@ describe('page-urls', () => {
     };
     mod.updateHomeUrl();
     expect(mod.homeUrl).toBe('file:///app/pages/home.html');
-    expect(mod.landingUrl).toBe('https://pirate/');
+    expect(mod.landingUrl).toBe('https://app.pirate/');
 
     global.window.__rendererState = {
       enableHnsIntegration: true,
