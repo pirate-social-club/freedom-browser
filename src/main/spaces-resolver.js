@@ -5,7 +5,7 @@ const IPC = require('../shared/ipc-channels');
 const SPACES_RESOLVER_BASE_URL =
   process.env.SPACES_RESOLVER_BASE_URL?.trim()
   || process.env.SPACES_VERIFIER_BASE_URL?.trim()
-  || 'https://spaces.pirate.sc';
+  || 'https://verifier.pirate.sc/spaces';
 const SPACES_CACHE_TTL_MS = 30 * 1000;
 const spaceResultCache = new Map();
 
@@ -41,7 +41,10 @@ async function resolveViaPublicResolver(handle) {
     throw new Error('No Spaces resolver base URL configured');
   }
 
-  const url = new URL('/resolve', SPACES_RESOLVER_BASE_URL);
+  const normalizedBaseUrl = SPACES_RESOLVER_BASE_URL.endsWith('/')
+    ? SPACES_RESOLVER_BASE_URL
+    : `${SPACES_RESOLVER_BASE_URL}/`;
+  const url = new URL('resolve', normalizedBaseUrl);
   url.searchParams.set('handle', handle);
 
   const response = await fetch(url.toString(), {

@@ -50,7 +50,7 @@ describe('spaces-resolver', () => {
     const result = await resolveSpace('@Space');
 
     expect(global.fetch).toHaveBeenCalledWith(
-      'https://spaces.pirate.sc/resolve?handle=%40space',
+      'https://verifier.pirate.sc/spaces/resolve?handle=%40space',
       expect.objectContaining({
         headers: {
           Accept: 'application/json',
