@@ -31,10 +31,14 @@ describe('url-utils', () => {
     });
 
     test('normalizes single-label HNS hosts over HTTPS', () => {
-      expect(normalizeHnsHostInput('pirate')).toBe('https://pirate/');
-      expect(normalizeHnsHostInput('pirate/')).toBe('https://pirate/');
       expect(normalizeHnsHostInput('dankmeme')).toBe('https://dankmeme/');
       expect(normalizeHnsHostInput('xn--pokmon-dva')).toBe('https://xn--pokmon-dva/');
+    });
+
+    test('normalizes the pirate root to the app host', () => {
+      expect(normalizeHnsHostInput('pirate')).toBe('https://app.pirate/');
+      expect(normalizeHnsHostInput('pirate/')).toBe('https://app.pirate/');
+      expect(normalizeHnsHostInput('pirate/feed')).toBe('https://app.pirate/feed');
     });
 
     test('normalizes representative .pirate hosts', () => {

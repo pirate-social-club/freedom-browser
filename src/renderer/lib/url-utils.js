@@ -112,8 +112,9 @@ export const normalizeHnsHostInput = (str) => {
 
   const trimmed = str.trim();
   const parts = trimmed.split(/[/?#]/);
-  const host = parts[0];
-  const rest = trimmed.slice(host.length);
+  const rawHost = parts[0];
+  const host = rawHost.toLowerCase() === 'pirate' ? 'app.pirate' : rawHost;
+  const rest = trimmed.slice(rawHost.length);
   return `https://${host}${rest || '/'}`;
 };
 
