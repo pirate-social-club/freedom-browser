@@ -2,6 +2,13 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [0.7.8] - 2026-05-04
+
+### Fixed
+
+- Spaces resolver requests no longer fail on self-signed certificates and use the verifier host for improved compatibility.
+- HNS home page reliably loads `app.pirate` as the root target.
+
 ## [0.7.7] - 2026-05-02
 
 ### Fixed

@@ -1,0 +1,101 @@
+name: Bump Version
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: Version bump type
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bump-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.12.0
+
+      - name: Configure git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Bump version in package.json
+        id: bump
+        run: |
+          CURRENT=$(node -p "require('./package.json').version")
+          IFS='.' read -r major minor patch <<< "$CURRENT"
+          case "${{ inputs.bump_type }}" in
+            patch) patch=$((patch + 1)) ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+          esac
+          NEW_VERSION="${major}.${minor}.${patch}"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          node -e "
+            const pkg = require('./package.json');
+            pkg.version = '$NEW_VERSION';
+            require('fs').writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Generate changelog entry
+        id: changelog
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          ENTRIES=""
+          if [ -n "$LAST_TAG" ]; then
+            while IFS= read -r line; do
+              case "$line" in
+                fix\("*") ENTRIES="$ENTRIES\n- $line" ;;
+                feat\("*") ENTRIES="$ENTRIES\n- $line" ;;
+                chore\("*"hns"*) ENTRIES="$ENTRIES\n- $line" ;;
+              esac
+            done < <(git log --pretty=format:"%s" "$LAST_TAG"..HEAD)
+          fi
+          echo "entries=$ENTRIES" >> $GITHUB_OUTPUT
+
+      - name: Update CHANGELOG.md
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          DATE=$(date +%Y-%m-%d)
+          HEADER="## [${NEW_VERSION}] - ${DATE}"
+          # Read existing changelog
+          EXISTING=$(cat CHANGELOG.md)
+          # Build section from commits
+          SECTION="${HEADER}\n\n### Fixed\n\n"
+          while IFS= read -r line; do
+            SECTION="${SECTION}- ${line}\n"
+          done < <(git log --pretty=format:"%s" v0.7.7..HEAD | grep -E '^fix' | sed 's/^fix(\([^)]*\)): /* **\1**: /')
+          # Prepend
+          printf "${SECTION}\n${EXISTING}" > CHANGELOG.md
+
+      - name: Commit and tag
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          git add package.json CHANGELOG.md
+          git commit -m "chore(release): prepare v${NEW_VERSION}"
+          git tag -a "v${NEW_VERSION}" -m "v${NEW_VERSION}"
+          git push origin "v${NEW_VERSION}"
