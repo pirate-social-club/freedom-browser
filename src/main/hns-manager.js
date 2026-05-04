@@ -353,8 +353,13 @@ function configureCertVerification(targetSession) {
           return;
         }
       }
+
+      if (request.verificationResult === 'ok') {
+        callback(0);
+        return;
+      }
     } catch {
-      // fall through to default
+      // fall through
     }
     callback(-3);
   });
