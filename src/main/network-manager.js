@@ -86,13 +86,25 @@ function registerApiRequestDiagnostics(targetSession = session.defaultSession) {
   });
 }
 
+function formatImportedHnsSuffixesLog(suffixes = []) {
+  const preview = suffixes.slice(0, 8).join(', ');
+  const remainder = suffixes.length - Math.min(suffixes.length, 8);
+  return remainder > 0
+    ? `${suffixes.length} suffixes (${preview}, +${remainder} more)`
+    : `${suffixes.length} suffixes${preview ? ` (${preview})` : ''}`;
+}
+
+function buildPacHnsTldMap() {
+  const entries = getHnsPublicSuffixes()
+    .map((suffix) => suffix.replace(/^\./, ''))
+    .filter(Boolean)
+    .map((tld) => `${JSON.stringify(tld)}:1`)
+    .join(',');
+  return `{${entries}}`;
+}
+
 function buildHnsHostPredicate() {
-  const suffixChecks = getHnsPublicSuffixes()
-    .map((suffix) => `dnsDomainIs(host, "${suffix}")`)
-    .join(' || ');
-  return suffixChecks
-    ? `dnsDomainLevels(host) === 0 || ${suffixChecks}`
-    : 'dnsDomainLevels(host) === 0';
+  return 'dnsDomainLevels(host) === 0 || hnsTlds[host.substring(host.lastIndexOf(".") + 1).toLowerCase()] === 1';
 }
 
 function extractNamespaceSuffixes(payload) {
@@ -104,6 +116,7 @@ function extractNamespaceSuffixes(payload) {
 
 function buildPacScript() {
   const hnsHostPredicate = buildHnsHostPredicate();
+  const hnsTldMap = buildPacHnsTldMap();
   const hnsLine = hnsProxyAddr
     ? `  if (${hnsHostPredicate}) {\n    return "PROXY ${hnsProxyAddr}";\n  }`
     : `  if (${hnsHostPredicate}) {\n    return "DIRECT";\n  }`;
@@ -112,7 +125,9 @@ function buildPacScript() {
     ? `  return "SOCKS5 ${dvpnProxyHost}:${dvpnProxyPort}; SOCKS ${dvpnProxyHost}:${dvpnProxyPort}; DIRECT";`
     : `  return "DIRECT";`;
 
-  return `function FindProxyForURL(url, host) {
+  return `var hnsTlds = ${hnsTldMap};
+
+function FindProxyForURL(url, host) {
   if (shExpMatch(host, "127.0.0.*") || host === "localhost" || host === "::1") {
     return "DIRECT";
   }
@@ -217,7 +232,7 @@ async function refreshImportedHnsSuffixes(fetchImpl = fetch, url = PUBLIC_NAMESP
       throw new Error(`public namespace fetch failed with ${response.status}`);
     }
     const suffixes = setDynamicHnsPublicSuffixes(extractNamespaceSuffixes(await response.json()));
-    log.info(`[Network] Imported HNS suffixes loaded: ${suffixes.join(', ')}`);
+    log.info(`[Network] Imported HNS suffixes loaded: ${formatImportedHnsSuffixesLog(suffixes)}`);
     if (hnsProxyAddr || dvpnProxyHost) {
       await rebuild();
     }

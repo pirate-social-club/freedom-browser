@@ -78,7 +78,8 @@ describe('network-manager', () => {
     expect(pac).toContain('PROXY 127.0.0.1:5380');
     expect(pac).toContain('return "DIRECT"');
     expect(pac).toContain('dnsDomainLevels(host) === 0');
-    expect(pac).toContain('dnsDomainIs(host, ".pirate")');
+    expect(pac).toContain('var hnsTlds = {"pirate":1}');
+    expect(pac).toContain('hnsTlds[host.substring(host.lastIndexOf(".") + 1).toLowerCase()] === 1');
   });
 
   test('HNS + dVPN PAC composition: single-label and .pirate → PROXY, others → SOCKS5', () => {
@@ -89,7 +90,7 @@ describe('network-manager', () => {
     const pac = ctx.mod.buildPacScript();
 
     expect(pac).toContain('dnsDomainLevels(host) === 0');
-    expect(pac).toContain('dnsDomainIs(host, ".pirate")');
+    expect(pac).toContain('var hnsTlds = {"pirate":1}');
     expect(pac).toContain('PROXY 127.0.0.1:5380');
     expect(pac).toContain('SOCKS5 127.0.0.1:10808');
   });
@@ -122,7 +123,7 @@ describe('network-manager', () => {
 
     const pac = ctx.mod.buildPacScript();
 
-    expect(pac).toContain('dnsDomainIs(host, ".pirate")');
+    expect(pac).toContain('var hnsTlds = {"pirate":1}');
     expect(REPRESENTATIVE_PIRATE_HOST.endsWith('.pirate')).toBe(true);
   });
 
@@ -183,8 +184,19 @@ describe('network-manager', () => {
     }));
 
     const pac = ctx.mod.buildPacScript();
-    expect(pac).toContain('dnsDomainIs(host, ".xn--pokmon-dva")');
-    expect(pac).toMatch(/dnsDomainIs\(host, "\.xn--pokmon-dva"\)[^}]*PROXY 127\.0\.0\.1:5380/);
+    expect(pac).toContain('"xn--pokmon-dva":1');
+    expect(pac).toMatch(/hnsTlds\[host\.substring\(host\.lastIndexOf\("\."\) \+ 1\)\.toLowerCase\(\)\] === 1[^}]*PROXY 127\.0\.0\.1:5380/);
+  });
+
+  test('imported namespace suffix log is summarized for large lists', async () => {
+    const ctx = loadNetworkManagerModule();
+    const namespaces = Array.from({ length: 12 }, (_, index) => ({ root_label: `name${index}` }));
+
+    await ctx.mod.refreshImportedHnsSuffixes(async () => Response.json({ namespaces }));
+
+    expect(ctx.log.info).toHaveBeenCalledWith(
+      '[Network] Imported HNS suffixes loaded: 13 suffixes (.pirate, .name0, .name1, .name2, .name3, .name4, .name5, .name6, +5 more)'
+    );
   });
   test('clearDvpnProxy removes dVPN proxy settings', () => {
     const ctx = loadNetworkManagerModule();
