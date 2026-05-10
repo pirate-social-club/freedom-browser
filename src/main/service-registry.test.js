@@ -181,6 +181,36 @@ describe('service-registry', () => {
     });
   });
 
+  test('clearService preserves JackTrip-specific fields', () => {
+    const { mod } = loadServiceRegistry();
+
+    mod.updateService('jacktrip', {
+      mode: mod.MODE.EXTERNAL,
+      connected: true,
+      server: '127.0.0.1',
+      port: 4464,
+      audioSourceName: 'jacktrip_duet_input',
+      audioSourceLabel: 'JackTrip Duet Mic',
+    });
+
+    mod.clearService('jacktrip');
+
+    const jacktrip = mod.getService('jacktrip');
+    expect(jacktrip).toEqual({
+      api: null,
+      gateway: null,
+      mode: mod.MODE.NONE,
+      statusMessage: null,
+      tempMessage: null,
+      tempMessageTimeout: null,
+      connected: false,
+      server: null,
+      port: null,
+      audioSourceName: null,
+      audioSourceLabel: null,
+    });
+  });
+
   test('registers an IPC handler that returns the current registry state', async () => {
     const ipcMain = createIpcMainMock();
     const { mod } = loadServiceRegistry({ ipcMain });

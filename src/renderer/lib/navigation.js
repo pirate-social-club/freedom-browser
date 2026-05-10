@@ -22,6 +22,7 @@ import {
   deriveBzzBaseFromUrl,
   deriveIpfsBaseFromUrl,
   deriveRadBaseFromUrl,
+  normalizeLocalhostInput,
   normalizeHnsHostInput,
   parseSpacesRootInput,
 } from './url-utils.js';
@@ -48,6 +49,7 @@ import {
   isHistoryRecordable,
   getInternalPageName,
   parseEnsInput,
+  resolveFreedomInternalUrl,
 } from './page-urls.js';
 
 // Helper to get active tab's navigation state (with fallback to empty object)
@@ -281,22 +283,23 @@ const isBenignLoadUrlError = (err) => {
 };
 
 const safeLoadUrl = (webview, url, context = 'navigation') => {
+  const normalizedUrl = normalizeLocalhostInput(url) || url;
   try {
-    const result = webview.loadURL(url);
+    const result = webview.loadURL(normalizedUrl);
     Promise.resolve(result).catch((err) => {
       if (isBenignLoadUrlError(err)) {
         pushDebug(
-          `[Nav] Ignored ${context} loadURL noise for ${url}: ${err.code || err.errno || err.message}`
+          `[Nav] Ignored ${context} loadURL noise for ${normalizedUrl}: ${err.code || err.errno || err.message}`
         );
         return;
       }
-      pushDebug(`[Nav] loadURL failed during ${context} for ${url}: ${err.message || err}`);
+      pushDebug(`[Nav] loadURL failed during ${context} for ${normalizedUrl}: ${err.message || err}`);
       console.error(`[Nav] loadURL failed during ${context}`, err);
     });
   } catch (err) {
     if (isBenignLoadUrlError(err)) {
       pushDebug(
-        `[Nav] Ignored ${context} loadURL noise for ${url}: ${err.code || err.errno || err.message}`
+        `[Nav] Ignored ${context} loadURL noise for ${normalizedUrl}: ${err.code || err.errno || err.message}`
       );
       return;
     }
@@ -535,17 +538,15 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
   isViewingSource = false;
 
   // Handle freedom:// protocol for internal pages
-  const fbMatch = value.match(/^freedom:\/\/([a-zA-Z0-9-]+)$/i);
-  if (fbMatch) {
-    const pageName = fbMatch[1].toLowerCase();
-    const pageUrl = internalPages[pageName];
-    if (pageUrl) {
-      safeLoadUrl(webview, pageUrl, 'internal-page');
-      pushDebug(`Loading internal page: ${pageName}`);
+  const freedomRoute = resolveFreedomInternalUrl(value);
+  if (freedomRoute) {
+    if (freedomRoute.pageUrl) {
+      safeLoadUrl(webview, freedomRoute.pageUrl, 'internal-page');
+      pushDebug(`Loading internal page: ${freedomRoute.pageName}`);
     } else {
-      pushDebug(`Unknown internal page: ${pageName}`);
+      pushDebug(`Unknown internal page: ${freedomRoute.pageName}`);
       alert(
-        `Unknown internal page: ${pageName}\nAvailable: ${Object.keys(internalPages).join(', ')}`
+        `Unknown internal page: ${freedomRoute.pageName}\nAvailable: ${Object.keys(internalPages).join(', ')}`
       );
     }
     return;
@@ -806,6 +807,21 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     navState.hasNavigatedDuringCurrentLoad = false;
     safeLoadUrl(webview, value, 'http');
     pushDebug(`Loading ${value}`);
+    syncBzzBase(null);
+    syncIpfsBase(null);
+    syncRadBase(null);
+    return;
+  }
+
+  const localhostUrl = normalizeLocalhostInput(value);
+  if (localhostUrl) {
+    addressInput.value = displayOverride || localhostUrl;
+    pushDebug(`[AddressBar] Loading local dev target: ${value} -> ${localhostUrl}`);
+    rememberDisplayAlias(navState, localhostUrl, displayOverride);
+    navState.pendingTitleForUrl = localhostUrl;
+    navState.pendingNavigationUrl = localhostUrl;
+    navState.hasNavigatedDuringCurrentLoad = false;
+    safeLoadUrl(webview, localhostUrl, 'http');
     syncBzzBase(null);
     syncIpfsBase(null);
     syncRadBase(null);
@@ -1192,20 +1208,18 @@ export const initNavigation = () => {
     const raw = addressInput.value;
 
     // Handle freedom:// protocol for internal pages
-    const fbMatch = raw.match(/^freedom:\/\/([a-zA-Z0-9-]+)$/i);
-    if (fbMatch) {
-      const pageName = fbMatch[1].toLowerCase();
-      const pageUrl = internalPages[pageName];
-      if (pageUrl) {
+    const freedomRoute = resolveFreedomInternalUrl(raw);
+    if (freedomRoute) {
+      if (freedomRoute.pageUrl) {
         const webview = getActiveWebview();
         if (webview) {
-          safeLoadUrl(webview, pageUrl, 'protocol-test');
-          pushDebug(`Loading internal page: ${pageName}`);
+          safeLoadUrl(webview, freedomRoute.pageUrl, 'protocol-test');
+          pushDebug(`Loading internal page: ${freedomRoute.pageName}`);
         }
       } else {
-        pushDebug(`Unknown internal page: ${pageName}`);
+        pushDebug(`Unknown internal page: ${freedomRoute.pageName}`);
         alert(
-          `Unknown internal page: ${pageName}\nAvailable: ${Object.keys(internalPages).join(', ')}`
+          `Unknown internal page: ${freedomRoute.pageName}\nAvailable: ${Object.keys(internalPages).join(', ')}`
         );
       }
       addressInput.blur();

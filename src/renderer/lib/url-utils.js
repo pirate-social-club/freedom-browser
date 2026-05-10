@@ -64,6 +64,36 @@ const looksLikeDomain = (str) => {
   return domainRegex.test(hostPart);
 };
 
+const isLocalhostHost = (host) => {
+  const normalized = String(host || '').toLowerCase();
+  return (
+    normalized === 'localhost' ||
+    normalized === '127.0.0.1' ||
+    normalized.startsWith('127.') ||
+    normalized === '[::1]' ||
+    normalized === '::1'
+  );
+};
+
+export const normalizeLocalhostInput = (str) => {
+  if (!str || typeof str !== 'string') return null;
+
+  const trimmed = str.trim();
+  if (!trimmed || /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(`http://${trimmed}`);
+    if (!isLocalhostHost(parsed.hostname)) {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+};
+
 const isValidHostLabel = (value) => /^[a-z]([a-z0-9-]*[a-z0-9])?$/.test(value);
 
 const getHnsPublicTlds = () => {

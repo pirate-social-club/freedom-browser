@@ -166,6 +166,12 @@ const loadTabsModule = async (options = {}) => {
     homeUrl: HOME_URL,
     isHomeUrl: (url) => url === HOME_URL || url === 'https://pirate.sc/' || url === 'https://app.pirate/',
   }));
+  jest.doMock('./url-utils.js', () => ({
+    normalizeLocalhostInput: (value) => {
+      if (value === 'localhost:5173') return 'http://localhost:5173/';
+      return null;
+    },
+  }));
 
   const mod = await import('./tabs.js');
 
@@ -254,6 +260,16 @@ describe('tabs ui behavior', () => {
       { id: initialTab.id, url: initialTab.url, title: initialTab.title, isActive: false },
       { id: thirdTab.id, url: thirdTab.url, title: thirdTab.title, isActive: false },
     ]);
+  });
+
+  test('normalizes bare localhost URLs before assigning initial webview src', async () => {
+    const { mod } = await loadTabsModule();
+
+    await mod.initTabs();
+    const localTab = mod.createTab('localhost:5173');
+
+    expect(localTab.url).toBe('http://localhost:5173/');
+    expect(localTab.webview.getAttribute('src')).toBe('http://localhost:5173/');
   });
 
   test('updates favicons and manages devtools state', async () => {

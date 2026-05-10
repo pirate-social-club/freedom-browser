@@ -54,6 +54,20 @@ export const internalPages = Object.fromEntries(
   ])
 );
 
+export const resolveFreedomInternalUrl = (value = '') => {
+  const match = String(value).trim().match(/^freedom:\/\/([a-zA-Z0-9-]+)([?#].*)?$/i);
+  if (!match) {
+    return null;
+  }
+
+  const pageName = match[1].toLowerCase();
+  const pageUrl = internalPages[pageName];
+  return {
+    pageName,
+    pageUrl: pageUrl ? `${pageUrl}${match[2] || ''}` : null,
+  };
+};
+
 // Detect protocol from display URL for history recording
 export const detectProtocol = (url) => {
   if (!url) return 'unknown';
@@ -78,8 +92,9 @@ export const isHistoryRecordable = (displayUrl, internalUrl) => {
 
 // Convert internal page URL back to freedom:// format
 export const getInternalPageName = (url) => {
+  const normalizedUrl = String(url || '').split(/[?#]/)[0];
   for (const [name, pageUrl] of Object.entries(internalPages)) {
-    if (url === pageUrl || url === pageUrl.replace(/\/$/, '')) {
+    if (normalizedUrl === pageUrl || normalizedUrl === pageUrl.replace(/\/$/, '')) {
       return name;
     }
   }

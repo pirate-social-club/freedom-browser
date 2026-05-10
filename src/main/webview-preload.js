@@ -45,6 +45,9 @@ contextBridge.exposeInMainWorld('freedomAPI', {
   // Settings (read-only for internal pages)
   getSettings: guardInternal('getSettings', () => ipcRenderer.invoke('settings:get')),
 
+  // Window
+  getPlatform: guardInternal('getPlatform', () => ipcRenderer.invoke(IPC.WINDOW_GET_PLATFORM)),
+
   // Service registry (read-only for internal pages)
   getServiceRegistry: guardInternal('getServiceRegistry', () =>
     ipcRenderer.invoke(IPC.SERVICE_REGISTRY_GET)
@@ -84,6 +87,68 @@ contextBridge.exposeInMainWorld('freedomAPI', {
   syncRadicleRepo: guardInternal('syncRadicleRepo', (rid) =>
     ipcRenderer.invoke('radicle:syncRepo', rid)
   ),
+
+  // JackTrip
+  getJacktripStatus: guardInternal('getJacktripStatus', () =>
+    ipcRenderer.invoke(IPC.JACKTRIP_GET_STATUS)
+  ),
+  checkJacktripDeps: guardInternal('checkJacktripDeps', () =>
+    ipcRenderer.invoke(IPC.JACKTRIP_CHECK_DEPS)
+  ),
+  connectJacktrip: guardInternal('connectJacktrip', (options) =>
+    ipcRenderer.invoke(IPC.JACKTRIP_CONNECT, options)
+  ),
+  disconnectJacktrip: guardInternal('disconnectJacktrip', () =>
+    ipcRenderer.invoke(IPC.JACKTRIP_DISCONNECT)
+  ),
+  listJacktripPorts: guardInternal('listJacktripPorts', () =>
+    ipcRenderer.invoke(IPC.JACKTRIP_LIST_PORTS)
+  ),
+  setupJacktripAudio: guardInternal('setupJacktripAudio', (options) =>
+    ipcRenderer.invoke(IPC.JACKTRIP_SETUP_AUDIO, options)
+  ),
+  restoreJacktripAudio: guardInternal('restoreJacktripAudio', (options) =>
+    ipcRenderer.invoke(IPC.JACKTRIP_RESTORE_AUDIO, options)
+  ),
+  startJacktripLocalServer: guardInternal('startJacktripLocalServer', (options) =>
+    ipcRenderer.invoke(IPC.JACKTRIP_START_LOCAL_SERVER, options)
+  ),
+  stopJacktripLocalServer: guardInternal('stopJacktripLocalServer', () =>
+    ipcRenderer.invoke(IPC.JACKTRIP_STOP_LOCAL_SERVER)
+  ),
+  hostAttachLiveRoom: guardInternal('hostAttachLiveRoom', (options) =>
+    ipcRenderer.invoke(IPC.PIRATE_LIVE_ROOM_HOST_ATTACH, options)
+  ),
+  endLiveRoom: guardInternal('endLiveRoom', (options) =>
+    ipcRenderer.invoke(IPC.PIRATE_LIVE_ROOM_END, options)
+  ),
+  getPirateAuthStatus: guardInternal('getPirateAuthStatus', () =>
+    ipcRenderer.invoke(IPC.PIRATE_AUTH_GET_STATUS)
+  ),
+  startPirateDeviceAuth: guardInternal('startPirateDeviceAuth', (options) =>
+    ipcRenderer.invoke(IPC.PIRATE_AUTH_START_DEVICE, options)
+  ),
+  pollPirateDeviceAuth: guardInternal('pollPirateDeviceAuth', (options) =>
+    ipcRenderer.invoke(IPC.PIRATE_AUTH_POLL_DEVICE, options)
+  ),
+  savePirateAccessToken: guardInternal('savePirateAccessToken', (accessToken) =>
+    ipcRenderer.invoke(IPC.PIRATE_AUTH_SAVE_ACCESS_TOKEN, accessToken)
+  ),
+  clearPirateAccessToken: guardInternal('clearPirateAccessToken', () =>
+    ipcRenderer.invoke(IPC.PIRATE_AUTH_CLEAR_ACCESS_TOKEN)
+  ),
+  onJacktripStatusUpdate: guardInternal('onJacktripStatusUpdate', (callback) => {
+    if (typeof callback !== 'function') {
+      return () => {};
+    }
+
+    const handler = (_event, status) => callback(status);
+    ipcRenderer.on(IPC.JACKTRIP_STATUS_UPDATE, handler);
+
+    return () => {
+      ipcRenderer.removeListener(IPC.JACKTRIP_STATUS_UPDATE, handler);
+    };
+  }),
 });
 
 // ============================================

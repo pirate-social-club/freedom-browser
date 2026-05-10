@@ -2,6 +2,7 @@
   "routable": {
     "home": "home.html",
     "history": "history.html",
+    "live-room": "live-room.html",
     "links": "links.html",
     "protocol-test": "protocol-test.html"
   },

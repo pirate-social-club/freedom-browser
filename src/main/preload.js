@@ -371,3 +371,21 @@ contextBridge.exposeInMainWorld('dvpn', {
   getWalletAddress: () => ipcRenderer.invoke('dvpn:getWalletAddress'),
   generateQR: (text, options) => ipcRenderer.invoke('dvpn:generateQr', text, options),
 });
+
+contextBridge.exposeInMainWorld('jacktrip', {
+  connect: (options) => ipcRenderer.invoke('jacktrip:connect', options),
+  disconnect: () => ipcRenderer.invoke('jacktrip:disconnect'),
+  getStatus: () => ipcRenderer.invoke('jacktrip:getStatus'),
+  checkDeps: () => ipcRenderer.invoke('jacktrip:checkDeps'),
+  listPorts: () => ipcRenderer.invoke('jacktrip:listPorts'),
+  setupAudio: (options) => ipcRenderer.invoke('jacktrip:setupAudio', options),
+  restoreAudio: (options) => ipcRenderer.invoke('jacktrip:restoreAudio', options),
+  startLocalServer: (options) => ipcRenderer.invoke('jacktrip:startLocalServer', options),
+  stopLocalServer: () => ipcRenderer.invoke('jacktrip:stopLocalServer'),
+  onStatusUpdate: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('jacktrip:statusUpdate', handler);
+    ipcRenderer.invoke('jacktrip:getStatus').then(callback);
+    return () => ipcRenderer.removeListener('jacktrip:statusUpdate', handler);
+  },
+});

@@ -58,12 +58,31 @@ describe('page-urls', () => {
   test('maps internal page urls back to freedom:// names', async () => {
     const mod = await loadModule({
       history: 'history.html',
+      'live-room': 'live-room.html',
       links: 'links.html',
     });
 
     expect(mod.getInternalPageName('file:///app/pages/history.html')).toBe('history');
+    expect(mod.getInternalPageName('file:///app/pages/live-room.html?roomId=lr_1')).toBe('live-room');
     expect(mod.getInternalPageName('file:///app/pages/links.html')).toBe('links');
     expect(mod.getInternalPageName('https://example.com')).toBeNull();
+  });
+
+  test('resolves freedom internal urls with query params', async () => {
+    const mod = await loadModule({
+      history: 'history.html',
+      'live-room': 'live-room.html',
+    });
+
+    expect(mod.resolveFreedomInternalUrl('freedom://live-room?roomId=lr_1')).toEqual({
+      pageName: 'live-room',
+      pageUrl: 'file:///app/pages/live-room.html?roomId=lr_1',
+    });
+    expect(mod.resolveFreedomInternalUrl('freedom://missing?x=1')).toEqual({
+      pageName: 'missing',
+      pageUrl: null,
+    });
+    expect(mod.resolveFreedomInternalUrl('https://example.com')).toBeNull();
   });
 
   test('parses ens inputs with prefixes, paths, and invalid names', async () => {

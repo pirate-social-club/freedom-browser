@@ -13,6 +13,7 @@ const internalPages = {
   routable: {
     home: 'home.html',
     history: 'history.html',
+    'live-room': 'live-room.html',
     links: 'links.html',
     'protocol-test': 'protocol-test.html',
   },
@@ -35,6 +36,7 @@ function loadWebviewPreloadModule(options = {}) {
     invokeResponses: {
       [IPC.HISTORY_GET]: [{ url: 'https://example.com' }],
       [IPC.SETTINGS_GET]: { theme: 'dark' },
+      [IPC.WINDOW_GET_PLATFORM]: 'linux',
       [IPC.SERVICE_REGISTRY_GET]: {
         hns: {
           mode: 'bundled',
@@ -44,6 +46,10 @@ function loadWebviewPreloadModule(options = {}) {
       },
       [IPC.BOOKMARKS_GET]: [{ target: 'https://example.com' }],
       [IPC.RADICLE_GET_STATUS]: { status: 'running' },
+      [IPC.JACKTRIP_GET_STATUS]: { status: 'DISCONNECTED' },
+      [IPC.JACKTRIP_CHECK_DEPS]: { available: true },
+      [IPC.JACKTRIP_LIST_PORTS]: ['system:capture_1'],
+      [IPC.PIRATE_AUTH_GET_STATUS]: { secureStorageAvailable: true, hasStoredAccessToken: true },
       ...(options.invokeResponses || {}),
     },
   });
@@ -141,6 +147,7 @@ describe('webview-preload', () => {
       ['removeHistory', [5], IPC.HISTORY_REMOVE, [5]],
       ['clearHistory', [], IPC.HISTORY_CLEAR, []],
       ['getSettings', [], IPC.SETTINGS_GET, []],
+      ['getPlatform', [], IPC.WINDOW_GET_PLATFORM, []],
       ['getServiceRegistry', [], IPC.SERVICE_REGISTRY_GET, []],
       ['getBookmarks', [], IPC.BOOKMARKS_GET, []],
       ['openInNewTab', ['https://example.com'], IPC.OPEN_URL_IN_NEW_TAB, ['https://example.com']],
@@ -149,6 +156,22 @@ describe('webview-preload', () => {
       ['getRadicleStatus', [], IPC.RADICLE_GET_STATUS, []],
       ['getRadicleRepoPayload', ['z3abc'], IPC.RADICLE_GET_REPO_PAYLOAD, ['z3abc']],
       ['syncRadicleRepo', ['z3abc'], IPC.RADICLE_SYNC_REPO, ['z3abc']],
+      ['getJacktripStatus', [], IPC.JACKTRIP_GET_STATUS, []],
+      ['checkJacktripDeps', [], IPC.JACKTRIP_CHECK_DEPS, []],
+      ['connectJacktrip', [{ server: 'room.example', port: 4464 }], IPC.JACKTRIP_CONNECT, [{ server: 'room.example', port: 4464 }]],
+      ['disconnectJacktrip', [], IPC.JACKTRIP_DISCONNECT, []],
+      ['listJacktripPorts', [], IPC.JACKTRIP_LIST_PORTS, []],
+      ['setupJacktripAudio', [{ setDefaultSource: true }], IPC.JACKTRIP_SETUP_AUDIO, [{ setDefaultSource: true }]],
+      ['restoreJacktripAudio', [{ preferredSource: 'alsa_input.usb' }], IPC.JACKTRIP_RESTORE_AUDIO, [{ preferredSource: 'alsa_input.usb' }]],
+      ['startJacktripLocalServer', [{ port: 4464 }], IPC.JACKTRIP_START_LOCAL_SERVER, [{ port: 4464 }]],
+      ['stopJacktripLocalServer', [], IPC.JACKTRIP_STOP_LOCAL_SERVER, []],
+      ['hostAttachLiveRoom', [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }], IPC.PIRATE_LIVE_ROOM_HOST_ATTACH, [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }]],
+      ['endLiveRoom', [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }], IPC.PIRATE_LIVE_ROOM_END, [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }]],
+      ['getPirateAuthStatus', [], IPC.PIRATE_AUTH_GET_STATUS, []],
+      ['startPirateDeviceAuth', [{ apiBase: 'http://localhost:8787' }], IPC.PIRATE_AUTH_START_DEVICE, [{ apiBase: 'http://localhost:8787' }]],
+      ['pollPirateDeviceAuth', [{ apiBase: 'http://localhost:8787', deviceCode: 'pdev_test' }], IPC.PIRATE_AUTH_POLL_DEVICE, [{ apiBase: 'http://localhost:8787', deviceCode: 'pdev_test' }]],
+      ['savePirateAccessToken', ['token'], IPC.PIRATE_AUTH_SAVE_ACCESS_TOKEN, ['token']],
+      ['clearPirateAccessToken', [], IPC.PIRATE_AUTH_CLEAR_ACCESS_TOKEN, []],
     ];
 
     for (const [method, args, channel, expectedArgs] of invokeCases) {
@@ -182,6 +205,36 @@ describe('webview-preload', () => {
     unsubscribe();
     expect(ipcRenderer.removeListener).toHaveBeenCalledWith(
       IPC.SERVICE_REGISTRY_UPDATE,
+      expect.any(Function)
+    );
+  });
+
+  test('subscribes to JackTrip status updates on internal pages', () => {
+    const { exposures, ipcRenderer } = loadWebviewPreloadModule({
+      location: {
+        href: 'file:///app/pages/live-room.html',
+        protocol: 'file:',
+        pathname: '/app/pages/live-room.html',
+      },
+    });
+    const callback = jest.fn();
+
+    const unsubscribe = exposures.freedomAPI.onJacktripStatusUpdate(callback);
+    ipcRenderer.emit(IPC.JACKTRIP_STATUS_UPDATE, {
+      status: 'CONNECTED',
+      server: 'room.example',
+      port: 4464,
+    });
+
+    expect(callback).toHaveBeenCalledWith({
+      status: 'CONNECTED',
+      server: 'room.example',
+      port: 4464,
+    });
+
+    unsubscribe();
+    expect(ipcRenderer.removeListener).toHaveBeenCalledWith(
+      IPC.JACKTRIP_STATUS_UPDATE,
       expect.any(Function)
     );
   });

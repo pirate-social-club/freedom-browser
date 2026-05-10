@@ -49,6 +49,27 @@ module.exports = {
   DVPN_GET_WALLET_ADDRESS: 'dvpn:getWalletAddress',
   DVPN_GENERATE_QR: 'dvpn:generateQr',
 
+  // JackTrip management
+  JACKTRIP_CONNECT: 'jacktrip:connect',
+  JACKTRIP_DISCONNECT: 'jacktrip:disconnect',
+  JACKTRIP_GET_STATUS: 'jacktrip:getStatus',
+  JACKTRIP_STATUS_UPDATE: 'jacktrip:statusUpdate',
+  JACKTRIP_CHECK_DEPS: 'jacktrip:checkDeps',
+  JACKTRIP_LIST_PORTS: 'jacktrip:listPorts',
+  JACKTRIP_SETUP_AUDIO: 'jacktrip:setupAudio',
+  JACKTRIP_RESTORE_AUDIO: 'jacktrip:restoreAudio',
+  JACKTRIP_START_LOCAL_SERVER: 'jacktrip:startLocalServer',
+  JACKTRIP_STOP_LOCAL_SERVER: 'jacktrip:stopLocalServer',
+
+  // Pirate API live-room host attach
+  PIRATE_LIVE_ROOM_HOST_ATTACH: 'pirate:live-room-host-attach',
+  PIRATE_LIVE_ROOM_END: 'pirate:live-room-end',
+  PIRATE_AUTH_GET_STATUS: 'pirate:auth-get-status',
+  PIRATE_AUTH_START_DEVICE: 'pirate:auth-start-device',
+  PIRATE_AUTH_POLL_DEVICE: 'pirate:auth-poll-device',
+  PIRATE_AUTH_SAVE_ACCESS_TOKEN: 'pirate:auth-save-access-token',
+  PIRATE_AUTH_CLEAR_ACCESS_TOKEN: 'pirate:auth-clear-access-token',
+
   // ENS resolution
   ENS_RESOLVE: 'ens:resolve',
   SPACES_RESOLVE: 'spaces:resolve',

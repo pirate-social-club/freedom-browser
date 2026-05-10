@@ -71,6 +71,19 @@ const registry = {
     ip: null,
     lastDisconnectReason: null,
   },
+  jacktrip: {
+    api: null,
+    gateway: null,
+    mode: MODE.NONE,
+    statusMessage: null,
+    tempMessage: null,
+    tempMessageTimeout: null,
+    connected: false,
+    server: null,
+    port: null,
+    audioSourceName: null,
+    audioSourceLabel: null,
+  },
 };
 
 // Default ports
@@ -111,6 +124,7 @@ function getRegistry() {
     radicle: { ...registry.radicle },
     hns: { ...registry.hns },
     dvpn: { ...registry.dvpn },
+    jacktrip: { ...registry.jacktrip },
   };
 }
 
@@ -248,6 +262,19 @@ const SERVICE_DEFAULTS = {
     country: null,
     ip: null,
     lastDisconnectReason: null,
+  },
+  jacktrip: {
+    api: null,
+    gateway: null,
+    mode: MODE.NONE,
+    statusMessage: null,
+    tempMessage: null,
+    tempMessageTimeout: null,
+    connected: false,
+    server: null,
+    port: null,
+    audioSourceName: null,
+    audioSourceLabel: null,
   },
 };
 

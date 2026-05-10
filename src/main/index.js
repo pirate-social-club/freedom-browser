@@ -19,7 +19,7 @@ app.setAboutPanelOptions({
   applicationName: 'Freedom',
   applicationVersion: version,
   version: `Electron ${process.versions.electron} · Chromium ${process.versions.chrome} · Node ${process.versions.node}`,
-  copyright: '© 2025-2026 Freedom Team\nCopyleft — MPL-2.0',
+  copyright: '© 2025-2026 Freedom Team\nCopyleft — AGPL-3.0-or-later',
   credits: 'A browser for the decentralized web\nSwarm · IPFS · ENS',
   website: 'https://freedombrowser.eth.limo/',
   iconPath,
@@ -36,7 +36,7 @@ process.on('unhandledRejection', (reason, _promise) => {
   log.error('Unhandled rejection:', reason);
 });
 
-const { BrowserWindow, session } = require('electron');
+const { BrowserWindow, session, ipcMain } = require('electron');
 const path = require('path');
 const { registerBaseIpcHandlers } = require('./ipc-handlers');
 const { registerRequestRewriter } = require('./request-rewriter');
@@ -52,6 +52,12 @@ const { registerIpfsIpc, stopIpfs, startIpfs, setUseInjectedIdentity: setIpfsInj
 const { registerRadicleIpc, stopRadicle, startRadicle, setUseInjectedIdentity: setRadicleInjectedIdentity } = require('./radicle-manager');
 const { registerHnsIpc, stopHns, startHns } = require('./hns-manager');
 const { registerDvpnIpc, initDvpn, stopDvpn } = require('./dvpn-manager');
+const { registerJacktripIpc, stopJacktrip } = require('./jacktrip-manager');
+const { registerLiveRoomApiIpc } = require('./live-room-api');
+const {
+  createFreedomProtocolHandler,
+  registerFreedomProtocolClient,
+} = require('./protocol-handler');
 const { registerIdentityIpc, hasVault, isBeeIdentityInjected, isIpfsIdentityInjected, isRadicleIdentityInjected } = require('./identity-manager');
 const { registerQuickUnlockIpc } = require('./quick-unlock');
 const { registerWalletIpc } = require('./wallet/wallet-ipc');
@@ -67,6 +73,27 @@ const { setupApplicationMenu, updateTabMenuItems } = require('./menu');
 const { registerWebContentsHandlers } = require('./webcontents-setup');
 
 app.commandLine.appendSwitch('disable-features', 'VizDisplayCompositor');
+
+const hasSingleInstanceLock = typeof app.requestSingleInstanceLock === 'function'
+  ? app.requestSingleInstanceLock()
+  : true;
+if (!hasSingleInstanceLock) {
+  app.quit();
+}
+
+let freedomProtocolHandler = {
+  consumePendingUrl: () => null,
+  flushPendingUrls: () => {},
+};
+if (hasSingleInstanceLock) {
+  registerFreedomProtocolClient({ app, log });
+  freedomProtocolHandler = createFreedomProtocolHandler({
+    app,
+    createMainWindow,
+    getMainWindows,
+    log,
+  });
+}
 
 const crashDir = path.join(__dirname, 'crash-reports');
 app.setPath('crashDumps', crashDir);
@@ -107,6 +134,8 @@ async function bootstrap() {
   registerRadicleIpc();
   registerHnsIpc();
   registerDvpnIpc();
+registerJacktripIpc();
+registerLiveRoomApiIpc(ipcMain);
   registerGithubBridgeIpc();
   registerServiceRegistryIpc();
   registerIdentityIpc();
@@ -174,7 +203,8 @@ async function bootstrap() {
   }
   await initDvpn();
 
-  const mainWindow = createMainWindow();
+  const mainWindow = createMainWindow(freedomProtocolHandler.consumePendingUrl());
+  freedomProtocolHandler.flushPendingUrls();
 
   // Initialize auto-updater (pass menu update callback)
   initUpdater(mainWindow, setupApplicationMenu);
@@ -186,7 +216,9 @@ async function bootstrap() {
   });
 }
 
-app.whenReady().then(bootstrap);
+if (hasSingleInstanceLock) {
+  app.whenReady().then(bootstrap);
+}
 
 app.on('window-all-closed', () => {
   updateTabMenuItems();
@@ -244,8 +276,8 @@ app.on('before-quit', async (event) => {
   // Clean up any GitHub bridge temp directories
   cleanupTempDirs();
 
-  log.info('[App] Waiting for Bee, IPFS, Radicle, HNS, and dVPN to stop...');
-  await Promise.all([stopBee(), stopIpfs(), stopRadicle(), stopHns(), stopDvpn()]);
+  log.info('[App] Waiting for Bee, IPFS, Radicle, HNS, dVPN, and JackTrip to stop...');
+  await Promise.all([stopBee(), stopIpfs(), stopRadicle(), stopHns(), stopDvpn(), stopJacktrip()]);
   log.info('[App] All processes stopped, quitting...');
 
 

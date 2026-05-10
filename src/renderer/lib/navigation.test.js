@@ -181,6 +181,10 @@ const loadNavigationModule = async (options = {}) => {
     deriveBzzBaseFromUrl: jest.fn((url) => (url.includes('/bzz/') ? 'https://gateway.example/bzz/hash/' : null)),
     deriveIpfsBaseFromUrl: jest.fn(() => null),
     deriveRadBaseFromUrl: jest.fn(() => null),
+    normalizeLocalhostInput: jest.fn((value) => {
+      if (value === 'localhost:5173') return 'http://localhost:5173/';
+      return null;
+    }),
     normalizeHnsHostInput: jest.fn(() => null),
     parseSpacesRootInput: jest.fn(() => null),
   };
@@ -206,6 +210,7 @@ const loadNavigationModule = async (options = {}) => {
     }),
     getInternalPageName: jest.fn((url) => (url === historyUrl ? 'history' : null)),
     parseEnsInput: jest.fn(() => null),
+    resolveFreedomInternalUrl: jest.fn(() => null),
   };
   const settingsState = options.initialSettings || { showBookmarkBar: true };
   const electronHandlers = {};
@@ -515,6 +520,16 @@ describe('navigation', () => {
     ctx.tabsMocks.webviewEventHandler('dom-ready', {});
     await flushMicrotasks();
     expect(ctx.debugMocks.pushDebug).toHaveBeenCalledWith('Webview ready.');
+  });
+
+  test('normalizes bare localhost before loading a target', async () => {
+    const ctx = await loadNavigationModule();
+
+    await ctx.mod.initNavigation();
+    ctx.mod.loadTarget('localhost:5173');
+
+    expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith('http://localhost:5173/');
+    expect(ctx.urlUtilsMocks.normalizeLocalhostInput).toHaveBeenCalledWith('localhost:5173');
   });
 
   test('shows HNS not ready page for single-label hosts while bundled HNS is still syncing', async () => {

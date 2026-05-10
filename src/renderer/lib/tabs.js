@@ -6,6 +6,7 @@ import { showMenuBackdrop, hideMenuBackdrop } from './menu-backdrop.js';
 import { setupWebviewContextMenu } from './page-context-menu.js';
 import { homeUrl, landingUrl, isHomeUrl } from './page-urls.js';
 import { setupWebviewProvider, setActiveWebview, unregisterWebviewProvider } from './dapp-provider.js';
+import { normalizeLocalhostInput } from './url-utils.js';
 
 const electronAPI = window.electronAPI;
 
@@ -644,7 +645,7 @@ const renderTabs = () => {
 // Create a new tab
 export const createTab = (url = null) => {
   const tabId = tabState.nextTabId++;
-  const targetUrl = url || homeUrl;
+  const targetUrl = normalizeLocalhostInput(url) || url || homeUrl;
   const webview = createWebview(tabId, targetUrl);
 
   const tab = {

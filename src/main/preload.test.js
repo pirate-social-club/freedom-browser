@@ -28,6 +28,7 @@ function loadPreloadModule(options = {}) {
         [IPC.BEE_GET_STATUS]: { status: 'running', error: null },
         [IPC.IPFS_GET_STATUS]: { status: 'stopped', error: null },
         [IPC.RADICLE_GET_STATUS]: { status: 'error', error: 'offline' },
+        [IPC.JACKTRIP_GET_STATUS]: { status: 'disconnected', error: null },
         ...(options.invokeResponses || {}),
       },
     });
@@ -85,7 +86,7 @@ describe('preload', () => {
       ipfsGatewayEnv: 'http://127.0.0.1:9090',
     });
 
-    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledTimes(16);
+    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledTimes(17);
     expect(Object.keys(exposures)).toEqual([
       'nodeConfig',
       'internalPages',
@@ -103,6 +104,7 @@ describe('preload', () => {
       'rpcManager',
       'dappPermissions',
       'dvpn',
+      'jacktrip',
     ]);
     expect(ipcRenderer.sendSync).toHaveBeenCalledWith(IPC.GET_INTERNAL_PAGES);
     expect(exposures.nodeConfig).toEqual({
@@ -158,6 +160,15 @@ describe('preload', () => {
       [exposures.githubBridge, 'validateUrl', ['https://github.com/openai/project'], IPC.GITHUB_BRIDGE_VALIDATE_URL, ['https://github.com/openai/project']],
       [exposures.githubBridge, 'checkExisting', ['https://github.com/openai/project'], IPC.GITHUB_BRIDGE_CHECK_EXISTING, ['https://github.com/openai/project']],
       [exposures.serviceRegistry, 'getRegistry', [], IPC.SERVICE_REGISTRY_GET, []],
+      [exposures.jacktrip, 'connect', [{ server: '127.0.0.1', port: 4464 }], IPC.JACKTRIP_CONNECT, [{ server: '127.0.0.1', port: 4464 }]],
+      [exposures.jacktrip, 'disconnect', [], IPC.JACKTRIP_DISCONNECT, []],
+      [exposures.jacktrip, 'getStatus', [], IPC.JACKTRIP_GET_STATUS, []],
+      [exposures.jacktrip, 'checkDeps', [], IPC.JACKTRIP_CHECK_DEPS, []],
+      [exposures.jacktrip, 'listPorts', [], IPC.JACKTRIP_LIST_PORTS, []],
+      [exposures.jacktrip, 'setupAudio', [{ setDefaultSource: true }], IPC.JACKTRIP_SETUP_AUDIO, [{ setDefaultSource: true }]],
+      [exposures.jacktrip, 'restoreAudio', [{ preferredSource: 'alsa_input.usb' }], IPC.JACKTRIP_RESTORE_AUDIO, [{ preferredSource: 'alsa_input.usb' }]],
+      [exposures.jacktrip, 'startLocalServer', [{ port: 4464 }], IPC.JACKTRIP_START_LOCAL_SERVER, [{ port: 4464 }]],
+      [exposures.jacktrip, 'stopLocalServer', [], IPC.JACKTRIP_STOP_LOCAL_SERVER, []],
     ];
 
     for (const [target, method, args, channel, expectedArgs] of invokeCases) {
@@ -233,11 +244,13 @@ describe('preload', () => {
     const beeStatus = { status: 'running', error: null };
     const ipfsStatus = { status: 'stopped', error: null };
     const radicleStatus = { status: 'error', error: 'offline' };
+    const jacktripStatus = { status: 'disconnected', error: null };
     const { exposures, ipcRenderer } = loadPreloadModule({
       invokeResponses: {
         [IPC.BEE_GET_STATUS]: beeStatus,
         [IPC.IPFS_GET_STATUS]: ipfsStatus,
         [IPC.RADICLE_GET_STATUS]: radicleStatus,
+        [IPC.JACKTRIP_GET_STATUS]: jacktripStatus,
       },
     });
 
@@ -245,6 +258,7 @@ describe('preload', () => {
       [exposures.bee, IPC.BEE_STATUS_UPDATE, IPC.BEE_GET_STATUS, beeStatus, { status: 'starting', error: null }],
       [exposures.ipfs, IPC.IPFS_STATUS_UPDATE, IPC.IPFS_GET_STATUS, ipfsStatus, { status: 'running', error: null }],
       [exposures.radicle, IPC.RADICLE_STATUS_UPDATE, IPC.RADICLE_GET_STATUS, radicleStatus, { status: 'running', error: null }],
+      [exposures.jacktrip, IPC.JACKTRIP_STATUS_UPDATE, IPC.JACKTRIP_GET_STATUS, jacktripStatus, { status: 'connected', error: null }],
     ];
 
     for (const [target, updateChannel, getStatusChannel, initialStatus, pushedStatus] of statusCases) {

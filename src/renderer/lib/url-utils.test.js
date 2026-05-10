@@ -15,6 +15,7 @@ import {
   parseRadicleInput,
   deriveRadBaseFromUrl,
   deriveRadicleDisplayValue,
+  normalizeLocalhostInput,
   normalizeHnsHostInput,
 } from './url-utils.js';
 
@@ -25,6 +26,24 @@ const HOME_URL = 'file:///app/home.html';
 const REPRESENTATIVE_PIRATE_HOST = 'sable-harbor-4143.pirate';
 
 describe('url-utils', () => {
+  describe('normalizeLocalhostInput', () => {
+    test('normalizes bare local dev hosts to http URLs', () => {
+      expect(normalizeLocalhostInput('localhost:5173')).toBe('http://localhost:5173/');
+      expect(normalizeLocalhostInput('localhost:5173/path?q=1')).toBe(
+        'http://localhost:5173/path?q=1'
+      );
+      expect(normalizeLocalhostInput('127.0.0.1:8787')).toBe('http://127.0.0.1:8787/');
+      expect(normalizeLocalhostInput('[::1]:5173')).toBe('http://[::1]:5173/');
+    });
+
+    test('does not rewrite non-local or already explicit URLs', () => {
+      expect(normalizeLocalhostInput('example.com')).toBeNull();
+      expect(normalizeLocalhostInput('api.pirate.sc')).toBeNull();
+      expect(normalizeLocalhostInput('http://localhost:5173')).toBeNull();
+      expect(normalizeLocalhostInput('https://localhost:5173')).toBeNull();
+    });
+  });
+
   describe('normalizeHnsHostInput', () => {
     afterEach(() => {
       delete globalThis.FREEDOM_HNS_HOSTS;
