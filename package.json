@@ -1,7 +1,7 @@
 {
   "name": "freedom-browser",
   "version": "0.7.8",
-  "license": "MPL-2.0",
+  "license": "AGPL-3.0-or-later",
   "description": "Freedom – A browser for the decentralized web, with Swarm, IPFS, and ENS as first-class protocols.",
   "author": {
     "name": "Freedom Team",
@@ -67,6 +67,14 @@
       "provider": "generic",
       "url": "https://freedom.baby/downloads"
     },
+    "protocols": [
+      {
+        "name": "Freedom URLs",
+        "schemes": [
+          "freedom"
+        ]
+      }
+    ],
     "mac": {
       "target": [
         "dmg",
@@ -112,6 +120,7 @@
       "category": "Network;WebBrowser",
       "executableName": "freedom",
       "mimeTypes": [
+        "x-scheme-handler/freedom",
         "x-scheme-handler/ipfs",
         "x-scheme-handler/ipns",
         "x-scheme-handler/bzz"
@@ -199,6 +208,13 @@
       {
         "from": "config/default-bookmarks.json",
         "to": "default-bookmarks.json"
+      },
+      {
+        "from": "scripts/jacktrip/",
+        "to": "jacktrip-scripts",
+        "filter": [
+          "**/*"
+        ]
       }
     ]
   },

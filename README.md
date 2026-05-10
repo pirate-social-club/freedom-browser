@@ -1,6 +1,6 @@
 # Freedom Browser
 
-[![License: MPL-2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL_3.0_or_later-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Platform](https://img.shields.io/badge/platform-macOS%20|%20Linux%20|%20Windows-lightgrey)](https://github.com/pirate-social-club/freedom-browser/releases)
 
 Freedom is a browser for the decentralized web, with Swarm, IPFS, Radicle, and ENS as first-class protocols.
