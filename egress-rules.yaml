@@ -5,3 +5,4 @@ domains:
   - "*.bun.sh"
   - "nodejs.org"
   - "*.nodejs.org"
+  - "*.githubapp.com"
