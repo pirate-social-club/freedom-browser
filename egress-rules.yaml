@@ -1,0 +1,7 @@
+domains:
+  - "registry.npmjs.org"
+  - "*.npmjs.org"
+  - "bun.sh"
+  - "*.bun.sh"
+  - "nodejs.org"
+  - "*.nodejs.org"
