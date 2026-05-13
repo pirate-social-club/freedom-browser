@@ -33,16 +33,26 @@ jobs:
         shell: bash
         run: cp -R blue-ai-connect ../blue-ai-connect
 
+      - name: Start iron-proxy egress audit
+        uses: ironsh/iron-proxy-action@fa1fd82ec32396d044deba7040a6db576bec927a
+        with:
+          egress-rules: freedom-browser/egress-rules.yaml
+          warn: true
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 22.12.0
+          node-version: 24
           cache: npm
           cache-dependency-path: freedom-browser/package-lock.json
 
       - name: Install dependencies
         working-directory: freedom-browser
         run: npm ci --ignore-scripts
+
+      - name: Audit dependencies
+        working-directory: freedom-browser
+        run: npm audit --audit-level=high
 
       - name: Run lint
         working-directory: freedom-browser
@@ -59,6 +69,10 @@ jobs:
           name: coverage
           path: freedom-browser/coverage/
           if-no-files-found: error
+
+      - name: Show iron-proxy egress summary
+        uses: ironsh/iron-proxy-action/summary@fa1fd82ec32396d044deba7040a6db576bec927a
+        if: always()
 
   release-smoke:
     name: Release smoke (${{ matrix.label }})
@@ -100,10 +114,17 @@ jobs:
         shell: pwsh
         run: Copy-Item -Path blue-ai-connect -Destination .. -Recurse -Force
 
+      - name: Start iron-proxy egress audit
+        if: runner.os == 'Linux'
+        uses: ironsh/iron-proxy-action@fa1fd82ec32396d044deba7040a6db576bec927a
+        with:
+          egress-rules: freedom-browser/egress-rules.yaml
+          warn: true
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 22.12.0
+          node-version: 24
           cache: npm
           cache-dependency-path: freedom-browser/package-lock.json
 
@@ -111,6 +132,14 @@ jobs:
         working-directory: freedom-browser
         run: npm ci --ignore-scripts
 
+      - name: Audit dependencies
+        working-directory: freedom-browser
+        run: npm audit --audit-level=high
+
       - name: Verify release toolchain
         working-directory: freedom-browser
         run: node scripts/build.js --dist --verify-tools ${{ matrix.args }}
+
+      - name: Show iron-proxy egress summary
+        if: runner.os == 'Linux' && always()
+        uses: ironsh/iron-proxy-action/summary@fa1fd82ec32396d044deba7040a6db576bec927a

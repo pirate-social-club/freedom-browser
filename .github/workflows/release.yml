@@ -68,7 +68,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 22.12.0
+          node-version: 24
           cache: npm
           cache-dependency-path: freedom-browser/package-lock.json
 
@@ -78,11 +78,23 @@ jobs:
         shell: bash
         run: npm ci
 
+      - name: Audit dependencies
+        if: runner.os != 'Windows'
+        working-directory: ${{ matrix.workdir }}
+        shell: bash
+        run: npm audit --audit-level=high
+
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         working-directory: ${{ matrix.workdir }}
         shell: pwsh
         run: npm ci
+
+      - name: Audit dependencies (Windows)
+        if: runner.os == 'Windows'
+        working-directory: ${{ matrix.workdir }}
+        shell: pwsh
+        run: npm audit --audit-level=high
 
       - name: Download platform binaries
         working-directory: ${{ matrix.workdir }}
