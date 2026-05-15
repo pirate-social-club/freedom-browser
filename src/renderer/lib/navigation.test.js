@@ -69,6 +69,7 @@ const loadNavigationModule = async (options = {}) => {
       hns: {
         mode: 'none',
         canaryReady: false,
+        resolverReady: false,
         synced: false,
         height: 0,
       },
@@ -542,6 +543,7 @@ describe('navigation', () => {
     ctx.state.registry.hns = {
       mode: 'bundled',
       canaryReady: false,
+      resolverReady: false,
       synced: false,
       height: 325297,
     };
@@ -567,6 +569,7 @@ describe('navigation', () => {
     ctx.state.registry.hns = {
       mode: 'bundled',
       canaryReady: false,
+      resolverReady: false,
       synced: false,
       height: 325297,
     };

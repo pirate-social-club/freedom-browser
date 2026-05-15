@@ -88,7 +88,7 @@ function loadHnsManagerModule(options = {}) {
       return false;
     }),
     mkdirSync: jest.fn(),
-    readFileSync: jest.fn(),
+    readFileSync: jest.fn((...args) => options.readFileSync?.(...args)),
     writeFileSync: jest.fn(),
   };
 
@@ -114,8 +114,11 @@ function loadHnsManagerModule(options = {}) {
     spawnedProcesses.push(proc);
     return proc;
   });
+  const readlineHandlers = new Map();
   const readlineInterface = {
-    on: jest.fn(),
+    on: jest.fn((event, handler) => {
+      readlineHandlers.set(event, handler);
+    }),
   };
 
   const { mod } = loadMainModule(require.resolve('./hns-manager'), {
@@ -133,6 +136,7 @@ function loadHnsManagerModule(options = {}) {
       child_process: () => ({
         spawn,
       }),
+      crypto: () => options.cryptoMock || jest.requireActual('crypto'),
       net: () => ({
         createServer: jest.fn(() => {
           const handlers = new Map();
@@ -189,6 +193,7 @@ function loadHnsManagerModule(options = {}) {
         rebuild,
         refreshImportedHnsSuffixes,
       }),
+      [require.resolve('./hns-health')]: () => options.hnsHealth || jest.requireActual('./hns-health'),
     },
   });
 
@@ -212,6 +217,7 @@ function loadHnsManagerModule(options = {}) {
     spawn,
     spawnedProcesses,
     readlineInterface,
+    readlineHandlers,
     windowMock,
   };
 }
@@ -239,12 +245,68 @@ describe('hns-manager', () => {
       error: null,
       synced: false,
       canaryReady: false,
+      resolverReady: false,
       height: 0,
       proxyAddr: null,
       caPemPath: null,
       rootAddr: null,
       recursiveAddr: null,
     });
+  });
+
+  test('resolverReady follows app.pirate health instead of aggregate suffix health', async () => {
+    jest.useFakeTimers();
+    const probeResults = [
+      {
+        ok: false,
+        results: [
+          { host: 'pirate', ok: true, addresses: ['173.199.93.117'] },
+          { host: 'app.pirate', ok: true, addresses: ['173.199.93.117'] },
+          { host: 'baddie', ok: false, code: 'ETIMEOUT' },
+        ],
+      },
+      {
+        ok: false,
+        results: [
+          { host: 'pirate', ok: false, code: 'ESERVFAIL' },
+          { host: 'app.pirate', ok: false, code: 'ESERVFAIL' },
+        ],
+      },
+    ];
+    const ctx = loadHnsManagerModule({
+      cryptoMock: {
+        X509Certificate: class {
+          fingerprint = 'AA:BB';
+        },
+      },
+      hnsHealth: {
+        buildHnsHealthProbeHosts: jest.fn(() => ['pirate', 'app.pirate', 'baddie']),
+        formatHnsHealthSummary: jest.fn((result) => result.results.map((entry) => entry.host).join(', ')),
+        probeHnsResolver: jest.fn(() => Promise.resolve(probeResults.shift())),
+      },
+      readFileSync: () => 'test certificate',
+    });
+
+    await ctx.mod.startHns();
+    ctx.readlineHandlers.get('line')?.(JSON.stringify({
+      type: 'ready',
+      proxyAddr: '127.0.0.1:44041',
+      caPath: '/tmp/hns-ca.pem',
+    }));
+    await Promise.resolve();
+    ctx.readlineHandlers.get('line')?.(JSON.stringify({
+      type: 'sync',
+      synced: true,
+      height: 326149,
+    }));
+
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(ctx.updateService).toHaveBeenCalledWith('hns', { resolverReady: true });
+    expect(ctx.mod.getHnsStatus().resolverReady).toBe(true);
+
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(ctx.updateService).toHaveBeenLastCalledWith('hns', { resolverReady: false });
+    expect(ctx.mod.getHnsStatus().resolverReady).toBe(false);
   });
 
   test('checkBinary returns true when fingertipd exists', () => {

@@ -50,6 +50,7 @@ let caPemPath = null;
 let caCertFingerprint = null;
 let synced = false;
 let canaryReady = false;
+let resolverReady = false;
 let height = 0;
 let lastLoggedHeight = 0;
 let lastHeightChangeAt = 0;
@@ -170,6 +171,10 @@ async function runHnsHealthCheck(reason = 'manual') {
     if (!canProbeHnsHealth()) return result;
 
     const summary = formatHnsHealthSummary(result);
+    const appPirateEntry = result.results.find((entry) => entry.host === 'app.pirate');
+    resolverReady = Boolean(appPirateEntry?.ok && appPirateEntry.addresses?.length > 0);
+    updateService('hns', { resolverReady });
+
     const changed = summary !== lastHnsHealthSummary || result.ok !== lastHnsHealthOk;
     lastHnsHealthSummary = summary;
     lastHnsHealthOk = result.ok;
@@ -454,11 +459,15 @@ function parseStdoutLine(line) {
 
           synced = helperReady || heightReady;
           canaryReady = helperReady || heightReady;
+          if (!synced) {
+            resolverReady = false;
+          }
         }
 
         updateService('hns', {
           synced,
           canaryReady,
+          resolverReady,
           height,
         });
 
@@ -585,6 +594,7 @@ async function startHns() {
       caCertFingerprint = null;
       synced = false;
       canaryReady = false;
+      resolverReady = false;
       height = 0;
       rootAddr = null;
       recursiveAddr = null;
@@ -693,6 +703,7 @@ function getHnsStatus() {
     error: lastError,
     synced,
     canaryReady,
+    resolverReady,
     height,
     proxyAddr,
     caPemPath,

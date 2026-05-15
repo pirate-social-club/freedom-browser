@@ -120,6 +120,7 @@ describe('service-registry', () => {
       mode: mod.MODE.BUNDLED,
       synced: true,
       canaryReady: true,
+      resolverReady: true,
       height: 42000,
     });
 
@@ -135,6 +136,7 @@ describe('service-registry', () => {
       tempMessageTimeout: null,
       synced: false,
       canaryReady: false,
+      resolverReady: false,
       height: 0,
     });
   });

@@ -128,7 +128,7 @@ describe('page-urls', () => {
     global.window.__rendererState = {
       enableHnsIntegration: false,
       registry: {
-        hns: { mode: 'bundled', canaryReady: true },
+        hns: { mode: 'bundled', canaryReady: true, resolverReady: true },
       },
     };
     expect(mod.isHnsHomeReady()).toBe(false);
@@ -140,19 +140,19 @@ describe('page-urls', () => {
     global.window.__rendererState = {
       enableHnsIntegration: true,
       registry: {
-        hns: { mode: 'none', canaryReady: true },
+        hns: { mode: 'none', canaryReady: true, resolverReady: true },
       },
     };
     expect(mod.isHnsHomeReady()).toBe(false);
     delete global.window.__rendererState;
   });
 
-  test('isHnsHomeReady returns false when canaryReady is false', async () => {
+  test('isHnsHomeReady returns false when resolverReady is false', async () => {
     const mod = await loadModule();
     global.window.__rendererState = {
       enableHnsIntegration: true,
       registry: {
-        hns: { mode: 'bundled', canaryReady: false },
+        hns: { mode: 'bundled', canaryReady: true, resolverReady: false },
       },
     };
     expect(mod.isHnsHomeReady()).toBe(false);
@@ -164,7 +164,7 @@ describe('page-urls', () => {
     global.window.__rendererState = {
       enableHnsIntegration: true,
       registry: {
-        hns: { mode: 'bundled', canaryReady: true },
+        hns: { mode: 'bundled', canaryReady: true, resolverReady: true },
       },
     };
     expect(mod.isHnsHomeReady()).toBe(true);
@@ -176,7 +176,7 @@ describe('page-urls', () => {
     global.window.__rendererState = {
       enableHnsIntegration: true,
       registry: {
-        hns: { mode: 'bundled', canaryReady: true },
+        hns: { mode: 'bundled', canaryReady: true, resolverReady: true },
       },
     };
     const changed = mod.updateHomeUrl();
@@ -193,7 +193,7 @@ describe('page-urls', () => {
     global.window.__rendererState = {
       enableHnsIntegration: true,
       registry: {
-        hns: { mode: 'bundled', canaryReady: false },
+        hns: { mode: 'bundled', canaryReady: true, resolverReady: false },
       },
     };
     const changed = mod.updateHomeUrl();
@@ -208,7 +208,7 @@ describe('page-urls', () => {
     global.window.__rendererState = {
       enableHnsIntegration: true,
       registry: {
-        hns: { mode: 'bundled', canaryReady: true },
+        hns: { mode: 'bundled', canaryReady: true, resolverReady: true },
       },
     };
     mod.updateHomeUrl();
@@ -222,7 +222,7 @@ describe('page-urls', () => {
     global.window.__rendererState = {
       enableHnsIntegration: true,
       registry: {
-        hns: { mode: 'bundled', canaryReady: true },
+        hns: { mode: 'bundled', canaryReady: true, resolverReady: true },
       },
     };
     mod.updateHomeUrl();
@@ -232,7 +232,7 @@ describe('page-urls', () => {
     global.window.__rendererState = {
       enableHnsIntegration: true,
       registry: {
-        hns: { mode: 'bundled', canaryReady: false },
+        hns: { mode: 'bundled', canaryReady: true, resolverReady: false },
       },
     };
     const changed = mod.updateHomeUrl();

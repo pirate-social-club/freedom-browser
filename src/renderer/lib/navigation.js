@@ -101,7 +101,7 @@ const isSingleLabelHostname = (value = '') => {
 
 const isBundledHnsReady = () => {
   if (!state.enableHnsIntegration) return false;
-  return state.registry?.hns?.canaryReady === true;
+  return state.registry?.hns?.resolverReady === true;
 };
 
 const normalizeExplicitHnsUrlInput = (value = '') => {

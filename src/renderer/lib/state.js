@@ -33,6 +33,7 @@ export const state = {
       tempMessage: null,
       synced: false,
       canaryReady: false,
+      resolverReady: false,
       height: 0,
     },
   },

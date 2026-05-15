@@ -51,6 +51,7 @@ const registry = {
     tempMessageTimeout: null,
     synced: false,
     canaryReady: false,
+    resolverReady: false,
     height: 0,
   },
   dvpn: {
@@ -243,6 +244,7 @@ const SERVICE_DEFAULTS = {
     tempMessageTimeout: null,
     synced: false,
     canaryReady: false,
+    resolverReady: false,
     height: 0,
   },
   dvpn: {
