@@ -5,9 +5,11 @@ const {
   removeTempUserDataDir,
 } = require('../../test/helpers/main-process-test-utils');
 const {
+  attachLiveRoom,
   clearPirateAccessToken,
   endLiveRoom,
   getPirateAuthStatus,
+  guestAttachLiveRoom,
   hostAttachLiveRoom,
   normalizeApiBase,
   pollPirateDeviceAuth,
@@ -71,6 +73,75 @@ describe('live-room-api', () => {
           'content-type': 'application/json',
         }),
       })
+    );
+  });
+
+  test('guest attach posts to the community live-room guest endpoint', async () => {
+    const fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: jest.fn().mockResolvedValue({
+        runtime: { status: 'attached', seat: 'guest' },
+        jacktrip: { server: 'jt.example', port: 4464 },
+      }),
+    });
+
+    await expect(guestAttachLiveRoom({
+      apiBase: 'https://api-staging.pirate.sc',
+      communityId: 'cmt_test',
+      liveRoomId: 'lr_test',
+      accessToken: 'tok_test',
+    }, { fetch })).resolves.toEqual({
+      runtime: { status: 'attached', seat: 'guest' },
+      jacktrip: { server: 'jt.example', port: 4464 },
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      'https://api-staging.pirate.sc/communities/cmt_test/live-rooms/lr_test/guest_attach',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          authorization: 'Bearer tok_test',
+          'content-type': 'application/json',
+        }),
+      })
+    );
+  });
+
+  test('generic attach falls back from host to guest when the user is not the host', async () => {
+    const fetch = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: jest.fn().mockResolvedValue({ error: 'Live room not found' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: jest.fn().mockResolvedValue({
+          runtime: { status: 'attached', seat: 'guest' },
+        }),
+      });
+
+    await expect(attachLiveRoom({
+      apiBase: 'https://api-staging.pirate.sc',
+      communityId: 'cmt_test',
+      liveRoomId: 'lr_test',
+      accessToken: 'tok_test',
+    }, { fetch })).resolves.toEqual({
+      runtime: { status: 'attached', seat: 'guest' },
+    });
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      'https://api-staging.pirate.sc/communities/cmt_test/live-rooms/lr_test/host_attach',
+      expect.any(Object)
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      'https://api-staging.pirate.sc/communities/cmt_test/live-rooms/lr_test/guest_attach',
+      expect.any(Object)
     );
   });
 
@@ -282,7 +353,9 @@ describe('live-room-api', () => {
   test('registers live-room API IPC handlers', async () => {
     const ipcMain = createIpcMainMock();
     registerLiveRoomApiIpc(ipcMain);
+    expect(ipcMain.handle).toHaveBeenCalledWith(IPC.PIRATE_LIVE_ROOM_ATTACH, expect.any(Function));
     expect(ipcMain.handle).toHaveBeenCalledWith(IPC.PIRATE_LIVE_ROOM_HOST_ATTACH, expect.any(Function));
+    expect(ipcMain.handle).toHaveBeenCalledWith(IPC.PIRATE_LIVE_ROOM_GUEST_ATTACH, expect.any(Function));
     expect(ipcMain.handle).toHaveBeenCalledWith(IPC.PIRATE_LIVE_ROOM_END, expect.any(Function));
     expect(ipcMain.handle).toHaveBeenCalledWith(IPC.PIRATE_AUTH_GET_STATUS, expect.any(Function));
     expect(ipcMain.handle).toHaveBeenCalledWith(IPC.PIRATE_AUTH_START_DEVICE, expect.any(Function));

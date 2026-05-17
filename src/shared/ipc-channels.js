@@ -61,8 +61,10 @@ module.exports = {
   JACKTRIP_START_LOCAL_SERVER: 'jacktrip:startLocalServer',
   JACKTRIP_STOP_LOCAL_SERVER: 'jacktrip:stopLocalServer',
 
-  // Pirate API live-room host attach
+  // Pirate API live-room attach
+  PIRATE_LIVE_ROOM_ATTACH: 'pirate:live-room-attach',
   PIRATE_LIVE_ROOM_HOST_ATTACH: 'pirate:live-room-host-attach',
+  PIRATE_LIVE_ROOM_GUEST_ATTACH: 'pirate:live-room-guest-attach',
   PIRATE_LIVE_ROOM_END: 'pirate:live-room-end',
   PIRATE_AUTH_GET_STATUS: 'pirate:auth-get-status',
   PIRATE_AUTH_START_DEVICE: 'pirate:auth-start-device',

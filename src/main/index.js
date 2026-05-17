@@ -98,11 +98,25 @@ if (hasSingleInstanceLock) {
 const crashDir = path.join(__dirname, 'crash-reports');
 app.setPath('crashDumps', crashDir);
 
+function isInternalLiveRoomUrl(value = '') {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'file:' && url.pathname.endsWith('/pages/live-room.html');
+  } catch {
+    return false;
+  }
+}
+
 function allowInteractivePermissions(targetSession) {
   if (!targetSession || !targetSession.setPermissionRequestHandler) {
     return;
   }
   targetSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    if (permission === 'media' && isInternalLiveRoomUrl(webContents.getURL())) {
+      log.info(`[permissions] granting ${permission} for`, webContents.getURL());
+      callback(true);
+      return;
+    }
     if (permission === 'pointerLock' || permission === 'fullscreen') {
       log.info(`[permissions] granting ${permission} for`, webContents.getURL());
       callback(true);

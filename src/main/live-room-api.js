@@ -236,7 +236,10 @@ async function postJson(url, body, options = {}) {
       return { ...responseBody, status: response.status };
     }
     const message = responseBody?.message || responseBody?.error || `Pirate API request failed with status ${response.status}`;
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = response.status;
+    error.body = responseBody;
+    throw error;
   }
   return responseBody;
 }
@@ -308,6 +311,25 @@ async function hostAttachLiveRoom(input = {}, options = {}) {
   return await requestJson(url, token, options.fetch);
 }
 
+async function guestAttachLiveRoom(input = {}, options = {}) {
+  const url = buildLiveRoomActionUrl(input, 'guest_attach');
+  const token = await normalizeAccessToken(input.accessToken, { apiBase: input.apiBase, fetch: options.fetch }, options.authStorage);
+  return await requestJson(url, token, options.fetch);
+}
+
+async function attachLiveRoom(input = {}, options = {}) {
+  const seat = cleanString(input.seat || input.role).toLowerCase();
+  if (seat === 'host') return await hostAttachLiveRoom(input, options);
+  if (seat === 'guest') return await guestAttachLiveRoom(input, options);
+
+  try {
+    return await hostAttachLiveRoom(input, options);
+  } catch (err) {
+    if (err?.status !== 404) throw err;
+    return await guestAttachLiveRoom(input, options);
+  }
+}
+
 async function endLiveRoom(input = {}, options = {}) {
   const url = buildLiveRoomActionUrl(input, 'end');
   const token = await normalizeAccessToken(input.accessToken, { apiBase: input.apiBase, fetch: options.fetch }, options.authStorage);
@@ -322,7 +344,9 @@ function buildLiveRoomActionUrl(input = {}, action) {
 }
 
 function registerLiveRoomApiIpc(ipcMain, options = {}) {
+  ipcMain.handle(IPC.PIRATE_LIVE_ROOM_ATTACH, (_event, input) => attachLiveRoom(input, options));
   ipcMain.handle(IPC.PIRATE_LIVE_ROOM_HOST_ATTACH, (_event, input) => hostAttachLiveRoom(input, options));
+  ipcMain.handle(IPC.PIRATE_LIVE_ROOM_GUEST_ATTACH, (_event, input) => guestAttachLiveRoom(input, options));
   ipcMain.handle(IPC.PIRATE_LIVE_ROOM_END, (_event, input) => endLiveRoom(input, options));
   ipcMain.handle(IPC.PIRATE_AUTH_GET_STATUS, () => getPirateAuthStatus(options.authStorage));
   ipcMain.handle(IPC.PIRATE_AUTH_START_DEVICE, (_event, input) => startPirateDeviceAuth(input, options));
@@ -334,9 +358,11 @@ function registerLiveRoomApiIpc(ipcMain, options = {}) {
 }
 
 module.exports = {
+  attachLiveRoom,
   clearPirateAccessToken,
   endLiveRoom,
   getPirateAuthStatus,
+  guestAttachLiveRoom,
   hostAttachLiveRoom,
   normalizeApiBase,
   pollPirateDeviceAuth,

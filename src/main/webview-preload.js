@@ -116,8 +116,14 @@ contextBridge.exposeInMainWorld('freedomAPI', {
   stopJacktripLocalServer: guardInternal('stopJacktripLocalServer', () =>
     ipcRenderer.invoke(IPC.JACKTRIP_STOP_LOCAL_SERVER)
   ),
+  attachLiveRoom: guardInternal('attachLiveRoom', (options) =>
+    ipcRenderer.invoke(IPC.PIRATE_LIVE_ROOM_ATTACH, options)
+  ),
   hostAttachLiveRoom: guardInternal('hostAttachLiveRoom', (options) =>
     ipcRenderer.invoke(IPC.PIRATE_LIVE_ROOM_HOST_ATTACH, options)
+  ),
+  guestAttachLiveRoom: guardInternal('guestAttachLiveRoom', (options) =>
+    ipcRenderer.invoke(IPC.PIRATE_LIVE_ROOM_GUEST_ATTACH, options)
   ),
   endLiveRoom: guardInternal('endLiveRoom', (options) =>
     ipcRenderer.invoke(IPC.PIRATE_LIVE_ROOM_END, options)

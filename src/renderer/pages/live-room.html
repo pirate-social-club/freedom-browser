@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';"
+      content="default-src 'none'; script-src 'unsafe-inline' https://download.agora.io; style-src 'unsafe-inline'; connect-src https: wss:; media-src blob: mediastream:; worker-src blob:;"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Live Room</title>
@@ -276,6 +276,40 @@
         color: var(--text);
       }
 
+      .preview {
+        position: relative;
+        aspect-ratio: 16 / 9;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #050608;
+      }
+
+      .local-video {
+        width: 100%;
+        height: 100%;
+      }
+
+      .local-video video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .preview-placeholder {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 16px;
+        color: rgba(255, 255, 255, 0.72);
+        text-align: center;
+      }
+
+      .preview.live .preview-placeholder {
+        display: none;
+      }
+
       @media (max-width: 840px) {
         main {
           width: min(100vw - 24px, 680px);
@@ -334,7 +368,7 @@
               </div>
             </div>
             <div class="actions">
-              <button id="attach-host" class="primary" type="submit">Host Attach</button>
+              <button id="attach-host" class="primary" type="submit">Attach Room</button>
               <button id="end-room" class="danger" type="button">End Room</button>
             </div>
           </form>
@@ -383,6 +417,19 @@
         </section>
 
         <section class="stack">
+          <h2>Agora Broadcast</h2>
+          <div id="broadcast-preview" class="preview">
+            <div id="local-video" class="local-video"></div>
+            <div id="broadcast-placeholder" class="preview-placeholder">Attach a room, then start broadcast.</div>
+          </div>
+          <div class="actions">
+            <button id="start-broadcast" class="primary" type="button">Go Live</button>
+            <button id="stop-broadcast" class="danger" type="button">Stop Broadcast</button>
+          </div>
+          <div id="broadcast-status" class="inline-status">Attach a room to enable Agora broadcast.</div>
+        </section>
+
+        <section class="stack">
           <h2>Status</h2>
           <div class="status-grid">
             <div class="metric">
@@ -421,8 +468,12 @@
       </div>
     </main>
 
+    <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.24.0.js"></script>
     <script>
       const api = window.freedomAPI;
+      const TOKEN_RENEW_LEAD_MS = 120000;
+      const TOKEN_RENEW_RETRY_MS = 15000;
+      const MIN_TOKEN_RENEW_DELAY_MS = 5000;
       const params = new URLSearchParams(window.location.search);
       const els = {
         roomId: document.getElementById('room-id'),
@@ -448,6 +499,12 @@
         log: document.getElementById('log'),
         connect: document.getElementById('connect'),
         disconnect: document.getElementById('disconnect'),
+        startBroadcast: document.getElementById('start-broadcast'),
+        stopBroadcast: document.getElementById('stop-broadcast'),
+        broadcastStatus: document.getElementById('broadcast-status'),
+        broadcastPreview: document.getElementById('broadcast-preview'),
+        broadcastPlaceholder: document.getElementById('broadcast-placeholder'),
+        localVideo: document.getElementById('local-video'),
       };
       let lastStatus = { status: 'DISCONNECTED' };
       let hostPlatform = 'unknown';
@@ -455,6 +512,11 @@
       let attachPayload = null;
       let deviceAuth = null;
       let deviceAuthTimer = null;
+      let agoraClient = null;
+      let localAudioTrack = null;
+      let localVideoTrack = null;
+      let agoraRenewTimer = null;
+      let broadcastState = 'idle';
 
       function renderAuthStatus(status = {}) {
         if (!status.secureStorageAvailable) {
@@ -522,6 +584,7 @@
         els.disconnect.disabled = busy || isTransition || stateKey === 'disconnected';
         document.getElementById('setup-audio').disabled = busy || hostPlatform !== 'linux';
         document.getElementById('restore-audio').disabled = busy || hostPlatform !== 'linux';
+        renderBroadcastControls();
       }
 
       function connectPayload() {
@@ -566,6 +629,7 @@
           if (jacktrip.quality) els.quality.value = String(jacktrip.quality);
           if (jacktrip.buffer_strategy) els.bufferStrategy.value = String(jacktrip.buffer_strategy);
         }
+        renderBroadcastControls();
       }
 
       function applyEndedRoom(room) {
@@ -573,6 +637,147 @@
           els.roomId.textContent = `Room ${room.id}`;
         }
         els.runtime.textContent = 'ended';
+        renderBroadcastStatus('Room ended.', 'idle');
+      }
+
+      function hasAgoraCredentials() {
+        const agora = attachPayload?.agora;
+        return Boolean(
+          agora?.configured
+          && agora.app_id
+          && agora.channel
+          && agora.token
+          && agora.uid !== undefined
+          && agora.uid !== null
+        );
+      }
+
+      function renderBroadcastStatus(message, nextState = broadcastState) {
+        broadcastState = nextState;
+        els.broadcastStatus.textContent = message;
+        els.broadcastPreview.classList.toggle('live', broadcastState === 'live');
+        renderBroadcastControls();
+      }
+
+      function renderBroadcastControls() {
+        const ready = hasAgoraCredentials();
+        const sdkReady = Boolean(window.AgoraRTC);
+        const active = broadcastState === 'connecting' || broadcastState === 'live';
+        els.startBroadcast.disabled = busy || active || !ready || !sdkReady;
+        els.stopBroadcast.disabled = busy || !active;
+        if (!sdkReady) {
+          els.broadcastStatus.textContent = 'Agora SDK is still loading.';
+        } else if (!ready && broadcastState === 'idle') {
+          els.broadcastStatus.textContent = 'Attach a room to enable Agora broadcast.';
+        }
+      }
+
+      function clearAgoraRenewTimer() {
+        if (agoraRenewTimer) {
+          clearTimeout(agoraRenewTimer);
+          agoraRenewTimer = null;
+        }
+      }
+
+      function scheduleAgoraTokenRenewal() {
+        clearAgoraRenewTimer();
+        const expiresAt = attachPayload?.agora?.token_expires_at;
+        if (!expiresAt || !agoraClient) return;
+        const delay = Math.max(
+          expiresAt * 1000 - Date.now() - TOKEN_RENEW_LEAD_MS,
+          MIN_TOKEN_RENEW_DELAY_MS
+        );
+        agoraRenewTimer = setTimeout(() => {
+          renewAgoraToken().catch((err) => {
+            writeLog('Renew Agora token failed', { message: err.message });
+            agoraRenewTimer = setTimeout(() => {
+              scheduleAgoraTokenRenewal();
+            }, TOKEN_RENEW_RETRY_MS);
+          });
+        }, delay);
+      }
+
+      async function renewAgoraToken() {
+        if (!agoraClient || !attachPayload?.runtime?.seat) return null;
+        const payload = await api.attachLiveRoom({
+          ...attachRequestPayload(),
+          seat: attachPayload.runtime.seat,
+        });
+        applyAttachPayload(payload);
+        if (payload?.agora?.token) {
+          await agoraClient.renewToken(payload.agora.token);
+        }
+        scheduleAgoraTokenRenewal();
+        writeLog('Renewed Agora token', payload);
+        return payload;
+      }
+
+      async function startAgoraBroadcast() {
+        if (!hasAgoraCredentials()) {
+          throw new Error('Attach the live room before starting broadcast');
+        }
+        if (!window.AgoraRTC) {
+          throw new Error('Agora SDK is not loaded');
+        }
+
+        const agora = attachPayload.agora;
+        renderBroadcastStatus('Requesting camera and microphone.', 'connecting');
+        const client = window.AgoraRTC.createClient({ mode: 'live', codec: 'vp8' });
+        let audioTrack = null;
+        let videoTrack = null;
+
+        try {
+          await client.setClientRole('host');
+          await client.join(agora.app_id, agora.channel, agora.token, agora.uid);
+          [audioTrack, videoTrack] = await Promise.all([
+            window.AgoraRTC.createMicrophoneAudioTrack(),
+            window.AgoraRTC.createCameraVideoTrack(),
+          ]);
+          await client.publish([audioTrack, videoTrack]);
+
+          agoraClient = client;
+          localAudioTrack = audioTrack;
+          localVideoTrack = videoTrack;
+          els.localVideo.replaceChildren();
+          localVideoTrack.play(els.localVideo);
+          renderBroadcastStatus(`Broadcasting to ${agora.channel}.`, 'live');
+          scheduleAgoraTokenRenewal();
+          return {
+            status: 'broadcasting',
+            channel: agora.channel,
+            uid: agora.uid,
+            seat: attachPayload.runtime?.seat || 'host',
+          };
+        } catch (err) {
+          audioTrack?.close();
+          videoTrack?.close();
+          await client.leave().catch(() => undefined);
+          renderBroadcastStatus('Broadcast failed.', 'idle');
+          throw err;
+        }
+      }
+
+      async function stopAgoraBroadcast(options = {}) {
+        clearAgoraRenewTimer();
+        const client = agoraClient;
+        const tracks = [localAudioTrack, localVideoTrack].filter(Boolean);
+        agoraClient = null;
+        localAudioTrack = null;
+        localVideoTrack = null;
+        els.localVideo.replaceChildren();
+
+        if (client) {
+          if (tracks.length) {
+            await client.unpublish(tracks).catch(() => undefined);
+          }
+          await client.leave().catch(() => undefined);
+        }
+        tracks.forEach((track) => {
+          track.stop();
+          track.close();
+        });
+        renderBroadcastStatus('Broadcast stopped.', 'idle');
+        return options.quiet ? null : { status: 'stopped' };
       }
 
       async function connectFromAttach(payload) {
@@ -667,6 +872,7 @@
         writeLog(deps.available ? 'JackTrip dependencies ready' : 'JackTrip dependency gap', deps);
 
         renderStatus(await api.getJacktripStatus());
+        renderBroadcastControls();
         renderAuthStatus(await api.getPirateAuthStatus());
       }
 
@@ -676,8 +882,8 @@
       });
       els.attachForm.addEventListener('submit', (event) => {
         event.preventDefault();
-        run('Host attach', async () => {
-          const payload = await api.hostAttachLiveRoom(attachRequestPayload());
+        run('Attach room', async () => {
+          const payload = await api.attachLiveRoom(attachRequestPayload());
           applyAttachPayload(payload);
           await connectFromAttach(payload);
           return payload;
@@ -685,6 +891,7 @@
       });
       document.getElementById('end-room').addEventListener('click', () => {
         run('End room', async () => {
+          await stopAgoraBroadcast({ quiet: true });
           const room = await api.endLiveRoom(attachRequestPayload());
           applyEndedRoom(room);
           let jacktrip = null;
@@ -728,6 +935,12 @@
       document.getElementById('stop-local').addEventListener('click', () => {
         run('Stop local server', () => api.stopJacktripLocalServer());
       });
+      els.startBroadcast.addEventListener('click', () => {
+        run('Start Agora broadcast', startAgoraBroadcast);
+      });
+      els.stopBroadcast.addEventListener('click', () => {
+        run('Stop Agora broadcast', stopAgoraBroadcast);
+      });
       document.getElementById('start-device-auth').addEventListener('click', () => {
         run('Start Pirate sign-in', async () => {
           stopDeviceAuthPolling();
@@ -748,6 +961,9 @@
           renderAuthStatus(status);
           return status;
         });
+      });
+      window.addEventListener('beforeunload', () => {
+        stopAgoraBroadcast({ quiet: true }).catch(() => undefined);
       });
 
       bootstrap().catch((err) => {
