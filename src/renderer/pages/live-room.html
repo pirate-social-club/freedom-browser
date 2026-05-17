@@ -518,6 +518,10 @@
       let agoraRenewTimer = null;
       let broadcastState = 'idle';
 
+      function sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+
       function renderAuthStatus(status = {}) {
         if (!status.secureStorageAvailable) {
           els.authStatus.textContent = 'Secure token storage is unavailable on this device';
@@ -532,6 +536,49 @@
           return;
         }
         els.authStatus.textContent = 'Not signed in';
+      }
+
+      async function waitForPirateDeviceAuthApproval(auth) {
+        const expiresInMs = Math.max(60, Number(auth.expires_in || 600)) * 1000;
+        const deadline = Date.now() + expiresInMs;
+        let intervalMs = Math.max(1, Number(auth.interval || 5)) * 1000;
+
+        while (Date.now() < deadline) {
+          await sleep(intervalMs);
+          const result = await api.pollPirateDeviceAuth({
+            apiBase: els.apiBase.value,
+            deviceCode: auth.device_code,
+          });
+          if (result?.error === 'authorization_pending') {
+            intervalMs = Math.max(1, Number(result.interval || auth.interval || 5)) * 1000;
+            els.authStatus.textContent = `Waiting for approval · ${auth.user_code}`;
+            continue;
+          }
+
+          stopDeviceAuthPolling();
+          deviceAuth = null;
+          els.deviceCode.textContent = '';
+          const status = result.auth || await api.getPirateAuthStatus();
+          renderAuthStatus(status);
+          writeLog('Pirate sign-in complete', result);
+          return status;
+        }
+
+        throw new Error('Pirate device authorization expired');
+      }
+
+      async function ensurePirateAuth(status) {
+        const currentStatus = status || await api.getPirateAuthStatus();
+        renderAuthStatus(currentStatus);
+        if (currentStatus.authorized) return currentStatus;
+
+        stopDeviceAuthPolling();
+        const auth = await api.startPirateDeviceAuth({ apiBase: els.apiBase.value });
+        deviceAuth = auth;
+        els.deviceCode.textContent = `Code ${auth.user_code}`;
+        els.authStatus.textContent = 'Approve the device in Pirate web';
+        writeLog('Pirate sign-in started', auth);
+        return await waitForPirateDeviceAuthApproval(auth);
       }
 
       function redact(value) {
@@ -801,6 +848,30 @@
         });
       }
 
+      async function attachConnectAndBroadcast() {
+        const payload = await api.attachLiveRoom(attachRequestPayload());
+        applyAttachPayload(payload);
+        let jacktrip = null;
+        try {
+          jacktrip = await connectFromAttach(payload);
+        } catch (err) {
+          jacktrip = { error: err.message };
+          writeLog('JackTrip auto-connect failed; continuing with Agora broadcast', jacktrip);
+        }
+        const broadcast = await startAgoraBroadcast();
+        return {
+          room: payload?.room?.id || null,
+          seat: payload?.runtime?.seat || null,
+          jacktrip,
+          broadcast,
+        };
+      }
+
+      async function autoStartFromLaunch(initialAuthStatus) {
+        await ensurePirateAuth(initialAuthStatus);
+        return await attachConnectAndBroadcast();
+      }
+
       async function run(label, fn) {
         try {
           setBusy(true);
@@ -854,6 +925,7 @@
         const roomId = params.get('roomId') || params.get('room');
         const communityId = params.get('communityId') || params.get('community');
         const apiBase = params.get('apiBase') || params.get('api');
+        const autoStart = Boolean(roomId && communityId && params.get('auto') !== '0');
         els.roomId.textContent = roomId ? `Room ${roomId}` : 'No room selected';
         if (apiBase) els.apiBase.value = apiBase;
         if (communityId) els.communityId.value = communityId;
@@ -873,7 +945,14 @@
 
         renderStatus(await api.getJacktripStatus());
         renderBroadcastControls();
-        renderAuthStatus(await api.getPirateAuthStatus());
+        const authStatus = await api.getPirateAuthStatus();
+        renderAuthStatus(authStatus);
+
+        if (autoStart) {
+          setTimeout(() => {
+            run('Auto start live room', () => autoStartFromLaunch(authStatus));
+          }, 0);
+        }
       }
 
       els.form.addEventListener('submit', (event) => {
