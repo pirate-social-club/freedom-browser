@@ -198,6 +198,27 @@ describe('webcontents-setup', () => {
     contents.emit('will-navigate', httpEvent, 'https://example.com/next');
     expect(httpEvent.preventDefault).not.toHaveBeenCalled();
 
+    contents.emit(
+      'did-fail-load',
+      {},
+      -27,
+      'ERR_BLOCKED_BY_RESPONSE',
+      'https://auth.privy.io/apps/app/embedded-wallets',
+      false,
+      44,
+      55
+    );
+    expect(ctx.log.warn).toHaveBeenCalledWith(
+      '[webcontents:33:webview] failed subframe load',
+      expect.objectContaining({
+        errorCode: -27,
+        errorDescription: 'ERR_BLOCKED_BY_RESPONSE',
+        frameProcessId: 44,
+        frameRoutingId: 55,
+        url: 'https://auth.privy.io',
+      })
+    );
+
     const crashDetails = { reason: 'crashed' };
     contents.emit('render-process-gone', {}, crashDetails);
     contents.emit('crashed');

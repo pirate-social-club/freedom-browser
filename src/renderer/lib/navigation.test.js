@@ -502,6 +502,17 @@ describe('navigation', () => {
       'file:///app/pages/error.html?error=ERR_NAME_NOT_RESOLVED&url=https%3A%2F%2Fbad.example'
     );
 
+    ctx.activeRef.tab.webview.loadURL.mockClear();
+    ctx.tabsMocks.webviewEventHandler('did-fail-load', {
+      event: {
+        errorCode: -27,
+        errorDescription: 'ERR_BLOCKED_BY_RESPONSE',
+        isMainFrame: false,
+        validatedURL: 'https://auth.privy.io/apps/app/embedded-wallets',
+      },
+    });
+    expect(ctx.activeRef.tab.webview.loadURL).not.toHaveBeenCalled();
+
     ctx.tabsMocks.webviewEventHandler('did-fail-load', {
       event: {
         errorCode: -111,

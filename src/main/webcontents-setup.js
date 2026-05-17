@@ -96,6 +96,29 @@ function registerWebContentsHandlers() {
           sendToHostWebContents(contents, 'navigate-to-url', url);
         }
       });
+
+      contents.on('did-fail-load', (
+        _event,
+        errorCode,
+        errorDescription,
+        validatedURL,
+        isMainFrame,
+        frameProcessId,
+        frameRoutingId
+      ) => {
+        const isPrivyFrame = String(validatedURL || '').startsWith('https://auth.privy.io/');
+        const isBlocked = errorDescription === 'ERR_BLOCKED_BY_RESPONSE';
+        if (!isPrivyFrame && !isBlocked) {
+          return;
+        }
+        log.warn(`${tag} failed ${isMainFrame ? 'main-frame' : 'subframe'} load`, {
+          errorCode,
+          errorDescription,
+          frameProcessId,
+          frameRoutingId,
+          url: sanitizeUrlForLog(validatedURL),
+        });
+      });
     }
 
     contents.on('render-process-gone', (_evt, details) => {

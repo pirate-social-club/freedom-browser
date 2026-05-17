@@ -1419,7 +1419,7 @@ export const initNavigation = () => {
         reloadBtn.dataset.state = 'reload';
         updateNavigationState();
 
-        if (data.event && data.event.errorCode !== -3 && webview) {
+        if (data.event && data.event.errorCode !== -3 && webview && data.event.isMainFrame !== false) {
           const errorUrl = new URL('pages/error.html', window.location.href);
           const failedUrl = data.event.validatedURL || data.event.url || '';
           const failedError = data.event.errorDescription || data.event.errorCode;
@@ -1436,6 +1436,10 @@ export const initNavigation = () => {
           }
           errorUrl.searchParams.set('url', failedUrl);
           safeLoadUrl(webview, errorUrl.toString(), 'error-page');
+        } else if (data.event?.isMainFrame === false) {
+          pushDebug(
+            `Subframe failed without replacing tab: ${data.event.errorDescription || data.event.errorCode} (${data.event.validatedURL || data.event.url || 'unknown url'})`
+          );
         }
 
         pushDebug(
