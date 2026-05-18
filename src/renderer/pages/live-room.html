@@ -881,16 +881,16 @@
         return payload?.runtime?.seat || launchSeat || '';
       }
 
-      function isDuetRoom(payload = attachPayload) {
-        return payload?.room?.room_kind === 'duet';
+      function isJacktripRequiredRoom(payload = attachPayload) {
+        return payload?.jacktrip?.required === true;
       }
 
-      function isDuetGuest(payload = attachPayload) {
-        return isDuetRoom(payload) && getRuntimeSeat(payload) === 'guest';
+      function isJacktripGuest(payload = attachPayload) {
+        return isJacktripRequiredRoom(payload) && getRuntimeSeat(payload) === 'guest';
       }
 
-      function isDuetHost(payload = attachPayload) {
-        return isDuetRoom(payload) && getRuntimeSeat(payload) === 'host';
+      function isJacktripHost(payload = attachPayload) {
+        return isJacktripRequiredRoom(payload) && getRuntimeSeat(payload) === 'host';
       }
 
       function isJacktripConnected(status = lastStatus) {
@@ -909,18 +909,18 @@
         const ready = hasAgoraCredentials();
         const sdkReady = Boolean(window.AgoraRTC);
         const active = broadcastState === 'connecting' || broadcastState === 'live';
-        const duetGuest = isDuetGuest();
-        const duetHostWaitingForJackTrip = isDuetHost() && !isJacktripConnected();
-        els.startBroadcast.style.display = duetGuest ? 'none' : '';
-        els.stopBroadcast.style.display = duetGuest ? 'none' : '';
-        els.startBroadcast.disabled = busy || active || !ready || !sdkReady || duetHostWaitingForJackTrip;
-        els.stopBroadcast.disabled = busy || !active || duetGuest;
-        if (duetGuest) {
+        const jacktripGuest = isJacktripGuest();
+        const jacktripHostWaitingForJackTrip = isJacktripHost() && !isJacktripConnected();
+        els.startBroadcast.style.display = jacktripGuest ? 'none' : '';
+        els.stopBroadcast.style.display = jacktripGuest ? 'none' : '';
+        els.startBroadcast.disabled = busy || active || !ready || !sdkReady || jacktripHostWaitingForJackTrip;
+        els.stopBroadcast.disabled = busy || !active || jacktripGuest;
+        if (jacktripGuest) {
           els.broadcastStatus.textContent = isJacktripConnected()
-            ? 'Connected to duet audio. The host controls the viewer broadcast.'
-            : 'Connect JackTrip duet audio. The host controls the viewer broadcast.';
-        } else if (duetHostWaitingForJackTrip) {
-          els.broadcastStatus.textContent = 'Connect JackTrip duet audio before broadcasting to viewers.';
+            ? 'Connected to JackTrip audio. The host controls the viewer broadcast.'
+            : 'Connect JackTrip audio. The host controls the viewer broadcast.';
+        } else if (jacktripHostWaitingForJackTrip) {
+          els.broadcastStatus.textContent = 'Connect JackTrip audio before broadcasting to viewers.';
         } else if (!sdkReady) {
           els.broadcastStatus.textContent = 'Agora SDK is still loading.';
         } else if (!ready && broadcastState === 'idle') {
@@ -976,11 +976,11 @@
         if (!window.AgoraRTC) {
           throw new Error('Agora SDK is not loaded');
         }
-        if (isDuetGuest()) {
-          throw new Error('Guests join duet audio over JackTrip. The host broadcasts to viewers.');
+        if (isJacktripGuest()) {
+          throw new Error('Guests join performance audio over JackTrip. The host broadcasts to viewers.');
         }
-        if (isDuetHost() && !isJacktripConnected()) {
-          throw new Error('Connect JackTrip duet audio before broadcasting to viewers');
+        if (isJacktripHost() && !isJacktripConnected()) {
+          throw new Error('Connect JackTrip audio before broadcasting to viewers');
         }
 
         const agora = attachPayload.agora;
@@ -1110,15 +1110,15 @@
 
       async function connectFromAttach(payload) {
         const jacktrip = payload?.jacktrip;
-        const duet = isDuetRoom(payload);
+        const jacktripRequired = isJacktripRequiredRoom(payload);
         writeDebugLog('JackTrip connect decision', {
           jacktrip: summarizeAttachPayload(payload).jacktrip,
           platform: hostPlatform,
           roomId: payload?.room?.id || null,
           seat: payload?.runtime?.seat || null,
         });
-        if (duet && !jacktrip?.required) {
-          throw new Error('Duet rooms require JackTrip audio');
+        if (jacktripRequired && !jacktrip?.required) {
+          throw new Error('Room requires JackTrip audio but JackTrip is not flagged as required');
         }
         if (!jacktrip?.required) {
           writeLog('JackTrip not required for this room');
@@ -1138,7 +1138,7 @@
           bufferStrategy: jacktrip.buffer_strategy || '3',
         });
         if (normalizeState(status?.status) === 'error') {
-          throw new Error(status?.error || status?.message || 'Could not connect JackTrip duet audio');
+          throw new Error(status?.error || status?.message || 'Could not connect JackTrip audio');
         }
         return status;
       }
@@ -1152,11 +1152,11 @@
           if (isJacktripConnected(status)) return status;
           const state = normalizeState(status?.status);
           if (state === 'error' || state === 'disconnected') {
-            throw new Error(status?.error || status?.message || 'JackTrip duet audio is not connected');
+            throw new Error(status?.error || status?.message || 'JackTrip audio is not connected');
           }
           await sleep(250);
         }
-        throw new Error('Timed out waiting for JackTrip duet audio to connect');
+        throw new Error('Timed out waiting for JackTrip audio to connect');
       }
 
       async function attachConnectAndBroadcast() {
@@ -1164,15 +1164,15 @@
         const payload = await api.attachLiveRoom(attachRequestPayload());
         applyAttachPayload(payload);
         writeLog('Auto start attach result', summarizeAttachPayload(payload));
-        const duet = isDuetRoom(payload);
-        const guest = isDuetGuest(payload);
+        const jacktripRequired = isJacktripRequiredRoom(payload);
+        const guest = isJacktripGuest(payload);
         let jacktrip = await connectFromAttach(payload);
-        if (duet) {
+        if (jacktripRequired) {
           jacktrip = await waitForJacktripConnected();
         }
         if (guest) {
-          renderBroadcastStatus('Connected to duet audio. The host controls the viewer broadcast.', 'idle');
-          writeLog('Duet guest connected to JackTrip; host controls Agora broadcast', {
+          renderBroadcastStatus('Connected to JackTrip audio. The host controls the viewer broadcast.', 'idle');
+          writeLog('JackTrip guest connected; host controls Agora broadcast', {
             jacktrip,
             room: payload?.room?.id || null,
             seat: payload?.runtime?.seat || null,
@@ -1315,7 +1315,7 @@
           const payload = await api.attachLiveRoom(attachRequestPayload());
           applyAttachPayload(payload);
           await connectFromAttach(payload);
-          if (isDuetRoom(payload)) {
+          if (isJacktripRequiredRoom(payload)) {
             await waitForJacktripConnected();
           }
           return payload;
