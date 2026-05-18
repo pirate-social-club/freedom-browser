@@ -564,25 +564,106 @@
       let localVideoTrack = null;
       let agoraRenewTimer = null;
       let broadcastState = 'idle';
+      const lastDebugMessages = new Map();
 
       function sleep(ms) {
         return new Promise((resolve) => setTimeout(resolve, ms));
       }
 
-      function renderAuthStatus(status = {}) {
-        if (!status.secureStorageAvailable) {
-          els.authStatus.textContent = 'Secure token storage is unavailable on this device';
-          return;
+      function safeErrorMessage(error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+
+      function summarizeAuthStatus(status = {}) {
+        return {
+          authorized: status.authorized === true,
+          hasEnvAccessToken: status.hasEnvAccessToken === true,
+          hasStoredAccessToken: status.hasStoredAccessToken === true,
+          hasStoredRefreshToken: status.hasStoredRefreshToken === true,
+          refreshTokenExpiresAt: status.refreshTokenExpiresAt || null,
+          scope: status.scope || null,
+          secureStorageAvailable: status.secureStorageAvailable !== false,
+        };
+      }
+
+      function summarizeAttachPayload(payload = {}) {
+        return {
+          agora: payload.agora ? {
+            channel: payload.agora.channel || null,
+            configured: payload.agora.configured === true,
+            hasToken: Boolean(payload.agora.token),
+            tokenExpiresAt: payload.agora.token_expires_at || null,
+            uid: payload.agora.uid ?? null,
+          } : null,
+          bridge: payload.bridge ? {
+            hasTicket: Boolean(payload.bridge.ticket),
+            ticketExpiresAt: payload.bridge.ticket_expires_at || null,
+          } : null,
+          jacktrip: payload.jacktrip ? {
+            configured: payload.jacktrip.configured === true,
+            port: payload.jacktrip.port || null,
+            required: payload.jacktrip.required === true,
+            server: payload.jacktrip.server || null,
+          } : null,
+          room: payload.room ? {
+            accessMode: payload.room.access_mode || null,
+            guestUser: payload.room.guest_user || null,
+            hostUser: payload.room.host_user || null,
+            id: payload.room.id || null,
+            roomKind: payload.room.room_kind || null,
+            status: payload.room.status || null,
+          } : null,
+          runtime: payload.runtime ? {
+            roomRuntimeId: payload.runtime.room_runtime_id || null,
+            seat: payload.runtime.seat || null,
+            status: payload.runtime.status || null,
+          } : null,
+        };
+      }
+
+      function summarizeBroadcastControls() {
+        return {
+          broadcastState,
+          busy,
+          hasAgoraCredentials: hasAgoraCredentials(),
+          jacktripState: lastStatus.status || null,
+          roomKind: attachPayload?.room?.room_kind || null,
+          sdkReady: Boolean(window.AgoraRTC),
+          seat: getRuntimeSeat(),
+          startDisabled: els.startBroadcast.disabled,
+          startVisible: els.startBroadcast.style.display !== 'none',
+          statusText: els.broadcastStatus.textContent,
+          stopDisabled: els.stopBroadcast.disabled,
+          stopVisible: els.stopBroadcast.style.display !== 'none',
+        };
+      }
+
+      function writeDebugLog(message, detail) {
+        let key = message;
+        try {
+          key += `:${JSON.stringify(redact(detail))}`;
+        } catch {
+          key += `:${String(detail)}`;
         }
-        if (status.authorized) {
-          els.authStatus.textContent = status.hasStoredRefreshToken
+        if (lastDebugMessages.get(message) === key) return;
+        lastDebugMessages.set(message, key);
+        writeLog(message, detail);
+      }
+
+      function renderAuthStatus(status = {}) {
+        const summary = summarizeAuthStatus(status);
+        let label = 'Not signed in';
+        if (!status.secureStorageAvailable) {
+          label = 'Secure token storage is unavailable on this device';
+        } else if (status.authorized) {
+          label = status.hasStoredRefreshToken
             ? 'Signed in with Pirate device auth'
             : status.hasEnvAccessToken
               ? 'Using development token from environment'
               : 'Stored access token available';
-          return;
         }
-        els.authStatus.textContent = 'Not signed in';
+        els.authStatus.textContent = label;
+        writeDebugLog('Pirate auth state', { ...summary, label });
       }
 
       async function waitForPirateDeviceAuthApproval(auth) {
@@ -624,9 +705,13 @@
       async function ensurePirateAuth(status) {
         const currentStatus = status || await api.getPirateAuthStatus();
         renderAuthStatus(currentStatus);
-        if (currentStatus.authorized) return currentStatus;
+        if (currentStatus.authorized) {
+          writeDebugLog('Pirate auth already available', summarizeAuthStatus(currentStatus));
+          return currentStatus;
+        }
 
         stopDeviceAuthPolling();
+        writeLog('Pirate auth missing; starting device auth', summarizeAuthStatus(currentStatus));
         const auth = await api.startPirateDeviceAuth({ apiBase: els.apiBase.value, openBrowser: false, webBase: launchWebBase });
         deviceAuth = auth;
         els.deviceCode.textContent = `Code ${auth.user_code}`;
@@ -712,6 +797,14 @@
         document.getElementById('setup-audio').disabled = busy || hostPlatform !== 'linux';
         document.getElementById('restore-audio').disabled = busy || hostPlatform !== 'linux';
         renderBroadcastControls();
+        writeDebugLog('JackTrip UI state', {
+          audio: els.audio.textContent,
+          busy,
+          connectDisabled: els.connect.disabled,
+          connection: els.connection.textContent,
+          disconnectDisabled: els.disconnect.disabled,
+          state,
+        });
       }
 
       function connectPayload() {
@@ -761,6 +854,7 @@
           if (jacktrip.buffer_strategy) els.bufferStrategy.value = String(jacktrip.buffer_strategy);
         }
         renderBroadcastControls();
+        writeDebugLog('Live room attach state', summarizeAttachPayload(payload));
       }
 
       function applyEndedRoom(room) {
@@ -783,24 +877,56 @@
         );
       }
 
+      function getRuntimeSeat(payload = attachPayload) {
+        return payload?.runtime?.seat || launchSeat || '';
+      }
+
+      function isDuetRoom(payload = attachPayload) {
+        return payload?.room?.room_kind === 'duet';
+      }
+
+      function isDuetGuest(payload = attachPayload) {
+        return isDuetRoom(payload) && getRuntimeSeat(payload) === 'guest';
+      }
+
+      function isDuetHost(payload = attachPayload) {
+        return isDuetRoom(payload) && getRuntimeSeat(payload) === 'host';
+      }
+
+      function isJacktripConnected(status = lastStatus) {
+        return normalizeState(status?.status) === 'connected';
+      }
+
       function renderBroadcastStatus(message, nextState = broadcastState) {
         broadcastState = nextState;
         els.broadcastStatus.textContent = message;
         els.broadcastPreview.classList.toggle('live', broadcastState === 'live');
         renderBroadcastControls();
+        writeDebugLog('Broadcast UI state', summarizeBroadcastControls());
       }
 
       function renderBroadcastControls() {
         const ready = hasAgoraCredentials();
         const sdkReady = Boolean(window.AgoraRTC);
         const active = broadcastState === 'connecting' || broadcastState === 'live';
-        els.startBroadcast.disabled = busy || active || !ready || !sdkReady;
-        els.stopBroadcast.disabled = busy || !active;
-        if (!sdkReady) {
+        const duetGuest = isDuetGuest();
+        const duetHostWaitingForJackTrip = isDuetHost() && !isJacktripConnected();
+        els.startBroadcast.style.display = duetGuest ? 'none' : '';
+        els.stopBroadcast.style.display = duetGuest ? 'none' : '';
+        els.startBroadcast.disabled = busy || active || !ready || !sdkReady || duetHostWaitingForJackTrip;
+        els.stopBroadcast.disabled = busy || !active || duetGuest;
+        if (duetGuest) {
+          els.broadcastStatus.textContent = isJacktripConnected()
+            ? 'Connected to duet audio. The host controls the viewer broadcast.'
+            : 'Connect JackTrip duet audio. The host controls the viewer broadcast.';
+        } else if (duetHostWaitingForJackTrip) {
+          els.broadcastStatus.textContent = 'Connect JackTrip duet audio before broadcasting to viewers.';
+        } else if (!sdkReady) {
           els.broadcastStatus.textContent = 'Agora SDK is still loading.';
         } else if (!ready && broadcastState === 'idle') {
           els.broadcastStatus.textContent = 'Attach a room to enable Agora broadcast.';
         }
+        writeDebugLog('Broadcast controls', summarizeBroadcastControls());
       }
 
       function clearAgoraRenewTimer() {
@@ -820,7 +946,7 @@
         );
         agoraRenewTimer = setTimeout(() => {
           renewAgoraToken().catch((err) => {
-            writeLog('Renew Agora token failed', { message: err.message });
+            writeLog('Renew Agora token failed', { message: safeErrorMessage(err) });
             agoraRenewTimer = setTimeout(() => {
               scheduleAgoraTokenRenewal();
             }, TOKEN_RENEW_RETRY_MS);
@@ -850,6 +976,12 @@
         if (!window.AgoraRTC) {
           throw new Error('Agora SDK is not loaded');
         }
+        if (isDuetGuest()) {
+          throw new Error('Guests join duet audio over JackTrip. The host broadcasts to viewers.');
+        }
+        if (isDuetHost() && !isJacktripConnected()) {
+          throw new Error('Connect JackTrip duet audio before broadcasting to viewers');
+        }
 
         const agora = attachPayload.agora;
         renderBroadcastStatus('Requesting camera and microphone.', 'connecting');
@@ -858,13 +990,64 @@
         let videoTrack = null;
 
         try {
+          writeLog('Agora producer start requested', {
+            channel: agora.channel,
+            roomId: attachPayload?.room?.id || els.liveRoomId.value,
+            seat: attachPayload?.runtime?.seat || launchSeat || 'host',
+            uid: agora.uid,
+          });
+          client.on('connection-state-change', (currentState, previousState, reason) => {
+            writeLog('Agora producer connection state', {
+              channel: agora.channel,
+              currentState,
+              previousState,
+              reason: reason || null,
+              uid: agora.uid,
+            });
+          });
+          client.on('user-joined', (user) => {
+            writeLog('Agora remote user joined producer channel', {
+              channel: agora.channel,
+              remoteUid: user?.uid ?? null,
+            });
+          });
+          client.on('user-left', (user, reason) => {
+            writeLog('Agora remote user left producer channel', {
+              channel: agora.channel,
+              reason: reason || null,
+              remoteUid: user?.uid ?? null,
+            });
+          });
+          client.on('user-published', (user, mediaType) => {
+            writeLog('Agora remote user published on producer channel', {
+              channel: agora.channel,
+              mediaType,
+              remoteUid: user?.uid ?? null,
+            });
+          });
           await client.setClientRole('host');
+          writeLog('Agora producer role set', { channel: agora.channel, role: 'host', uid: agora.uid });
           await client.join(agora.app_id, agora.channel, agora.token, agora.uid);
+          writeLog('Agora producer joined channel', {
+            channel: agora.channel,
+            uid: agora.uid,
+          });
           [audioTrack, videoTrack] = await Promise.all([
             window.AgoraRTC.createMicrophoneAudioTrack(),
             window.AgoraRTC.createCameraVideoTrack(),
           ]);
+          writeLog('Agora local media tracks created', {
+            audioTrack: Boolean(audioTrack),
+            channel: agora.channel,
+            videoTrack: Boolean(videoTrack),
+          });
           await client.publish([audioTrack, videoTrack]);
+          writeLog('Agora producer published local tracks', {
+            audioTrack: Boolean(audioTrack),
+            channel: agora.channel,
+            uid: agora.uid,
+            videoTrack: Boolean(videoTrack),
+          });
 
           agoraClient = client;
           localAudioTrack = audioTrack;
@@ -880,6 +1063,11 @@
             seat: attachPayload.runtime?.seat || 'host',
           };
         } catch (err) {
+          writeLog('Agora producer start failed detail', {
+            channel: agora.channel,
+            message: safeErrorMessage(err),
+            uid: agora.uid,
+          });
           audioTrack?.close();
           videoTrack?.close();
           await client.leave().catch(() => undefined);
@@ -889,6 +1077,11 @@
       }
 
       async function stopAgoraBroadcast(options = {}) {
+        writeLog('Stop Agora broadcast requested', {
+          channel: attachPayload?.agora?.channel || null,
+          hasClient: Boolean(agoraClient),
+          trackCount: [localAudioTrack, localVideoTrack].filter(Boolean).length,
+        });
         clearAgoraRenewTimer();
         const client = agoraClient;
         const tracks = [localAudioTrack, localVideoTrack].filter(Boolean);
@@ -908,11 +1101,25 @@
           track.close();
         });
         renderBroadcastStatus('Broadcast stopped.', 'idle');
+        writeLog('Agora broadcast stopped', {
+          channel: attachPayload?.agora?.channel || null,
+          quiet: options.quiet === true,
+        });
         return options.quiet ? null : { status: 'stopped' };
       }
 
       async function connectFromAttach(payload) {
         const jacktrip = payload?.jacktrip;
+        const duet = isDuetRoom(payload);
+        writeDebugLog('JackTrip connect decision', {
+          jacktrip: summarizeAttachPayload(payload).jacktrip,
+          platform: hostPlatform,
+          roomId: payload?.room?.id || null,
+          seat: payload?.runtime?.seat || null,
+        });
+        if (duet && !jacktrip?.required) {
+          throw new Error('Duet rooms require JackTrip audio');
+        }
         if (!jacktrip?.required) {
           writeLog('JackTrip not required for this room');
           return null;
@@ -923,24 +1130,59 @@
         if (hostPlatform === 'linux' && jacktrip.linux_audio_setup_recommended) {
           await api.setupJacktripAudio({ setDefaultSource: true });
         }
-        return await api.connectJacktrip({
+        const status = await api.connectJacktrip({
           server: jacktrip.server,
           port: jacktrip.port || 4464,
           bindPort: jacktrip.bind_port || undefined,
           quality: jacktrip.quality || '4',
           bufferStrategy: jacktrip.buffer_strategy || '3',
         });
+        if (normalizeState(status?.status) === 'error') {
+          throw new Error(status?.error || status?.message || 'Could not connect JackTrip duet audio');
+        }
+        return status;
+      }
+
+      async function waitForJacktripConnected(timeoutMs = 10000) {
+        const startedAt = Date.now();
+        let status = lastStatus;
+        while (Date.now() - startedAt < timeoutMs) {
+          status = await api.getJacktripStatus();
+          renderStatus(status);
+          if (isJacktripConnected(status)) return status;
+          const state = normalizeState(status?.status);
+          if (state === 'error' || state === 'disconnected') {
+            throw new Error(status?.error || status?.message || 'JackTrip duet audio is not connected');
+          }
+          await sleep(250);
+        }
+        throw new Error('Timed out waiting for JackTrip duet audio to connect');
       }
 
       async function attachConnectAndBroadcast() {
+        writeLog('Auto start attach request', attachRequestPayload());
         const payload = await api.attachLiveRoom(attachRequestPayload());
         applyAttachPayload(payload);
-        let jacktrip = null;
-        try {
-          jacktrip = await connectFromAttach(payload);
-        } catch (err) {
-          jacktrip = { error: err.message };
-          writeLog('JackTrip auto-connect failed; continuing with Agora broadcast', jacktrip);
+        writeLog('Auto start attach result', summarizeAttachPayload(payload));
+        const duet = isDuetRoom(payload);
+        const guest = isDuetGuest(payload);
+        let jacktrip = await connectFromAttach(payload);
+        if (duet) {
+          jacktrip = await waitForJacktripConnected();
+        }
+        if (guest) {
+          renderBroadcastStatus('Connected to duet audio. The host controls the viewer broadcast.', 'idle');
+          writeLog('Duet guest connected to JackTrip; host controls Agora broadcast', {
+            jacktrip,
+            room: payload?.room?.id || null,
+            seat: payload?.runtime?.seat || null,
+          });
+          return {
+            room: payload?.room?.id || null,
+            seat: payload?.runtime?.seat || null,
+            jacktrip,
+            broadcast: null,
+          };
         }
         const broadcast = await startAgoraBroadcast();
         return {
@@ -958,6 +1200,11 @@
 
       async function run(label, fn) {
         try {
+          writeDebugLog(`${label} started`, {
+            attach: attachPayload ? summarizeAttachPayload(attachPayload) : null,
+            broadcastState,
+            busy,
+          });
           setBusy(true);
           const result = await fn();
           writeLog(label, result);
@@ -966,7 +1213,11 @@
           }
           return result;
         } catch (err) {
-          writeLog(`${label} failed`, { message: err.message });
+          writeLog(`${label} failed`, {
+            attach: attachPayload ? summarizeAttachPayload(attachPayload) : null,
+            broadcastState,
+            message: safeErrorMessage(err),
+          });
           return null;
         } finally {
           setBusy(false);
@@ -1001,7 +1252,7 @@
         } catch (err) {
           stopDeviceAuthPolling();
           els.authStatus.textContent = 'Pirate sign-in failed';
-          writeLog('Pirate sign-in failed', { message: err.message });
+          writeLog('Pirate sign-in failed', { message: safeErrorMessage(err) });
         }
       }
 
@@ -1060,9 +1311,13 @@
       els.attachForm.addEventListener('submit', (event) => {
         event.preventDefault();
         run('Attach room', async () => {
+          writeLog('Attach room request', attachRequestPayload());
           const payload = await api.attachLiveRoom(attachRequestPayload());
           applyAttachPayload(payload);
           await connectFromAttach(payload);
+          if (isDuetRoom(payload)) {
+            await waitForJacktripConnected();
+          }
           return payload;
         });
       });
@@ -1075,7 +1330,7 @@
           try {
             jacktrip = await api.disconnectJacktrip();
           } catch (err) {
-            jacktrip = { disconnectError: err.message };
+            jacktrip = { disconnectError: safeErrorMessage(err) };
           }
           return { room, jacktrip };
         });
@@ -1120,6 +1375,9 @@
       });
       document.getElementById('start-device-auth').addEventListener('click', () => {
         run('Start Pirate sign-in', async () => {
+          const currentStatus = await api.getPirateAuthStatus();
+          renderAuthStatus(currentStatus);
+          writeLog('Start Pirate sign-in clicked', summarizeAuthStatus(currentStatus));
           stopDeviceAuthPolling();
           const auth = await api.startPirateDeviceAuth({ apiBase: els.apiBase.value, openBrowser: false, webBase: launchWebBase });
           deviceAuth = auth;
@@ -1145,7 +1403,7 @@
       });
 
       bootstrap().catch((err) => {
-        writeLog('Live room failed to initialize', { message: err.message });
+        writeLog('Live room failed to initialize', { message: safeErrorMessage(err) });
       });
     </script>
   </body>
