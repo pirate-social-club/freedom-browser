@@ -610,7 +610,7 @@
             guestUser: payload.room.guest_user || null,
             hostUser: payload.room.host_user || null,
             id: payload.room.id || null,
-            roomKind: payload.room.room_kind || null,
+            jacktripRequired: payload.jacktrip?.required === true,
             status: payload.room.status || null,
           } : null,
           runtime: payload.runtime ? {
@@ -627,7 +627,7 @@
           busy,
           hasAgoraCredentials: hasAgoraCredentials(),
           jacktripState: lastStatus.status || null,
-          roomKind: attachPayload?.room?.room_kind || null,
+          jacktripRequired: attachPayload?.jacktrip?.required === true,
           sdkReady: Boolean(window.AgoraRTC),
           seat: getRuntimeSeat(),
           startDisabled: els.startBroadcast.disabled,
@@ -1117,9 +1117,6 @@
           roomId: payload?.room?.id || null,
           seat: payload?.runtime?.seat || null,
         });
-        if (jacktripRequired && !jacktrip?.required) {
-          throw new Error('Room requires JackTrip audio but JackTrip is not flagged as required');
-        }
         if (!jacktrip?.required) {
           writeLog('JackTrip not required for this room');
           return null;
