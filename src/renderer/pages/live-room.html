@@ -969,6 +969,122 @@
         return payload;
       }
 
+      function normalizeAudioDeviceText(value) {
+        return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+      }
+
+      function uniqueStrings(values) {
+        return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
+      }
+
+      function getJacktripAudioSourceHints(status = lastStatus) {
+        const audio = status?.audio || {};
+        return uniqueStrings([
+          audio.sourceName,
+          audio.sourceLabel,
+          els.audio.textContent,
+          'jacktrip',
+        ]);
+      }
+
+      function summarizeAudioInputDevice(device) {
+        return {
+          deviceId: device?.deviceId ? '<available>' : null,
+          groupId: device?.groupId ? '<available>' : null,
+          kind: device?.kind || null,
+          label: device?.label || null,
+        };
+      }
+
+      async function listAudioInputsWithLabels() {
+        if (!navigator.mediaDevices?.enumerateDevices) {
+          throw new Error('Audio device enumeration is unavailable');
+        }
+        let devices = await navigator.mediaDevices.enumerateDevices();
+        let audioInputs = devices.filter((device) => device.kind === 'audioinput');
+        const hasLabels = audioInputs.some((device) => Boolean(device.label));
+        if (!hasLabels && navigator.mediaDevices.getUserMedia) {
+          let probeStream = null;
+          try {
+            probeStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+          } catch (err) {
+            writeLog('Audio device label probe failed', { message: safeErrorMessage(err) });
+          } finally {
+            probeStream?.getTracks().forEach((track) => track.stop());
+          }
+          devices = await navigator.mediaDevices.enumerateDevices();
+          audioInputs = devices.filter((device) => device.kind === 'audioinput');
+        }
+        return audioInputs;
+      }
+
+      function scoreJacktripAudioInput(device, hints) {
+        const label = normalizeAudioDeviceText(device?.label);
+        if (!label) return { score: 0, matchedBy: null };
+        let best = { score: 0, matchedBy: null };
+        for (const hint of hints) {
+          const normalizedHint = normalizeAudioDeviceText(hint);
+          if (!normalizedHint) continue;
+          if (label === normalizedHint) {
+            best = { score: 100, matchedBy: hint };
+            break;
+          }
+          if (label.includes(normalizedHint)) {
+            best = best.score >= 80 ? best : { score: 80, matchedBy: hint };
+          } else if (normalizedHint.includes(label)) {
+            best = best.score >= 70 ? best : { score: 70, matchedBy: hint };
+          }
+        }
+        if (best.score === 0 && label.includes('jacktrip')) {
+          best = { score: 50, matchedBy: 'jacktrip' };
+        }
+        return best;
+      }
+
+      async function resolveJacktripAudioInput() {
+        const hints = getJacktripAudioSourceHints();
+        const audioInputs = await listAudioInputsWithLabels();
+        const ranked = audioInputs
+          .map((device) => ({ device, ...scoreJacktripAudioInput(device, hints) }))
+          .filter((entry) => entry.score > 0 && entry.device.deviceId)
+          .sort((a, b) => b.score - a.score);
+        const selected = ranked[0] || null;
+        const detail = {
+          availableInputs: audioInputs.map(summarizeAudioInputDevice),
+          hints,
+          selected: selected ? {
+            ...summarizeAudioInputDevice(selected.device),
+            matchedBy: selected.matchedBy,
+            score: selected.score,
+          } : null,
+        };
+        if (!selected) {
+          writeLog('JackTrip Agora audio source not found', detail);
+          throw new Error('JackTrip audio input was not found in browser devices');
+        }
+        writeLog('JackTrip Agora audio source selected', detail);
+        return selected.device;
+      }
+
+      async function createAgoraAudioTrack() {
+        if (!isJacktripHost()) {
+          writeLog('Creating Agora audio track from default microphone');
+          return await window.AgoraRTC.createMicrophoneAudioTrack();
+        }
+        const device = await resolveJacktripAudioInput();
+        writeLog('Creating Agora audio track from JackTrip input', {
+          device: summarizeAudioInputDevice(device),
+          musicProfile: 'high_quality_stereo',
+        });
+        return await window.AgoraRTC.createMicrophoneAudioTrack({
+          AEC: false,
+          AGC: false,
+          ANS: false,
+          encoderConfig: 'high_quality_stereo',
+          microphoneId: device.deviceId,
+        });
+      }
+
       async function startAgoraBroadcast() {
         if (!hasAgoraCredentials()) {
           throw new Error('Attach the live room before starting broadcast');
@@ -1033,11 +1149,12 @@
             uid: agora.uid,
           });
           [audioTrack, videoTrack] = await Promise.all([
-            window.AgoraRTC.createMicrophoneAudioTrack(),
+            createAgoraAudioTrack(),
             window.AgoraRTC.createCameraVideoTrack(),
           ]);
           writeLog('Agora local media tracks created', {
             audioTrack: Boolean(audioTrack),
+            audioSource: isJacktripHost() ? 'jacktrip' : 'default_microphone',
             channel: agora.channel,
             videoTrack: Boolean(videoTrack),
           });
@@ -1110,7 +1227,6 @@
 
       async function connectFromAttach(payload) {
         const jacktrip = payload?.jacktrip;
-        const jacktripRequired = isJacktripRequiredRoom(payload);
         writeDebugLog('JackTrip connect decision', {
           jacktrip: summarizeAttachPayload(payload).jacktrip,
           platform: hostPlatform,
