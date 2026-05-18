@@ -7,14 +7,25 @@
  */
 
 const { contextBridge, ipcRenderer } = require('electron');
-const IPC = require('../shared/ipc-channels');
+
+contextBridge.exposeInMainWorld('freedomBrowser', {
+  isFreedomBrowser: true,
+});
 
 // Internal pages list — canonical source is src/shared/internal-pages.json,
 // served by the main process via sync IPC so preloads don't need require().
-const internalPages = ipcRenderer.sendSync('internal:get-pages');
+let internalPages = { routable: {}, other: [] };
+try {
+  internalPages = ipcRenderer.sendSync('internal:get-pages') || internalPages;
+} catch (err) {
+  console.warn('[webview-preload] Failed to load internal page list:', err);
+}
 
 // Whitelist of all internal page files (routable + other like error.html)
-const ALLOWED_FILES = [...Object.values(internalPages.routable), ...internalPages.other];
+const ALLOWED_FILES = [
+  ...Object.values(internalPages.routable || {}),
+  ...(internalPages.other || []),
+];
 
 const isInternalPage = () => {
   const location = globalThis.location;
@@ -46,11 +57,11 @@ contextBridge.exposeInMainWorld('freedomAPI', {
   getSettings: guardInternal('getSettings', () => ipcRenderer.invoke('settings:get')),
 
   // Window
-  getPlatform: guardInternal('getPlatform', () => ipcRenderer.invoke(IPC.WINDOW_GET_PLATFORM)),
+  getPlatform: guardInternal('getPlatform', () => ipcRenderer.invoke('window:get-platform')),
 
   // Service registry (read-only for internal pages)
   getServiceRegistry: guardInternal('getServiceRegistry', () =>
-    ipcRenderer.invoke(IPC.SERVICE_REGISTRY_GET)
+    ipcRenderer.invoke('service-registry:get')
   ),
   onServiceRegistryUpdate: guardInternal('onServiceRegistryUpdate', (callback) => {
     if (typeof callback !== 'function') {
@@ -58,10 +69,10 @@ contextBridge.exposeInMainWorld('freedomAPI', {
     }
 
     const handler = (_event, registry) => callback(registry);
-    ipcRenderer.on(IPC.SERVICE_REGISTRY_UPDATE, handler);
+    ipcRenderer.on('service-registry:update', handler);
 
     return () => {
-      ipcRenderer.removeListener(IPC.SERVICE_REGISTRY_UPDATE, handler);
+      ipcRenderer.removeListener('service-registry:update', handler);
     };
   }),
 
@@ -90,58 +101,58 @@ contextBridge.exposeInMainWorld('freedomAPI', {
 
   // JackTrip
   getJacktripStatus: guardInternal('getJacktripStatus', () =>
-    ipcRenderer.invoke(IPC.JACKTRIP_GET_STATUS)
+    ipcRenderer.invoke('jacktrip:getStatus')
   ),
   checkJacktripDeps: guardInternal('checkJacktripDeps', () =>
-    ipcRenderer.invoke(IPC.JACKTRIP_CHECK_DEPS)
+    ipcRenderer.invoke('jacktrip:checkDeps')
   ),
   connectJacktrip: guardInternal('connectJacktrip', (options) =>
-    ipcRenderer.invoke(IPC.JACKTRIP_CONNECT, options)
+    ipcRenderer.invoke('jacktrip:connect', options)
   ),
   disconnectJacktrip: guardInternal('disconnectJacktrip', () =>
-    ipcRenderer.invoke(IPC.JACKTRIP_DISCONNECT)
+    ipcRenderer.invoke('jacktrip:disconnect')
   ),
   listJacktripPorts: guardInternal('listJacktripPorts', () =>
-    ipcRenderer.invoke(IPC.JACKTRIP_LIST_PORTS)
+    ipcRenderer.invoke('jacktrip:listPorts')
   ),
   setupJacktripAudio: guardInternal('setupJacktripAudio', (options) =>
-    ipcRenderer.invoke(IPC.JACKTRIP_SETUP_AUDIO, options)
+    ipcRenderer.invoke('jacktrip:setupAudio', options)
   ),
   restoreJacktripAudio: guardInternal('restoreJacktripAudio', (options) =>
-    ipcRenderer.invoke(IPC.JACKTRIP_RESTORE_AUDIO, options)
+    ipcRenderer.invoke('jacktrip:restoreAudio', options)
   ),
   startJacktripLocalServer: guardInternal('startJacktripLocalServer', (options) =>
-    ipcRenderer.invoke(IPC.JACKTRIP_START_LOCAL_SERVER, options)
+    ipcRenderer.invoke('jacktrip:startLocalServer', options)
   ),
   stopJacktripLocalServer: guardInternal('stopJacktripLocalServer', () =>
-    ipcRenderer.invoke(IPC.JACKTRIP_STOP_LOCAL_SERVER)
+    ipcRenderer.invoke('jacktrip:stopLocalServer')
   ),
   attachLiveRoom: guardInternal('attachLiveRoom', (options) =>
-    ipcRenderer.invoke(IPC.PIRATE_LIVE_ROOM_ATTACH, options)
+    ipcRenderer.invoke('pirate:live-room-attach', options)
   ),
   hostAttachLiveRoom: guardInternal('hostAttachLiveRoom', (options) =>
-    ipcRenderer.invoke(IPC.PIRATE_LIVE_ROOM_HOST_ATTACH, options)
+    ipcRenderer.invoke('pirate:live-room-host-attach', options)
   ),
   guestAttachLiveRoom: guardInternal('guestAttachLiveRoom', (options) =>
-    ipcRenderer.invoke(IPC.PIRATE_LIVE_ROOM_GUEST_ATTACH, options)
+    ipcRenderer.invoke('pirate:live-room-guest-attach', options)
   ),
   endLiveRoom: guardInternal('endLiveRoom', (options) =>
-    ipcRenderer.invoke(IPC.PIRATE_LIVE_ROOM_END, options)
+    ipcRenderer.invoke('pirate:live-room-end', options)
   ),
   getPirateAuthStatus: guardInternal('getPirateAuthStatus', () =>
-    ipcRenderer.invoke(IPC.PIRATE_AUTH_GET_STATUS)
+    ipcRenderer.invoke('pirate:auth-get-status')
   ),
   startPirateDeviceAuth: guardInternal('startPirateDeviceAuth', (options) =>
-    ipcRenderer.invoke(IPC.PIRATE_AUTH_START_DEVICE, options)
+    ipcRenderer.invoke('pirate:auth-start-device', options)
   ),
   pollPirateDeviceAuth: guardInternal('pollPirateDeviceAuth', (options) =>
-    ipcRenderer.invoke(IPC.PIRATE_AUTH_POLL_DEVICE, options)
+    ipcRenderer.invoke('pirate:auth-poll-device', options)
   ),
   savePirateAccessToken: guardInternal('savePirateAccessToken', (accessToken) =>
-    ipcRenderer.invoke(IPC.PIRATE_AUTH_SAVE_ACCESS_TOKEN, accessToken)
+    ipcRenderer.invoke('pirate:auth-save-access-token', accessToken)
   ),
   clearPirateAccessToken: guardInternal('clearPirateAccessToken', () =>
-    ipcRenderer.invoke(IPC.PIRATE_AUTH_CLEAR_ACCESS_TOKEN)
+    ipcRenderer.invoke('pirate:auth-clear-access-token')
   ),
   onJacktripStatusUpdate: guardInternal('onJacktripStatusUpdate', (callback) => {
     if (typeof callback !== 'function') {
@@ -149,10 +160,10 @@ contextBridge.exposeInMainWorld('freedomAPI', {
     }
 
     const handler = (_event, status) => callback(status);
-    ipcRenderer.on(IPC.JACKTRIP_STATUS_UPDATE, handler);
+    ipcRenderer.on('jacktrip:statusUpdate', handler);
 
     return () => {
-      ipcRenderer.removeListener(IPC.JACKTRIP_STATUS_UPDATE, handler);
+      ipcRenderer.removeListener('jacktrip:statusUpdate', handler);
     };
   }),
 });

@@ -19,6 +19,60 @@ contextBridge.exposeInMainWorld('nodeConfig', {
 
 contextBridge.exposeInMainWorld('internalPages', internalPages);
 
+contextBridge.exposeInMainWorld('freedomBrowser', {
+  isFreedomBrowser: true,
+});
+
+const isTrustedInternalContext = () => {
+  const location = globalThis.location;
+  return Boolean(location && location.protocol === 'file:');
+};
+
+const guardInternal =
+  (name, fn) =>
+  (...args) => {
+    if (!isTrustedInternalContext()) {
+      const url = globalThis.location?.href || 'unknown';
+      console.warn(`[freedomAPI] blocked "${name}" on non-internal page: ${url}`);
+      return Promise.reject(new Error('freedomAPI is only available on Freedom internal pages'));
+    }
+    return fn(...args);
+  };
+
+// Main renderer pages are trusted local files, but keep this bridge guarded so
+// accidental non-file BrowserWindow navigations cannot call privileged IPC.
+contextBridge.exposeInMainWorld('freedomAPI', {
+  getPlatform: guardInternal('getPlatform', () => ipcRenderer.invoke('window:get-platform')),
+  checkJacktripDeps: guardInternal('checkJacktripDeps', () => ipcRenderer.invoke('jacktrip:checkDeps')),
+  connectJacktrip: guardInternal('connectJacktrip', (options) => ipcRenderer.invoke('jacktrip:connect', options)),
+  disconnectJacktrip: guardInternal('disconnectJacktrip', () => ipcRenderer.invoke('jacktrip:disconnect')),
+  getJacktripStatus: guardInternal('getJacktripStatus', () => ipcRenderer.invoke('jacktrip:getStatus')),
+  listJacktripPorts: guardInternal('listJacktripPorts', () => ipcRenderer.invoke('jacktrip:listPorts')),
+  setupJacktripAudio: guardInternal('setupJacktripAudio', (options) => ipcRenderer.invoke('jacktrip:setupAudio', options)),
+  restoreJacktripAudio: guardInternal('restoreJacktripAudio', (options) => ipcRenderer.invoke('jacktrip:restoreAudio', options)),
+  startJacktripLocalServer: guardInternal('startJacktripLocalServer', (options) => ipcRenderer.invoke('jacktrip:startLocalServer', options)),
+  stopJacktripLocalServer: guardInternal('stopJacktripLocalServer', () => ipcRenderer.invoke('jacktrip:stopLocalServer')),
+  attachLiveRoom: guardInternal('attachLiveRoom', (options) => ipcRenderer.invoke('pirate:live-room-attach', options)),
+  hostAttachLiveRoom: guardInternal('hostAttachLiveRoom', (options) => ipcRenderer.invoke('pirate:live-room-host-attach', options)),
+  guestAttachLiveRoom: guardInternal('guestAttachLiveRoom', (options) => ipcRenderer.invoke('pirate:live-room-guest-attach', options)),
+  endLiveRoom: guardInternal('endLiveRoom', (options) => ipcRenderer.invoke('pirate:live-room-end', options)),
+  getPirateAuthStatus: guardInternal('getPirateAuthStatus', () => ipcRenderer.invoke('pirate:auth-get-status')),
+  openInNewTab: guardInternal('openInNewTab', (url) => ipcRenderer.invoke('internal:open-url-in-new-tab', url)),
+  startPirateDeviceAuth: guardInternal('startPirateDeviceAuth', (options) => ipcRenderer.invoke('pirate:auth-start-device', options)),
+  pollPirateDeviceAuth: guardInternal('pollPirateDeviceAuth', (options) => ipcRenderer.invoke('pirate:auth-poll-device', options)),
+  savePirateAccessToken: guardInternal('savePirateAccessToken', (accessToken) => ipcRenderer.invoke('pirate:auth-save-access-token', accessToken)),
+  clearPirateAccessToken: guardInternal('clearPirateAccessToken', () => ipcRenderer.invoke('pirate:auth-clear-access-token')),
+  onJacktripStatusUpdate: guardInternal('onJacktripStatusUpdate', (callback) => {
+    if (typeof callback !== 'function') {
+      return () => {};
+    }
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('jacktrip:statusUpdate', handler);
+    ipcRenderer.invoke('jacktrip:getStatus').then(callback);
+    return () => ipcRenderer.removeListener('jacktrip:statusUpdate', handler);
+  }),
+});
+
 contextBridge.exposeInMainWorld('electronAPI', {
   setBzzBase: (webContentsId, baseUrl) =>
     ipcRenderer.invoke('bzz:set-base', { webContentsId, baseUrl }),

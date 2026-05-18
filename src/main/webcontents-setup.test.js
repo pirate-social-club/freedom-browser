@@ -198,6 +198,17 @@ describe('webcontents-setup', () => {
     contents.emit('will-navigate', httpEvent, 'https://example.com/next');
     expect(httpEvent.preventDefault).not.toHaveBeenCalled();
 
+    const liveRoomEvent = {
+      preventDefault: jest.fn(),
+    };
+    contents.emit('will-navigate', liveRoomEvent, 'freedom://live-room?roomId=lr_test');
+    expect(liveRoomEvent.preventDefault).toHaveBeenCalled();
+    expect(parentWindow.webContents.send).toHaveBeenLastCalledWith(
+      'tab:new-with-url',
+      'freedom://live-room?roomId=lr_test',
+      null
+    );
+
     contents.emit(
       'did-fail-load',
       {},

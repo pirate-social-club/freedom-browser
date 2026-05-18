@@ -44,6 +44,34 @@ describe('live-room-api', () => {
     expect(() => normalizeApiBase('https://evil.example')).toThrow('host is not allowed');
   });
 
+  test('uses the launch web base for device authorization links', async () => {
+    const shell = { openExternal: jest.fn().mockResolvedValue(undefined) };
+    const fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: jest.fn().mockResolvedValue({
+        device_code: 'pdev_abc',
+        user_code: 'PTR-ABCD-2345',
+        verification_uri: 'https://pirate.sc/authorize-device',
+        verification_uri_complete: 'https://pirate.sc/authorize-device?user_code=PTR-ABCD-2345',
+        expires_in: 900,
+        interval: 5,
+      }),
+    });
+
+    await expect(startPirateDeviceAuth({
+      apiBase: 'http://localhost:8787',
+      webBase: 'http://localhost:5173',
+    }, { fetch, authStorage: { shell } })).resolves.toEqual(expect.objectContaining({
+      device_code: 'pdev_abc',
+      user_code: 'PTR-ABCD-2345',
+      verification_uri: 'http://localhost:5173/authorize-device',
+      verification_uri_complete: 'http://localhost:5173/authorize-device?user_code=PTR-ABCD-2345',
+    }));
+
+    expect(shell.openExternal).toHaveBeenCalledWith('http://localhost:5173/authorize-device?user_code=PTR-ABCD-2345');
+  });
+
   test('host attach posts to the community live-room endpoint', async () => {
     const fetch = jest.fn().mockResolvedValue({
       ok: true,

@@ -7,6 +7,7 @@ const {
 
 const originalBeeApi = process.env.BEE_API;
 const originalIpfsGateway = process.env.IPFS_GATEWAY;
+const originalLocation = global.location;
 
 const flushMicrotasks = async () => {
   await Promise.resolve();
@@ -33,6 +34,13 @@ function loadPreloadModule(options = {}) {
       },
     });
   const contextBridge = options.contextBridge || createContextBridgeMock();
+  const location = options.location || {
+    href: 'file:///app/index.html',
+    pathname: '/app/index.html',
+    protocol: 'file:',
+  };
+
+  global.location = location;
 
   if (Object.prototype.hasOwnProperty.call(options, 'beeApiEnv')) {
     if (options.beeApiEnv == null) {
@@ -77,6 +85,12 @@ describe('preload', () => {
       process.env.IPFS_GATEWAY = originalIpfsGateway;
     }
 
+    if (originalLocation === undefined) {
+      delete global.location;
+    } else {
+      global.location = originalLocation;
+    }
+
     jest.restoreAllMocks();
   });
 
@@ -86,10 +100,12 @@ describe('preload', () => {
       ipfsGatewayEnv: 'http://127.0.0.1:9090',
     });
 
-    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledTimes(17);
+    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledTimes(19);
     expect(Object.keys(exposures)).toEqual([
       'nodeConfig',
       'internalPages',
+      'freedomBrowser',
+      'freedomAPI',
       'electronAPI',
       'bee',
       'ipfs',
@@ -112,6 +128,9 @@ describe('preload', () => {
       ipfsGateway: 'http://127.0.0.1:9090',
     });
     expect(exposures.internalPages).toBe(internalPages);
+    expect(exposures.freedomBrowser).toEqual({ isFreedomBrowser: true });
+    expect(exposures.freedomAPI.attachLiveRoom).toEqual(expect.any(Function));
+    expect(exposures.freedomAPI.onJacktripStatusUpdate).toEqual(expect.any(Function));
 
     const invokeCases = [
       [exposures.electronAPI, 'setBzzBase', [11, 'http://127.0.0.1:1633/bzz/hash/'], IPC.BZZ_SET_BASE, [{ webContentsId: 11, baseUrl: 'http://127.0.0.1:1633/bzz/hash/' }]],
@@ -169,6 +188,15 @@ describe('preload', () => {
       [exposures.jacktrip, 'restoreAudio', [{ preferredSource: 'alsa_input.usb' }], IPC.JACKTRIP_RESTORE_AUDIO, [{ preferredSource: 'alsa_input.usb' }]],
       [exposures.jacktrip, 'startLocalServer', [{ port: 4464 }], IPC.JACKTRIP_START_LOCAL_SERVER, [{ port: 4464 }]],
       [exposures.jacktrip, 'stopLocalServer', [], IPC.JACKTRIP_STOP_LOCAL_SERVER, []],
+      [exposures.freedomAPI, 'attachLiveRoom', [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }], IPC.PIRATE_LIVE_ROOM_ATTACH, [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }]],
+      [exposures.freedomAPI, 'hostAttachLiveRoom', [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }], IPC.PIRATE_LIVE_ROOM_HOST_ATTACH, [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }]],
+      [exposures.freedomAPI, 'guestAttachLiveRoom', [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }], IPC.PIRATE_LIVE_ROOM_GUEST_ATTACH, [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }]],
+      [exposures.freedomAPI, 'endLiveRoom', [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }], IPC.PIRATE_LIVE_ROOM_END, [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }]],
+      [exposures.freedomAPI, 'getPirateAuthStatus', [], IPC.PIRATE_AUTH_GET_STATUS, []],
+      [exposures.freedomAPI, 'openInNewTab', ['http://localhost:5173/authorize-device'], IPC.OPEN_URL_IN_NEW_TAB, ['http://localhost:5173/authorize-device']],
+      [exposures.freedomAPI, 'startPirateDeviceAuth', [{ apiBase: 'https://api.pirate.sc' }], IPC.PIRATE_AUTH_START_DEVICE, [{ apiBase: 'https://api.pirate.sc' }]],
+      [exposures.freedomAPI, 'pollPirateDeviceAuth', [{ apiBase: 'https://api.pirate.sc', deviceCode: 'pdev_test' }], IPC.PIRATE_AUTH_POLL_DEVICE, [{ apiBase: 'https://api.pirate.sc', deviceCode: 'pdev_test' }]],
+      [exposures.freedomAPI, 'clearPirateAccessToken', [], IPC.PIRATE_AUTH_CLEAR_ACCESS_TOKEN, []],
     ];
 
     for (const [target, method, args, channel, expectedArgs] of invokeCases) {
@@ -198,6 +226,27 @@ describe('preload', () => {
       target[method](...args);
       expect(ipcRenderer.send).toHaveBeenCalledWith(channel, ...expectedArgs);
     }
+  });
+
+  test('blocks main freedomAPI methods outside trusted file contexts', async () => {
+    const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const { exposures, ipcRenderer } = loadPreloadModule({
+      location: {
+        href: 'https://example.com/app',
+        pathname: '/app',
+        protocol: 'https:',
+      },
+    });
+
+    ipcRenderer.invoke.mockClear();
+    await expect(exposures.freedomAPI.attachLiveRoom({ communityId: 'cmt_test', liveRoomId: 'lr_test' }))
+      .rejects
+      .toThrow('freedomAPI is only available on Freedom internal pages');
+
+    expect(ipcRenderer.invoke).not.toHaveBeenCalled();
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      '[freedomAPI] blocked "attachLiveRoom" on non-internal page: https://example.com/app'
+    );
   });
 
   test('registers electronAPI, github bridge, and service registry listeners with cleanup', () => {

@@ -40,6 +40,16 @@ const sendToHostWebContents = (contents, channel, ...args) => {
   return true;
 };
 
+const isFreedomLiveRoomUrl = (rawUrl) => {
+  if (!rawUrl || typeof rawUrl !== 'string') return false;
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.protocol === 'freedom:' && parsed.hostname.toLowerCase() === 'live-room';
+  } catch {
+    return rawUrl.toLowerCase().startsWith('freedom://live-room');
+  }
+};
+
 function registerWebContentsHandlers() {
   app.on('web-contents-created', (_event, contents) => {
     contents.once('destroyed', () => {
@@ -93,7 +103,11 @@ function registerWebContentsHandlers() {
         ) {
           log.info(`${tag} intercepted custom protocol navigation: ${sanitizeUrlForLog(url)}`);
           event.preventDefault();
-          sendToHostWebContents(contents, 'navigate-to-url', url);
+          if (isFreedomLiveRoomUrl(url)) {
+            sendToHostWebContents(contents, 'tab:new-with-url', url, null);
+          } else {
+            sendToHostWebContents(contents, 'navigate-to-url', url);
+          }
         }
       });
 

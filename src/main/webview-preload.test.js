@@ -30,8 +30,10 @@ function loadWebviewPreloadModule(options = {}) {
 
   const contextBridge = createContextBridgeMock();
   const ipcRenderer = createIpcRendererMock({
+    sendSyncImplementation: options.sendSyncImplementation,
     syncResponses: {
       [IPC.GET_INTERNAL_PAGES]: internalPages,
+      ...(options.syncResponses || {}),
     },
     invokeResponses: {
       [IPC.HISTORY_GET]: [{ url: 'https://example.com' }],
@@ -140,7 +142,12 @@ describe('webview-preload', () => {
       'freedomAPI',
       expect.any(Object)
     );
+    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledWith(
+      'freedomBrowser',
+      { isFreedomBrowser: true }
+    );
     expect(ipcRenderer.sendSync).toHaveBeenCalledWith(IPC.GET_INTERNAL_PAGES);
+    expect(exposures.freedomBrowser).toEqual({ isFreedomBrowser: true });
 
     const invokeCases = [
       ['getHistory', [{ limit: 10 }], IPC.HISTORY_GET, [{ limit: 10 }]],
@@ -184,6 +191,27 @@ describe('webview-preload', () => {
     }
 
     expect(consoleLogSpy).toHaveBeenCalledWith('[webview-preload] Loaded (freedomAPI + context menu + ethereum provider)');
+  });
+
+  test('exposes the Freedom marker even if internal page lookup fails', () => {
+    const { exposures, ipcRenderer } = loadWebviewPreloadModule({
+      sendSyncImplementation: () => {
+        throw new Error('sync IPC unavailable');
+      },
+      location: {
+        href: 'https://pirate.sc/p/pst_live',
+        protocol: 'https:',
+        pathname: '/p/pst_live',
+      },
+    });
+
+    expect(ipcRenderer.sendSync).toHaveBeenCalledWith(IPC.GET_INTERNAL_PAGES);
+    expect(exposures.freedomBrowser).toEqual({ isFreedomBrowser: true });
+    expect(exposures.freedomAPI).toEqual(expect.any(Object));
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      '[webview-preload] Failed to load internal page list:',
+      expect.any(Error)
+    );
   });
 
   test('subscribes to service registry updates on internal pages', () => {

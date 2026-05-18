@@ -310,6 +310,24 @@
         display: none;
       }
 
+      details.advanced {
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: var(--panel);
+      }
+
+      details.advanced > summary {
+        cursor: pointer;
+        padding: 18px;
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      details.advanced > .advanced-body {
+        border-top: 1px solid var(--border);
+        padding: 0 18px 18px;
+      }
+
       @media (max-width: 840px) {
         main {
           width: min(100vw - 24px, 680px);
@@ -374,8 +392,9 @@
           </form>
         </section>
 
-        <section>
-          <h2>JackTrip</h2>
+        <details id="advanced-audio" class="advanced">
+          <summary>Advanced audio</summary>
+          <div class="advanced-body">
           <form id="connect-form">
             <div class="row">
               <label for="server">Server</label>
@@ -414,7 +433,8 @@
               <button id="check-deps" type="button">Check Deps</button>
             </div>
           </form>
-        </section>
+          </div>
+        </details>
 
         <section class="stack">
           <h2>Agora Broadcast</h2>
@@ -429,8 +449,9 @@
           <div id="broadcast-status" class="inline-status">Attach a room to enable Agora broadcast.</div>
         </section>
 
-        <section class="stack">
-          <h2>Status</h2>
+        <details id="diagnostics" class="advanced">
+          <summary>Diagnostics</summary>
+          <div class="advanced-body stack">
           <div class="status-grid">
             <div class="metric">
               <span>Connection</span>
@@ -464,17 +485,42 @@
 
           <div id="ports" class="ports">No JACK ports loaded</div>
           <pre id="log" aria-live="polite"></pre>
-        </section>
+          </div>
+        </details>
       </div>
     </main>
 
     <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.24.0.js"></script>
     <script>
-      const api = window.freedomAPI;
+      const api = window.freedomAPI || null;
+      const requiredApiMethods = [
+        'attachLiveRoom',
+        'checkJacktripDeps',
+        'clearPirateAccessToken',
+        'connectJacktrip',
+        'disconnectJacktrip',
+        'endLiveRoom',
+        'getJacktripStatus',
+        'getPirateAuthStatus',
+        'getPlatform',
+        'listJacktripPorts',
+        'openInNewTab',
+        'onJacktripStatusUpdate',
+        'pollPirateDeviceAuth',
+        'restoreJacktripAudio',
+        'setupJacktripAudio',
+        'startJacktripLocalServer',
+        'startPirateDeviceAuth',
+        'stopJacktripLocalServer',
+      ];
       const TOKEN_RENEW_LEAD_MS = 120000;
       const TOKEN_RENEW_RETRY_MS = 15000;
       const MIN_TOKEN_RENEW_DELAY_MS = 5000;
       const params = new URLSearchParams(window.location.search);
+      const launchWebBase = params.get('webBase') || params.get('web') || '';
+      const launchSeat = ['host', 'guest'].includes((params.get('seat') || params.get('role') || '').toLowerCase())
+        ? (params.get('seat') || params.get('role') || '').toLowerCase()
+        : '';
       const els = {
         roomId: document.getElementById('room-id'),
         state: document.getElementById('state'),
@@ -504,6 +550,7 @@
         broadcastStatus: document.getElementById('broadcast-status'),
         broadcastPreview: document.getElementById('broadcast-preview'),
         broadcastPlaceholder: document.getElementById('broadcast-placeholder'),
+        diagnostics: document.getElementById('diagnostics'),
         localVideo: document.getElementById('local-video'),
       };
       let lastStatus = { status: 'DISCONNECTED' };
@@ -567,17 +614,25 @@
         throw new Error('Pirate device authorization expired');
       }
 
+      async function openDeviceAuthorization(auth) {
+        const url = auth?.verification_uri_complete || auth?.verification_uri;
+        if (!url) return;
+        await api.openInNewTab(url);
+        writeLog('Pirate sign-in opened in Freedom', { url });
+      }
+
       async function ensurePirateAuth(status) {
         const currentStatus = status || await api.getPirateAuthStatus();
         renderAuthStatus(currentStatus);
         if (currentStatus.authorized) return currentStatus;
 
         stopDeviceAuthPolling();
-        const auth = await api.startPirateDeviceAuth({ apiBase: els.apiBase.value });
+        const auth = await api.startPirateDeviceAuth({ apiBase: els.apiBase.value, openBrowser: false, webBase: launchWebBase });
         deviceAuth = auth;
         els.deviceCode.textContent = `Code ${auth.user_code}`;
         els.authStatus.textContent = 'Approve the device in Pirate web';
         writeLog('Pirate sign-in started', auth);
+        await openDeviceAuthorization(auth);
         return await waitForPirateDeviceAuthApproval(auth);
       }
 
@@ -599,6 +654,31 @@
         const time = new Date().toLocaleTimeString();
         const suffix = detail ? `\n${JSON.stringify(redact(detail), null, 2)}` : '';
         els.log.textContent = `[${time}] ${message}${suffix}\n\n${els.log.textContent}`.trim();
+        if (/failed|gap|unavailable|missing/i.test(message)) {
+          els.diagnostics.open = true;
+        }
+      }
+
+      function missingFreedomApiMethods() {
+        if (!api) return requiredApiMethods;
+        return requiredApiMethods.filter((method) => typeof api[method] !== 'function');
+      }
+
+      function renderBridgeUnavailable(missing) {
+        document.querySelectorAll('input, select, button').forEach((el) => {
+          el.disabled = true;
+        });
+        els.state.textContent = 'BRIDGE MISSING';
+        els.state.className = 'state-pill disconnected';
+        els.authStatus.textContent = 'Freedom live-room bridge unavailable';
+        els.runtime.textContent = 'Bridge unavailable';
+        els.broadcastStatus.textContent = 'Update or restart Freedom, then open this producer room again.';
+        writeLog('Freedom live-room bridge unavailable', {
+          missing,
+          freedomBrowser: window.freedomBrowser || null,
+          hasFreedomAPI: Boolean(window.freedomAPI),
+          href: window.location.href,
+        });
       }
 
       function setBusy(isBusy) {
@@ -648,11 +728,15 @@
       }
 
       function attachRequestPayload() {
-        return {
+        const payload = {
           apiBase: els.apiBase.value,
           communityId: els.communityId.value,
           liveRoomId: els.liveRoomId.value,
         };
+        if (launchSeat) {
+          payload.seat = launchSeat;
+        }
+        return payload;
       }
 
       function applyAttachPayload(payload) {
@@ -922,6 +1006,12 @@
       }
 
       async function bootstrap() {
+        const missing = missingFreedomApiMethods();
+        if (missing.length > 0) {
+          renderBridgeUnavailable(missing);
+          return;
+        }
+
         const roomId = params.get('roomId') || params.get('room');
         const communityId = params.get('communityId') || params.get('community');
         const apiBase = params.get('apiBase') || params.get('api');
@@ -930,6 +1020,14 @@
         if (apiBase) els.apiBase.value = apiBase;
         if (communityId) els.communityId.value = communityId;
         if (roomId) els.liveRoomId.value = roomId;
+        writeLog('Live room launch parameters', {
+          apiBase: els.apiBase.value,
+          autoStart,
+          communityId: els.communityId.value,
+          roomId: els.liveRoomId.value,
+          seat: launchSeat || null,
+          webBase: launchWebBase || null,
+        });
         els.server.value = params.get('server') || '';
         els.port.value = params.get('port') || '4464';
         els.bindPort.value = params.get('bindPort') || '';
@@ -1023,10 +1121,11 @@
       document.getElementById('start-device-auth').addEventListener('click', () => {
         run('Start Pirate sign-in', async () => {
           stopDeviceAuthPolling();
-          const auth = await api.startPirateDeviceAuth({ apiBase: els.apiBase.value });
+          const auth = await api.startPirateDeviceAuth({ apiBase: els.apiBase.value, openBrowser: false, webBase: launchWebBase });
           deviceAuth = auth;
           els.deviceCode.textContent = `Code ${auth.user_code}`;
           els.authStatus.textContent = 'Approve the device in Pirate web';
+          await openDeviceAuthorization(auth);
           deviceAuthTimer = setTimeout(pollDeviceAuth, Math.max(1, Number(auth.interval || 5)) * 1000);
           return auth;
         });

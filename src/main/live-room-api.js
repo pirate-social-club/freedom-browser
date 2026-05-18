@@ -9,6 +9,13 @@ const ALLOWED_API_HOSTS = new Set([
   'localhost',
   '127.0.0.1',
 ]);
+const ALLOWED_WEB_HOSTS = new Set([
+  'pirate.sc',
+  'www.pirate.sc',
+  'staging.pirate.sc',
+  'localhost',
+  '127.0.0.1',
+]);
 const MAX_ID_LENGTH = 160;
 const TOKEN_FILE = 'api-token.enc';
 const DEVICE_CLIENT_ID = 'freedom-desktop';
@@ -47,6 +54,40 @@ function normalizeApiBase(value) {
   url.search = '';
   url.hash = '';
   return url.toString().replace(/\/$/, '');
+}
+
+function normalizeWebBase(value) {
+  const raw = cleanString(value);
+  if (!raw) return '';
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error('Invalid Pirate web base URL');
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error('Pirate web base URL must use http or https');
+  }
+  if (url.protocol === 'http:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
+    throw new Error('Pirate web base URL must use https outside localhost');
+  }
+  if (!ALLOWED_WEB_HOSTS.has(url.hostname)) {
+    throw new Error('Pirate web base URL host is not allowed');
+  }
+  url.pathname = '';
+  url.search = '';
+  url.hash = '';
+  return url.toString().replace(/\/$/, '');
+}
+
+function withVerificationWebBase(result, webBase) {
+  if (!webBase || !result?.user_code) return result;
+  const verificationUri = `${webBase}/authorize-device`;
+  return {
+    ...result,
+    verification_uri: verificationUri,
+    verification_uri_complete: `${verificationUri}?user_code=${encodeURIComponent(result.user_code)}`,
+  };
 }
 
 function normalizeId(value, field) {
@@ -235,10 +276,12 @@ async function postJson(url, body, options = {}) {
     if (options.allowErrorBody && responseBody && typeof responseBody === 'object') {
       return { ...responseBody, status: response.status };
     }
-    const message = responseBody?.message || responseBody?.error || `Pirate API request failed with status ${response.status}`;
+    const apiMessage = responseBody?.message || responseBody?.error || 'Pirate API request failed';
+    const message = `${apiMessage} (${response.status} ${url})`;
     const error = new Error(message);
     error.status = response.status;
     error.body = responseBody;
+    error.url = url;
     throw error;
   }
   return responseBody;
@@ -250,17 +293,19 @@ async function requestJson(url, token, fetchImpl = globalThis.fetch) {
 
 async function startPirateDeviceAuth(input = {}, options = {}) {
   const apiBase = normalizeApiBase(input.apiBase);
+  const webBase = normalizeWebBase(input.webBase || input.webOrigin || input.webUrl);
   const result = await postJson(`${apiBase}/oauth/device_authorize`, {
     client_id: DEVICE_CLIENT_ID,
     scope: cleanString(input.scope) || DEFAULT_DEVICE_SCOPE,
   }, { fetch: options.fetch });
+  const launchResult = withVerificationWebBase(result, webBase);
 
   if (input.openBrowser !== false) {
     const deps = getAuthDeps(options.authStorage);
-    await deps.shell?.openExternal?.(result.verification_uri_complete || result.verification_uri).catch(() => undefined);
+    await deps.shell?.openExternal?.(launchResult.verification_uri_complete || launchResult.verification_uri).catch(() => undefined);
   }
 
-  return result;
+  return launchResult;
 }
 
 async function pollPirateDeviceAuth(input = {}, options = {}) {
