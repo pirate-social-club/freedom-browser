@@ -1241,7 +1241,8 @@
           throw new Error('Room requires JackTrip but no JackTrip server is configured');
         }
         if (hostPlatform === 'linux' && jacktrip.linux_audio_setup_recommended) {
-          await api.setupJacktripAudio({ setDefaultSource: true });
+          const audio = await api.setupJacktripAudio({ setDefaultSource: true });
+          writeLog('JackTrip audio source prepared before connect', audio);
         }
         const status = await api.connectJacktrip({
           server: jacktrip.server,
@@ -1254,6 +1255,29 @@
           throw new Error(status?.error || status?.message || 'Could not connect JackTrip audio');
         }
         return status;
+      }
+
+      async function routeJacktripAudioAfterConnect(payload) {
+        if (hostPlatform !== 'linux' || !isJacktripHost(payload)) {
+          return null;
+        }
+        const audio = await api.setupJacktripAudio({ setDefaultSource: true });
+        const movedInputsCount = Number(audio?.movedInputsCount || 0);
+        writeLog('JackTrip audio routed after connect', {
+          audio,
+          movedInputsCount,
+          roomId: payload?.room?.id || null,
+          seat: payload?.runtime?.seat || null,
+        });
+        if (movedInputsCount === 0) {
+          writeLog('JackTrip Pulse routing found no sink inputs; JACK/PipeWire port routing may be required', {
+            audio,
+            roomId: payload?.room?.id || null,
+          });
+        }
+        const status = await api.getJacktripStatus();
+        renderStatus(status);
+        return { audio, status };
       }
 
       async function waitForJacktripConnected(timeoutMs = 10000) {
@@ -1280,13 +1304,16 @@
         const jacktripRequired = isJacktripRequiredRoom(payload);
         const guest = isJacktripGuest(payload);
         let jacktrip = await connectFromAttach(payload);
+        let jacktripRouting = null;
         if (jacktripRequired) {
           jacktrip = await waitForJacktripConnected();
+          jacktripRouting = await routeJacktripAudioAfterConnect(payload);
         }
         if (guest) {
           renderBroadcastStatus('Connected to JackTrip audio. The host controls the viewer broadcast.', 'idle');
           writeLog('JackTrip guest connected; host controls Agora broadcast', {
             jacktrip,
+            jacktripRouting,
             room: payload?.room?.id || null,
             seat: payload?.runtime?.seat || null,
           });
@@ -1294,6 +1321,7 @@
             room: payload?.room?.id || null,
             seat: payload?.runtime?.seat || null,
             jacktrip,
+            jacktripRouting,
             broadcast: null,
           };
         }
@@ -1302,6 +1330,7 @@
           room: payload?.room?.id || null,
           seat: payload?.runtime?.seat || null,
           jacktrip,
+          jacktripRouting,
           broadcast,
         };
       }
@@ -1430,6 +1459,7 @@
           await connectFromAttach(payload);
           if (isJacktripRequiredRoom(payload)) {
             await waitForJacktripConnected();
+            await routeJacktripAudioAfterConnect(payload);
           }
           return payload;
         });
