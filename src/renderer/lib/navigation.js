@@ -99,6 +99,8 @@ const isSingleLabelHostname = (value = '') => {
   }
 };
 
+const isSubframeNavigationEvent = (event) => event?.isMainFrame === false;
+
 const isBundledHnsReady = () => {
   if (!state.enableHnsIntegration) return false;
   return state.registry?.hns?.resolverReady === true;
@@ -1448,6 +1450,10 @@ export const initNavigation = () => {
         break;
 
       case 'did-navigate':
+        if (isSubframeNavigationEvent(data.event)) {
+          pushDebug(`Ignored subframe navigation: ${data.event?.url || 'unknown url'}`);
+          break;
+        }
         if (webview) webview.classList.add('hidden');
         // Update bookmarks bar visibility based on destination
         updateBookmarkBarState(data.event?.url);
@@ -1471,6 +1477,10 @@ export const initNavigation = () => {
         break;
 
       case 'did-navigate-in-page':
+        if (isSubframeNavigationEvent(data.event)) {
+          pushDebug(`Ignored subframe in-page navigation: ${data.event?.url || 'unknown url'}`);
+          break;
+        }
         if (data.event) handleNavigationEvent(data.event);
         // Notify other modules that navigation completed (for dApp connection banner)
         document.dispatchEvent(new CustomEvent('navigation-completed'));

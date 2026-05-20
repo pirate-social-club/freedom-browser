@@ -264,6 +264,7 @@ const loadNavigationModule = async (options = {}) => {
     if (selector === '.bookmarks') return bookmarksBar;
     return null;
   });
+  document.dispatchEvent = jest.fn();
   document.activeElement = null;
 
   const windowHandlers = {};
@@ -532,6 +533,33 @@ describe('navigation', () => {
     ctx.tabsMocks.webviewEventHandler('dom-ready', {});
     await flushMicrotasks();
     expect(ctx.debugMocks.pushDebug).toHaveBeenCalledWith('Webview ready.');
+  });
+
+  test('ignores subframe navigation events so embeds do not replace the address bar', async () => {
+    const ctx = await loadNavigationModule();
+
+    await ctx.mod.initNavigation();
+
+    ctx.elements.addressInput.value = '@\u{1F3F4}';
+    ctx.activeRef.tab.navigationState.currentPageUrl = 'https://space.example/';
+    ctx.navigationUtilsMocks.deriveDisplayAddress.mockClear();
+
+    ctx.tabsMocks.webviewEventHandler('did-navigate-in-page', {
+      event: {
+        url: 'https://auth.privy.io/apps/app/embedded-wallets',
+        isMainFrame: false,
+      },
+    });
+
+    expect(ctx.elements.addressInput.value).toBe('@\u{1F3F4}');
+    expect(ctx.activeRef.tab.navigationState.currentPageUrl).toBe('https://space.example/');
+    expect(ctx.navigationUtilsMocks.deriveDisplayAddress).not.toHaveBeenCalled();
+    expect(global.document.dispatchEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'navigation-completed' })
+    );
+    expect(ctx.debugMocks.pushDebug).toHaveBeenCalledWith(
+      'Ignored subframe in-page navigation: https://auth.privy.io/apps/app/embedded-wallets'
+    );
   });
 
   test('normalizes bare localhost before loading a target', async () => {

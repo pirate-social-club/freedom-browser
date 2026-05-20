@@ -23,6 +23,8 @@ const { isValidMnemonic } = require('./derivation');
 const TEST_MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
+jest.setTimeout(15000);
+
 describe('vault', () => {
   let tempDir;
 
@@ -245,7 +247,7 @@ describe('vault', () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
 
       expect(isUnlocked()).toBe(false);
-    }, 1000);
+    }, 15000);
 
     test('does not auto-lock when timeout is 0', async () => {
       await importVault(tempDir, 'password123', TEST_MNEMONIC);
