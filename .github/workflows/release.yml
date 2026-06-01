@@ -18,6 +18,9 @@ jobs:
     name: Build ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RADICLE_ALLOW_EXPIRED_CERT: '1'
     strategy:
       fail-fast: false
       matrix:
@@ -99,9 +102,6 @@ jobs:
       - name: Download platform binaries
         working-directory: ${{ matrix.workdir }}
         shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RADICLE_ALLOW_EXPIRED_CERT: '1'
         run: |
           npm run bee:download
           npm run ipfs:download
