@@ -16,6 +16,10 @@
     ])));
   }
 
+  function getHnsPublicRoots() {
+    return Object.freeze(getHnsPublicSuffixes().map((suffix) => suffix.replace(/^\./, '')));
+  }
+
   function setDynamicHnsPublicSuffixes(values = []) {
     dynamicHnsPublicSuffixes = Array.from(new Set(
       values
@@ -29,6 +33,15 @@
     return hostname === 'localhost' || hostname === '::1' || /^127\./.test(hostname);
   }
 
+  function isValidHostnameLabel(value = '') {
+    return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value);
+  }
+
+  function isHnsPublicRoot(hostname = '') {
+    const normalized = String(hostname || '').trim().toLowerCase();
+    return isValidHostnameLabel(normalized) && getHnsPublicRoots().includes(normalized);
+  }
+
   function isHnsHost(hostname = '') {
     if (!hostname || typeof hostname !== 'string') return false;
 
@@ -37,15 +50,19 @@
     if (isLoopbackHostname(normalized)) return false;
 
     if (!normalized.includes('.')) {
-      return true;
+      return isValidHostnameLabel(normalized);
     }
+
+    if (!normalized.split('.').every(isValidHostnameLabel)) return false;
 
     return getHnsPublicSuffixes().some((suffix) => normalized.endsWith(suffix));
   }
 
   const api = {
     HNS_PUBLIC_SUFFIXES: DEFAULT_HNS_PUBLIC_SUFFIXES,
+    getHnsPublicRoots,
     getHnsPublicSuffixes,
+    isHnsPublicRoot,
     isHnsHost,
     setDynamicHnsPublicSuffixes,
   };

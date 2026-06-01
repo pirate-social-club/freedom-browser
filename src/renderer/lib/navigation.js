@@ -89,11 +89,25 @@ export const setOnHistoryRecorded = (callback) => {
   onHistoryRecorded = callback;
 };
 
-const isSingleLabelHostname = (value = '') => {
+const getKnownHnsSuffixes = () =>
+  globalThis.FREEDOM_HNS_HOSTS?.getHnsPublicSuffixes?.() || ['.pirate'];
+
+const isKnownHnsUrl = (value = '') => {
   try {
     const parsed = new URL(value);
-    const hostname = parsed.hostname || '';
-    return Boolean(hostname) && !hostname.includes('.');
+    const hostname = (parsed.hostname || '').toLowerCase();
+    if (!hostname) return false;
+
+    if (globalThis.FREEDOM_HNS_HOSTS?.isHnsHost?.(hostname)) {
+      return true;
+    }
+
+    const suffixes = getKnownHnsSuffixes();
+    if (!hostname.includes('.')) {
+      return hostname !== 'localhost';
+    }
+
+    return suffixes.some((suffix) => hostname.endsWith(String(suffix).toLowerCase()));
   } catch {
     return false;
   }
@@ -104,6 +118,13 @@ const isSubframeNavigationEvent = (event) => event?.isMainFrame === false;
 const isBundledHnsReady = () => {
   if (!state.enableHnsIntegration) return false;
   return state.registry?.hns?.resolverReady === true;
+};
+
+const shouldShowHnsNotReady = () => {
+  if (!state.enableHnsIntegration || isBundledHnsReady()) return false;
+  const hnsState = state.registry?.hns || {};
+  if (hnsState.mode !== 'bundled') return true;
+  return hnsState.synced !== true || hnsState.canaryReady !== true;
 };
 
 const normalizeExplicitHnsUrlInput = (value = '') => {
@@ -780,7 +801,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     const explicitHnsUrl = normalizeExplicitHnsUrlInput(value);
     if (explicitHnsUrl) {
       const hnsState = state.registry?.hns;
-      if (!isBundledHnsReady()) {
+      if (shouldShowHnsNotReady()) {
         loadHnsNotReadyPage(webview, navState, displayOverride || value, explicitHnsUrl, hnsState);
         return;
       }
@@ -835,7 +856,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     const hnsUrl = normalizeHnsHostInput(value);
     if (hnsUrl) {
       const hnsState = state.registry?.hns;
-      if (!isBundledHnsReady()) {
+      if (shouldShowHnsNotReady()) {
         loadHnsNotReadyPage(webview, navState, displayOverride || value, hnsUrl, hnsState);
         return;
       }
@@ -1426,9 +1447,9 @@ export const initNavigation = () => {
           const failedUrl = data.event.validatedURL || data.event.url || '';
           const failedError = data.event.errorDescription || data.event.errorCode;
           const isHnsLookupFailure =
-            failedError === 'ERR_TUNNEL_CONNECTION_FAILED' && isSingleLabelHostname(failedUrl);
+            failedError === 'ERR_TUNNEL_CONNECTION_FAILED' && isKnownHnsUrl(failedUrl);
 
-          if (isHnsLookupFailure && !isBundledHnsReady()) {
+          if (isHnsLookupFailure && shouldShowHnsNotReady()) {
             errorUrl.searchParams.set('error', 'HNS_NOT_READY');
             if (state.registry?.hns?.height > 0) {
               errorUrl.searchParams.set('height', String(state.registry.hns.height));

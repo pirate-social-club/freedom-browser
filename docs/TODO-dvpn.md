@@ -12,7 +12,7 @@ The task is done when ALL of these are true:
 - [ ] User can fund and see balance from settings
 - [ ] User can connect/disconnect dVPN from settings
 - [ ] Ordinary web traffic routes through dVPN when connected (verified via ipify)
-- [ ] HNS single-label browsing still works with dVPN on (verified via shakestation/ in same session)
+- [ ] HNS allowlisted roots and `.pirate` browsing still work with dVPN on (verified via `pirate/` and `app.pirate/` in same session)
 - [ ] Loopback and local services bypass proxy correctly
 - [ ] Low-balance auto-disconnect works
 - [ ] Max-duration auto-disconnect works

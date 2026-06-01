@@ -150,12 +150,12 @@ Then execute this test sequence manually:
 | 7 | Click refresh balance again | Balance updates, funded=true |
 | 8 | Click Connect | Status changes to "Connecting..." then "Connected" |
 | 9 | Browse to https://api.ipify.org | Shows VPN IP (not your real IP) |
-| 10 | Browse to a shakestation/ URL (e.g. `nameweb.shakestation/`) | Still resolves via HNS proxy — proves composed PAC works, not just SOCKS5 |
+| 10 | Browse to a `.pirate` URL (e.g. `app.pirate/`) | Still resolves via HNS proxy — proves composed PAC works, not just SOCKS5 |
 | 11 | Browse to http://127.0.0.1:1633 | Still DIRECT (loopback bypass) |
 | 12 | Check Bee/IPFS/Radicle services still work | No regression |
 | 13 | Click Disconnect | Status returns to "Stopped — user" |
 | 14 | Browse to https://api.ipify.org | Shows your real IP again — proves PAC rebuild on disconnect removed SOCKS5 |
-| 15 | Browse to a shakestation/ URL | Still resolves via HNS proxy — proves PAC rebuild preserved HNS routing after dVPN disconnect |
+| 15 | Browse to a `.pirate` URL | Still resolves via HNS proxy — proves PAC rebuild preserved HNS routing after dVPN disconnect |
 
 ### Step 5: Classify Any Failures Precisely
 
@@ -167,7 +167,7 @@ If runtime fails, identify the exact failure category:
 | V2Ray binary missing | `getV2RayPath()` returns null, settings shows "V2Ray binary not found" |
 | Wallet/balance issue | `createWallet` or `getBalance` throws, check Electron console logs |
 | PAC composition issue | Traffic doesn't route through SOCKS5 but V2Ray is running — check `buildPacScript()` output |
-| HNS regression | HNS single-label names stop resolving when dVPN is on — PAC ordering bug |
+| HNS regression | Allowlisted HNS roots or `.pirate` names stop resolving when dVPN is on — PAC ordering bug |
 | Disconnect lifecycle | After disconnect, IP doesn't return to normal — `clearDvpnProxy` not called or `rebuild()` failed |
 
 For each failure, check the Electron main process console for `[dVPN]` and `[Network]` log lines.
@@ -268,14 +268,14 @@ Test cases:
 
 | Test | What It Verifies |
 |---|---|
-| HNS-only PAC | setHnsProxy set, no dVPN → single-label hosts go PROXY, others go DIRECT |
-| HNS + dVPN PAC composition | Both set → single-label hosts go PROXY, others go SOCKS5 |
+| HNS-only PAC | setHnsProxy set, no dVPN → allowlisted HNS roots and suffix hosts go PROXY, others go DIRECT |
+| HNS + dVPN PAC composition | Both set → allowlisted HNS hosts go PROXY, others go SOCKS5 |
 | loopback always DIRECT | 127.0.0.1, localhost, ::1 → DIRECT regardless of proxy config |
-| single-label hosts → HNS proxy | dnsDomainLevels(host)===0 returns PROXY when HNS set |
+| unknown single-label hosts bypass HNS | Unimported single-label hosts do not go to the HNS proxy |
 | ordinary hosts → SOCKS5 when dVPN connected | Multi-label hosts return SOCKS5 when dvpnProxy set |
 | ordinary hosts → DIRECT when dVPN off | Multi-label hosts return DIRECT when no dvpnProxy |
 | proxy updates on connect/disconnect | setDvpnProxy + rebuild applies new PAC; clearDvpnProxy + rebuild removes SOCKS5 |
-| HNS not regressed by dVPN | With both active, single-label still goes to HNS PROXY (not SOCKS5) |
+| HNS not regressed by dVPN | With both active, allowlisted HNS hosts still go to HNS PROXY (not SOCKS5) |
 | clearProxy stops PAC server | After clearProxy, no PAC server running |
 | rebuild with no proxies clears everything | No HNS, no dVPN → clearProxy called |
 

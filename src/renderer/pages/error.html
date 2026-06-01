@@ -59,6 +59,15 @@
       button:hover {
         background: #3a3a3a;
       }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        justify-content: center;
+      }
+      .hidden {
+        display: none;
+      }
       .nodes-icon {
         display: inline-block;
         width: 1.2em;
@@ -102,7 +111,10 @@
         invalid, the content may no longer exist, or no peers are serving it.
       </p>
       <div id="details" class="error-details"></div>
-      <button id="retry-btn">Try Again</button>
+      <div class="actions">
+        <button id="retry-btn">Try Again</button>
+        <button id="try-http-btn" class="hidden">Try HTTP</button>
+      </div>
     </div>
 
     <script>
@@ -165,6 +177,18 @@
         }
       }
 
+      function getHttpFallbackUrl(urlValue) {
+        if (!urlValue) return null;
+        try {
+          const parsed = new URL(urlValue);
+          if (parsed.protocol !== 'https:') return null;
+          parsed.protocol = 'http:';
+          return parsed.toString();
+        } catch (e) {
+          return null;
+        }
+      }
+
       async function checkSwarmStatus() {
         try {
           const res = await fetch('http://127.0.0.1:1633/health', { timeout: 2000 });
@@ -188,9 +212,9 @@
 
       async function displayError() {
         if (error === 'HNS_NOT_READY') {
-          titleEl.textContent = 'Handshake Syncing';
+          titleEl.textContent = 'Handshake Resolver Not Ready';
           descriptionEl.textContent =
-            'Freedom is still syncing Handshake. This site should load once the resolver is ready.';
+            'Freedom cannot query Handshake names yet. The resolver may still be starting, syncing, or recovering.';
           detailsEl.textContent = height ? `${url}\n\nCurrent height: ${height}` : url || 'Handshake resolver not ready';
           return;
         }
@@ -198,13 +222,27 @@
         if (error === 'HNS_LOOKUP_FAILED' || (error === 'ERR_TUNNEL_CONNECTION_FAILED' && isSingleLabelHost(url))) {
           titleEl.textContent = 'Handshake Site Unavailable';
           descriptionEl.textContent =
-            'Freedom could not resolve this Handshake site yet. The resolver may still be syncing, or the name may not exist.';
+            'Freedom could not resolve this Handshake site. The resolver may be degraded, or the name may not exist.';
           detailsEl.textContent = url ? `${url}\n\n${error}` : error || 'Handshake lookup failed';
           return;
         }
 
         const parts = [];
         if (protocolUrl) parts.push(protocolUrl);
+
+        if (error === 'ERR_SSL_PROTOCOL_ERROR') {
+          titleEl.textContent = 'Secure Connection Failed';
+          descriptionEl.textContent =
+            'The site resolved, but its HTTPS endpoint failed during the TLS handshake. The server may only support plain HTTP or may have a broken HTTPS configuration.';
+          parts.push('');
+          parts.push(error);
+          detailsEl.textContent = parts.join('\n') || error;
+
+          if (getHttpFallbackUrl(url)) {
+            document.getElementById('try-http-btn').classList.remove('hidden');
+          }
+          return;
+        }
 
         if (error && error.includes('ERR_CONNECTION_REFUSED')) {
           if (protocol === 'swarm') {
@@ -236,6 +274,13 @@
           window.location.href = url;
         } else {
           window.location.reload();
+        }
+      };
+
+      document.getElementById('try-http-btn').onclick = () => {
+        const fallbackUrl = getHttpFallbackUrl(url);
+        if (fallbackUrl) {
+          window.location.href = fallbackUrl;
         }
       };
     </script>

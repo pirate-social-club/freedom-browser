@@ -101,9 +101,20 @@ function loadHnsManagerModule(options = {}) {
   const clearService = jest.fn();
 
   const setHnsProxy = jest.fn();
+  const setHnsResolverAddrs = jest.fn();
   const clearHnsProxy = jest.fn();
   const rebuild = jest.fn(() => Promise.resolve());
-  const refreshImportedHnsSuffixes = jest.fn(() => Promise.resolve());
+  const getHnsProxyAddr = jest.fn(() => options.effectiveHnsProxyAddr ?? '127.0.0.1:55000');
+  const refreshImportedHnsSuffixes = jest.fn(() => Promise.resolve(['.pirate']));
+  const canResolveHnsFallbackForHost = jest.fn(() => Promise.resolve(options.canResolveHnsFallbackForHost ?? false));
+  const getHnsResolutionForHost = jest.fn(() => {
+    if (Object.prototype.hasOwnProperty.call(options, 'hnsResolutionForHost')) {
+      return Promise.resolve(options.hnsResolutionForHost);
+    }
+    return Promise.resolve(options.canResolveHnsFallbackForHost ? { resolverType: 'doh' } : null);
+  });
+  const isHnsProxyHost = jest.fn(() => options.isHnsProxyHost ?? false);
+  const pruneUnknownSingleLabelHistory = jest.fn();
   const spawnedProcesses = [];
   const tcpPorts = [...(options.tcpPorts || [41001, 41002, 41003, 41004])];
   const unavailableUdpPorts = new Set(options.unavailableUdpPorts || []);
@@ -189,9 +200,17 @@ function loadHnsManagerModule(options = {}) {
       }),
       [require.resolve('./network-manager')]: () => ({
         setHnsProxy,
+        setHnsResolverAddrs,
         clearHnsProxy,
         rebuild,
+        getHnsProxyAddr,
         refreshImportedHnsSuffixes,
+        getHnsResolutionForHost,
+        canResolveHnsFallbackForHost,
+        isHnsProxyHost,
+      }),
+      [require.resolve('./browser-state-sanitizer')]: () => ({
+        pruneUnknownSingleLabelHistory,
       }),
       [require.resolve('./hns-health')]: () => options.hnsHealth || jest.requireActual('./hns-health'),
     },
@@ -211,9 +230,15 @@ function loadHnsManagerModule(options = {}) {
     clearErrorState,
     clearService,
     setHnsProxy,
+    setHnsResolverAddrs,
     clearHnsProxy,
     rebuild,
+    getHnsProxyAddr,
     refreshImportedHnsSuffixes,
+    getHnsResolutionForHost,
+    canResolveHnsFallbackForHost,
+    isHnsProxyHost,
+    pruneUnknownSingleLabelHistory,
     spawn,
     spawnedProcesses,
     readlineInterface,
@@ -221,6 +246,8 @@ function loadHnsManagerModule(options = {}) {
     windowMock,
   };
 }
+
+const OBSOLETE_HNS_CANARY = ['shake', 'station'].join('');
 
 describe('hns-manager', () => {
   afterEach(() => {
@@ -309,6 +336,153 @@ describe('hns-manager', () => {
     expect(ctx.mod.getHnsStatus().resolverReady).toBe(false);
   });
 
+  test('resolverReady stays true when app.pirate DoH last-resort resolution is available', async () => {
+    jest.useFakeTimers();
+    const ctx = loadHnsManagerModule({
+      hnsResolutionForHost: { resolverType: 'doh' },
+      cryptoMock: {
+        X509Certificate: class {
+          fingerprint = 'AA:BB';
+        },
+      },
+      hnsHealth: {
+        buildHnsHealthProbeHosts: jest.fn(() => ['pirate', 'app.pirate']),
+        formatHnsHealthSummary: jest.fn(() => 'pirate=FAIL(ESERVFAIL), app.pirate=FAIL(ESERVFAIL)'),
+        probeHnsResolver: jest.fn(() => Promise.resolve({
+          ok: false,
+          results: [
+            { host: 'pirate', ok: false, code: 'ESERVFAIL' },
+            { host: 'app.pirate', ok: false, code: 'ESERVFAIL' },
+          ],
+        })),
+      },
+      readFileSync: () => 'test certificate',
+    });
+
+    await ctx.mod.startHns();
+    ctx.readlineHandlers.get('line')?.(JSON.stringify({
+      type: 'ready',
+      proxyAddr: '127.0.0.1:44041',
+      caPath: '/tmp/hns-ca.pem',
+    }));
+    await Promise.resolve();
+    ctx.readlineHandlers.get('line')?.(JSON.stringify({
+      type: 'sync',
+      synced: true,
+      height: 326149,
+    }));
+
+    await jest.advanceTimersByTimeAsync(1000);
+
+    expect(ctx.getHnsResolutionForHost).toHaveBeenCalledWith('app.pirate');
+    expect(ctx.canResolveHnsFallbackForHost).not.toHaveBeenCalled();
+    expect(ctx.updateService).toHaveBeenCalledWith('hns', { resolverReady: true });
+    expect(ctx.mod.getHnsStatus().resolverReady).toBe(true);
+    expect(ctx.setStatusMessage).toHaveBeenCalledWith(
+      'hns',
+      'HNS recursive resolver recovering; using HTTPS last-resort resolver'
+    );
+  });
+
+  test('resolverReady reports local delegation when recursive DNS is unavailable', async () => {
+    jest.useFakeTimers();
+    const ctx = loadHnsManagerModule({
+      hnsResolutionForHost: { resolverType: 'local' },
+      cryptoMock: {
+        X509Certificate: class {
+          fingerprint = 'AA:BB';
+        },
+      },
+      hnsHealth: {
+        buildHnsHealthProbeHosts: jest.fn(() => ['pirate', 'app.pirate']),
+        formatHnsHealthSummary: jest.fn(() => 'pirate=FAIL(ETIMEOUT), app.pirate=FAIL(ETIMEOUT)'),
+        probeHnsResolver: jest.fn(() => Promise.resolve({
+          ok: false,
+          results: [
+            { host: 'pirate', ok: false, code: 'ETIMEOUT' },
+            { host: 'app.pirate', ok: false, code: 'ETIMEOUT' },
+          ],
+        })),
+      },
+      readFileSync: () => 'test certificate',
+    });
+
+    await ctx.mod.startHns();
+    ctx.readlineHandlers.get('line')?.(JSON.stringify({
+      type: 'ready',
+      proxyAddr: '127.0.0.1:44041',
+      caPath: '/tmp/hns-ca.pem',
+    }));
+    await Promise.resolve();
+    ctx.readlineHandlers.get('line')?.(JSON.stringify({
+      type: 'sync',
+      synced: true,
+      height: 326149,
+    }));
+
+    await jest.advanceTimersByTimeAsync(1000);
+
+    expect(ctx.updateService).toHaveBeenCalledWith('hns', { resolverReady: true });
+    expect(ctx.setStatusMessage).toHaveBeenCalledWith(
+      'hns',
+      'HNS recursive resolver recovering; using local delegation resolver'
+    );
+    expect(ctx.log.info).toHaveBeenCalledWith(
+      '[HNS] Local recursive resolver unavailable (sync): pirate=FAIL(ETIMEOUT), app.pirate=FAIL(ETIMEOUT); local delegation resolver ready; retrying in 5000ms'
+    );
+  });
+
+  test('publishes guarded HNS proxy instead of helper upstream', async () => {
+    const ctx = loadHnsManagerModule({
+      effectiveHnsProxyAddr: '127.0.0.1:55000',
+      cryptoMock: {
+        X509Certificate: class {
+          fingerprint = 'AA:BB';
+        },
+      },
+      readFileSync: () => 'test certificate',
+    });
+
+    await ctx.mod.startHns();
+    ctx.readlineHandlers.get('line')?.(JSON.stringify({
+      type: 'ready',
+      proxyAddr: '127.0.0.1:44041',
+      caPath: '/tmp/hns-ca.pem',
+    }));
+    await Promise.resolve();
+
+    expect(ctx.setHnsProxy).toHaveBeenCalledWith('127.0.0.1:44041');
+    expect(ctx.rebuild).toHaveBeenCalled();
+    expect(ctx.getHnsProxyAddr).toHaveBeenCalled();
+    expect(ctx.updateService).toHaveBeenCalledWith('hns', expect.objectContaining({
+      api: 'http://127.0.0.1:55000',
+      proxy: '127.0.0.1:55000',
+    }));
+    expect(ctx.updateService).not.toHaveBeenCalledWith('hns', expect.objectContaining({
+      proxy: '127.0.0.1:44041',
+    }));
+    expect(ctx.mod.getHnsStatus().proxyAddr).toBe('127.0.0.1:55000');
+  });
+
+  test('uses helper sync status even when obsolete canary is unavailable', async () => {
+    const ctx = loadHnsManagerModule();
+
+    await ctx.mod.startHns();
+    ctx.readlineHandlers.get('line')?.(JSON.stringify({
+      type: 'sync',
+      synced: true,
+      canaryReady: false,
+      height: 326149,
+    }));
+
+    expect(ctx.mod.getHnsStatus()).toEqual(expect.objectContaining({
+      synced: true,
+      canaryReady: true,
+      height: 326149,
+    }));
+    expect(ctx.setStatusMessage).toHaveBeenLastCalledWith('hns', null);
+  });
+
   test('checkBinary returns true when fingertipd exists', () => {
     const ctx = loadHnsManagerModule({ fingertipdExists: true });
     expect(ctx.mod.checkBinary()).toBe(true);
@@ -316,6 +490,17 @@ describe('hns-manager', () => {
 
   test('checkBinary returns false when fingertipd missing', () => {
     const ctx = loadHnsManagerModule({ fingertipdExists: false });
+    expect(ctx.mod.checkBinary()).toBe(false);
+  });
+
+  test('checkBinary returns false when fingertipd contains obsolete canary', () => {
+    const ctx = loadHnsManagerModule({
+      readFileSync: (target) => (
+        target.includes('fingertipd')
+          ? Buffer.from(`obsolete canary: ${OBSOLETE_HNS_CANARY}`)
+          : 'test certificate'
+      ),
+    });
     expect(ctx.mod.checkBinary()).toBe(false);
   });
 
@@ -334,6 +519,23 @@ describe('hns-manager', () => {
     await ctx.mod.startHns();
     expect(ctx.mod.getHnsStatus().status).toBe('error');
     expect(ctx.mod.getHnsStatus().error).toContain('hnsd binary not found');
+  });
+
+  test('startHns rejects obsolete fingertipd canary before spawning', async () => {
+    const ctx = loadHnsManagerModule({
+      readFileSync: (target) => (
+        target.includes('fingertipd')
+          ? Buffer.from(`obsolete canary: ${OBSOLETE_HNS_CANARY}`)
+          : 'test certificate'
+      ),
+    });
+
+    await ctx.mod.startHns();
+
+    expect(ctx.spawn).not.toHaveBeenCalled();
+    expect(ctx.mod.getHnsStatus().status).toBe('error');
+    expect(ctx.mod.getHnsStatus().error).toContain(`obsolete hardcoded canary "${OBSOLETE_HNS_CANARY}"`);
+    expect(ctx.setErrorState).toHaveBeenCalledWith('hns', 'HNS helper binary is obsolete');
   });
 
   test('startHns ignores request when already running', async () => {
@@ -388,7 +590,7 @@ describe('hns-manager', () => {
     );
   });
 
-  test('startHns rate-limits repeated stderr warnings', async () => {
+  test('startHns rate-limits repeated helper DNS misses as resolver info', async () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date('2026-05-02T12:00:00.000Z'));
 
@@ -398,34 +600,37 @@ describe('hns-manager', () => {
 
     proc.emitStderr(
       'data',
-      Buffer.from('2026/05/02 12:00:00 [WARN] tunnel: 502 CONNECT shakestation:443 dns lookup failed (rcode: servfail)\n')
+      Buffer.from('2026/05/02 12:00:00 [WARN] tunnel: 502 CONNECT missing.pirate:443 dns lookup failed (rcode: servfail)\n')
     );
     jest.setSystemTime(new Date('2026-05-02T12:00:05.000Z'));
     proc.emitStderr(
       'data',
-      Buffer.from('2026/05/02 12:00:05 [WARN] tunnel: 502 CONNECT shakestation:443 dns lookup failed (rcode: servfail)\n')
+      Buffer.from('2026/05/02 12:00:05 [WARN] tunnel: 502 CONNECT missing.pirate:443 dns lookup failed (rcode: servfail)\n')
     );
 
-    expect(ctx.log.warn).toHaveBeenCalledTimes(1);
-    expect(ctx.log.warn).toHaveBeenLastCalledWith(
-      '[HNS stderr]: 2026/05/02 12:00:00 [WARN] tunnel: 502 CONNECT shakestation:443 dns lookup failed (rcode: servfail)'
-    );
+    expect(ctx.log.warn).not.toHaveBeenCalled();
+    let helperInfoCalls = ctx.log.info.mock.calls
+      .map(([message]) => message)
+      .filter((message) => message.startsWith('[HNS helper]'));
+    expect(helperInfoCalls).toEqual([
+      '[HNS helper] Local DNS miss; guard resolver will retry: 2026/05/02 12:00:00 [WARN] tunnel: 502 CONNECT missing.pirate:443 dns lookup failed (rcode: servfail)',
+    ]);
 
     jest.setSystemTime(new Date('2026-05-02T12:00:31.000Z'));
     proc.emitStderr(
       'data',
-      Buffer.from('2026/05/02 12:00:31 [WARN] tunnel: 502 CONNECT shakestation:443 dns lookup failed (rcode: servfail)\n')
+      Buffer.from('2026/05/02 12:00:31 [WARN] tunnel: 502 CONNECT missing.pirate:443 dns lookup failed (rcode: servfail)\n')
     );
 
-    expect(ctx.log.warn).toHaveBeenCalledTimes(3);
-    expect(ctx.log.warn).toHaveBeenNthCalledWith(
-      2,
-      '[HNS stderr]: suppressed 1 repeat(s): 2026/05/02 12:00:05 [WARN] tunnel: 502 CONNECT shakestation:443 dns lookup failed (rcode: servfail)'
-    );
-    expect(ctx.log.warn).toHaveBeenNthCalledWith(
-      3,
-      '[HNS stderr]: 2026/05/02 12:00:31 [WARN] tunnel: 502 CONNECT shakestation:443 dns lookup failed (rcode: servfail)'
-    );
+    expect(ctx.log.warn).not.toHaveBeenCalled();
+    helperInfoCalls = ctx.log.info.mock.calls
+      .map(([message]) => message)
+      .filter((message) => message.startsWith('[HNS helper]'));
+    expect(helperInfoCalls).toEqual([
+      '[HNS helper] Local DNS miss; guard resolver will retry: 2026/05/02 12:00:00 [WARN] tunnel: 502 CONNECT missing.pirate:443 dns lookup failed (rcode: servfail)',
+      '[HNS helper] suppressed 1 repeat local DNS miss(es): 2026/05/02 12:00:05 [WARN] tunnel: 502 CONNECT missing.pirate:443 dns lookup failed (rcode: servfail)',
+      '[HNS helper] Local DNS miss; guard resolver will retry: 2026/05/02 12:00:31 [WARN] tunnel: 502 CONNECT missing.pirate:443 dns lookup failed (rcode: servfail)',
+    ]);
   });
 
   test('stopHns clears proxy and service when no process', async () => {

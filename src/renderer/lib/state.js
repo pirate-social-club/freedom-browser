@@ -35,6 +35,7 @@ export const state = {
       canaryReady: false,
       resolverReady: false,
       height: 0,
+      publicSuffixes: ['.pirate'],
     },
   },
 
@@ -134,6 +135,10 @@ export const updateRegistry = (newRegistry) => {
 
   // Expose on window so page-urls.js can read registry without circular imports
   window.__rendererState = state;
+
+  if (Array.isArray(newRegistry.hns?.publicSuffixes)) {
+    window.FREEDOM_HNS_HOSTS?.setDynamicHnsPublicSuffixes?.(newRegistry.hns.publicSuffixes);
+  }
 
   // Update base URLs from registry if available
   if (newRegistry.bee.api) {

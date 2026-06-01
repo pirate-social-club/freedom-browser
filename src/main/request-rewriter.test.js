@@ -5,6 +5,7 @@ const {
   shouldBlockInvalidBzzRequest,
   registerRequestRewriter,
 } = require('./request-rewriter');
+const log = require('./logger');
 const { activeRadBases } = require('./state');
 const { formatRadicleUrl, deriveRadBaseFromUrl, deriveDisplayValue } = require('../renderer/lib/url-utils.js');
 
@@ -23,11 +24,18 @@ const { loadSettings } = require('./settings-store');
 const BASE_URL = 'http://127.0.0.1:1633/bzz/abc123def456/';
 const VALID_HASH = 'a'.repeat(64);
 const VALID_ENCRYPTED_HASH = 'a'.repeat(128);
+const originalHnsDiagnostics = process.env.FREEDOM_HNS_DIAGNOSTICS;
 
 describe('request-rewriter', () => {
   afterEach(() => {
     activeRadBases.clear();
     loadSettings.mockReturnValue({ enableRadicleIntegration: true });
+    if (originalHnsDiagnostics === undefined) {
+      delete process.env.FREEDOM_HNS_DIAGNOSTICS;
+    } else {
+      process.env.FREEDOM_HNS_DIAGNOSTICS = originalHnsDiagnostics;
+    }
+    jest.restoreAllMocks();
   });
 
   describe('convertProtocolUrl', () => {
@@ -537,6 +545,35 @@ describe('request-rewriter', () => {
       );
 
       expect(callback).toHaveBeenCalledWith({});
+    });
+
+    test('does not log single-label HNS requests as bypassed', () => {
+      process.env.FREEDOM_HNS_DIAGNOSTICS = '1';
+      const warnSpy = jest.spyOn(log, 'warn').mockImplementation(() => {});
+      const sessionMock = {
+        webRequest: {
+          onBeforeRequest: jest.fn(),
+        },
+      };
+
+      registerRequestRewriter(sessionMock);
+
+      const [handler] = sessionMock.webRequest.onBeforeRequest.mock.calls[0];
+      const callback = jest.fn();
+      handler(
+        {
+          frameId: 0,
+          initiator: 'https://app.pirate',
+          method: 'GET',
+          resourceType: 'xhr',
+          url: 'https://unknown-single-label/?token=secret',
+          webContentsId: 21,
+        },
+        callback
+      );
+
+      expect(callback).toHaveBeenCalledWith({});
+      expect(warnSpy).not.toHaveBeenCalled();
     });
   });
 });

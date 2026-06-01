@@ -68,6 +68,7 @@ const { registerGithubBridgeIpc, cleanupTempDirs } = require('./github-bridge');
 const { registerServiceRegistryIpc } = require('./service-registry');
 const { createMainWindow, setWindowTitle, getMainWindows } = require('./windows/mainWindow');
 const { migrateUserData } = require('./migrate-user-data');
+const { clearPersistedBrowserRequestState } = require('./browser-state-sanitizer');
 const { initUpdater } = require('./updater');
 const { setupApplicationMenu, updateTabMenuItems } = require('./menu');
 const { registerWebContentsHandlers } = require('./webcontents-setup');
@@ -130,6 +131,7 @@ async function bootstrap() {
   // Migrate user data from old "Freedom Browser" directory if needed
   // This must run before any modules access userData
   migrateUserData();
+  clearPersistedBrowserRequestState();
 
   const defaultSession = session.defaultSession;
   await defaultSession.clearCache();

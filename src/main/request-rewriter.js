@@ -2,7 +2,18 @@ const log = require('./logger');
 const { activeBzzBases, activeIpfsBases, activeRadBases } = require('./state');
 const { getBeeApiUrl, getIpfsGatewayUrl, getRadicleApiUrl } = require('./service-registry');
 const { loadSettings } = require('./settings-store');
+const { isHnsHost } = require('../shared/hns-hosts');
 const { URL } = require('url');
+
+let electronApp = null;
+try {
+  ({ app: electronApp } = require('electron'));
+} catch {
+  electronApp = null;
+}
+
+const UNKNOWN_SINGLE_LABEL_LOG_WINDOW_MS = 30 * 1000;
+const unknownSingleLabelLogState = new Map();
 
 const sanitizeUrlForLog = (rawUrl) => {
   if (!rawUrl || typeof rawUrl !== 'string') return 'unknown';
@@ -31,6 +42,78 @@ const sanitizeUrlForLog = (rawUrl) => {
     }
     return 'unknown';
   }
+};
+
+const sanitizeRequestUrlForDiagnostics = (rawUrl) => {
+  if (!rawUrl || typeof rawUrl !== 'string') return 'unknown';
+  try {
+    const parsed = new URL(rawUrl);
+    for (const [key] of parsed.searchParams) {
+      if (/(auth|code|secret|session|state|token)/i.test(key)) {
+        parsed.searchParams.set(key, '<redacted>');
+      }
+    }
+    return `${parsed.origin}${parsed.pathname}${parsed.search}`;
+  } catch {
+    return 'unknown';
+  }
+};
+
+const isUnknownSingleLabelDiagnosticsEnabled = () =>
+  electronApp?.isPackaged === false || process.env.FREEDOM_HNS_DIAGNOSTICS === '1';
+
+const isLoopbackHostname = (hostname = '') =>
+  hostname === 'localhost' || hostname === '::1' || /^127\./.test(hostname);
+
+const formatRequestSource = (details = {}) => {
+  const parts = [
+    `type=${details.resourceType || 'unknown'}`,
+    `webContentsId=${details.webContentsId ?? 'unknown'}`,
+    `frameId=${details.frameId ?? 'unknown'}`,
+  ];
+  if (details.initiator) parts.push(`initiator=${details.initiator}`);
+  if (details.referrer) {
+    parts.push(`referrer=${sanitizeRequestUrlForDiagnostics(details.referrer)}`);
+  }
+  return parts.join(' ');
+};
+
+const logUnknownSingleLabelRequest = (details = {}) => {
+  if (!isUnknownSingleLabelDiagnosticsEnabled()) return;
+
+  let hostname;
+  try {
+    const parsed = new URL(details.url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
+    hostname = parsed.hostname.toLowerCase();
+  } catch {
+    return;
+  }
+
+  if (!hostname || hostname.includes('.') || isLoopbackHostname(hostname) || isHnsHost(hostname)) {
+    return;
+  }
+
+  const message =
+    `[Network] Unknown single-label request bypassed HNS: ${details.method || 'GET'} ` +
+    `${sanitizeRequestUrlForDiagnostics(details.url)} ${formatRequestSource(details)}`;
+  const now = Date.now();
+  const previous = unknownSingleLabelLogState.get(message);
+
+  if (previous && now - previous.lastLoggedAt < UNKNOWN_SINGLE_LABEL_LOG_WINDOW_MS) {
+    previous.suppressed += 1;
+    return;
+  }
+
+  if (previous?.suppressed > 0) {
+    log.warn(`[Network] Unknown single-label diagnostics suppressed ${previous.suppressed} repeat(s): ${message}`);
+  }
+
+  log.warn(message);
+  unknownSingleLabelLogState.set(message, {
+    lastLoggedAt: now,
+    suppressed: 0,
+  });
 };
 
 // Validate IPFS CID format (mirrors src/renderer/lib/url-utils.js)
@@ -230,6 +313,7 @@ function registerRequestRewriter(targetSession) {
 
   targetSession.webRequest.onBeforeRequest((details, callback) => {
     const webContentsId = details.webContentsId;
+    logUnknownSingleLabelRequest(details);
 
     // First, check for custom protocol URLs (bzz://, ipfs://, ipns://)
     const { converted, url: convertedUrl } = convertProtocolUrl(details.url);

@@ -49,8 +49,8 @@ describe('url-utils', () => {
       delete globalThis.FREEDOM_HNS_HOSTS;
     });
 
-    test('normalizes single-label HNS hosts over HTTPS', () => {
-      expect(normalizeHnsHostInput('dankmeme')).toBe('https://dankmeme/');
+    test('normalizes arbitrary single-label HNS hosts', () => {
+      expect(normalizeHnsHostInput('unknown-single-label')).toBe('https://unknown-single-label/');
       expect(normalizeHnsHostInput('xn--pokmon-dva')).toBe('https://xn--pokmon-dva/');
     });
 
@@ -69,11 +69,12 @@ describe('url-utils', () => {
       );
     });
 
-    test('normalizes imported namespace subdomains when suffixes are loaded', () => {
+    test('normalizes imported namespace roots and subdomains when suffixes are loaded', () => {
       globalThis.FREEDOM_HNS_HOSTS = {
         getHnsPublicSuffixes: () => ['.pirate', '.xn--pokmon-dva'],
       };
 
+      expect(normalizeHnsHostInput('xn--pokmon-dva')).toBe('https://xn--pokmon-dva/');
       expect(normalizeHnsHostInput('v.xn--pokmon-dva')).toBe('https://v.xn--pokmon-dva/');
     });
 
@@ -284,6 +285,16 @@ describe('url-utils', () => {
       expect(result).toEqual({
         targetUrl: 'https://example.com/path/to/page',
         displayValue: 'https://example.com/path/to/page',
+        baseUrl: null,
+      });
+    });
+
+    test('converts syntactically valid dotted HNS-style hosts to https://', () => {
+      const input = 'portal.any-hns-root/path';
+      const result = formatBzzUrl(input, BZZ_ROUTE_PREFIX);
+      expect(result).toEqual({
+        targetUrl: 'https://portal.any-hns-root/path',
+        displayValue: 'https://portal.any-hns-root/path',
         baseUrl: null,
       });
     });

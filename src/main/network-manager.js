@@ -1,14 +1,22 @@
 const log = require('./logger');
 const { app, session } = require('electron');
 const http = require('http');
+const net = require('net');
+const { resolveHnsDohAddresses } = require('./hns-doh-resolver');
+const { resolveHnsLocalAddresses } = require('./hns-local-resolver');
 const {
   getHnsPublicSuffixes,
+  isHnsHost,
   setDynamicHnsPublicSuffixes,
 } = require('../shared/hns-hosts');
 
 const PUBLIC_NAMESPACES_URL = process.env.PIRATE_PUBLIC_NAMESPACES_URL || 'https://api.pirate.sc/public-namespaces';
 
 let hnsProxyAddr = null;
+let hnsUpstreamProxyAddr = null;
+let hnsRootResolverAddr = null;
+let hnsGuardServer = null;
+let hnsGuardPort = null;
 let dvpnProxyHost = null;
 let dvpnProxyPort = null;
 
@@ -16,12 +24,14 @@ let pacServer = null;
 let pacPort = null;
 let apiRequestDiagnosticsRegistered = false;
 const apiRequestLogState = new Map();
+const hnsProxyHosts = new Set();
 
 const API_DIAGNOSTICS_REPEAT_WINDOW_MS = 30 * 1000;
 const API_DIAGNOSTICS_URLS = [
   'https://api.pirate.sc/*',
   'https://api-staging.pirate.sc/*',
 ];
+const HNS_PROXY_CONNECT_TIMEOUT_MS = 5000;
 
 function isApiDiagnosticsEnabled() {
   return !app?.isPackaged || process.env.FREEDOM_API_DIAGNOSTICS === '1';
@@ -94,7 +104,7 @@ function formatImportedHnsSuffixesLog(suffixes = []) {
     : `${suffixes.length} suffixes${preview ? ` (${preview})` : ''}`;
 }
 
-function buildPacHnsTldMap() {
+function buildPacHnsRootMap() {
   const entries = getHnsPublicSuffixes()
     .map((suffix) => suffix.replace(/^\./, ''))
     .filter(Boolean)
@@ -104,7 +114,345 @@ function buildPacHnsTldMap() {
 }
 
 function buildHnsHostPredicate() {
-  return 'dnsDomainLevels(host) === 0 || hnsTlds[host.substring(host.lastIndexOf(".") + 1).toLowerCase()] === 1';
+  return [
+    'dnsDomainLevels(host) === 0',
+    'hnsRoots[host.toLowerCase()] === 1',
+    '(dnsDomainLevels(host) > 0 && hnsRoots[host.substring(host.lastIndexOf(".") + 1).toLowerCase()] === 1)',
+    '(dnsDomainLevels(host) > 0 && !isResolvable(host))',
+  ].join(' || ');
+}
+
+function parseAuthority(authority = '') {
+  const value = String(authority || '').trim();
+  if (!value) return { host: '', port: null };
+  if (value.startsWith('[')) {
+    const end = value.indexOf(']');
+    const host = end === -1 ? value.slice(1) : value.slice(1, end);
+    const rest = end === -1 ? '' : value.slice(end + 1);
+    const port = rest.startsWith(':') ? Number(rest.slice(1)) : null;
+    return { host: host.toLowerCase(), port: Number.isFinite(port) ? port : null };
+  }
+  const [host, portValue] = value.split(':');
+  const port = portValue ? Number(portValue) : null;
+  return { host: host.toLowerCase(), port: Number.isFinite(port) ? port : null };
+}
+
+function parseHostFromAuthority(authority = '') {
+  return parseAuthority(authority).host;
+}
+
+function isLoopbackHostname(hostname = '') {
+  const normalized = String(hostname || '').trim().toLowerCase();
+  return normalized === 'localhost' || normalized === '::1' || /^127\./.test(normalized);
+}
+
+function isValidProxyHostname(hostname = '') {
+  const normalized = String(hostname || '').trim().toLowerCase();
+  if (!normalized || isLoopbackHostname(normalized) || net.isIP(normalized)) return false;
+  return normalized
+    .split('.')
+    .every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
+}
+
+function parseProxyAddress(proxyAddr = '') {
+  const [host, port] = String(proxyAddr).split(':');
+  return {
+    host,
+    port: Number(port),
+  };
+}
+
+function isAllowedHnsProxyTarget(authority = '') {
+  return isValidProxyHostname(parseHostFromAuthority(authority));
+}
+
+function markHnsProxyHost(hostname = '') {
+  const normalized = String(hostname || '').trim().toLowerCase();
+  if (isValidProxyHostname(normalized)) {
+    hnsProxyHosts.add(normalized);
+  }
+}
+
+function isHnsProxyHost(hostname = '') {
+  const normalized = String(hostname || '').trim().toLowerCase();
+  return hnsProxyHosts.has(normalized) || isHnsHost(normalized);
+}
+
+async function resolveHnsFallbackTarget(authority = '', defaultPort = 443) {
+  const parsed = parseAuthority(authority);
+  if (!isValidProxyHostname(parsed.host)) return null;
+  let result;
+  let resolverType = 'doh';
+  if (hnsRootResolverAddr) {
+    try {
+      result = await resolveHnsLocalAddresses(parsed.host, {
+        rootAddr: hnsRootResolverAddr,
+      });
+      resolverType = 'local';
+    } catch (error) {
+      log.info(`[Network] Local HNS delegation lookup failed for ${parsed.host}: ${error.message}`);
+    }
+  }
+  if (!result) {
+    result = await resolveHnsDohAddresses(parsed.host);
+  }
+  const target = result.addresses.find((entry) => entry.family === 4) || result.addresses[0];
+  if (!target?.address) return null;
+
+  return {
+    hostname: parsed.host,
+    address: target.address,
+    port: parsed.port || defaultPort,
+    resolverType,
+    resolver: result.endpoint,
+  };
+}
+
+async function getHnsResolutionForHost(hostname = '') {
+  try {
+    return await resolveHnsFallbackTarget(hostname, 443);
+  } catch {
+    return null;
+  }
+}
+
+async function canResolveHnsFallbackForHost(hostname = '') {
+  return Boolean(await getHnsResolutionForHost(hostname));
+}
+
+function writeProxyError(socket, statusCode, reason) {
+  if (socket.destroyed) return;
+  socket.write(`HTTP/1.1 ${statusCode} ${reason}\r\nConnection: close\r\n\r\n`);
+  socket.destroy();
+}
+
+async function forwardConnectToDohFallback(req, clientSocket, head = Buffer.alloc(0), reason = 'unavailable') {
+  let target;
+  try {
+    target = await resolveHnsFallbackTarget(req.url, 443);
+  } catch (error) {
+    log.warn(`[Network] HNS resolution failed for ${req.url}: ${error.message}`);
+    writeProxyError(clientSocket, 502, 'HNS lookup failed');
+    return;
+  }
+
+  if (!target) {
+    writeProxyError(clientSocket, 502, 'HNS lookup failed');
+    return;
+  }
+
+  const resolverLabel = target.resolverType === 'local' ? 'local delegation' : 'DoH last-resort';
+  log.info(
+    `[Network] HNS ${resolverLabel} CONNECT (${reason}): ${req.url} -> ${target.address}:${target.port}`
+  );
+  const upstreamSocket = net.connect(target.port, target.address, () => {
+    clientSocket.write('HTTP/1.1 200 Connection Established\r\nConnection: keep-alive\r\n\r\n');
+    if (head.length > 0) {
+      upstreamSocket.write(head);
+    }
+    upstreamSocket.pipe(clientSocket);
+    clientSocket.pipe(upstreamSocket);
+  });
+
+  upstreamSocket.on('error', () => {
+    writeProxyError(clientSocket, 502, 'HNS fallback upstream failed');
+  });
+  clientSocket.on('error', () => {
+    upstreamSocket.destroy();
+  });
+}
+
+function formatFallbackHostHeader(target) {
+  if ((target.port === 80) || (target.port === 443)) return target.hostname;
+  return `${target.hostname}:${target.port}`;
+}
+
+async function forwardHttpToDohFallback(req, res, host, defaultPort, requestPath, reason = 'unavailable') {
+  let target;
+  try {
+    target = await resolveHnsFallbackTarget(host, defaultPort);
+  } catch (error) {
+    log.warn(`[Network] HNS resolution failed for ${host}: ${error.message}`);
+    res.writeHead(502);
+    res.end('HNS lookup failed');
+    return;
+  }
+
+  if (!target) {
+    res.writeHead(502);
+    res.end('HNS lookup failed');
+    return;
+  }
+
+  const resolverLabel = target.resolverType === 'local' ? 'local delegation' : 'DoH last-resort';
+  log.info(
+    `[Network] HNS ${resolverLabel} request (${reason}): ${req.method} ${target.hostname} -> ${target.address}:${target.port}`
+  );
+  const proxyReq = http.request(
+    {
+      host: target.address,
+      port: target.port,
+      method: req.method,
+      path: requestPath,
+      headers: {
+        ...req.headers,
+        host: formatFallbackHostHeader(target),
+      },
+    },
+    (proxyRes) => {
+      res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+      proxyRes.pipe(res);
+    }
+  );
+
+  proxyReq.on('error', () => {
+    res.writeHead(502);
+    res.end('HNS fallback upstream failed');
+  });
+  req.pipe(proxyReq);
+}
+
+function forwardConnectToHnsProxy(req, clientSocket, head = Buffer.alloc(0)) {
+  if (!isAllowedHnsProxyTarget(req.url)) {
+    log.warn(`[Network] Blocked non-HNS proxy CONNECT: ${req.url}`);
+    writeProxyError(clientSocket, 502, 'HNS host not allowed');
+    return;
+  }
+
+  const targetHost = parseHostFromAuthority(req.url);
+  markHnsProxyHost(targetHost);
+
+  if (!hnsUpstreamProxyAddr) {
+    forwardConnectToDohFallback(req, clientSocket, head, 'no local upstream');
+    return;
+  }
+
+  const upstream = parseProxyAddress(hnsUpstreamProxyAddr);
+  let settled = false;
+  let buffered = Buffer.alloc(0);
+  const finishWithFallback = (reason) => {
+    if (settled) return;
+    settled = true;
+    upstreamSocket.destroy();
+    forwardConnectToDohFallback(req, clientSocket, head, reason).catch((error) => {
+      log.warn(`[Network] HNS resolution failed for ${req.url}: ${error.message}`);
+      writeProxyError(clientSocket, 502, 'HNS lookup failed');
+    });
+  };
+
+  const upstreamSocket = net.connect(upstream.port, upstream.host, () => {
+    const headerLines = [`CONNECT ${req.url} HTTP/${req.httpVersion}`];
+    for (const [name, value] of Object.entries(req.headers || {})) {
+      headerLines.push(`${name}: ${value}`);
+    }
+    upstreamSocket.write(`${headerLines.join('\r\n')}\r\n\r\n`);
+    if (head.length > 0) {
+      upstreamSocket.write(head);
+    }
+  });
+
+  upstreamSocket.setTimeout(HNS_PROXY_CONNECT_TIMEOUT_MS, () => {
+    finishWithFallback('local upstream timeout');
+  });
+
+  upstreamSocket.on('data', (chunk) => {
+    if (settled) return;
+    buffered = Buffer.concat([buffered, chunk]);
+    const headerEnd = buffered.indexOf('\r\n\r\n');
+    if (headerEnd === -1) {
+      if (buffered.length > 64 * 1024) {
+        finishWithFallback('local upstream invalid response');
+      }
+      return;
+    }
+
+    const header = buffered.subarray(0, headerEnd).toString('latin1');
+    const statusCode = Number((header.match(/^HTTP\/\d(?:\.\d)?\s+(\d{3})/i) || [])[1]);
+    if (statusCode >= 200 && statusCode < 300) {
+      settled = true;
+      upstreamSocket.setTimeout(0);
+      clientSocket.write(buffered);
+      upstreamSocket.pipe(clientSocket);
+      clientSocket.pipe(upstreamSocket);
+      return;
+    }
+
+    if (statusCode >= 500 || statusCode === 0 || Number.isNaN(statusCode)) {
+      finishWithFallback(`local upstream ${Number.isNaN(statusCode) ? 'invalid response' : statusCode}`);
+      return;
+    }
+
+    settled = true;
+    clientSocket.write(buffered);
+    clientSocket.destroy();
+    upstreamSocket.destroy();
+  });
+
+  upstreamSocket.on('error', () => {
+    finishWithFallback('local upstream error');
+  });
+  clientSocket.on('error', () => {
+    upstreamSocket.destroy();
+  });
+}
+
+function isReplayableHttpProxyRequest(req) {
+  return ['GET', 'HEAD', 'OPTIONS'].includes(String(req.method || 'GET').toUpperCase());
+}
+
+function forwardHttpToHnsProxy(req, res) {
+  let host = req.headers.host || '';
+  let requestPath = req.url || '/';
+  let defaultPort = 80;
+  try {
+    const parsedUrl = new URL(req.url);
+    host = parsedUrl.host || host;
+    requestPath = `${parsedUrl.pathname || '/'}${parsedUrl.search || ''}`;
+    defaultPort = parsedUrl.protocol === 'https:' ? 443 : 80;
+  } catch {
+    // Proxy requests may occasionally arrive as origin-form; fall back to Host.
+  }
+
+  if (!isAllowedHnsProxyTarget(host)) {
+    log.warn(`[Network] Blocked non-HNS proxy request: ${req.method} ${host}`);
+    res.writeHead(502);
+    res.end('HNS host not allowed');
+    return;
+  }
+
+  markHnsProxyHost(parseHostFromAuthority(host));
+
+  if (!hnsUpstreamProxyAddr) {
+    return forwardHttpToDohFallback(req, res, host, defaultPort, requestPath, 'no local upstream');
+  }
+
+  const upstream = parseProxyAddress(hnsUpstreamProxyAddr);
+  const proxyReq = http.request(
+    {
+      host: upstream.host,
+      port: upstream.port,
+      method: req.method,
+      path: req.url,
+    headers: req.headers,
+    },
+    (proxyRes) => {
+      if ((proxyRes.statusCode || 0) >= 500 && isReplayableHttpProxyRequest(req)) {
+        proxyRes.resume();
+        return forwardHttpToDohFallback(req, res, host, defaultPort, requestPath, `local upstream ${proxyRes.statusCode}`);
+      }
+      res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+      proxyRes.pipe(res);
+    }
+  );
+
+  proxyReq.on('error', () => {
+    if (isReplayableHttpProxyRequest(req)) {
+      return forwardHttpToDohFallback(req, res, host, defaultPort, requestPath, 'local upstream error');
+    }
+    res.writeHead(502);
+    res.end('HNS proxy upstream failed');
+  });
+  req.pipe(proxyReq);
 }
 
 function extractNamespaceSuffixes(payload) {
@@ -116,19 +464,23 @@ function extractNamespaceSuffixes(payload) {
 
 function buildPacScript() {
   const hnsHostPredicate = buildHnsHostPredicate();
-  const hnsTldMap = buildPacHnsTldMap();
-  const hnsLine = hnsProxyAddr
-    ? `  if (${hnsHostPredicate}) {\n    return "PROXY ${hnsProxyAddr}";\n  }`
+  const hnsRootMap = buildPacHnsRootMap();
+  const effectiveHnsProxyAddr = hnsProxyAddr || hnsUpstreamProxyAddr;
+  const hnsLine = effectiveHnsProxyAddr
+    ? `  if (${hnsHostPredicate}) {\n    return "PROXY ${effectiveHnsProxyAddr}";\n  }`
     : `  if (${hnsHostPredicate}) {\n    return "DIRECT";\n  }`;
 
   const dvpnLine = dvpnProxyHost && dvpnProxyPort
     ? `  return "SOCKS5 ${dvpnProxyHost}:${dvpnProxyPort}; SOCKS ${dvpnProxyHost}:${dvpnProxyPort}; DIRECT";`
     : `  return "DIRECT";`;
 
-  return `var hnsTlds = ${hnsTldMap};
+  return `var hnsRoots = ${hnsRootMap};
 
 function FindProxyForURL(url, host) {
   if (shExpMatch(host, "127.0.0.*") || host === "localhost" || host === "::1") {
+    return "DIRECT";
+  }
+  if (/^(?:\\d{1,3}\\.){3}\\d{1,3}$/.test(host) || host.indexOf(":") !== -1) {
     return "DIRECT";
   }
 ${hnsLine}
@@ -163,6 +515,50 @@ async function startPacServer(pacContent) {
   });
 }
 
+async function startHnsGuardProxy() {
+  if (hnsGuardServer && hnsGuardPort) {
+    hnsProxyAddr = `127.0.0.1:${hnsGuardPort}`;
+    return hnsProxyAddr;
+  }
+
+  if (!hnsUpstreamProxyAddr) return null;
+
+  return new Promise((resolve, reject) => {
+    const srv = http.createServer(forwardHttpToHnsProxy);
+    srv.on('connect', forwardConnectToHnsProxy);
+    srv.on('error', (err) => {
+      hnsGuardServer = null;
+      hnsGuardPort = null;
+      hnsProxyAddr = null;
+      reject(err);
+    });
+    srv.listen(0, '127.0.0.1', () => {
+      hnsGuardServer = srv;
+      hnsGuardPort = srv.address().port;
+      hnsProxyAddr = `127.0.0.1:${hnsGuardPort}`;
+      log.info(`[Network] HNS guard proxy listening at ${hnsProxyAddr}, upstream=${hnsUpstreamProxyAddr}`);
+      resolve(hnsProxyAddr);
+    });
+  });
+}
+
+async function stopHnsGuardProxy() {
+  if (!hnsGuardServer) {
+    hnsGuardPort = null;
+    hnsProxyAddr = null;
+    return;
+  }
+
+  return new Promise((resolve) => {
+    hnsGuardServer.close(() => {
+      hnsGuardServer = null;
+      hnsGuardPort = null;
+      hnsProxyAddr = null;
+      resolve();
+    });
+  });
+}
+
 async function stopPacServer() {
   if (!pacServer) return;
   return new Promise((resolve) => {
@@ -175,6 +571,11 @@ async function stopPacServer() {
 }
 
 async function applyProxy() {
+  if (hnsUpstreamProxyAddr) {
+    await startHnsGuardProxy();
+  } else {
+    await stopHnsGuardProxy();
+  }
   const pac = buildPacScript();
   const port = await startPacServer(pac);
   const pacUrl = `http://127.0.0.1:${port}/proxy.pac`;
@@ -189,12 +590,20 @@ async function clearProxy() {
 }
 
 function setHnsProxy(proxyAddr) {
-  hnsProxyAddr = proxyAddr;
-  log.info(`[Network] HNS proxy set to ${proxyAddr}`);
+  hnsUpstreamProxyAddr = proxyAddr;
+  hnsProxyAddr = null;
+  log.info(`[Network] HNS proxy upstream set to ${proxyAddr}`);
+}
+
+function setHnsResolverAddrs({ rootAddr } = {}) {
+  hnsRootResolverAddr = rootAddr || null;
 }
 
 function clearHnsProxy() {
+  hnsUpstreamProxyAddr = null;
+  hnsRootResolverAddr = null;
   hnsProxyAddr = null;
+  hnsProxyHosts.clear();
   log.info('[Network] HNS proxy cleared');
 }
 
@@ -211,7 +620,8 @@ function clearDvpnProxy() {
 }
 
 async function rebuild() {
-  if (!hnsProxyAddr && !dvpnProxyHost) {
+  if (!hnsUpstreamProxyAddr && !dvpnProxyHost) {
+    await stopHnsGuardProxy();
     await clearProxy();
     return;
   }
@@ -258,6 +668,7 @@ function getDvpnProxy() {
 
 module.exports = {
   setHnsProxy,
+  setHnsResolverAddrs,
   clearHnsProxy,
   setDvpnProxy,
   clearDvpnProxy,
@@ -269,4 +680,7 @@ module.exports = {
   refreshImportedHnsSuffixes,
   registerApiRequestDiagnostics,
   sanitizeApiRequestUrl,
+  getHnsResolutionForHost,
+  canResolveHnsFallbackForHost,
+  isHnsProxyHost,
 };

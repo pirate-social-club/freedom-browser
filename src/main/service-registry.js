@@ -53,6 +53,7 @@ const registry = {
     canaryReady: false,
     resolverReady: false,
     height: 0,
+    publicSuffixes: ['.pirate'],
   },
   dvpn: {
     api: null,
@@ -246,6 +247,7 @@ const SERVICE_DEFAULTS = {
     canaryReady: false,
     resolverReady: false,
     height: 0,
+    publicSuffixes: ['.pirate'],
   },
   dvpn: {
     api: null,

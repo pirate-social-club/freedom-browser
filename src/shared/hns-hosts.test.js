@@ -18,6 +18,7 @@ describe('hns-hosts', () => {
   test('classifies hostnames consistently for HNS routing', () => {
     expect(isHnsHost('pirate')).toBe(true);
     expect(isHnsHost('app.pirate')).toBe(true);
+    expect(isHnsHost('unknown-single-label')).toBe(true);
     expect(isHnsHost('night-signal.clawitzer')).toBe(false);
     expect(isHnsHost('vitalik.eth')).toBe(false);
     expect(isHnsHost('google.com')).toBe(false);
@@ -27,7 +28,9 @@ describe('hns-hosts', () => {
 
   test('extends HNS routing with imported namespace roots', () => {
     expect(setDynamicHnsPublicSuffixes(['xn--pokmon-dva'])).toEqual(['.pirate', '.xn--pokmon-dva']);
+    expect(isHnsHost('xn--pokmon-dva')).toBe(true);
     expect(isHnsHost('v.xn--pokmon-dva')).toBe(true);
+    expect(isHnsHost('not-imported')).toBe(true);
     expect(isHnsHost('google.com')).toBe(false);
   });
 });

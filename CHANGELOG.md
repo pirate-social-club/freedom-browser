@@ -2,6 +2,16 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [0.7.9] - 2026-06-01
+
+### Fixed
+
+- Handshake browsing now uses a local-first resolver cascade: bundled helper proxy, local root/delegation resolution, direct authoritative nameserver queries, and HNS DoH only as a last resort.
+- HNS resolution now follows CNAMEs, retries DNS over TCP when UDP is unreliable, caches positive local answers by TTL, and avoids caching transient DoH SERVFAIL responses.
+- Removed the obsolete `shakestation` helper canary from the HNS runtime path and added startup/build checks so stale helper binaries are rejected.
+- HNS error handling now distinguishes resolver-not-ready, lookup-failed, and remote TLS failures, with a `Try HTTP` action for HTTPS endpoints that fail during TLS negotiation.
+- Browser startup clears stale Chromium request replay state that could reissue obsolete single-label HNS requests from previous sessions.
+
 ## [0.7.8] - 2026-05-04
 
 ### Fixed

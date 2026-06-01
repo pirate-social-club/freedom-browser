@@ -20,9 +20,53 @@ function loadNetworkManagerModule(options = {}) {
 
   let pacServerPort = options.pacServerPort || 9999;
   const createServerCalls = [];
+  const netSockets = [];
+  const netConnect = jest.fn((port, host, connectHandler) => {
+    const handlers = new Map();
+    const socket = {
+      port,
+      host,
+      connectHandler,
+      destroy: jest.fn(),
+      on: jest.fn((event, handler) => {
+        handlers.set(event, handler);
+        return socket;
+      }),
+      pipe: jest.fn(),
+      setTimeout: jest.fn((timeout, handler) => {
+        if (handler) handlers.set('timeout', handler);
+        return socket;
+      }),
+      write: jest.fn(),
+      emit(event, ...args) {
+        handlers.get(event)?.(...args);
+      },
+    };
+    netSockets.push(socket);
+    return socket;
+  });
+  const httpRequest = jest.fn(() => ({
+    on: jest.fn(),
+  }));
+  const resolveHnsDohAddresses = jest.fn(() => Promise.resolve({
+    addresses: [{ address: options.hnsDohAddress || '173.199.93.117', family: 4, ttl: 60 }],
+    endpoint: 'https://hnsdoh.com/dns-query',
+    hostname: 'app.pirate',
+  }));
+  const resolveHnsLocalAddresses = jest.fn(() => {
+    if (options.hnsLocalAddress === false) {
+      return Promise.reject(new Error('local unavailable'));
+    }
+    return Promise.resolve({
+      addresses: [{ address: options.hnsLocalAddress || '173.199.93.117', family: 4, ttl: 60 }],
+      hostname: 'app.pirate',
+      resolver: 'ns1.pirate.sc',
+    });
+  });
 
   const httpMock = {
     createServer: jest.fn((handler) => {
+      const handlers = new Map();
       const srv = {
         listen: jest.fn((port, host, cb) => {
           if (cb) cb();
@@ -31,11 +75,15 @@ function loadNetworkManagerModule(options = {}) {
           if (cb) cb();
         }),
         address: jest.fn(() => ({ port: pacServerPort })),
-        on: jest.fn(),
+        on: jest.fn((event, eventHandler) => {
+          handlers.set(event, eventHandler);
+          return srv;
+        }),
       };
-      createServerCalls.push({ server: srv, handler });
+      createServerCalls.push({ server: srv, handler, handlers });
       return srv;
     }),
+    request: httpRequest,
   };
 
   const { mod } = loadMainModule(require.resolve('./network-manager'), {
@@ -45,6 +93,16 @@ function loadNetworkManagerModule(options = {}) {
         app: { isPackaged: options.isPackaged ?? false },
       }),
       http: () => httpMock,
+      net: () => ({
+        connect: netConnect,
+        isIP: jest.requireActual('net').isIP,
+      }),
+      [require.resolve('./hns-doh-resolver')]: () => ({
+        resolveHnsDohAddresses,
+      }),
+      [require.resolve('./hns-local-resolver')]: () => ({
+        resolveHnsLocalAddresses,
+      }),
       [require.resolve('./logger')]: () => log,
     },
   });
@@ -57,10 +115,32 @@ function loadNetworkManagerModule(options = {}) {
     webRequest,
     httpMock,
     createServerCalls,
+    netConnect,
+    netSockets,
+    httpRequest,
+    resolveHnsDohAddresses,
+    resolveHnsLocalAddresses,
   };
 }
 
 const REPRESENTATIVE_PIRATE_HOST = 'sable-harbor-4143.pirate';
+
+function evaluatePac(pac, host, url = `https://${host}/`) {
+  const dnsDomainLevels = (value) => String(value || '').split('.').length - 1;
+  const isResolvable = (value) => !String(value || '').startsWith('missing.');
+  const shExpMatch = (value, pattern) => {
+    const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+    return new RegExp(`^${escaped}$`).test(value);
+  };
+  return new Function(
+    'url',
+    'host',
+    'dnsDomainLevels',
+    'isResolvable',
+    'shExpMatch',
+    `${pac}; return FindProxyForURL(url, host);`
+  )(url, host, dnsDomainLevels, isResolvable, shExpMatch);
+}
 
 describe('network-manager', () => {
   afterEach(() => {
@@ -69,7 +149,7 @@ describe('network-manager', () => {
     jest.restoreAllMocks();
   });
 
-  test('HNS-only PAC: single-label and .pirate hosts go PROXY, others go DIRECT', () => {
+  test('HNS-only PAC: HNS candidates go PROXY, ordinary resolved hosts go DIRECT', () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
 
@@ -77,22 +157,29 @@ describe('network-manager', () => {
 
     expect(pac).toContain('PROXY 127.0.0.1:5380');
     expect(pac).toContain('return "DIRECT"');
+    expect(pac).toContain('var hnsRoots = {"pirate":1}');
     expect(pac).toContain('dnsDomainLevels(host) === 0');
-    expect(pac).toContain('var hnsTlds = {"pirate":1}');
-    expect(pac).toContain('hnsTlds[host.substring(host.lastIndexOf(".") + 1).toLowerCase()] === 1');
+    expect(pac).toContain('!isResolvable(host)');
+    expect(evaluatePac(pac, 'pirate')).toBe('PROXY 127.0.0.1:5380');
+    expect(evaluatePac(pac, REPRESENTATIVE_PIRATE_HOST)).toBe('PROXY 127.0.0.1:5380');
+    expect(evaluatePac(pac, 'unknown-single-label')).toBe('PROXY 127.0.0.1:5380');
+    expect(evaluatePac(pac, 'missing.example')).toBe('PROXY 127.0.0.1:5380');
+    expect(evaluatePac(pac, 'example.com')).toBe('DIRECT');
   });
 
-  test('HNS + dVPN PAC composition: single-label and .pirate → PROXY, others → SOCKS5', () => {
+  test('HNS + dVPN PAC composition: known HNS hosts go PROXY, others go SOCKS5', () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
     ctx.mod.setDvpnProxy('127.0.0.1', 10808);
 
     const pac = ctx.mod.buildPacScript();
 
-    expect(pac).toContain('dnsDomainLevels(host) === 0');
-    expect(pac).toContain('var hnsTlds = {"pirate":1}');
+    expect(pac).toContain('var hnsRoots = {"pirate":1}');
     expect(pac).toContain('PROXY 127.0.0.1:5380');
     expect(pac).toContain('SOCKS5 127.0.0.1:10808');
+    expect(evaluatePac(pac, 'pirate')).toBe('PROXY 127.0.0.1:5380');
+    expect(evaluatePac(pac, REPRESENTATIVE_PIRATE_HOST)).toBe('PROXY 127.0.0.1:5380');
+    expect(evaluatePac(pac, 'unknown-single-label')).toBe('PROXY 127.0.0.1:5380');
   });
 
   test('loopback always DIRECT regardless of proxy config', () => {
@@ -108,13 +195,14 @@ describe('network-manager', () => {
     expect(pac.match(/DIRECT/g).length).toBeGreaterThanOrEqual(1);
   });
 
-  test('single-label hosts go to HNS proxy when set', () => {
+  test('unknown single-label hosts go to the HNS proxy when set', () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
 
     const pac = ctx.mod.buildPacScript();
 
-    expect(pac).toMatch(/dnsDomainLevels\(host\) === 0[^}]*PROXY 127\.0\.0\.1:5380/);
+    expect(evaluatePac(pac, 'unknown-single-label')).toBe('PROXY 127.0.0.1:5380');
+    expect(evaluatePac(pac, 'pirate')).toBe('PROXY 127.0.0.1:5380');
   });
 
   test('representative .pirate hosts go to HNS proxy when set', () => {
@@ -123,8 +211,9 @@ describe('network-manager', () => {
 
     const pac = ctx.mod.buildPacScript();
 
-    expect(pac).toContain('var hnsTlds = {"pirate":1}');
+    expect(pac).toContain('var hnsRoots = {"pirate":1}');
     expect(REPRESENTATIVE_PIRATE_HOST.endsWith('.pirate')).toBe(true);
+    expect(evaluatePac(pac, REPRESENTATIVE_PIRATE_HOST)).toBe('PROXY 127.0.0.1:5380');
   });
 
   test('ordinary hosts go SOCKS5 when dVPN is connected', () => {
@@ -149,28 +238,30 @@ describe('network-manager', () => {
     expect(lastReturn).toContain('DIRECT');
   });
 
-  test('no proxies set returns DIRECT default for single-label hosts', () => {
+  test('no proxies set returns DIRECT default for HNS hosts', () => {
     const ctx = loadNetworkManagerModule();
 
     const pac = ctx.mod.buildPacScript();
 
-    expect(pac).toContain('dnsDomainLevels(host) === 0');
-    expect(pac).toContain('return "DIRECT"');
+    expect(evaluatePac(pac, 'pirate')).toBe('DIRECT');
+    expect(evaluatePac(pac, REPRESENTATIVE_PIRATE_HOST)).toBe('DIRECT');
   });
 
-  test('HNS not regressed by dVPN: single-label and .pirate still go to HNS PROXY', () => {
+  test('HNS not regressed by dVPN: known HNS hosts still go to HNS PROXY', () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
     ctx.mod.setDvpnProxy('127.0.0.1', 10808);
 
     const pac = ctx.mod.buildPacScript();
 
-    const hnsBlockStart = pac.indexOf('dnsDomainLevels(host) === 0');
+    const hnsBlockStart = pac.indexOf('hnsRoots[host.toLowerCase()] === 1');
     const socksStart = pac.indexOf('SOCKS5');
 
     expect(hnsBlockStart).toBeGreaterThan(-1);
     expect(socksStart).toBeGreaterThan(-1);
     expect(hnsBlockStart).toBeLessThan(socksStart);
+    expect(evaluatePac(pac, 'pirate')).toBe('PROXY 127.0.0.1:5380');
+    expect(evaluatePac(pac, 'unknown-single-label')).toBe('PROXY 127.0.0.1:5380');
   });
 
   test('imported namespace suffixes are routed to the HNS proxy after refresh', async () => {
@@ -185,7 +276,9 @@ describe('network-manager', () => {
 
     const pac = ctx.mod.buildPacScript();
     expect(pac).toContain('"xn--pokmon-dva":1');
-    expect(pac).toMatch(/hnsTlds\[host\.substring\(host\.lastIndexOf\("\."\) \+ 1\)\.toLowerCase\(\)\] === 1[^}]*PROXY 127\.0\.0\.1:5380/);
+    expect(evaluatePac(pac, 'xn--pokmon-dva')).toBe('PROXY 127.0.0.1:5380');
+    expect(evaluatePac(pac, 'v.xn--pokmon-dva')).toBe('PROXY 127.0.0.1:5380');
+    expect(evaluatePac(pac, 'not-imported')).toBe('PROXY 127.0.0.1:5380');
   });
 
   test('imported namespace suffix log is summarized for large lists', async () => {
@@ -220,11 +313,11 @@ describe('network-manager', () => {
     expect(ctx.mod.getDvpnProxy()).toEqual({ host: '127.0.0.1', port: 10808 });
   });
 
-  test('setHnsProxy stores the proxy address', () => {
+  test('setHnsProxy keeps the helper proxy private until the guard starts', () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
 
-    expect(ctx.mod.getHnsProxyAddr()).toBe('127.0.0.1:5380');
+    expect(ctx.mod.getHnsProxyAddr()).toBeNull();
   });
 
   test('clearHnsProxy removes the HNS proxy address', () => {
@@ -253,6 +346,240 @@ describe('network-manager', () => {
     expect(ctx.setProxy).toHaveBeenCalledWith(
       expect.objectContaining({ pacScript: expect.stringContaining('proxy.pac') })
     );
+  });
+
+  test('rebuild puts an HNS guard proxy in front of the helper proxy', async () => {
+    const ctx = loadNetworkManagerModule({ pacServerPort: 9181 });
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+
+    await ctx.mod.rebuild();
+
+    const pac = ctx.mod.buildPacScript();
+    expect(ctx.httpMock.createServer).toHaveBeenCalledTimes(2);
+    expect(ctx.mod.getHnsProxyAddr()).toBe('127.0.0.1:9181');
+    expect(pac).toContain('PROXY 127.0.0.1:9181');
+    expect(pac).not.toContain('PROXY 127.0.0.1:5380');
+  });
+
+  test('HNS guard blocks loopback CONNECT requests before the helper proxy', async () => {
+    const ctx = loadNetworkManagerModule({ pacServerPort: 9181 });
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+
+    await ctx.mod.rebuild();
+
+    const guardConnect = ctx.createServerCalls[0].handlers.get('connect');
+    const clientSocket = {
+      destroyed: false,
+      destroy: jest.fn(function destroy() {
+        this.destroyed = true;
+      }),
+      on: jest.fn(),
+      pipe: jest.fn(),
+      write: jest.fn(),
+    };
+
+    guardConnect(
+      { url: '127.0.0.1:443', httpVersion: '1.1', headers: {} },
+      clientSocket,
+      Buffer.alloc(0)
+    );
+
+    expect(ctx.netConnect).not.toHaveBeenCalled();
+    expect(clientSocket.write).toHaveBeenCalledWith(
+      'HTTP/1.1 502 HNS host not allowed\r\nConnection: close\r\n\r\n'
+    );
+    expect(ctx.log.warn).toHaveBeenCalledWith(
+      '[Network] Blocked non-HNS proxy CONNECT: 127.0.0.1:443'
+    );
+  });
+
+  test('HNS guard falls back through HNS DoH when local recursive DNS is down', async () => {
+    const ctx = loadNetworkManagerModule({ pacServerPort: 9181 });
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+
+    await ctx.mod.rebuild();
+
+    const guardConnect = ctx.createServerCalls[0].handlers.get('connect');
+    const clientSocket = {
+      destroyed: false,
+      destroy: jest.fn(function destroy() {
+        this.destroyed = true;
+      }),
+      on: jest.fn(),
+      pipe: jest.fn(),
+      write: jest.fn(),
+    };
+
+    guardConnect(
+      { url: 'app.pirate:443', httpVersion: '1.1', headers: {} },
+      clientSocket,
+      Buffer.alloc(0)
+    );
+
+    expect(ctx.netConnect).toHaveBeenCalledWith(
+      5380,
+      '127.0.0.1',
+      expect.any(Function)
+    );
+    ctx.netSockets[0].connectHandler();
+    ctx.netSockets[0].emit('data', Buffer.from('HTTP/1.1 502 Bad Gateway\r\n\r\n'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(ctx.resolveHnsDohAddresses).toHaveBeenCalledWith('app.pirate');
+    expect(ctx.netConnect).toHaveBeenCalledWith(
+      443,
+      '173.199.93.117',
+      expect.any(Function)
+    );
+    expect(ctx.log.info).toHaveBeenCalledWith(
+      '[Network] HNS DoH last-resort CONNECT (local upstream 502): app.pirate:443 -> 173.199.93.117:443'
+    );
+  });
+
+  test('HNS guard prefers local HNS delegation fallback before DoH', async () => {
+    const ctx = loadNetworkManagerModule({ pacServerPort: 9181, hnsLocalAddress: '198.51.100.9' });
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+    ctx.mod.setHnsResolverAddrs({ rootAddr: '127.0.0.1:43000' });
+
+    await ctx.mod.rebuild();
+
+    const guardConnect = ctx.createServerCalls[0].handlers.get('connect');
+    const clientSocket = {
+      destroyed: false,
+      destroy: jest.fn(function destroy() {
+        this.destroyed = true;
+      }),
+      on: jest.fn(),
+      pipe: jest.fn(),
+      write: jest.fn(),
+    };
+
+    guardConnect(
+      { url: 'app.pirate:443', httpVersion: '1.1', headers: {} },
+      clientSocket,
+      Buffer.alloc(0)
+    );
+
+    ctx.netSockets[0].connectHandler();
+    ctx.netSockets[0].emit('data', Buffer.from('HTTP/1.1 502 Bad Gateway\r\n\r\n'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(ctx.resolveHnsLocalAddresses).toHaveBeenCalledWith('app.pirate', {
+      rootAddr: '127.0.0.1:43000',
+    });
+    expect(ctx.resolveHnsDohAddresses).not.toHaveBeenCalled();
+    expect(ctx.netConnect).toHaveBeenCalledWith(
+      443,
+      '198.51.100.9',
+      expect.any(Function)
+    );
+  });
+
+  test('HNS guard uses DoH only after local HNS delegation fallback fails', async () => {
+    const ctx = loadNetworkManagerModule({ pacServerPort: 9181, hnsLocalAddress: false });
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+    ctx.mod.setHnsResolverAddrs({ rootAddr: '127.0.0.1:43000' });
+
+    await ctx.mod.rebuild();
+
+    const guardConnect = ctx.createServerCalls[0].handlers.get('connect');
+    const clientSocket = {
+      destroyed: false,
+      destroy: jest.fn(function destroy() {
+        this.destroyed = true;
+      }),
+      on: jest.fn(),
+      pipe: jest.fn(),
+      write: jest.fn(),
+    };
+
+    guardConnect(
+      { url: 'app.pirate:443', httpVersion: '1.1', headers: {} },
+      clientSocket,
+      Buffer.alloc(0)
+    );
+
+    ctx.netSockets[0].connectHandler();
+    ctx.netSockets[0].emit('data', Buffer.from('HTTP/1.1 502 Bad Gateway\r\n\r\n'));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(ctx.resolveHnsLocalAddresses).toHaveBeenCalled();
+    expect(ctx.resolveHnsDohAddresses).toHaveBeenCalledWith('app.pirate');
+  });
+
+  test('HNS guard falls back through HNS DoH for arbitrary HNS CONNECT hosts', async () => {
+    const ctx = loadNetworkManagerModule({ pacServerPort: 9181, hnsDohAddress: '203.0.113.7' });
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+
+    await ctx.mod.rebuild();
+
+    const guardConnect = ctx.createServerCalls[0].handlers.get('connect');
+    const clientSocket = {
+      destroyed: false,
+      destroy: jest.fn(function destroy() {
+        this.destroyed = true;
+      }),
+      on: jest.fn(),
+      pipe: jest.fn(),
+      write: jest.fn(),
+    };
+
+    guardConnect(
+      { url: 'portal.any-hns-root:443', httpVersion: '1.1', headers: {} },
+      clientSocket,
+      Buffer.alloc(0)
+    );
+
+    ctx.netSockets[0].connectHandler();
+    ctx.netSockets[0].emit('data', Buffer.from('HTTP/1.1 502 Bad Gateway\r\n\r\n'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(ctx.resolveHnsDohAddresses).toHaveBeenCalledWith('portal.any-hns-root');
+    expect(ctx.netConnect).toHaveBeenCalledWith(
+      443,
+      '203.0.113.7',
+      expect.any(Function)
+    );
+  });
+
+  test('HNS guard forwards app.pirate HTTP requests through DoH last-resort when no local upstream is available', async () => {
+    const ctx = loadNetworkManagerModule({ pacServerPort: 9181 });
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+
+    await ctx.mod.rebuild();
+    ctx.mod.clearHnsProxy();
+
+    const guardHttp = ctx.createServerCalls[0].handler;
+    const req = {
+      method: 'GET',
+      url: 'http://app.pirate/feed?tab=home',
+      headers: { host: 'app.pirate' },
+      pipe: jest.fn(),
+    };
+    const res = {
+      writeHead: jest.fn(),
+      end: jest.fn(),
+    };
+
+    await guardHttp(req, res);
+
+    expect(ctx.resolveHnsDohAddresses).toHaveBeenCalledWith('app.pirate');
+    expect(ctx.httpRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: '173.199.93.117',
+        port: 80,
+        method: 'GET',
+        path: '/feed?tab=home',
+        headers: expect.objectContaining({ host: 'app.pirate' }),
+      }),
+      expect.any(Function)
+    );
+    expect(req.pipe).toHaveBeenCalled();
   });
 
   test('PAC script is valid JavaScript', () => {
@@ -307,4 +634,5 @@ describe('network-manager', () => {
     expect(ctx.webRequest.onCompleted).not.toHaveBeenCalled();
     expect(ctx.webRequest.onErrorOccurred).not.toHaveBeenCalled();
   });
+
 });

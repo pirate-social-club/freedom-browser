@@ -4,6 +4,15 @@ const path = require('path');
 const BEE_BIN_DIR = path.join(__dirname, '..', 'bee-bin');
 const IPFS_BIN_DIR = path.join(__dirname, '..', 'ipfs-bin');
 const RADICLE_BIN_DIR = path.join(__dirname, '..', 'radicle-bin');
+const HNS_BIN_DIR = path.join(__dirname, '..', 'hns-bin');
+const FORBIDDEN_HNS_BINARY_STRINGS = [['shake', 'station'].join('')];
+
+function findForbiddenBinaryString(binaryPath, forbiddenStrings) {
+  if (!fs.existsSync(binaryPath)) return null;
+
+  const binaryData = fs.readFileSync(binaryPath);
+  return forbiddenStrings.find((value) => binaryData.includes(Buffer.from(value))) || null;
+}
 
 function getPlatformArch() {
   const args = process.argv.slice(2);
@@ -75,15 +84,34 @@ function checkBinaries(platforms) {
     const platformDir = `${os}-${arch}`;
     const beeExt = os === 'win' ? '.exe' : '';
     const ipfsExt = os === 'win' ? '.exe' : '';
+    const hnsExt = os === 'win' ? '.exe' : '';
 
     const beePath = path.join(BEE_BIN_DIR, platformDir, `bee${beeExt}`);
     const ipfsPath = path.join(IPFS_BIN_DIR, platformDir, `ipfs${ipfsExt}`);
+    const fingertipdPath = path.join(HNS_BIN_DIR, platformDir, `fingertipd${hnsExt}`);
+    const hnsdPath = path.join(HNS_BIN_DIR, platformDir, `hnsd${hnsExt}`);
 
     if (!fs.existsSync(beePath)) {
       missing.push(`bee binary for ${platformDir}: ${beePath}`);
     }
     if (!fs.existsSync(ipfsPath)) {
       missing.push(`ipfs binary for ${platformDir}: ${ipfsPath}`);
+    }
+    if (!fs.existsSync(fingertipdPath)) {
+      missing.push(`fingertipd binary for ${platformDir}: ${fingertipdPath}`);
+    } else {
+      const forbiddenString = findForbiddenBinaryString(
+        fingertipdPath,
+        FORBIDDEN_HNS_BINARY_STRINGS
+      );
+      if (forbiddenString) {
+        missing.push(
+          `fingertipd binary for ${platformDir} contains obsolete string "${forbiddenString}": ${fingertipdPath}`
+        );
+      }
+    }
+    if (!fs.existsSync(hnsdPath)) {
+      missing.push(`hnsd binary for ${platformDir}: ${hnsdPath}`);
     }
 
     // Radicle: no official Windows binaries yet — skip check for win targets
@@ -110,7 +138,7 @@ function main() {
   const missing = checkBinaries(platforms);
 
   if (missing.length > 0) {
-    console.error('\n❌ Build cannot proceed. Missing binaries:\n');
+    console.error('\n❌ Build cannot proceed. Missing or invalid binaries:\n');
     missing.forEach((m) => console.error(`  - ${m}`));
     console.error('\nRun the following commands to download binaries:');
     console.error('  npm run bee:download');

@@ -7,12 +7,13 @@ const net = require('net');
 const dgram = require('dgram');
 const readline = require('readline');
 const IPC = require('../shared/ipc-channels');
-const { getHnsPublicSuffixes } = require('../shared/hns-hosts');
+const { getHnsPublicSuffixes, isHnsHost } = require('../shared/hns-hosts');
 const {
   buildHnsHealthProbeHosts,
   formatHnsHealthSummary,
   probeHnsResolver,
 } = require('./hns-health');
+const { pruneUnknownSingleLabelHistory } = require('./browser-state-sanitizer');
 const {
   MODE,
   updateService,
@@ -44,6 +45,8 @@ const HNS_STDERR_REPEAT_WINDOW_MS = 30 * 1000;
 const HNS_HEALTH_INITIAL_DELAY_MS = 1000;
 const HNS_HEALTH_RETRY_BASE_MS = 5000;
 const HNS_HEALTH_RETRY_MAX_MS = 60 * 1000;
+const FORBIDDEN_HELPER_CANARIES = [['shake', 'station'].join('')];
+const HNS_HELPER_TUNNEL_DNS_FAILURE_RE = /\[WARN\]\s+tunnel:\s+502\s+CONNECT\s+\S+\s+dns lookup failed/i;
 
 let proxyAddr = null;
 let caPemPath = null;
@@ -64,30 +67,33 @@ let hnsHealthAttempt = 0;
 let lastHnsHealthOk = null;
 let lastHnsHealthSummary = null;
 
-function isLoopbackHostname(hostname = '') {
-  return hostname === 'localhost' || hostname === '::1' || /^127\./.test(hostname);
-}
-
 function isHnsHostname(hostname = '') {
-  if (!hostname || typeof hostname !== 'string') return false;
-
-  const normalized = hostname.trim().toLowerCase();
-  if (!normalized) return false;
-  if (isLoopbackHostname(normalized)) return false;
-
-  if (!normalized.includes('.')) {
-    return /^[a-z0-9-]+$/.test(normalized);
-  }
-
-  const labels = normalized.split('.');
-  if (labels.length !== 2) return false;
-  if (labels[1] !== 'pirate') return false;
-
-  return /^[a-z0-9-]+$/.test(labels[0]);
+  return isHnsHost(hostname);
 }
 
 function normalizeHnsStderrLine(line) {
   return line.replace(/^\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2}\s+/, '');
+}
+
+function isExpectedHelperTunnelDnsFailure(line) {
+  return HNS_HELPER_TUNNEL_DNS_FAILURE_RE.test(line);
+}
+
+function logHnsStderrLine(line) {
+  if (isExpectedHelperTunnelDnsFailure(line)) {
+    log.info(`[HNS helper] Local DNS miss; guard resolver will retry: ${line}`);
+    return;
+  }
+
+  log.warn(`[HNS stderr]: ${line}`);
+}
+
+function logSuppressedHnsStderr(previous) {
+  const message = isExpectedHelperTunnelDnsFailure(previous.lastLine)
+    ? `[HNS helper] suppressed ${previous.suppressed} repeat local DNS miss(es): ${previous.lastLine}`
+    : `[HNS stderr]: suppressed ${previous.suppressed} repeat(s): ${previous.lastLine}`;
+  const level = isExpectedHelperTunnelDnsFailure(previous.lastLine) ? 'info' : 'warn';
+  log[level](message);
 }
 
 function logHnsStderr(data) {
@@ -109,10 +115,10 @@ function logHnsStderr(data) {
     }
 
     if (previous?.suppressed > 0) {
-      log.warn(`[HNS stderr]: suppressed ${previous.suppressed} repeat(s): ${previous.lastLine}`);
+      logSuppressedHnsStderr(previous);
     }
 
-    log.warn(`[HNS stderr]: ${line}`);
+    logHnsStderrLine(line);
     hnsStderrLogState.set(key, {
       lastLoggedAt: now,
       lastSeenAt: now,
@@ -172,19 +178,49 @@ async function runHnsHealthCheck(reason = 'manual') {
 
     const summary = formatHnsHealthSummary(result);
     const appPirateEntry = result.results.find((entry) => entry.host === 'app.pirate');
-    resolverReady = Boolean(appPirateEntry?.ok && appPirateEntry.addresses?.length > 0);
+    let appPirateResolution = null;
+    if (!appPirateEntry?.ok) {
+      if (typeof networkManager.getHnsResolutionForHost === 'function') {
+        appPirateResolution = await networkManager.getHnsResolutionForHost('app.pirate');
+      } else if (await networkManager.canResolveHnsFallbackForHost?.('app.pirate') === true) {
+        appPirateResolution = { resolverType: 'doh' };
+      }
+    }
+    const appPirateFallbackReady = Boolean(appPirateResolution);
+    const appPirateRecursiveReady = Boolean(appPirateEntry?.ok && appPirateEntry.addresses?.length > 0);
+    resolverReady = Boolean(
+      appPirateRecursiveReady ||
+      appPirateFallbackReady
+    );
     updateService('hns', { resolverReady });
 
     const changed = summary !== lastHnsHealthSummary || result.ok !== lastHnsHealthOk;
     lastHnsHealthSummary = summary;
     lastHnsHealthOk = result.ok;
 
-    if (result.ok) {
+    if (result.ok || resolverReady) {
       hnsHealthAttempt = 0;
       clearErrorState('hns');
-      setStatusMessage('hns', null);
-      if (changed) {
+      let resolverLabel = 'HTTPS last-resort resolver';
+      if (appPirateRecursiveReady) {
+        resolverLabel = 'app.pirate local recursive resolver';
+      } else if (appPirateResolution?.resolverType === 'local') {
+        resolverLabel = 'local delegation resolver';
+      }
+      const statusMessage = appPirateRecursiveReady
+        ? `HNS resolver partially degraded; ${resolverLabel} ready`
+        : `HNS recursive resolver recovering; using ${resolverLabel}`;
+      setStatusMessage('hns', result.ok ? null : statusMessage);
+      if (result.ok && changed) {
         log.info(`[HNS] Resolver health ok (${reason}): ${summary}`);
+      } else if (!result.ok && changed) {
+        const retryDelayMs = scheduleHnsHealthRetry();
+        const logPrefix = appPirateRecursiveReady
+          ? 'Resolver partially degraded'
+          : 'Local recursive resolver unavailable';
+        log.info(
+          `[HNS] ${logPrefix} (${reason}): ${summary}; ${resolverLabel} ready; retrying in ${retryDelayMs}ms`
+        );
       }
       return result;
     }
@@ -250,6 +286,28 @@ function getHnsDataPath() {
     fs.mkdirSync(dataDir, { recursive: true });
   }
   return dataDir;
+}
+
+function getHelperBinaryValidationError(binPath) {
+  let binaryData;
+  try {
+    binaryData = fs.readFileSync(binPath);
+  } catch (err) {
+    log.warn(`[HNS] Could not inspect helper binary ${binPath}: ${err.message}`);
+    return null;
+  }
+
+  const binaryBuffer = Buffer.isBuffer(binaryData)
+    ? binaryData
+    : Buffer.from(String(binaryData || ''));
+
+  const forbiddenCanary = FORBIDDEN_HELPER_CANARIES.find((canary) => (
+    binaryBuffer.includes(Buffer.from(canary))
+  ));
+
+  if (!forbiddenCanary) return null;
+
+  return `HNS helper binary contains obsolete hardcoded canary "${forbiddenCanary}"; replace ${binPath} with a rebuilt fingertipd.`;
 }
 
 function reserveTcpPort() {
@@ -341,7 +399,10 @@ function configureCertVerification(targetSession) {
 
   targetSession.setCertificateVerifyProc((request, callback) => {
     try {
-      if (proxyAddr && isHnsHostname(request?.hostname)) {
+      if (proxyAddr && (
+        isHnsHostname(request?.hostname) ||
+        networkManager.isHnsProxyHost?.(request?.hostname) === true
+      )) {
         callback(0);
         return;
       }
@@ -402,12 +463,21 @@ async function handleReady(event) {
   }
 
   const defaultSession = session.defaultSession;
+  let publishedProxyAddr;
 
   try {
     networkManager.setHnsProxy(proxyAddr);
+    networkManager.setHnsResolverAddrs?.({ rootAddr, recursiveAddr });
     await networkManager.rebuild();
+    publishedProxyAddr = networkManager.getHnsProxyAddr() || null;
     networkManager.refreshImportedHnsSuffixes()
-      .then(() => scheduleHnsHealthCheck('suffix refresh'))
+      .then((suffixes) => {
+        updateService('hns', { publicSuffixes: suffixes });
+        if (suffixes.length > 1) {
+          pruneUnknownSingleLabelHistory();
+        }
+        scheduleHnsHealthCheck('suffix refresh');
+      })
       .catch((err) => {
         log.warn(`[HNS] Imported namespace suffix refresh failed: ${err.message}`);
       });
@@ -420,14 +490,15 @@ async function handleReady(event) {
   configureCertVerification(defaultSession);
 
   updateService('hns', {
-    api: proxyAddr ? `http://${proxyAddr}` : null,
-    proxy: proxyAddr,
+    api: publishedProxyAddr ? `http://${publishedProxyAddr}` : null,
+    proxy: publishedProxyAddr,
     mode: MODE.BUNDLED,
+    publicSuffixes: getHnsPublicSuffixes(),
   });
   setStatusMessage('hns', null);
 
   updateState(STATUS.RUNNING);
-  log.info(`[HNS] Helper ready: proxy=${proxyAddr}, ca=${caPemPath}`);
+  log.info(`[HNS] Helper ready: proxy=${publishedProxyAddr || 'unavailable'}, upstream=${proxyAddr}, ca=${caPemPath}`);
 }
 
 function parseStdoutLine(line) {
@@ -449,9 +520,7 @@ function parseStdoutLine(line) {
           }
           height = nextHeight;
 
-          const helperReady =
-            event.canaryReady === true ||
-            (event.canaryReady === undefined && event.synced === true);
+          const helperReady = event.synced === true || event.canaryReady === true;
           const heightReady =
             height > 0 &&
             lastHeightChangeAt > 0 &&
@@ -521,6 +590,15 @@ async function startHns() {
   if (!fs.existsSync(binPath)) {
     updateState(STATUS.ERROR, `Helper binary not found at ${binPath}`);
     setStatusMessage('hns', 'HNS not available');
+    return;
+  }
+
+  const binaryValidationError = getHelperBinaryValidationError(binPath);
+  if (binaryValidationError) {
+    log.error(`[HNS] ${binaryValidationError}`);
+    updateState(STATUS.ERROR, binaryValidationError);
+    setErrorState('hns', 'HNS helper binary is obsolete');
+    setStatusMessage('hns', 'HNS helper binary is obsolete');
     return;
   }
 
@@ -694,10 +772,11 @@ function stopHns() {
 
 function checkBinary() {
   const binPath = getHelperBinaryPath();
-  return fs.existsSync(binPath);
+  return fs.existsSync(binPath) && !getHelperBinaryValidationError(binPath);
 }
 
 function getHnsStatus() {
+  const publishedProxyAddr = proxyAddr ? networkManager.getHnsProxyAddr() : null;
   return {
     status: currentState,
     error: lastError,
@@ -705,7 +784,7 @@ function getHnsStatus() {
     canaryReady,
     resolverReady,
     height,
-    proxyAddr,
+    proxyAddr: publishedProxyAddr,
     caPemPath,
     rootAddr,
     recursiveAddr,

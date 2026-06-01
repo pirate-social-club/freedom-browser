@@ -72,4 +72,20 @@ describe('renderer state', () => {
     expect(mod.getDisplayMessage('bee')).toBe('Starting');
     expect(mod.getDisplayMessage('missing')).toBeNull();
   });
+
+  test('syncs imported HNS public suffixes into the renderer classifier', async () => {
+    const mod = await loadModule();
+    const setDynamicHnsPublicSuffixes = jest.fn();
+    global.window.FREEDOM_HNS_HOSTS = { setDynamicHnsPublicSuffixes };
+
+    mod.updateRegistry({
+      ...mod.state.registry,
+      hns: {
+        ...mod.state.registry.hns,
+        publicSuffixes: ['.pirate', '.xn--pokmon-dva'],
+      },
+    });
+
+    expect(setDynamicHnsPublicSuffixes).toHaveBeenCalledWith(['.pirate', '.xn--pokmon-dva']);
+  });
 });

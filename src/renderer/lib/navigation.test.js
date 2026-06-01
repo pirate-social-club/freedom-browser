@@ -518,11 +518,23 @@ describe('navigation', () => {
       event: {
         errorCode: -111,
         errorDescription: 'ERR_TUNNEL_CONNECTION_FAILED',
-        validatedURL: 'https://shakestation/',
+        validatedURL: 'https://unknown-single-label/',
       },
     });
     expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
-      'file:///app/pages/error.html?error=HNS_NOT_READY&url=https%3A%2F%2Fshakestation%2F'
+      'file:///app/pages/error.html?error=HNS_LOOKUP_FAILED&url=https%3A%2F%2Funknown-single-label%2F'
+    );
+
+    ctx.activeRef.tab.webview.loadURL.mockClear();
+    ctx.tabsMocks.webviewEventHandler('did-fail-load', {
+      event: {
+        errorCode: -111,
+        errorDescription: 'ERR_TUNNEL_CONNECTION_FAILED',
+        validatedURL: 'https://pirate/',
+      },
+    });
+    expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
+      'file:///app/pages/error.html?error=HNS_LOOKUP_FAILED&url=https%3A%2F%2Fpirate%2F'
     );
 
     ctx.tabsMocks.webviewEventHandler('certificate-error', {
@@ -572,7 +584,7 @@ describe('navigation', () => {
     expect(ctx.urlUtilsMocks.normalizeLocalhostInput).toHaveBeenCalledWith('localhost:5173');
   });
 
-  test('shows HNS not ready page for single-label hosts while bundled HNS is still syncing', async () => {
+  test('shows HNS not ready page for known HNS roots while bundled HNS is still syncing', async () => {
     const ctx = await loadNavigationModule({
       initialSettings: { showBookmarkBar: true },
       enableHnsIntegration: true,
@@ -586,15 +598,15 @@ describe('navigation', () => {
       synced: false,
       height: 325297,
     };
-    ctx.urlUtilsMocks.normalizeHnsHostInput.mockReturnValue('https://shakestation/');
+    ctx.urlUtilsMocks.normalizeHnsHostInput.mockReturnValue('https://app.pirate/');
 
     await ctx.mod.initNavigation();
 
-    ctx.elements.addressInput.value = 'shakestation/';
+    ctx.elements.addressInput.value = 'pirate/';
     ctx.elements.navForm.dispatch('submit', { preventDefault: jest.fn() });
 
     expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
-      'file:///app/pages/error.html?error=HNS_NOT_READY&url=https%3A%2F%2Fshakestation%2F&height=325297'
+      'file:///app/pages/error.html?error=HNS_NOT_READY&url=https%3A%2F%2Fapp.pirate%2F&height=325297'
     );
   });
 
@@ -613,19 +625,49 @@ describe('navigation', () => {
       height: 325297,
     };
     ctx.urlUtilsMocks.normalizeHnsHostInput.mockImplementation((input) => {
-      if (input === 'shakestation/' || input === 'shakestation') {
-        return 'https://shakestation/';
+      if (input === 'pirate/' || input === 'pirate') {
+        return 'https://app.pirate/';
       }
       return null;
     });
 
     await ctx.mod.initNavigation();
 
-    ctx.elements.addressInput.value = 'https://shakestation/';
+    ctx.elements.addressInput.value = 'https://pirate/';
     ctx.elements.navForm.dispatch('submit', { preventDefault: jest.fn() });
 
     expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
-      'file:///app/pages/error.html?error=HNS_NOT_READY&url=https%3A%2F%2Fshakestation%2F&height=325297'
+      'file:///app/pages/error.html?error=HNS_NOT_READY&url=https%3A%2F%2Fapp.pirate%2F&height=325297'
+    );
+  });
+
+  test('shows lookup failed instead of syncing once bundled HNS is synced', async () => {
+    const ctx = await loadNavigationModule({
+      initialSettings: { showBookmarkBar: true },
+      enableHnsIntegration: true,
+    });
+
+    ctx.state.enableHnsIntegration = true;
+    ctx.state.registry.hns = {
+      mode: 'bundled',
+      canaryReady: true,
+      resolverReady: false,
+      synced: true,
+      height: 325297,
+    };
+
+    await ctx.mod.initNavigation();
+
+    ctx.tabsMocks.webviewEventHandler('did-fail-load', {
+      event: {
+        errorCode: -111,
+        errorDescription: 'ERR_TUNNEL_CONNECTION_FAILED',
+        validatedURL: 'https://pirate/',
+      },
+    });
+
+    expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
+      'file:///app/pages/error.html?error=HNS_LOOKUP_FAILED&url=https%3A%2F%2Fpirate%2F'
     );
   });
 

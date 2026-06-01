@@ -122,6 +122,7 @@ describe('service-registry', () => {
       canaryReady: true,
       resolverReady: true,
       height: 42000,
+      publicSuffixes: ['.pirate', '.xn--pokmon-dva'],
     });
 
     mod.clearService('hns');
@@ -138,6 +139,7 @@ describe('service-registry', () => {
       canaryReady: false,
       resolverReady: false,
       height: 0,
+      publicSuffixes: ['.pirate'],
     });
   });
 

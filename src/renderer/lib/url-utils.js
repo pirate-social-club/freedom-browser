@@ -51,16 +51,15 @@ const looksLikeDomain = (str) => {
 
   // Extract the part before any path/query
   const hostPart = str.split(/[/?#]/)[0];
+  if (!hostPart || hostPart.length > 253) return false;
 
   // Should not be a valid Swarm hash
   if (isValidSwarmHash(hostPart)) return false;
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(hostPart)) return false;
 
-  // Check for common domain patterns
-  // - Has a TLD-like ending (2-10 chars after last dot)
-  // - No spaces
-  // - Reasonable characters for a domain
-  const domainRegex =
-    /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,10}$/;
+  // Accept any syntactically valid DNS name. The PAC layer decides whether an
+  // unresolved dotted host should use HNS or ordinary network routing.
+  const domainRegex = /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
   return domainRegex.test(hostPart);
 };
 
@@ -126,13 +125,15 @@ const looksLikeHnsHost = (str) => {
 
   if (hostPart.length > 63) return false;
 
+  const hnsPublicTlds = getHnsPublicTlds();
+
   if (!hostPart.includes('.')) {
     return isValidHostLabel(hostPart);
   }
 
   const labels = hostPart.split('.');
   if (labels.length !== 2) return false;
-  if (!getHnsPublicTlds().has(labels[1])) return false;
+  if (!hnsPublicTlds.has(labels[1].toLowerCase())) return false;
 
   return isValidHostLabel(labels[0]);
 };
