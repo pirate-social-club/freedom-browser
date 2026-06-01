@@ -101,6 +101,7 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RADICLE_ALLOW_EXPIRED_CERT: '1'
         run: |
           npm run bee:download
           npm run ipfs:download

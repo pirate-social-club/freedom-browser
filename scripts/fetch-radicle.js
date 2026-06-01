@@ -9,6 +9,14 @@ const OUTPUT_DIR = path.join(__dirname, '..', 'radicle-bin');
 // Main bundle (rad, radicle-node) and httpd have SEPARATE release paths
 const MAIN_RELEASES_URL = 'https://files.radicle.xyz/releases/latest';
 const HTTPD_RELEASES_URL = 'https://files.radicle.xyz/releases/radicle-httpd/latest';
+const allowExpiredCert = process.env.RADICLE_ALLOW_EXPIRED_CERT === '1';
+const insecureAgent = allowExpiredCert
+  ? new https.Agent({ rejectUnauthorized: false })
+  : null;
+
+if (allowExpiredCert) {
+  console.warn('Warning: RADICLE_ALLOW_EXPIRED_CERT=1; accepting files.radicle.xyz TLS certificate errors for release binary downloads.');
+}
 
 // Target mapping: Freedom platform naming to Radicle target triple
 // Freedom uses mac-arm64/mac-x64/linux-arm64/linux-x64 (matching bee/ipfs)
@@ -26,7 +34,7 @@ const TARGETS = {
 
 async function fetchJson(url) {
   return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
+    https.get(url, { agent: insecureAgent }, (res) => {
       if (res.statusCode === 301 || res.statusCode === 302) {
         fetchJson(res.headers.location).then(resolve).catch(reject);
         return;
@@ -52,7 +60,7 @@ async function downloadFile(url, dest) {
   console.log(`Downloading ${url}...`);
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest);
-    https.get(url, (response) => {
+    https.get(url, { agent: insecureAgent }, (response) => {
       if (response.statusCode === 302 || response.statusCode === 301) {
         file.close();
         fs.unlinkSync(dest);

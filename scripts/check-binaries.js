@@ -88,6 +88,7 @@ function checkBinaries(platforms) {
 
     const beePath = path.join(BEE_BIN_DIR, platformDir, `bee${beeExt}`);
     const ipfsPath = path.join(IPFS_BIN_DIR, platformDir, `ipfs${ipfsExt}`);
+    const hnsPlatformDir = path.join(HNS_BIN_DIR, platformDir);
     const fingertipdPath = path.join(HNS_BIN_DIR, platformDir, `fingertipd${hnsExt}`);
     const hnsdPath = path.join(HNS_BIN_DIR, platformDir, `hnsd${hnsExt}`);
 
@@ -97,21 +98,25 @@ function checkBinaries(platforms) {
     if (!fs.existsSync(ipfsPath)) {
       missing.push(`ipfs binary for ${platformDir}: ${ipfsPath}`);
     }
-    if (!fs.existsSync(fingertipdPath)) {
-      missing.push(`fingertipd binary for ${platformDir}: ${fingertipdPath}`);
-    } else {
-      const forbiddenString = findForbiddenBinaryString(
-        fingertipdPath,
-        FORBIDDEN_HNS_BINARY_STRINGS
-      );
-      if (forbiddenString) {
-        missing.push(
-          `fingertipd binary for ${platformDir} contains obsolete string "${forbiddenString}": ${fingertipdPath}`
+    if (fs.existsSync(hnsPlatformDir)) {
+      if (!fs.existsSync(fingertipdPath)) {
+        missing.push(`fingertipd binary for ${platformDir}: ${fingertipdPath}`);
+      } else {
+        const forbiddenString = findForbiddenBinaryString(
+          fingertipdPath,
+          FORBIDDEN_HNS_BINARY_STRINGS
         );
+        if (forbiddenString) {
+          missing.push(
+            `fingertipd binary for ${platformDir} contains obsolete string "${forbiddenString}": ${fingertipdPath}`
+          );
+        }
       }
-    }
-    if (!fs.existsSync(hnsdPath)) {
-      missing.push(`hnsd binary for ${platformDir}: ${hnsdPath}`);
+      if (!fs.existsSync(hnsdPath)) {
+        missing.push(`hnsd binary for ${platformDir}: ${hnsdPath}`);
+      }
+    } else {
+      console.warn(`Skipping HNS binary check for ${platformDir}; ${hnsPlatformDir} is not bundled.`);
     }
 
     // Radicle: no official Windows binaries yet — skip check for win targets
