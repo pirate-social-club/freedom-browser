@@ -921,6 +921,12 @@
             : 'Connect JackTrip audio. The host controls the viewer broadcast.';
         } else if (jacktripHostWaitingForJackTrip) {
           els.broadcastStatus.textContent = 'Connect JackTrip audio before broadcasting to viewers.';
+        } else if (broadcastState === 'live') {
+          els.broadcastStatus.textContent = attachPayload?.agora?.channel
+            ? `Broadcasting to ${attachPayload.agora.channel}.`
+            : 'Broadcasting.';
+        } else if (broadcastState === 'connecting') {
+          els.broadcastStatus.textContent = 'Requesting camera and microphone.';
         } else if (!sdkReady) {
           els.broadcastStatus.textContent = 'Agora SDK is still loading.';
         } else if (!ready && broadcastState === 'idle') {
@@ -1241,7 +1247,7 @@
           throw new Error('Room requires JackTrip but no JackTrip server is configured');
         }
         if (hostPlatform === 'linux' && jacktrip.linux_audio_setup_recommended) {
-          const audio = await api.setupJacktripAudio({ setDefaultSource: true });
+          const audio = await api.setupJacktripAudio({ setDefaultSource: false });
           writeLog('JackTrip audio source prepared before connect', audio);
         }
         const status = await api.connectJacktrip({
@@ -1261,7 +1267,7 @@
         if (hostPlatform !== 'linux' || !isJacktripHost(payload)) {
           return null;
         }
-        const audio = await api.setupJacktripAudio({ setDefaultSource: true });
+        const audio = await api.setupJacktripAudio({ setDefaultSource: false });
         const movedInputsCount = Number(audio?.movedInputsCount || 0);
         writeLog('JackTrip audio routed after connect', {
           audio,

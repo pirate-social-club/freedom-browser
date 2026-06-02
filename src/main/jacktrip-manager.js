@@ -96,12 +96,28 @@ function findInPath(name) {
   return null;
 }
 
+function bundledPlatformDir() {
+  return `${process.platform}-${process.arch}`;
+}
+
+function findBundledJacktripBinary() {
+  const binaryName = isWindows() ? 'jacktrip.exe' : 'jacktrip';
+  const platformDir = bundledPlatformDir();
+  const candidates = [
+    path.join(__dirname, '..', '..', 'jacktrip-bin', platformDir, binaryName),
+  ];
+  if (app?.isPackaged && process.resourcesPath) {
+    candidates.unshift(path.join(process.resourcesPath, 'jacktrip-bin', platformDir, binaryName));
+  }
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
 function resolveJacktripBinary() {
   const explicit = process.env.JACKTRIP_BIN?.trim();
   if (explicit) {
     return explicit;
   }
-  return findInPath('jacktrip') || 'jacktrip';
+  return findBundledJacktripBinary() || findInPath('jacktrip') || 'jacktrip';
 }
 
 function resolveBinary(name) {

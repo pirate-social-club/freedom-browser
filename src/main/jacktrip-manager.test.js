@@ -64,6 +64,11 @@ function createWindowMock() {
   };
 }
 
+function bundledJacktripBinaryPath() {
+  const binaryName = process.platform === 'win32' ? 'jacktrip.exe' : 'jacktrip';
+  return path.join(__dirname, '..', '..', 'jacktrip-bin', `${process.platform}-${process.arch}`, binaryName);
+}
+
 function loadJacktripManager(options = {}) {
   const ipcMain = options.ipcMain || createIpcMainMock();
   const app = options.app || createAppMock({
@@ -202,6 +207,28 @@ describe('jacktrip-manager', () => {
         jacktripBinary: '/mock/bin/jacktrip',
       })
     );
+  });
+
+  test('uses bundled jacktrip binary when it is not available on PATH', async () => {
+    const bundledBinary = bundledJacktripBinaryPath();
+    const binDir = '/mock/bin';
+    const scriptPath = path.join(__dirname, '..', '..', 'scripts', 'jacktrip', 'setup-duet-audio-source-linux.sh');
+    const ctx = loadJacktripManager({
+      binaries: [
+        bundledBinary,
+        path.join(binDir, 'jack_lsp'),
+        path.join(binDir, 'jack_connect'),
+        path.join(binDir, 'jack_disconnect'),
+        scriptPath,
+      ],
+    });
+
+    expect(ctx.mod.checkDeps()).toEqual(expect.objectContaining({
+      available: true,
+      jacktripBinary: bundledBinary,
+    }));
+    await ctx.mod.connect({ server: '127.0.0.1', port: 4464 });
+    expect(ctx.spawn).toHaveBeenCalledWith(bundledBinary, expect.any(Array), expect.any(Object));
   });
 
   test('connect spawns jacktrip with room endpoint and broadcasts connected state', async () => {
