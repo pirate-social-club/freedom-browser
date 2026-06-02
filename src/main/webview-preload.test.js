@@ -43,7 +43,7 @@ function loadWebviewPreloadModule(options = {}) {
         hns: {
           mode: 'bundled',
           canaryReady: true,
-          resolverReady: true,
+          localResolverReady: true,
           height: 325297,
         },
       },
@@ -226,11 +226,11 @@ describe('webview-preload', () => {
 
     const unsubscribe = exposures.freedomAPI.onServiceRegistryUpdate(callback);
     ipcRenderer.emit(IPC.SERVICE_REGISTRY_UPDATE, {
-      hns: { mode: 'bundled', canaryReady: true, resolverReady: true, height: 325297 },
+      hns: { mode: 'bundled', canaryReady: true, localResolverReady: true, height: 325297 },
     });
 
     expect(callback).toHaveBeenCalledWith({
-      hns: { mode: 'bundled', canaryReady: true, resolverReady: true, height: 325297 },
+      hns: { mode: 'bundled', canaryReady: true, localResolverReady: true, height: 325297 },
     });
 
     unsubscribe();

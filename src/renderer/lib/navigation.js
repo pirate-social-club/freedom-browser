@@ -52,6 +52,9 @@ import {
   resolveFreedomInternalUrl,
 } from './page-urls.js';
 
+const HOME_ICANN_URL = 'https://pirate.sc/';
+const HOME_HNS_URL = 'https://app.pirate/';
+
 // Helper to get active tab's navigation state (with fallback to empty object)
 const getNavState = () => getActiveTabState() || {};
 
@@ -117,7 +120,7 @@ const isSubframeNavigationEvent = (event) => event?.isMainFrame === false;
 
 const isBundledHnsReady = () => {
   if (!state.enableHnsIntegration) return false;
-  return state.registry?.hns?.resolverReady === true;
+  return state.registry?.hns?.localResolverReady === true;
 };
 
 const shouldShowHnsNotReady = () => {
@@ -1644,6 +1647,11 @@ export const initNavigation = () => {
 };
 
 export const upgradeHomePageIfNeeded = (oldHomeUrl) => {
+  if (oldHomeUrl === HOME_HNS_URL && landingUrl === HOME_ICANN_URL) {
+    pushDebug(`Homepage downgrade skipped: ${oldHomeUrl} -> ${landingUrl}`);
+    return;
+  }
+
   const tabs = getTabs();
   if (!tabs.length) return;
 

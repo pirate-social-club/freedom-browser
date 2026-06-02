@@ -42,6 +42,21 @@ function buildEmptyResponse() {
   };
 }
 
+function buildServfailResponse() {
+  return {
+    ...buildEmptyResponse(),
+    rcode: 2,
+  };
+}
+
+function buildDohResult(hostname = 'app.pirate', address = '203.0.113.10') {
+  return {
+    addresses: [buildAddressRecord(hostname, address, 60)],
+    endpoint: 'https://hnsdoh.test/dns-query',
+    hostname,
+  };
+}
+
 function buildWireAddressResponse(query, address = '198.51.100.44') {
   const header = Buffer.alloc(12);
   header.writeUInt16BE(query.readUInt16BE(0), 0);
@@ -90,6 +105,7 @@ describe('hns-local-resolver', () => {
   afterEach(() => {
     clearHnsLocalCache();
     jest.clearAllMocks();
+    jest.useRealTimers();
   });
 
   test('resolves a delegated HNS name through local root glue and authoritative nameserver', async () => {
@@ -165,6 +181,179 @@ describe('hns-local-resolver', () => {
     }));
   });
 
+  test('uses DoH fallback for nameserver addresses when delegation omits glue', async () => {
+    const resolveHnsDohAddresses = jest.fn(async (hostname) => {
+      if (hostname === 'ns1.pirate') {
+        return {
+          addresses: [{ address: '198.51.100.9', family: 4, ttl: 60 }],
+          hostname,
+        };
+      }
+      throw new Error(`unexpected DoH lookup for ${hostname}`);
+    });
+    const queryDnsMock = jest.fn(async ({ host, hostname, type }) => {
+      if (host === '127.0.0.1' && hostname === 'app.pirate') {
+        return {
+          ...buildEmptyResponse(),
+          authorities: [{ name: 'pirate', ns: 'ns1.pirate', ttl: 120, type: DNS_TYPE_NS }],
+        };
+      }
+      if (host === '127.0.0.1' && hostname === 'ns1.pirate') {
+        return buildEmptyResponse();
+      }
+      if (host === '198.51.100.9' && hostname === 'app.pirate' && type === DNS_TYPE_A) {
+        return {
+          ...buildEmptyResponse(),
+          answers: [buildAddressRecord('app.pirate', '203.0.113.10')],
+        };
+      }
+      return buildEmptyResponse();
+    });
+
+    const result = await resolveHnsLocalAddresses('app.pirate', {
+      family: 4,
+      queryDns: queryDnsMock,
+      resolveHnsDohAddresses,
+      resolveNameserverOsAddresses: jest.fn(() => Promise.resolve([])),
+      rootAddr: '127.0.0.1:5300',
+    });
+
+    expect(resolveHnsDohAddresses).toHaveBeenCalledWith('ns1.pirate', { family: 4 });
+    expect(result).toEqual(expect.objectContaining({
+      hostname: 'app.pirate',
+      resolver: 'ns1.pirate',
+    }));
+    expect(result.addresses).toEqual([
+      expect.objectContaining({ address: '203.0.113.10', family: 4 }),
+    ]);
+    expect(queryDnsMock).toHaveBeenCalledWith(expect.objectContaining({
+      host: '198.51.100.9',
+      hostname: 'app.pirate',
+      type: DNS_TYPE_A,
+    }));
+  });
+
+  test('uses full DoH fallback when local root returns no delegation', async () => {
+    const resolveHnsDohAddresses = jest.fn(async () => buildDohResult());
+    const queryDnsMock = jest.fn(async ({ host, hostname }) => {
+      if (host === '127.0.0.1' && hostname === 'app.pirate') {
+        return buildServfailResponse();
+      }
+      return buildEmptyResponse();
+    });
+
+    const result = await resolveHnsLocalAddresses('app.pirate', {
+      family: 4,
+      queryDns: queryDnsMock,
+      resolveHnsDohAddresses,
+      rootAddr: '127.0.0.1:5300',
+    });
+
+    expect(resolveHnsDohAddresses).toHaveBeenCalledWith('app.pirate', {
+      cnameDepth: 0,
+      family: 4,
+    });
+    expect(result).toEqual(expect.objectContaining({
+      addresses: [expect.objectContaining({ address: '203.0.113.10', family: 4 })],
+      hostname: 'app.pirate',
+      resolver: 'https://hnsdoh.test/dns-query',
+      resolverType: 'doh-fallback',
+    }));
+  });
+
+  test('uses full DoH fallback when local authoritative refuses connections', async () => {
+    const resolveHnsDohAddresses = jest.fn(async () => buildDohResult());
+    const queryDnsMock = jest.fn(async ({ host, hostname }) => {
+      if (host === '127.0.0.1' && hostname === 'app.pirate') {
+        return buildDelegation('ns1.pirate', '198.51.100.9');
+      }
+      if (host === '198.51.100.9' && hostname === 'app.pirate') {
+        const error = new Error('connect ECONNREFUSED 198.51.100.9:53');
+        error.code = 'ECONNREFUSED';
+        throw error;
+      }
+      return buildEmptyResponse();
+    });
+
+    const result = await resolveHnsLocalAddresses('app.pirate', {
+      family: 4,
+      queryDns: queryDnsMock,
+      resolveHnsDohAddresses,
+      rootAddr: '127.0.0.1:5300',
+    });
+
+    expect(resolveHnsDohAddresses).toHaveBeenCalledWith('app.pirate', {
+      cnameDepth: 0,
+      family: 4,
+    });
+    expect(result).toEqual(expect.objectContaining({
+      addresses: [expect.objectContaining({ address: '203.0.113.10', family: 4 })],
+      resolverType: 'doh-fallback',
+    }));
+  });
+
+  test('uses full DoH fallback when local authoritative times out', async () => {
+    const resolveHnsDohAddresses = jest.fn(async () => buildDohResult());
+    const queryDnsMock = jest.fn(async ({ host, hostname }) => {
+      if (host === '127.0.0.1' && hostname === 'app.pirate') {
+        return buildDelegation('ns1.pirate', '198.51.100.9');
+      }
+      if (host === '198.51.100.9' && hostname === 'app.pirate') {
+        const error = new Error('DNS UDP timeout for app.pirate');
+        error.code = 'ETIMEOUT';
+        throw error;
+      }
+      return buildEmptyResponse();
+    });
+
+    const result = await resolveHnsLocalAddresses('app.pirate', {
+      family: 4,
+      queryDns: queryDnsMock,
+      resolveHnsDohAddresses,
+      rootAddr: '127.0.0.1:5300',
+    });
+
+    expect(resolveHnsDohAddresses).toHaveBeenCalledWith('app.pirate', {
+      cnameDepth: 0,
+      family: 4,
+    });
+    expect(result).toEqual(expect.objectContaining({
+      addresses: [expect.objectContaining({ address: '203.0.113.10', family: 4 })],
+      resolverType: 'doh-fallback',
+    }));
+  });
+
+  test('does not use full DoH fallback when local authoritative resolves', async () => {
+    const resolveHnsDohAddresses = jest.fn(() => {
+      throw new Error('DoH must not be called');
+    });
+    const queryDnsMock = jest.fn(async ({ host, hostname, type }) => {
+      if (host === '127.0.0.1' && hostname === 'app.pirate') {
+        return buildDelegation('ns1.pirate', '198.51.100.9');
+      }
+      if (host === '198.51.100.9' && hostname === 'app.pirate' && type === DNS_TYPE_A) {
+        return {
+          ...buildEmptyResponse(),
+          answers: [buildAddressRecord('app.pirate', '203.0.113.10')],
+        };
+      }
+      return buildEmptyResponse();
+    });
+
+    const result = await resolveHnsLocalAddresses('app.pirate', {
+      family: 4,
+      queryDns: queryDnsMock,
+      resolveHnsDohAddresses,
+      rootAddr: '127.0.0.1:5300',
+    });
+
+    expect(resolveHnsDohAddresses).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({
+      addresses: [expect.objectContaining({ address: '203.0.113.10', family: 4 })],
+      resolver: 'ns1.pirate',
+    }));
+  });
+
   test('follows CNAME answers before returning addresses', async () => {
     const queryDnsMock = jest.fn(async ({ host, hostname }) => {
       if (host === '127.0.0.1' && hostname === 'alias.pirate') {
@@ -217,6 +406,141 @@ describe('hns-local-resolver', () => {
     });
 
     expect(queryDnsMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('caches empty nameserver failures briefly', async () => {
+    const queryDnsMock = jest.fn(async ({ host, hostname }) => {
+      if (host === '127.0.0.1' && hostname === 'app.pirate') {
+        return {
+          ...buildEmptyResponse(),
+          authorities: [{ name: 'pirate', ns: 'ns1.pirate', ttl: 120, type: DNS_TYPE_NS }],
+        };
+      }
+      return buildEmptyResponse();
+    });
+
+    await expect(resolveHnsLocalAddresses('app.pirate', {
+      family: 4,
+      queryDns: queryDnsMock,
+      resolveHnsDohAddresses: jest.fn(() => Promise.reject(new Error('DoH unavailable'))),
+      resolveNameserverOsAddresses: jest.fn(() => Promise.resolve([])),
+      rootAddr: '127.0.0.1:5300',
+    })).rejects.toThrow('No local HNS nameservers found for app.pirate');
+    await expect(resolveHnsLocalAddresses('app.pirate', {
+      family: 4,
+      queryDns: queryDnsMock,
+      resolveHnsDohAddresses: jest.fn(() => Promise.reject(new Error('DoH unavailable'))),
+      resolveNameserverOsAddresses: jest.fn(() => Promise.resolve([])),
+      rootAddr: '127.0.0.1:5300',
+    })).rejects.toThrow('No local HNS nameservers found for app.pirate');
+
+    expect(queryDnsMock).toHaveBeenCalledTimes(3);
+  });
+
+  test('positive cache can be replaced by a negative result after TTL expiry', async () => {
+    jest.useFakeTimers();
+    let mode = 'positive';
+    const queryDnsMock = jest.fn(async ({ host, hostname, type }) => {
+      if (mode === 'positive') {
+        if (host === '127.0.0.1' && hostname === 'app.pirate') {
+          return buildDelegation('ns1.pirate', '198.51.100.9');
+        }
+        if (host === '198.51.100.9' && hostname === 'app.pirate' && type === DNS_TYPE_A) {
+          return {
+            ...buildEmptyResponse(),
+            answers: [buildAddressRecord('app.pirate', '203.0.113.10', 1)],
+          };
+        }
+      }
+      if (host === '127.0.0.1' && hostname === 'app.pirate') {
+        return {
+          ...buildEmptyResponse(),
+          authorities: [{ name: 'pirate', ns: 'ns1.pirate', ttl: 120, type: DNS_TYPE_NS }],
+        };
+      }
+      return buildEmptyResponse();
+    });
+
+    await expect(resolveHnsLocalAddresses('app.pirate', {
+      family: 4,
+      queryDns: queryDnsMock,
+      rootAddr: '127.0.0.1:5300',
+    })).resolves.toEqual(expect.objectContaining({
+      addresses: [expect.objectContaining({ address: '203.0.113.10' })],
+    }));
+
+    mode = 'negative';
+    jest.advanceTimersByTime(1001);
+    await expect(resolveHnsLocalAddresses('app.pirate', {
+      family: 4,
+      queryDns: queryDnsMock,
+      resolveHnsDohAddresses: jest.fn(() => Promise.reject(new Error('DoH unavailable'))),
+      resolveNameserverOsAddresses: jest.fn(() => Promise.resolve([])),
+      rootAddr: '127.0.0.1:5300',
+    })).rejects.toThrow('No local HNS nameservers found for app.pirate');
+    const callsAfterNegativeLookup = queryDnsMock.mock.calls.length;
+    await expect(resolveHnsLocalAddresses('app.pirate', {
+      family: 4,
+      queryDns: queryDnsMock,
+      resolveHnsDohAddresses: jest.fn(() => Promise.reject(new Error('DoH unavailable'))),
+      resolveNameserverOsAddresses: jest.fn(() => Promise.resolve([])),
+      rootAddr: '127.0.0.1:5300',
+    })).rejects.toThrow('No local HNS nameservers found for app.pirate');
+
+    expect(queryDnsMock).toHaveBeenCalledTimes(callsAfterNegativeLookup);
+  });
+
+  test('negative cache can be replaced by a positive result after TTL expiry', async () => {
+    jest.useFakeTimers();
+    let mode = 'negative';
+    const queryDnsMock = jest.fn(async ({ host, hostname, type }) => {
+      if (mode === 'positive') {
+        if (host === '127.0.0.1' && hostname === 'app.pirate') {
+          return buildDelegation('ns1.pirate', '198.51.100.9');
+        }
+        if (host === '198.51.100.9' && hostname === 'app.pirate' && type === DNS_TYPE_A) {
+          return {
+            ...buildEmptyResponse(),
+            answers: [buildAddressRecord('app.pirate', '203.0.113.10', 1)],
+          };
+        }
+      }
+      if (host === '127.0.0.1' && hostname === 'app.pirate') {
+        return {
+          ...buildEmptyResponse(),
+          authorities: [{ name: 'pirate', ns: 'ns1.pirate', ttl: 120, type: DNS_TYPE_NS }],
+        };
+      }
+      return buildEmptyResponse();
+    });
+
+    await expect(resolveHnsLocalAddresses('app.pirate', {
+      family: 4,
+      queryDns: queryDnsMock,
+      resolveHnsDohAddresses: jest.fn(() => Promise.reject(new Error('DoH unavailable'))),
+      resolveNameserverOsAddresses: jest.fn(() => Promise.resolve([])),
+      rootAddr: '127.0.0.1:5300',
+    })).rejects.toThrow('No local HNS nameservers found for app.pirate');
+    const callsAfterNegativeLookup = queryDnsMock.mock.calls.length;
+
+    mode = 'positive';
+    await expect(resolveHnsLocalAddresses('app.pirate', {
+      family: 4,
+      queryDns: queryDnsMock,
+      resolveHnsDohAddresses: jest.fn(() => Promise.reject(new Error('DoH unavailable'))),
+      resolveNameserverOsAddresses: jest.fn(() => Promise.resolve([])),
+      rootAddr: '127.0.0.1:5300',
+    })).rejects.toThrow('No local HNS nameservers found for app.pirate');
+    expect(queryDnsMock).toHaveBeenCalledTimes(callsAfterNegativeLookup);
+
+    jest.advanceTimersByTime(10001);
+    await expect(resolveHnsLocalAddresses('app.pirate', {
+      family: 4,
+      queryDns: queryDnsMock,
+      rootAddr: '127.0.0.1:5300',
+    })).resolves.toEqual(expect.objectContaining({
+      addresses: [expect.objectContaining({ address: '203.0.113.10' })],
+    }));
   });
 
   test('retries DNS over TCP when UDP returns a truncated response', async () => {

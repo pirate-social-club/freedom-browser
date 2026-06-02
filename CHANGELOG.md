@@ -2,6 +2,15 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [0.7.10] - 2026-06-02
+
+### Fixed
+
+- HNS home navigation no longer bounces between `pirate.sc` and `app.pirate` when resolver health flickers.
+- HNS readiness now separates sticky local resolver health from observational DoH fallback state, with quieter registry broadcasts and explicit transition logs.
+- Local HNS resolution now falls back through DoH-resolved nameserver glue and full DoH answers when root delegation or authoritative lookups fail, while caching degraded failures briefly.
+- Browser windows now disable hardware acceleration before startup to avoid GPU process crashes in webviews on affected Linux graphics stacks.
+
 ## [0.7.9] - 2026-06-01
 
 ### Fixed

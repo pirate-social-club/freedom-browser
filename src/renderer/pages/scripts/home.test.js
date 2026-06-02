@@ -81,7 +81,6 @@ describe('home page bootstrap', () => {
         hns: {
           mode: 'bundled',
           canaryReady: false,
-          resolverReady: false,
           height: 325297,
           statusMessage: 'Syncing block 325297',
         },
@@ -105,7 +104,7 @@ describe('home page bootstrap', () => {
         hns: {
           mode: 'bundled',
           canaryReady: true,
-          resolverReady: true,
+          localResolverReady: true,
           height: 325297,
         },
       },
@@ -132,7 +131,6 @@ describe('home page bootstrap', () => {
         hns: {
           mode: 'bundled',
           canaryReady: true,
-          resolverReady: true,
           height: 325297,
         },
       },

@@ -30,7 +30,7 @@ function isHnsReady(registry) {
   if (!hns) return false;
   if (activeSettings.enableHnsIntegration !== true) return false;
   if (hns.mode !== 'bundled') return false;
-  if (hns.resolverReady !== true) return false;
+  if (hns.localResolverReady !== true) return false;
   return true;
 }
 

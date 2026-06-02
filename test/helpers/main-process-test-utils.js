@@ -124,6 +124,7 @@ function createAppMock(options = {}) {
 
       return path.join(os.tmpdir(), name);
     }),
+    disableHardwareAcceleration: jest.fn(),
     showAboutPanel: jest.fn(),
   };
 }

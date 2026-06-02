@@ -120,7 +120,8 @@ describe('service-registry', () => {
       mode: mod.MODE.BUNDLED,
       synced: true,
       canaryReady: true,
-      resolverReady: true,
+      localResolverReady: true,
+      dohFallbackReady: true,
       height: 42000,
       publicSuffixes: ['.pirate', '.xn--pokmon-dva'],
     });
@@ -137,7 +138,8 @@ describe('service-registry', () => {
       tempMessageTimeout: null,
       synced: false,
       canaryReady: false,
-      resolverReady: false,
+      localResolverReady: false,
+      dohFallbackReady: false,
       height: 0,
       publicSuffixes: ['.pirate'],
     });

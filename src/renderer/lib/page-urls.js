@@ -32,7 +32,7 @@ export const isHnsHomeReady = () => {
   if (!hns) return false;
   if (window.__rendererState?.enableHnsIntegration !== true) return false;
   if (hns.mode !== 'bundled') return false;
-  if (hns.resolverReady !== true) return false;
+  if (hns.localResolverReady !== true) return false;
   return true;
 };
 

@@ -9,6 +9,7 @@ if (!app.isPackaged) {
 
 app.name = appName;
 app.setName(appName);
+app.disableHardwareAcceleration();
 
 const { version } = require('../../package.json');
 const iconPath = app.isPackaged
@@ -72,8 +73,6 @@ const { clearPersistedBrowserRequestState } = require('./browser-state-sanitizer
 const { initUpdater } = require('./updater');
 const { setupApplicationMenu, updateTabMenuItems } = require('./menu');
 const { registerWebContentsHandlers } = require('./webcontents-setup');
-
-app.commandLine.appendSwitch('disable-features', 'VizDisplayCompositor');
 
 const hasSingleInstanceLock = typeof app.requestSingleInstanceLock === 'function'
   ? app.requestSingleInstanceLock()

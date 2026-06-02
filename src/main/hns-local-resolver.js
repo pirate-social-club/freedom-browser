@@ -2,6 +2,8 @@ const crypto = require('crypto');
 const dgram = require('dgram');
 const dns = require('dns').promises;
 const net = require('net');
+const log = require('./logger');
+const { resolveHnsDohAddresses: resolveHnsDohAddressesDefault } = require('./hns-doh-resolver');
 
 const DNS_TYPE_A = 1;
 const DNS_TYPE_NS = 2;
@@ -10,6 +12,7 @@ const DNS_TYPE_AAAA = 28;
 const DNS_CLASS_IN = 1;
 const DEFAULT_TIMEOUT_MS = 2500;
 const DEFAULT_CACHE_TTL_SECONDS = 60;
+const NEGATIVE_CACHE_TTL_MS = 10 * 1000;
 const MAX_CNAME_DEPTH = 8;
 
 const cache = new Map();
@@ -358,6 +361,9 @@ function getCachedResult(cacheKey) {
     cache.delete(cacheKey);
     return null;
   }
+  if (cached.errorMessage) {
+    throw new Error(cached.errorMessage);
+  }
   return cached.value;
 }
 
@@ -376,6 +382,13 @@ function cacheResult(cacheKey, result) {
   cache.set(cacheKey, {
     expiresAt: Date.now() + getResultTtlMs(result),
     value: result,
+  });
+}
+
+function cacheNegativeResult(cacheKey, errorMessage) {
+  cache.set(cacheKey, {
+    errorMessage,
+    expiresAt: Date.now() + NEGATIVE_CACHE_TTL_MS,
   });
 }
 
@@ -412,6 +425,21 @@ async function resolveOsAddresses(hostname, queryTypes) {
   return addresses.filter((entry) => entry.address);
 }
 
+async function resolveNameserverOsAddresses(nsName) {
+  const addresses = [];
+  try {
+    addresses.push(...(await dns.resolve4(nsName)).map((address) => ({ address, family: 4 })));
+  } catch {
+    // Try AAAA below.
+  }
+  try {
+    addresses.push(...(await dns.resolve6(nsName)).map((address) => ({ address, family: 6 })));
+  } catch {
+    // Ignore nameservers that the OS resolver cannot resolve.
+  }
+  return addresses;
+}
+
 async function resolveNameserverAddresses(nsName, glueByName, rootAddr, options = {}) {
   const normalized = normalizeRecordName(nsName);
   const glued = glueByName.get(normalized) || [];
@@ -437,17 +465,48 @@ async function resolveNameserverAddresses(nsName, glueByName, rootAddr, options 
     if (addresses.length > 0) return addresses;
   }
 
+  const resolveOs = options.resolveNameserverOsAddresses || resolveNameserverOsAddresses;
+  addresses.push(...(await resolveOs(normalized)));
+  return addresses;
+}
+
+async function resolveNameserverAddressesWithDohFallback(nsName, glueByName, rootAddr, options = {}) {
+  let addresses = await resolveNameserverAddresses(nsName, glueByName, rootAddr, options);
+  if (addresses.length > 0) return addresses;
+
+  const resolveHnsDohAddresses = options.resolveHnsDohAddresses || resolveHnsDohAddressesDefault;
   try {
-    addresses.push(...(await dns.resolve4(normalized)).map((address) => ({ address, family: 4 })));
+    const dohResult = await resolveHnsDohAddresses(nsName, { family: options.family });
+    addresses = (dohResult?.addresses || [])
+      .filter((entry) => entry?.address && (entry.family === 4 || entry.family === 6))
+      .map((entry) => ({
+        address: entry.address,
+        family: entry.family,
+        ttl: entry.ttl,
+      }));
   } catch {
-    // Try AAAA below.
-  }
-  try {
-    addresses.push(...(await dns.resolve6(normalized)).map((address) => ({ address, family: 6 })));
-  } catch {
-    // Ignore nameservers that the OS resolver cannot resolve.
+    // Fall back to the existing empty-nameserver failure path below.
   }
   return addresses;
+}
+
+async function tryFullDohResolution(normalized, options = {}) {
+  const resolveHnsDohAddresses = options.resolveHnsDohAddresses || resolveHnsDohAddressesDefault;
+  try {
+    const dohResult = await resolveHnsDohAddresses(normalized, {
+      cnameDepth: options.cnameDepth || 0,
+      family: options.family,
+    });
+    if (!dohResult?.addresses?.length) return null;
+    return {
+      ...dohResult,
+      hostname: normalized,
+      resolver: dohResult.resolver || dohResult.endpoint || 'doh-fallback',
+      resolverType: 'doh-fallback',
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function resolveHnsLocalAddresses(hostname, options = {}) {
@@ -566,7 +625,7 @@ async function resolveHnsLocalAddresses(hostname, options = {}) {
 
   const nsTargets = [];
   for (const nsName of nsNames) {
-    const addresses = await resolveNameserverAddresses(nsName, glueByName, rootAddr, options);
+    const addresses = await resolveNameserverAddressesWithDohFallback(nsName, glueByName, rootAddr, options);
     for (const address of addresses) {
       nsTargets.push({ ...address, nsName });
     }
@@ -596,7 +655,15 @@ async function resolveHnsLocalAddresses(hostname, options = {}) {
   }
 
   if (attempts.length === 0) {
-    throw new Error(`No local HNS nameservers found for ${normalized}`);
+    const dohFallback = await tryFullDohResolution(normalized, options);
+    if (dohFallback) {
+      cacheResult(cacheKey, dohFallback);
+      log.warn(`[HNS] Local root returned no delegation for ${normalized}; using DoH fallback`);
+      return dohFallback;
+    }
+    const errorMessage = `No local HNS nameservers found for ${normalized}`;
+    cacheNegativeResult(cacheKey, errorMessage);
+    throw new Error(errorMessage);
   }
 
   try {
@@ -605,6 +672,14 @@ async function resolveHnsLocalAddresses(hostname, options = {}) {
     return result;
   } catch (error) {
     const firstError = error.errors?.[0]?.message || error.message;
+    const dohFallback = await tryFullDohResolution(normalized, options);
+    if (dohFallback) {
+      cacheResult(cacheKey, dohFallback);
+      log.warn(
+        `[HNS] Local authoritative unreachable for ${normalized}; using DoH fallback (${firstError})`
+      );
+      return dohFallback;
+    }
     throw new Error(firstError || `No local HNS records found for ${normalized}`, { cause: error });
   }
 }

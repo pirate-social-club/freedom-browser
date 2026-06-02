@@ -272,7 +272,8 @@ describe('hns-manager', () => {
       error: null,
       synced: false,
       canaryReady: false,
-      resolverReady: false,
+      localResolverReady: false,
+      dohFallbackReady: false,
       height: 0,
       proxyAddr: null,
       caPemPath: null,
@@ -281,7 +282,7 @@ describe('hns-manager', () => {
     });
   });
 
-  test('resolverReady follows app.pirate health instead of aggregate suffix health', async () => {
+  test('localResolverReady follows app.pirate health instead of aggregate suffix health', async () => {
     jest.useFakeTimers();
     const probeResults = [
       {
@@ -290,6 +291,21 @@ describe('hns-manager', () => {
           { host: 'pirate', ok: true, addresses: ['173.199.93.117'] },
           { host: 'app.pirate', ok: true, addresses: ['173.199.93.117'] },
           { host: 'baddie', ok: false, code: 'ETIMEOUT' },
+        ],
+      },
+      {
+        ok: false,
+        results: [
+          { host: 'pirate', ok: true, addresses: ['173.199.93.117'] },
+          { host: 'app.pirate', ok: true, addresses: ['173.199.93.117'] },
+          { host: 'baddie', ok: false, code: 'ETIMEOUT' },
+        ],
+      },
+      {
+        ok: false,
+        results: [
+          { host: 'pirate', ok: false, code: 'ESERVFAIL' },
+          { host: 'app.pirate', ok: false, code: 'ESERVFAIL' },
         ],
       },
       {
@@ -328,15 +344,38 @@ describe('hns-manager', () => {
     }));
 
     await jest.advanceTimersByTimeAsync(1000);
-    expect(ctx.updateService).toHaveBeenCalledWith('hns', { resolverReady: true });
-    expect(ctx.mod.getHnsStatus().resolverReady).toBe(true);
+    expect(ctx.updateService).toHaveBeenCalledWith('hns', expect.objectContaining({
+      localResolverReady: false,
+    }));
+    expect(ctx.mod.getHnsStatus().localResolverReady).toBe(false);
 
     await jest.advanceTimersByTimeAsync(5000);
-    expect(ctx.updateService).toHaveBeenLastCalledWith('hns', { resolverReady: false });
-    expect(ctx.mod.getHnsStatus().resolverReady).toBe(false);
+    expect(ctx.updateService).toHaveBeenCalledWith('hns', expect.objectContaining({
+      localResolverReady: true,
+    }));
+    expect(ctx.mod.getHnsStatus().localResolverReady).toBe(true);
+
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(ctx.mod.getHnsStatus().localResolverReady).toBe(true);
+
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(ctx.updateService).toHaveBeenLastCalledWith('hns', expect.objectContaining({
+      localResolverReady: false,
+    }));
+    expect(ctx.mod.getHnsStatus().localResolverReady).toBe(false);
+    expect(ctx.updateService.mock.calls.filter(([_service, updates]) => (
+      Object.prototype.hasOwnProperty.call(updates, 'dohFallbackReady') &&
+      !Object.prototype.hasOwnProperty.call(updates, 'synced')
+    ))).toHaveLength(3);
+    expect(ctx.log.info).toHaveBeenCalledWith(
+      '[HNS] localResolverReady=false->true after 2 consecutive successful probes'
+    );
+    expect(ctx.log.info).toHaveBeenCalledWith(
+      '[HNS] localResolverReady=true->false after 2 consecutive failed probes'
+    );
   });
 
-  test('resolverReady stays true when app.pirate DoH last-resort resolution is available', async () => {
+  test('dohFallbackReady stays true when app.pirate DoH last-resort resolution is available', async () => {
     jest.useFakeTimers();
     const ctx = loadHnsManagerModule({
       hnsResolutionForHost: { resolverType: 'doh' },
@@ -376,15 +415,115 @@ describe('hns-manager', () => {
 
     expect(ctx.getHnsResolutionForHost).toHaveBeenCalledWith('app.pirate');
     expect(ctx.canResolveHnsFallbackForHost).not.toHaveBeenCalled();
-    expect(ctx.updateService).toHaveBeenCalledWith('hns', { resolverReady: true });
-    expect(ctx.mod.getHnsStatus().resolverReady).toBe(true);
+    expect(ctx.updateService).toHaveBeenCalledWith('hns', expect.objectContaining({
+      dohFallbackReady: true,
+      localResolverReady: false,
+    }));
+    expect(ctx.mod.getHnsStatus().localResolverReady).toBe(false);
+    expect(ctx.mod.getHnsStatus().dohFallbackReady).toBe(true);
     expect(ctx.setStatusMessage).toHaveBeenCalledWith(
       'hns',
       'HNS recursive resolver recovering; using HTTPS last-resort resolver'
     );
   });
 
-  test('resolverReady reports local delegation when recursive DNS is unavailable', async () => {
+  test('skips readiness broadcasts when readiness state is unchanged', async () => {
+    jest.useFakeTimers();
+    const ctx = loadHnsManagerModule({
+      hnsResolutionForHost: { resolverType: 'doh' },
+      cryptoMock: {
+        X509Certificate: class {
+          fingerprint = 'AA:BB';
+        },
+      },
+      hnsHealth: {
+        buildHnsHealthProbeHosts: jest.fn(() => ['pirate', 'app.pirate']),
+        formatHnsHealthSummary: jest.fn(() => 'pirate=FAIL(ESERVFAIL), app.pirate=FAIL(ESERVFAIL)'),
+        probeHnsResolver: jest.fn(() => Promise.resolve({
+          ok: false,
+          results: [
+            { host: 'pirate', ok: false, code: 'ESERVFAIL' },
+            { host: 'app.pirate', ok: false, code: 'ESERVFAIL' },
+          ],
+        })),
+      },
+      readFileSync: () => 'test certificate',
+    });
+
+    await ctx.mod.startHns();
+    ctx.readlineHandlers.get('line')?.(JSON.stringify({
+      type: 'ready',
+      proxyAddr: '127.0.0.1:44041',
+      caPath: '/tmp/hns-ca.pem',
+    }));
+    await Promise.resolve();
+    ctx.readlineHandlers.get('line')?.(JSON.stringify({
+      type: 'sync',
+      synced: true,
+      height: 326149,
+    }));
+
+    await jest.advanceTimersByTimeAsync(1000);
+    await jest.advanceTimersByTimeAsync(5000);
+
+    expect(ctx.updateService.mock.calls.filter(([_service, updates]) => (
+      Object.prototype.hasOwnProperty.call(updates, 'dohFallbackReady') &&
+      !Object.prototype.hasOwnProperty.call(updates, 'synced')
+    ))).toHaveLength(1);
+  });
+
+  test('sync height progress does not reset established local resolver readiness', async () => {
+    jest.useFakeTimers();
+    const ctx = loadHnsManagerModule({
+      cryptoMock: {
+        X509Certificate: class {
+          fingerprint = 'AA:BB';
+        },
+      },
+      hnsHealth: {
+        buildHnsHealthProbeHosts: jest.fn(() => ['pirate', 'app.pirate']),
+        formatHnsHealthSummary: jest.fn(() => 'pirate=OK, app.pirate=OK'),
+        probeHnsResolver: jest.fn(() => Promise.resolve({
+          ok: true,
+          results: [
+            { host: 'pirate', ok: true, addresses: ['173.199.93.117'] },
+            { host: 'app.pirate', ok: true, addresses: ['173.199.93.117'] },
+          ],
+        })),
+      },
+      readFileSync: () => 'test certificate',
+    });
+
+    await ctx.mod.startHns();
+    ctx.readlineHandlers.get('line')?.(JSON.stringify({
+      type: 'ready',
+      proxyAddr: '127.0.0.1:44041',
+      caPath: '/tmp/hns-ca.pem',
+    }));
+    await Promise.resolve();
+    ctx.readlineHandlers.get('line')?.(JSON.stringify({
+      type: 'sync',
+      synced: true,
+      height: 326149,
+    }));
+
+    await jest.advanceTimersByTimeAsync(1000);
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(ctx.mod.getHnsStatus().localResolverReady).toBe(true);
+
+    ctx.readlineHandlers.get('line')?.(JSON.stringify({
+      type: 'sync',
+      synced: false,
+      canaryReady: false,
+      height: 326150,
+    }));
+
+    expect(ctx.mod.getHnsStatus().synced).toBe(true);
+    expect(ctx.mod.getHnsStatus().localResolverReady).toBe(true);
+    expect(ctx.mod.getHnsStatus().dohFallbackReady).toBe(false);
+  });
+
+  test('localResolverReady reports local delegation when recursive DNS is unavailable', async () => {
     jest.useFakeTimers();
     const ctx = loadHnsManagerModule({
       hnsResolutionForHost: { resolverType: 'local' },
@@ -421,8 +560,14 @@ describe('hns-manager', () => {
     }));
 
     await jest.advanceTimersByTimeAsync(1000);
+    expect(ctx.mod.getHnsStatus().localResolverReady).toBe(false);
 
-    expect(ctx.updateService).toHaveBeenCalledWith('hns', { resolverReady: true });
+    await jest.advanceTimersByTimeAsync(5000);
+
+    expect(ctx.updateService).toHaveBeenCalledWith('hns', expect.objectContaining({
+      dohFallbackReady: false,
+      localResolverReady: true,
+    }));
     expect(ctx.setStatusMessage).toHaveBeenCalledWith(
       'hns',
       'HNS recursive resolver recovering; using local delegation resolver'

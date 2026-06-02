@@ -11,6 +11,7 @@ const app = {
   isPackaged: false,
   getName: () => 'freedom-browser-test',
   getVersion: () => '0.0.0-test',
+  disableHardwareAcceleration: () => {},
 };
 
 const ipcMain = {

@@ -69,7 +69,8 @@ const loadNavigationModule = async (options = {}) => {
       hns: {
         mode: 'none',
         canaryReady: false,
-        resolverReady: false,
+        localResolverReady: false,
+        dohFallbackReady: false,
         synced: false,
         height: 0,
       },
@@ -594,7 +595,8 @@ describe('navigation', () => {
     ctx.state.registry.hns = {
       mode: 'bundled',
       canaryReady: false,
-      resolverReady: false,
+      localResolverReady: false,
+      dohFallbackReady: false,
       synced: false,
       height: 325297,
     };
@@ -620,7 +622,8 @@ describe('navigation', () => {
     ctx.state.registry.hns = {
       mode: 'bundled',
       canaryReady: false,
-      resolverReady: false,
+      localResolverReady: false,
+      dohFallbackReady: false,
       synced: false,
       height: 325297,
     };
@@ -651,7 +654,8 @@ describe('navigation', () => {
     ctx.state.registry.hns = {
       mode: 'bundled',
       canaryReady: true,
-      resolverReady: false,
+      localResolverReady: false,
+      dohFallbackReady: false,
       synced: true,
       height: 325297,
     };
@@ -776,5 +780,33 @@ describe('navigation', () => {
     expect(secondHomeTab.navigationState.currentPageUrl).toBe(newHomeUrl);
     expect(navigatedTab.navigationState.currentPageUrl).toBe('https://pirate.sc/docs');
     expect(ctx.elements.addressInput.value).toBe(newHomeUrl);
+  });
+
+  test('does not force downgrade HNS home tabs when local readiness flickers off', async () => {
+    const oldHomeUrl = 'https://app.pirate/';
+    const newHomeUrl = 'https://pirate.sc/';
+    const activeTab = createTab(1, oldHomeUrl, {
+      title: 'New Tab',
+      webview: createWebview(oldHomeUrl, {
+        webContentsId: 21,
+      }),
+    });
+
+    const ctx = await loadNavigationModule({
+      tabs: [activeTab],
+      activeTab,
+    });
+
+    ctx.tabsRef.list = [activeTab];
+    ctx.activeRef.tab = activeTab;
+    ctx.pageUrlsMocks.landingUrl = newHomeUrl;
+    ctx.pageUrlsMocks.landingUrlNormalized = newHomeUrl;
+
+    await ctx.mod.initNavigation();
+
+    ctx.mod.upgradeHomePageIfNeeded(oldHomeUrl);
+
+    expect(activeTab.webview.loadURL).not.toHaveBeenCalledWith(newHomeUrl);
+    expect(activeTab.navigationState.currentPageUrl).toBe(oldHomeUrl);
   });
 });

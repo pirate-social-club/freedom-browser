@@ -45,6 +45,8 @@ const HNS_STDERR_REPEAT_WINDOW_MS = 30 * 1000;
 const HNS_HEALTH_INITIAL_DELAY_MS = 1000;
 const HNS_HEALTH_RETRY_BASE_MS = 5000;
 const HNS_HEALTH_RETRY_MAX_MS = 60 * 1000;
+const HNS_LOCAL_READY_SUCCESS_THRESHOLD = 2;
+const HNS_LOCAL_READY_FAILURE_THRESHOLD = 2;
 const FORBIDDEN_HELPER_CANARIES = [['shake', 'station'].join('')];
 const HNS_HELPER_TUNNEL_DNS_FAILURE_RE = /\[WARN\]\s+tunnel:\s+502\s+CONNECT\s+\S+\s+dns lookup failed/i;
 
@@ -53,7 +55,8 @@ let caPemPath = null;
 let caCertFingerprint = null;
 let synced = false;
 let canaryReady = false;
-let resolverReady = false;
+let localResolverReady = false;
+let dohFallbackReady = false;
 let height = 0;
 let lastLoggedHeight = 0;
 let lastHeightChangeAt = 0;
@@ -66,6 +69,12 @@ let hnsHealthInFlight = false;
 let hnsHealthAttempt = 0;
 let lastHnsHealthOk = null;
 let lastHnsHealthSummary = null;
+let localReadySuccessCount = 0;
+let localReadyFailureCount = 0;
+let lastBroadcastReadiness = {
+  dohFallbackReady: null,
+  localResolverReady: null,
+};
 
 function isHnsHostname(hostname = '') {
   return isHnsHost(hostname);
@@ -137,6 +146,58 @@ function clearHnsHealthState() {
   hnsHealthAttempt = 0;
   lastHnsHealthOk = null;
   lastHnsHealthSummary = null;
+  localReadySuccessCount = 0;
+  localReadyFailureCount = 0;
+}
+
+function resetHnsReadiness() {
+  localResolverReady = false;
+  dohFallbackReady = false;
+  localReadySuccessCount = 0;
+  localReadyFailureCount = 0;
+  lastBroadcastReadiness = {
+    dohFallbackReady: null,
+    localResolverReady: null,
+  };
+}
+
+function shouldBroadcastReadiness() {
+  if (
+    lastBroadcastReadiness.localResolverReady === localResolverReady &&
+    lastBroadcastReadiness.dohFallbackReady === dohFallbackReady
+  ) {
+    return false;
+  }
+
+  lastBroadcastReadiness = {
+    dohFallbackReady,
+    localResolverReady,
+  };
+  return true;
+}
+
+function updateLocalResolverReadiness(candidateReady) {
+  const wasReady = localResolverReady;
+  if (candidateReady) {
+    localReadySuccessCount += 1;
+    localReadyFailureCount = 0;
+    if (localReadySuccessCount >= HNS_LOCAL_READY_SUCCESS_THRESHOLD && !wasReady) {
+      localResolverReady = true;
+      log.info(
+        `[HNS] localResolverReady=false->true after ${HNS_LOCAL_READY_SUCCESS_THRESHOLD} consecutive successful probes`
+      );
+    }
+    return;
+  }
+
+  localReadyFailureCount += 1;
+  localReadySuccessCount = 0;
+  if (localReadyFailureCount >= HNS_LOCAL_READY_FAILURE_THRESHOLD && wasReady) {
+    localResolverReady = false;
+    log.info(
+      `[HNS] localResolverReady=true->false after ${HNS_LOCAL_READY_FAILURE_THRESHOLD} consecutive failed probes`
+    );
+  }
 }
 
 function canProbeHnsHealth() {
@@ -188,17 +249,28 @@ async function runHnsHealthCheck(reason = 'manual') {
     }
     const appPirateFallbackReady = Boolean(appPirateResolution);
     const appPirateRecursiveReady = Boolean(appPirateEntry?.ok && appPirateEntry.addresses?.length > 0);
-    resolverReady = Boolean(
+    const appPirateLocalReady = Boolean(
       appPirateRecursiveReady ||
-      appPirateFallbackReady
+      appPirateResolution?.resolverType === 'local'
     );
-    updateService('hns', { resolverReady });
+    updateLocalResolverReadiness(appPirateLocalReady);
+    dohFallbackReady = Boolean(
+      appPirateResolution?.resolverType === 'doh' ||
+      (appPirateFallbackReady && appPirateResolution?.resolverType !== 'local')
+    );
+    const readyForStatus = localResolverReady || dohFallbackReady;
+    if (shouldBroadcastReadiness()) {
+      updateService('hns', {
+        localResolverReady,
+        dohFallbackReady,
+      });
+    }
 
     const changed = summary !== lastHnsHealthSummary || result.ok !== lastHnsHealthOk;
     lastHnsHealthSummary = summary;
     lastHnsHealthOk = result.ok;
 
-    if (result.ok || resolverReady) {
+    if (result.ok || readyForStatus || appPirateLocalReady) {
       hnsHealthAttempt = 0;
       clearErrorState('hns');
       let resolverLabel = 'HTTPS last-resort resolver';
@@ -211,16 +283,21 @@ async function runHnsHealthCheck(reason = 'manual') {
         ? `HNS resolver partially degraded; ${resolverLabel} ready`
         : `HNS recursive resolver recovering; using ${resolverLabel}`;
       setStatusMessage('hns', result.ok ? null : statusMessage);
+      if (appPirateLocalReady && !localResolverReady) {
+        scheduleHnsHealthRetry();
+      }
       if (result.ok && changed) {
         log.info(`[HNS] Resolver health ok (${reason}): ${summary}`);
-      } else if (!result.ok && changed) {
+      } else if (!result.ok) {
         const retryDelayMs = scheduleHnsHealthRetry();
-        const logPrefix = appPirateRecursiveReady
-          ? 'Resolver partially degraded'
-          : 'Local recursive resolver unavailable';
-        log.info(
-          `[HNS] ${logPrefix} (${reason}): ${summary}; ${resolverLabel} ready; retrying in ${retryDelayMs}ms`
-        );
+        if (changed) {
+          const logPrefix = appPirateRecursiveReady
+            ? 'Resolver partially degraded'
+            : 'Local recursive resolver unavailable';
+          log.info(
+            `[HNS] ${logPrefix} (${reason}): ${summary}; ${resolverLabel} ready; retrying in ${retryDelayMs}ms`
+          );
+        }
       }
       return result;
     }
@@ -526,17 +603,19 @@ function parseStdoutLine(line) {
             lastHeightChangeAt > 0 &&
             Date.now() - lastHeightChangeAt >= HNS_SYNC_QUIET_MS;
 
-          synced = helperReady || heightReady;
-          canaryReady = helperReady || heightReady;
+          const readyNow = helperReady || heightReady;
+          synced = synced || readyNow;
+          canaryReady = canaryReady || readyNow;
           if (!synced) {
-            resolverReady = false;
+            resetHnsReadiness();
           }
         }
 
         updateService('hns', {
           synced,
           canaryReady,
-          resolverReady,
+          localResolverReady,
+          dohFallbackReady,
           height,
         });
 
@@ -672,7 +751,7 @@ async function startHns() {
       caCertFingerprint = null;
       synced = false;
       canaryReady = false;
-      resolverReady = false;
+      resetHnsReadiness();
       height = 0;
       rootAddr = null;
       recursiveAddr = null;
@@ -782,7 +861,8 @@ function getHnsStatus() {
     error: lastError,
     synced,
     canaryReady,
-    resolverReady,
+    localResolverReady,
+    dohFallbackReady,
     height,
     proxyAddr: publishedProxyAddr,
     caPemPath,
