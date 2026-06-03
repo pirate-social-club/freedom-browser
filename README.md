@@ -146,6 +146,8 @@ The address bar also provides **autocomplete suggestions** from browsing history
   - `Cmd+T` / `Ctrl+T`: New tab
   - `Cmd+W` / `Ctrl+W` / `Ctrl+F4`: Close tab
   - `Cmd+Shift+T` / `Ctrl+Shift+T`: Reopen last closed tab
+  - `Alt+1` through `Alt+8`: Switch to tab 1 through 8
+  - `Alt+9`: Switch to the last tab
   - `Ctrl+PgDn` / `Ctrl+Tab`: Next tab
   - `Ctrl+PgUp` / `Ctrl+Shift+Tab`: Previous tab
   - `Ctrl+Shift+PgDn`: Move tab right

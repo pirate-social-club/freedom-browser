@@ -198,6 +198,11 @@ contextBridge.exposeInMainWorld('electronAPI', guardInternalBridge('electronAPI'
     ipcRenderer.on('tab:prev', handler);
     return () => ipcRenderer.removeListener('tab:prev', handler);
   },
+  onSwitchToTabIndex: (callback) => {
+    const handler = (_event, index) => callback(index);
+    ipcRenderer.on('tab:switch-to-index', handler);
+    return () => ipcRenderer.removeListener('tab:switch-to-index', handler);
+  },
   onMoveTabLeft: (callback) => {
     const handler = () => callback();
     ipcRenderer.on('tab:move-left', handler);

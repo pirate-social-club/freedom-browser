@@ -734,6 +734,42 @@ describe('navigation', () => {
     expect(ctx.elements.addressInput.focus).toHaveBeenCalled();
   });
 
+  test('loads a captured background webview without clearing the active tab address', async () => {
+    const firstTab = createTab(1, 'https://first.example', {
+      webview: createWebview('https://first.example', {
+        webContentsId: 21,
+      }),
+    });
+    const secondTab = createTab(2, 'file:///app/pages/home.html', {
+      webview: createWebview('file:///app/pages/home.html', {
+        webContentsId: 22,
+      }),
+    });
+    const ctx = await loadNavigationModule({
+      tabs: [firstTab, secondTab],
+      activeTab: secondTab,
+    });
+
+    ctx.tabsRef.list = [firstTab, secondTab];
+    ctx.activeRef.tab = secondTab;
+    await ctx.mod.initNavigation();
+
+    ctx.elements.addressInput.value = '';
+    ctx.mod.loadTarget('bzz://abcdef/docs', 'ens://name.eth/docs', firstTab.webview);
+    await flushMicrotasks();
+
+    expect(firstTab.webview.loadURL).toHaveBeenCalledWith(
+      'https://gateway.example/bzz/abcdef/docs'
+    );
+    expect(firstTab.navigationState.addressBarSnapshot).toBe('ens://name.eth/docs');
+    expect(secondTab.navigationState.addressBarSnapshot).toBe('');
+    expect(ctx.elements.addressInput.value).toBe('');
+    expect(ctx.electronAPI.setBzzBase).toHaveBeenCalledWith(
+      21,
+      'https://gateway.example/bzz/abcdef/'
+    );
+  });
+
   test('upgrades all untouched home tabs when the canonical homepage changes', async () => {
     const oldHomeUrl = 'https://pirate.sc/';
     const newHomeUrl = 'https://app.pirate/';
