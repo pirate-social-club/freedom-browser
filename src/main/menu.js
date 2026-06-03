@@ -1,5 +1,6 @@
 const log = require('./logger');
 const { BrowserWindow, Menu, app, ipcMain } = require('electron');
+const IPC = require('../shared/ipc-channels');
 const { isMainBrowserWindow, getMainWindows, createMainWindow } = require('./windows/mainWindow');
 const { checkForUpdates, isUpdateReady, installUpdate } = require('./updater');
 
@@ -19,6 +20,19 @@ let closeTabMenuItem = null;
 let toggleBookmarkBarMenuItem = null;
 let isFullScreen = false;
 
+const buildTabIndexMenuItems = () =>
+  Array.from({ length: 9 }, (_, index) => ({
+    id: `switch-tab-${index + 1}`,
+    label: index === 8 ? 'Switch to Last Tab' : `Switch to Tab ${index + 1}`,
+    accelerator: `Alt+${index + 1}`,
+    visible: false,
+    click: () => {
+      const win = getTargetWindow();
+      if (win) {
+        win.webContents.send(IPC.TAB_SWITCH_TO_INDEX, index);
+      }
+    },
+  }));
 
 function updateTabMenuItems() {
   const hasWindows = BrowserWindow.getAllWindows().length > 0;
@@ -209,6 +223,7 @@ function setupApplicationMenu() {
             }
           },
         },
+        ...buildTabIndexMenuItems(),
         {
           id: 'move-tab-right',
           label: 'Move Tab Right',

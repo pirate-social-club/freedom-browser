@@ -58,6 +58,40 @@ const HOME_HNS_URL = 'https://app.pirate/';
 // Helper to get active tab's navigation state (with fallback to empty object)
 const getNavState = () => getActiveTabState() || {};
 
+const getTabForWebview = (webview) => {
+  if (!webview) return null;
+  return getTabs().find((tab) => tab.webview === webview) || null;
+};
+
+const getNavigationContext = (targetWebview = null) => {
+  const webview = targetWebview || getActiveWebview();
+  if (!webview) {
+    return { webview: null, tab: null, navState: null };
+  }
+
+  const tab = getTabForWebview(webview) || (!targetWebview ? getActiveTab() : null);
+  return {
+    webview,
+    tab,
+    navState: tab?.navigationState || (!targetWebview ? getNavState() : null),
+  };
+};
+
+const isNavigationContextActive = (navContext) => {
+  const activeTab = getActiveTab();
+  return Boolean(activeTab && navContext?.tab && activeTab.id === navContext.tab.id);
+};
+
+const setNavigationDisplay = (navContext, value = '') => {
+  const displayValue = value || '';
+  if (navContext?.navState) {
+    navContext.navState.addressBarSnapshot = displayValue;
+  }
+  if (isNavigationContextActive(navContext) && addressInput) {
+    addressInput.value = displayValue;
+  }
+};
+
 const electronAPI = window.electronAPI;
 const RADICLE_DISABLED_MESSAGE =
   'Radicle integration is disabled. Enable it in Settings > Experimental';
@@ -247,39 +281,44 @@ const buildSpaceBrowserUrl = (result = {}, requestedHandle = '') => {
 const loadSpacesResultPage = ({
   webview,
   navState,
+  navContext,
   result,
   displayValue,
   requestedHandle,
 }) => {
+  const context = navContext || { webview, tab: getTabForWebview(webview), navState };
   const targetUrl = buildSpaceBrowserUrl(result, requestedHandle);
   rememberDisplayAlias(navState, targetUrl, displayValue);
-  addressInput.value = displayValue;
+  setNavigationDisplay(context, displayValue);
   navState.pendingTitleForUrl = targetUrl;
   navState.pendingNavigationUrl = targetUrl;
   navState.hasNavigatedDuringCurrentLoad = false;
   safeLoadUrl(webview, targetUrl, 'spaces-result');
-  syncBzzBase(null);
-  syncIpfsBase(null);
-  syncRadBase(null);
-  updateProtocolIcon();
+  syncBzzBase(null, context);
+  syncIpfsBase(null, context);
+  syncRadBase(null, context);
+  if (isNavigationContextActive(context)) {
+    updateProtocolIcon();
+  }
 };
 
-const loadHnsNotReadyPage = (webview, navState, inputValue, hnsUrl, hnsState) => {
+const loadHnsNotReadyPage = (webview, navState, inputValue, hnsUrl, hnsState, navContext = null) => {
+  const context = navContext || { webview, tab: getTabForWebview(webview), navState };
   const errorUrl = new URL(errorUrlBase);
   errorUrl.searchParams.set('error', 'HNS_NOT_READY');
   errorUrl.searchParams.set('url', hnsUrl);
   if (hnsState?.height > 0) {
     errorUrl.searchParams.set('height', String(hnsState.height));
   }
-  addressInput.value = inputValue;
+  setNavigationDisplay(context, inputValue);
   navState.pendingHnsUrl = hnsUrl;
   navState.pendingTitleForUrl = hnsUrl;
   navState.pendingNavigationUrl = errorUrl.toString();
   navState.hasNavigatedDuringCurrentLoad = false;
   safeLoadUrl(webview, errorUrl.toString(), 'hns-not-ready');
-  syncBzzBase(null);
-  syncIpfsBase(null);
-  syncRadBase(null);
+  syncBzzBase(null, context);
+  syncIpfsBase(null, context);
+  syncRadBase(null, context);
 };
 
 const clearPendingHnsNavigation = (navState) => {
@@ -287,10 +326,19 @@ const clearPendingHnsNavigation = (navState) => {
   navState.pendingHnsUrl = null;
 };
 
-const setLoading = (isLoading) => {
-  setTabLoading(isLoading);
-  updateBookmarkButtonVisibility();
-  updateGithubBridgeIcon();
+const setLoading = (isLoading, navContext = null) => {
+  if (navContext?.tab) {
+    setTabLoading(isLoading, navContext.tab.id);
+  } else {
+    setTabLoading(isLoading);
+  }
+  if (navContext?.navState) {
+    navContext.navState.isWebviewLoading = isLoading;
+  }
+  if (!navContext || isNavigationContextActive(navContext)) {
+    updateBookmarkButtonVisibility();
+    updateGithubBridgeIcon();
+  }
 };
 
 const isBenignLoadUrlError = (err) => {
@@ -391,8 +439,10 @@ const updateNavigationState = () => {
   }
 };
 
-const ensureWebContentsId = () => {
-  const navState = getNavState();
+const ensureWebContentsId = (webview = getActiveWebview(), navState = getNavState()) => {
+  if (!navState) {
+    return Promise.resolve(null);
+  }
   if (navState.cachedWebContentsId) {
     return Promise.resolve(navState.cachedWebContentsId);
   }
@@ -401,7 +451,6 @@ const ensureWebContentsId = () => {
   }
   navState.resolvingWebContentsId = new Promise((resolve) => {
     const attempt = () => {
-      const webview = getActiveWebview();
       if (webview && typeof webview.getWebContentsId === 'function') {
         const value = webview.getWebContentsId();
         if (typeof value === 'number' && value > 0) {
@@ -417,16 +466,20 @@ const ensureWebContentsId = () => {
   return navState.resolvingWebContentsId;
 };
 
-const syncBzzBase = (nextBase) => {
-  const navState = getNavState();
+const syncBzzBase = (nextBase, navContext = null) => {
+  const navState = navContext?.navState || getNavState();
+  const webview = navContext?.webview || getActiveWebview();
   if (!electronAPI || (!electronAPI.setBzzBase && !electronAPI.clearBzzBase)) {
+    return;
+  }
+  if (!navState) {
     return;
   }
   if (navState.currentBzzBase === nextBase) {
     return;
   }
   navState.currentBzzBase = nextBase || null;
-  ensureWebContentsId()
+  ensureWebContentsId(webview, navState)
     .then((id) => {
       if (!id) return;
       if (navState.currentBzzBase) {
@@ -440,16 +493,20 @@ const syncBzzBase = (nextBase) => {
     });
 };
 
-const syncIpfsBase = (nextBase) => {
-  const navState = getNavState();
+const syncIpfsBase = (nextBase, navContext = null) => {
+  const navState = navContext?.navState || getNavState();
+  const webview = navContext?.webview || getActiveWebview();
   if (!electronAPI || (!electronAPI.setIpfsBase && !electronAPI.clearIpfsBase)) {
+    return;
+  }
+  if (!navState) {
     return;
   }
   if (navState.currentIpfsBase === nextBase) {
     return;
   }
   navState.currentIpfsBase = nextBase || null;
-  ensureWebContentsId()
+  ensureWebContentsId(webview, navState)
     .then((id) => {
       if (!id) return;
       if (navState.currentIpfsBase) {
@@ -463,16 +520,20 @@ const syncIpfsBase = (nextBase) => {
     });
 };
 
-const syncRadBase = (nextBase) => {
-  const navState = getNavState();
+const syncRadBase = (nextBase, navContext = null) => {
+  const navState = navContext?.navState || getNavState();
+  const webview = navContext?.webview || getActiveWebview();
   if (!electronAPI || (!electronAPI.setRadBase && !electronAPI.clearRadBase)) {
+    return;
+  }
+  if (!navState) {
     return;
   }
   if (navState.currentRadBase === nextBase) {
     return;
   }
   navState.currentRadBase = nextBase || null;
-  ensureWebContentsId()
+  ensureWebContentsId(webview, navState)
     .then((id) => {
       if (!id) return;
       if (navState.currentRadBase) {
@@ -488,12 +549,17 @@ const syncRadBase = (nextBase) => {
 
 export const loadTarget = (value, displayOverride = null, targetWebview = null) => {
   // Use provided webview or fall back to active webview
-  const webview = targetWebview || getActiveWebview();
-  const navState = getNavState();
-  if (!webview) {
-    pushDebug('No active webview to load target');
+  const navContext = getNavigationContext(targetWebview);
+  const { webview, navState } = navContext;
+  if (!webview || !navState) {
+    pushDebug('No target webview to load target');
     return;
   }
+  const updateActiveProtocolIcon = () => {
+    if (isNavigationContextActive(navContext)) {
+      updateProtocolIcon();
+    }
+  };
 
   clearPendingHnsNavigation(navState);
 
@@ -507,13 +573,13 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     const ens = parseEnsInput(innerUrl);
     if (ens && electronAPI?.resolveEns) {
       const capturedWebview = webview;
-      setLoading(true);
-      addressInput.value = `view-source:ens://${ens.name}`;
-      updateProtocolIcon();
+      setLoading(true, navContext);
+      setNavigationDisplay(navContext, `view-source:ens://${ens.name}`);
+      updateActiveProtocolIcon();
       electronAPI
         .resolveEns(ens.name)
         .then((result) => {
-          setLoading(false);
+          setLoading(false, navContext);
           if (!result || result.type !== 'ok') {
             alert(`ENS resolution failed for ${ens.name}: ${result?.reason || 'no response'}`);
             return;
@@ -539,7 +605,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
           safeLoadUrl(capturedWebview, loadUrl, 'view-source-ens');
         })
         .catch((err) => {
-          setLoading(false);
+          setLoading(false, navContext);
           alert(`ENS resolution error: ${err.message}`);
         });
       return;
@@ -554,8 +620,8 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
       radicleApiPrefix: state.radicleApiPrefix,
       knownEnsNames: state.knownEnsNames,
     });
-    addressInput.value = viewSourceNavigation.addressValue;
-    updateProtocolIcon();
+    setNavigationDisplay(navContext, viewSourceNavigation.addressValue);
+    updateActiveProtocolIcon();
     safeLoadUrl(webview, viewSourceNavigation.loadUrl, 'view-source');
     return;
   }
@@ -567,6 +633,13 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
   const freedomRoute = resolveFreedomInternalUrl(value);
   if (freedomRoute) {
     if (freedomRoute.pageUrl) {
+      setNavigationDisplay(
+        navContext,
+        freedomRoute.pageName === 'home' ? '' : `freedom://${freedomRoute.pageName}`
+      );
+      navState.pendingTitleForUrl = freedomRoute.pageUrl;
+      navState.pendingNavigationUrl = freedomRoute.pageUrl;
+      navState.hasNavigatedDuringCurrentLoad = false;
       safeLoadUrl(webview, freedomRoute.pageUrl, 'internal-page');
       pushDebug(`Loading internal page: ${freedomRoute.pageName}`);
     } else {
@@ -583,12 +656,12 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
   if (ens && electronAPI?.resolveEns) {
     // Capture the webview reference before async operation to prevent loading in wrong tab
     const capturedWebview = webview;
-    setLoading(true);
+    setLoading(true, navContext);
     pushDebug(`Resolving ENS name: ${ens.name}`);
     electronAPI
       .resolveEns(ens.name)
       .then((result) => {
-        setLoading(false);
+        setLoading(false, navContext);
         if (!result) {
           alert('ENS resolution failed: no response');
           return;
@@ -623,7 +696,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
         );
       })
       .catch((err) => {
-        setLoading(false);
+        setLoading(false, navContext);
         console.error('ENS resolution error', err);
         pushDebug(`ENS resolution error for ${ens.name}: ${err.message}`);
         alert(`ENS resolution error for ${ens.name}: ${err.message}`);
@@ -636,11 +709,13 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     const displayValue = displayOverride || spacesInput.displayValue;
     const capturedWebview = webview;
     const capturedNavState = navState;
+    const capturedNavContext = navContext;
 
     if (!electronAPI?.resolveSpace) {
       loadSpacesResultPage({
         webview: capturedWebview,
         navState: capturedNavState,
+        navContext: capturedNavContext,
         result: {
           type: 'error',
           handle: spacesInput.routeKey,
@@ -653,12 +728,12 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
       return;
     }
 
-    setLoading(true);
+    setLoading(true, navContext);
     pushDebug(`[AddressBar] Resolving Spaces handle: ${spacesInput.routeKey}`);
     electronAPI
       .resolveSpace(spacesInput.routeKey)
       .then((result) => {
-        setLoading(false);
+        setLoading(false, capturedNavContext);
 
         const selectedUrl = selectSpacesTargetUrl(result);
         if (result?.type === 'ok' && selectedUrl) {
@@ -669,6 +744,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
         loadSpacesResultPage({
           webview: capturedWebview,
           navState: capturedNavState,
+          navContext: capturedNavContext,
           result:
             result || {
               type: 'error',
@@ -681,11 +757,12 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
         });
       })
       .catch((err) => {
-        setLoading(false);
+        setLoading(false, capturedNavContext);
         console.error('Spaces resolution error', err);
         loadSpacesResultPage({
           webview: capturedWebview,
           navState: capturedNavState,
+          navContext: capturedNavContext,
           result: {
             type: 'error',
             handle: spacesInput.routeKey,
@@ -704,19 +781,20 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     if (!state.enableRadicleIntegration) {
       pushDebug(RADICLE_DISABLED_MESSAGE);
       const disabledUrl = buildRadicleDisabledUrl(window.location.href, value.trim());
-      addressInput.value = value.trim();
+      setNavigationDisplay(navContext, value.trim());
       navState.pendingNavigationUrl = disabledUrl;
       navState.hasNavigatedDuringCurrentLoad = false;
       safeLoadUrl(webview, disabledUrl, 'radicle-disabled');
-      syncRadBase(null);
-      syncBzzBase(null);
-      syncIpfsBase(null);
+      syncRadBase(null, navContext);
+      syncBzzBase(null, navContext);
+      syncIpfsBase(null, navContext);
       return;
     }
     const radicleTarget = formatRadicleUrl(value, state.radicleBase);
     if (radicleTarget) {
-      addressInput.value = displayOverride || radicleTarget.displayValue;
-      pushDebug(`[AddressBar] Loading Radicle target, set to: ${addressInput.value}`);
+      const displayValue = displayOverride || radicleTarget.displayValue;
+      setNavigationDisplay(navContext, displayValue);
+      pushDebug(`[AddressBar] Loading Radicle target, set to: ${displayValue}`);
       navState.pendingTitleForUrl = radicleTarget.targetUrl;
       navState.pendingNavigationUrl = radicleTarget.targetUrl;
       navState.hasNavigatedDuringCurrentLoad = false;
@@ -730,10 +808,10 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
       }
       pushDebug(`Loading ${radicleTarget.displayValue} via ${radicleTarget.targetUrl}`);
       // rad-browser.html handles its own API calls, no base sync needed
-      syncRadBase(null);
-      syncBzzBase(null);
-      syncIpfsBase(null);
-      updateProtocolIcon();
+      syncRadBase(null, navContext);
+      syncBzzBase(null, navContext);
+      syncIpfsBase(null, navContext);
+      updateActiveProtocolIcon();
       return;
     }
     // Invalid Radicle ID — show error page
@@ -742,13 +820,13 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     const errorUrl = new URL('pages/rad-browser.html', window.location.href);
     errorUrl.searchParams.set('error', 'invalid-rid');
     errorUrl.searchParams.set('input', withoutScheme);
-    addressInput.value = value.trim();
+    setNavigationDisplay(navContext, value.trim());
     navState.pendingNavigationUrl = errorUrl.toString();
     navState.hasNavigatedDuringCurrentLoad = false;
     safeLoadUrl(webview, errorUrl.toString(), 'radicle-error');
-    syncRadBase(null);
-    syncBzzBase(null);
-    syncIpfsBase(null);
+    syncRadBase(null, navContext);
+    syncBzzBase(null, navContext);
+    syncIpfsBase(null, navContext);
     return;
   }
 
@@ -762,17 +840,18 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
       if (cidMatch) state.knownEnsNames.delete(cidMatch[1]);
       if (ipnsMatch) state.knownEnsNames.delete(ipnsMatch[1]);
     }
-    addressInput.value = displayOverride || ipfsTarget.displayValue;
-    pushDebug(`[AddressBar] Loading IPFS target, set to: ${addressInput.value}`);
+    const displayValue = displayOverride || ipfsTarget.displayValue;
+    setNavigationDisplay(navContext, displayValue);
+    pushDebug(`[AddressBar] Loading IPFS target, set to: ${displayValue}`);
     rememberDisplayAlias(navState, ipfsTarget.targetUrl, displayOverride);
     navState.pendingTitleForUrl = ipfsTarget.targetUrl;
     navState.pendingNavigationUrl = ipfsTarget.targetUrl;
     navState.hasNavigatedDuringCurrentLoad = false;
     safeLoadUrl(webview, ipfsTarget.targetUrl, 'ipfs');
     pushDebug(`Loading ${ipfsTarget.displayValue} via ${ipfsTarget.targetUrl}`);
-    syncIpfsBase(ipfsTarget.baseUrl || null);
-    syncBzzBase(null); // Clear bzz base when loading IPFS
-    syncRadBase(null); // Clear rad base when loading IPFS
+    syncIpfsBase(ipfsTarget.baseUrl || null, navContext);
+    syncBzzBase(null, navContext); // Clear bzz base when loading IPFS
+    syncRadBase(null, navContext); // Clear rad base when loading IPFS
     return;
   }
 
@@ -784,17 +863,18 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
       const hashMatch = target.displayValue.match(/^bzz:\/\/([a-fA-F0-9]+)/);
       if (hashMatch) state.knownEnsNames.delete(hashMatch[1].toLowerCase());
     }
-    addressInput.value = displayOverride || target.displayValue;
-    pushDebug(`[AddressBar] Loading target, set to: ${addressInput.value}`);
+    const displayValue = displayOverride || target.displayValue;
+    setNavigationDisplay(navContext, displayValue);
+    pushDebug(`[AddressBar] Loading target, set to: ${displayValue}`);
     rememberDisplayAlias(navState, target.targetUrl, displayOverride);
     navState.pendingTitleForUrl = target.targetUrl;
     navState.pendingNavigationUrl = target.targetUrl;
     navState.hasNavigatedDuringCurrentLoad = false;
     safeLoadUrl(webview, target.targetUrl, 'swarm');
     pushDebug(`Loading ${target.displayValue} via ${target.targetUrl}`);
-    syncBzzBase(target.baseUrl || null);
-    syncIpfsBase(null); // Clear ipfs base when loading bzz
-    syncRadBase(null); // Clear rad base when loading bzz
+    syncBzzBase(target.baseUrl || null, navContext);
+    syncIpfsBase(null, navContext); // Clear ipfs base when loading bzz
+    syncRadBase(null, navContext); // Clear rad base when loading bzz
     return;
   }
 
@@ -805,27 +885,34 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     if (explicitHnsUrl) {
       const hnsState = state.registry?.hns;
       if (shouldShowHnsNotReady()) {
-        loadHnsNotReadyPage(webview, navState, displayOverride || value, explicitHnsUrl, hnsState);
+        loadHnsNotReadyPage(
+          webview,
+          navState,
+          displayOverride || value,
+          explicitHnsUrl,
+          hnsState,
+          navContext
+        );
         return;
       }
 
-      addressInput.value = displayOverride || value;
+      setNavigationDisplay(navContext, displayOverride || value);
       pushDebug(`[AddressBar] HNS explicit URL: ${value} -> ${explicitHnsUrl}`);
       rememberDisplayAlias(navState, explicitHnsUrl, displayOverride);
       navState.pendingTitleForUrl = explicitHnsUrl;
       navState.pendingNavigationUrl = explicitHnsUrl;
       navState.hasNavigatedDuringCurrentLoad = false;
       safeLoadUrl(webview, explicitHnsUrl, 'explicit-hns');
-      syncBzzBase(null);
-      syncIpfsBase(null);
-      syncRadBase(null);
+      syncBzzBase(null, navContext);
+      syncIpfsBase(null, navContext);
+      syncRadBase(null, navContext);
       return;
     }
   }
 
   // Try HTTP/HTTPS URLs
   if (value.startsWith('http://') || value.startsWith('https://')) {
-    addressInput.value = displayOverride || value;
+    setNavigationDisplay(navContext, displayOverride || value);
     pushDebug(`[AddressBar] Loading HTTP(S) target: ${value}`);
     rememberDisplayAlias(navState, value, displayOverride);
     navState.pendingTitleForUrl = value;
@@ -833,24 +920,24 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     navState.hasNavigatedDuringCurrentLoad = false;
     safeLoadUrl(webview, value, 'http');
     pushDebug(`Loading ${value}`);
-    syncBzzBase(null);
-    syncIpfsBase(null);
-    syncRadBase(null);
+    syncBzzBase(null, navContext);
+    syncIpfsBase(null, navContext);
+    syncRadBase(null, navContext);
     return;
   }
 
   const localhostUrl = normalizeLocalhostInput(value);
   if (localhostUrl) {
-    addressInput.value = displayOverride || localhostUrl;
+    setNavigationDisplay(navContext, displayOverride || localhostUrl);
     pushDebug(`[AddressBar] Loading local dev target: ${value} -> ${localhostUrl}`);
     rememberDisplayAlias(navState, localhostUrl, displayOverride);
     navState.pendingTitleForUrl = localhostUrl;
     navState.pendingNavigationUrl = localhostUrl;
     navState.hasNavigatedDuringCurrentLoad = false;
     safeLoadUrl(webview, localhostUrl, 'http');
-    syncBzzBase(null);
-    syncIpfsBase(null);
-    syncRadBase(null);
+    syncBzzBase(null, navContext);
+    syncIpfsBase(null, navContext);
+    syncRadBase(null, navContext);
     return;
   }
 
@@ -860,20 +947,27 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     if (hnsUrl) {
       const hnsState = state.registry?.hns;
       if (shouldShowHnsNotReady()) {
-        loadHnsNotReadyPage(webview, navState, displayOverride || value, hnsUrl, hnsState);
+        loadHnsNotReadyPage(
+          webview,
+          navState,
+          displayOverride || value,
+          hnsUrl,
+          hnsState,
+          navContext
+        );
         return;
       }
 
-      addressInput.value = displayOverride || value;
+      setNavigationDisplay(navContext, displayOverride || value);
       pushDebug(`[AddressBar] HNS normalization: ${value} -> ${hnsUrl}`);
       rememberDisplayAlias(navState, hnsUrl, displayOverride);
       navState.pendingTitleForUrl = hnsUrl;
       navState.pendingNavigationUrl = hnsUrl;
       navState.hasNavigatedDuringCurrentLoad = false;
       safeLoadUrl(webview, hnsUrl, 'hns');
-      syncBzzBase(null);
-      syncIpfsBase(null);
-      syncRadBase(null);
+      syncBzzBase(null, navContext);
+      syncIpfsBase(null, navContext);
+      syncRadBase(null, navContext);
       return;
     }
   }
@@ -1257,12 +1351,13 @@ export const initNavigation = () => {
     if (ens && electronAPI?.resolveEns) {
       // Capture the webview reference before async operation to prevent loading in wrong tab
       const capturedWebview = getActiveWebview();
-      setLoading(true);
+      const capturedNavContext = getNavigationContext(capturedWebview);
+      setLoading(true, capturedNavContext);
       pushDebug(`Resolving ENS name: ${ens.name}`);
       electronAPI
         .resolveEns(ens.name)
         .then((result) => {
-          setLoading(false);
+          setLoading(false, capturedNavContext);
           if (!result) {
             alert('ENS resolution failed: no response');
             return;
@@ -1296,10 +1391,12 @@ export const initNavigation = () => {
 
           // Pass captured webview to ensure we load in the correct tab
           loadTarget(targetUri, 'ens://' + ens.name + (ens.suffix || ''), capturedWebview);
-          addressInput.blur();
+          if (isNavigationContextActive(capturedNavContext)) {
+            addressInput.blur();
+          }
         })
         .catch((err) => {
-          setLoading(false);
+          setLoading(false, capturedNavContext);
           console.error('ENS resolution error', err);
           pushDebug(`ENS resolution error for ${ens.name}: ${err.message}`);
           alert(`ENS resolution error for ${ens.name}: ${err.message}`);

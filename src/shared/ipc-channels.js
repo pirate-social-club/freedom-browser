@@ -134,6 +134,7 @@ module.exports = {
   // Tab navigation
   TAB_NEXT: 'tab:next',
   TAB_PREV: 'tab:prev',
+  TAB_SWITCH_TO_INDEX: 'tab:switch-to-index',
   TAB_MOVE_LEFT: 'tab:move-left',
   TAB_MOVE_RIGHT: 'tab:move-right',
   TAB_REOPEN_CLOSED: 'tab:reopen-closed',
