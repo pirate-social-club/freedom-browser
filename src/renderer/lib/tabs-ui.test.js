@@ -38,6 +38,7 @@ const createElectronApi = () => {
       onHardReload: register('hardReload'),
       onNextTab: register('nextTab'),
       onPrevTab: register('prevTab'),
+      onSwitchToTabIndex: register('switchToTabIndex'),
       onMoveTabLeft: register('moveTabLeft'),
       onMoveTabRight: register('moveTabRight'),
       onReopenClosedTab: register('reopenClosedTab'),
@@ -255,10 +256,16 @@ describe('tabs ui behavior', () => {
     mod.switchToPrevTab();
     expect(mod.getActiveTab().id).toBe(secondTab.id);
 
+    mod.switchToTabIndex(1);
+    expect(mod.getActiveTab().id).toBe(initialTab.id);
+
+    mod.switchToTabIndex(8);
+    expect(mod.getActiveTab().id).toBe(thirdTab.id);
+
     expect(mod.getOpenTabs()).toEqual([
-      { id: secondTab.id, url: secondTab.url, title: secondTab.title, isActive: true },
+      { id: secondTab.id, url: secondTab.url, title: secondTab.title, isActive: false },
       { id: initialTab.id, url: initialTab.url, title: initialTab.title, isActive: false },
-      { id: thirdTab.id, url: thirdTab.url, title: thirdTab.title, isActive: false },
+      { id: thirdTab.id, url: thirdTab.url, title: thirdTab.title, isActive: true },
     ]);
   });
 
@@ -519,17 +526,23 @@ describe('tabs ui behavior', () => {
 
     electronHandlers.newTabWithUrl('https://named-target.example', 'named-target');
     expect(mod.getActiveTab().url).toBe('https://named-target.example');
+    const namedTargetTab = mod.getActiveTab();
     const beforeReuseCount = mod.getTabs().length;
     electronHandlers.newTabWithUrl('https://reuse-target.example', 'named-target');
     jest.runOnlyPendingTimers();
     await flushMicrotasks();
     expect(mod.getTabs()).toHaveLength(beforeReuseCount);
-    expect(onLoadTarget).toHaveBeenCalledWith('https://reuse-target.example');
+    expect(onLoadTarget).toHaveBeenCalledWith(
+      'https://reuse-target.example',
+      null,
+      namedTargetTab.webview
+    );
 
     electronHandlers.newTabWithUrl('ipfs://cid', 'ipfs-target');
+    const ipfsTargetTab = mod.getActiveTab();
     jest.runOnlyPendingTimers();
     await flushMicrotasks();
-    expect(onLoadTarget).toHaveBeenCalledWith('ipfs://cid');
+    expect(onLoadTarget).toHaveBeenCalledWith('ipfs://cid', null, ipfsTargetTab.webview);
 
     electronHandlers.navigateToUrl('https://navigate.example');
     electronHandlers.loadUrl('https://load.example');
@@ -567,6 +580,30 @@ describe('tabs ui behavior', () => {
     });
     expect(mod.getActiveTab().id).toBe(firstTab.id);
 
+    windowHandlers.keydown({
+      altKey: true,
+      ctrlKey: false,
+      shiftKey: false,
+      metaKey: false,
+      key: '2',
+      preventDefault: jest.fn(),
+    });
+    expect(mod.getActiveTab().id).toBe(orderedTabs[1].id);
+
+    windowHandlers.keydown({
+      altKey: true,
+      ctrlKey: false,
+      shiftKey: false,
+      metaKey: false,
+      key: '9',
+      preventDefault: jest.fn(),
+    });
+    expect(mod.getActiveTab().id).toBe(orderedTabs[orderedTabs.length - 1].id);
+
+    electronHandlers.switchToTabIndex(0);
+    expect(mod.getActiveTab().id).toBe(orderedTabs[0].id);
+
+    mod.switchTab(firstTab.id);
     const devtoolsOpenBefore = firstTab.webview.openDevTools.mock.calls.length;
     const devtoolsCloseBefore = firstTab.webview.closeDevTools.mock.calls.length;
     windowHandlers.keydown({

@@ -174,19 +174,23 @@ export const closeAllDevTools = () => {
 export const getTabs = () => tabState.tabs;
 
 // Create default navigation state for a tab
-const createNavigationState = () => ({
-  currentPageUrl: '',
-  pendingNavigationUrl: '',
-  pendingHnsUrl: null,
-  pendingTitleForUrl: null,
-  hasNavigatedDuringCurrentLoad: false,
-  isWebviewLoading: false,
-  currentBzzBase: null,
-  addressBarSnapshot: '',
-  displayAliases: new Map(),
-  cachedWebContentsId: null,
-  resolvingWebContentsId: null,
-});
+const createNavigationState = (initialUrl = '') => {
+  const initialDisplay =
+    !initialUrl || initialUrl === 'about:blank' || isHomeUrl(initialUrl) ? '' : initialUrl;
+  return {
+    currentPageUrl: initialUrl,
+    pendingNavigationUrl: initialUrl,
+    pendingHnsUrl: null,
+    pendingTitleForUrl: initialUrl || null,
+    hasNavigatedDuringCurrentLoad: false,
+    isWebviewLoading: false,
+    currentBzzBase: null,
+    addressBarSnapshot: initialDisplay,
+    displayAliases: new Map(),
+    cachedWebContentsId: null,
+    resolvingWebContentsId: null,
+  };
+};
 
 // Get navigation state of the active tab
 export const getActiveTabState = () => {
@@ -654,7 +658,7 @@ export const createTab = (url = null) => {
     title: 'New Tab',
     isLoading: false,
     webview,
-    navigationState: createNavigationState(),
+    navigationState: createNavigationState(targetUrl),
   };
 
   tabState.tabs.push(tab);
@@ -815,6 +819,20 @@ export const switchToPrevTab = () => {
   const currentIndex = tabState.tabs.findIndex((t) => t.id === tabState.activeTabId);
   const prevIndex = (currentIndex - 1 + tabState.tabs.length) % tabState.tabs.length;
   switchTab(tabState.tabs[prevIndex].id);
+};
+
+export const switchToTabIndex = (index) => {
+  if (!Number.isInteger(index) || index < 0 || tabState.tabs.length === 0) return;
+  const targetIndex = index === 8 ? tabState.tabs.length - 1 : index;
+  const tab = tabState.tabs[targetIndex];
+  if (!tab) return;
+  switchTab(tab.id);
+};
+
+const getAltDigitTabIndex = (event) => {
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return null;
+  if (!/^[1-9]$/.test(event.key || '')) return null;
+  return Number(event.key) - 1;
 };
 
 // Toggle pin state for a tab
@@ -1021,7 +1039,7 @@ export const initTabs = async () => {
           // Navigate the existing tab to the new URL
           setTimeout(() => {
             if (onLoadTarget) {
-              onLoadTarget(url);
+              onLoadTarget(url, null, existingTab.webview);
             }
           }, 50);
           return;
@@ -1046,7 +1064,7 @@ export const initTabs = async () => {
       if (!isDirectUrl) {
         setTimeout(() => {
           if (onLoadTarget) {
-            onLoadTarget(url);
+            onLoadTarget(url, null, newTab.webview);
           }
         }, 50);
       }
@@ -1108,6 +1126,10 @@ export const initTabs = async () => {
     switchToPrevTab();
   });
 
+  electronAPI?.onSwitchToTabIndex?.((index) => {
+    switchToTabIndex(index);
+  });
+
   electronAPI?.onMoveTabLeft?.(() => {
     moveTab('left');
   });
@@ -1122,6 +1144,13 @@ export const initTabs = async () => {
 
   // Keyboard shortcuts that do not already route through the main-process menu
   window.addEventListener('keydown', (event) => {
+    const altDigitTabIndex = getAltDigitTabIndex(event);
+    if (altDigitTabIndex !== null) {
+      event.preventDefault();
+      switchToTabIndex(altDigitTabIndex);
+      return;
+    }
+
     // Cmd+Option+I (Mac) or Ctrl+Shift+I (Win/Linux) - Toggle DevTools
     if (
       (event.metaKey && event.altKey && event.key.toLowerCase() === 'i') ||
@@ -1185,7 +1214,7 @@ export const initTabs = async () => {
         addressInput.value = initialUrl;
       }
       // Use loadTarget for proper URL resolution (handles dweb URLs, ENS, etc.)
-      setTimeout(() => onLoadTarget(initialUrl), 50);
+      setTimeout(() => onLoadTarget(initialUrl, null, tab.webview), 50);
     }
   } else {
     createTab(landingUrl);
