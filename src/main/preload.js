@@ -39,6 +39,14 @@ const guardInternal =
     return fn(...args);
   };
 
+const guardInternalBridge = (bridgeName, api) =>
+  Object.fromEntries(
+    Object.entries(api).map(([name, value]) => [
+      name,
+      typeof value === 'function' ? guardInternal(`${bridgeName}.${name}`, value) : value,
+    ])
+  );
+
 // Main renderer pages are trusted local files, but keep this bridge guarded so
 // accidental non-file BrowserWindow navigations cannot call privileged IPC.
 contextBridge.exposeInMainWorld('freedomAPI', {
@@ -73,7 +81,7 @@ contextBridge.exposeInMainWorld('freedomAPI', {
   }),
 });
 
-contextBridge.exposeInMainWorld('electronAPI', {
+contextBridge.exposeInMainWorld('electronAPI', guardInternalBridge('electronAPI', {
   setBzzBase: (webContentsId, baseUrl) =>
     ipcRenderer.invoke('bzz:set-base', { webContentsId, baseUrl }),
   clearBzzBase: (webContentsId) => ipcRenderer.invoke('bzz:clear-base', { webContentsId }),
@@ -223,9 +231,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   restartAndInstallUpdate: () => ipcRenderer.send('update:restart-and-install'),
   checkForUpdates: () => ipcRenderer.send('update:check'),
-});
+}));
 
-contextBridge.exposeInMainWorld('bee', {
+contextBridge.exposeInMainWorld('bee', guardInternalBridge('bee', {
   start: () => ipcRenderer.invoke('bee:start'),
   stop: () => ipcRenderer.invoke('bee:stop'),
   getStatus: () => ipcRenderer.invoke('bee:getStatus'),
@@ -236,9 +244,9 @@ contextBridge.exposeInMainWorld('bee', {
     ipcRenderer.invoke('bee:getStatus').then(callback);
     return () => ipcRenderer.removeListener('bee:statusUpdate', handler);
   },
-});
+}));
 
-contextBridge.exposeInMainWorld('ipfs', {
+contextBridge.exposeInMainWorld('ipfs', guardInternalBridge('ipfs', {
   start: () => ipcRenderer.invoke('ipfs:start'),
   stop: () => ipcRenderer.invoke('ipfs:stop'),
   getStatus: () => ipcRenderer.invoke('ipfs:getStatus'),
@@ -249,9 +257,9 @@ contextBridge.exposeInMainWorld('ipfs', {
     ipcRenderer.invoke('ipfs:getStatus').then(callback);
     return () => ipcRenderer.removeListener('ipfs:statusUpdate', handler);
   },
-});
+}));
 
-contextBridge.exposeInMainWorld('radicle', {
+contextBridge.exposeInMainWorld('radicle', guardInternalBridge('radicle', {
   start: () => ipcRenderer.invoke('radicle:start'),
   stop: () => ipcRenderer.invoke('radicle:stop'),
   getStatus: () => ipcRenderer.invoke('radicle:getStatus'),
@@ -263,9 +271,9 @@ contextBridge.exposeInMainWorld('radicle', {
     ipcRenderer.invoke('radicle:getStatus').then(callback);
     return () => ipcRenderer.removeListener('radicle:statusUpdate', handler);
   },
-});
+}));
 
-contextBridge.exposeInMainWorld('hns', {
+contextBridge.exposeInMainWorld('hns', guardInternalBridge('hns', {
   start: () => ipcRenderer.invoke('hns:start'),
   stop: () => ipcRenderer.invoke('hns:stop'),
   getStatus: () => ipcRenderer.invoke('hns:getStatus'),
@@ -275,9 +283,9 @@ contextBridge.exposeInMainWorld('hns', {
     ipcRenderer.invoke('hns:getStatus').then(callback);
     return () => ipcRenderer.removeListener('hns:statusUpdate', handler);
   },
-});
+}));
 
-contextBridge.exposeInMainWorld('githubBridge', {
+contextBridge.exposeInMainWorld('githubBridge', guardInternalBridge('githubBridge', {
   import: (url) => ipcRenderer.invoke('github-bridge:import', url),
   checkGit: () => ipcRenderer.invoke('github-bridge:check-git'),
   checkPrerequisites: () => ipcRenderer.invoke('github-bridge:check-prerequisites'),
@@ -288,18 +296,18 @@ contextBridge.exposeInMainWorld('githubBridge', {
     ipcRenderer.on('github-bridge:progress', handler);
     return () => ipcRenderer.removeListener('github-bridge:progress', handler);
   },
-});
+}));
 
-contextBridge.exposeInMainWorld('serviceRegistry', {
+contextBridge.exposeInMainWorld('serviceRegistry', guardInternalBridge('serviceRegistry', {
   getRegistry: () => ipcRenderer.invoke('service-registry:get'),
   onUpdate: (callback) => {
     const handler = (_event, value) => callback(value);
     ipcRenderer.on('service-registry:update', handler);
     return () => ipcRenderer.removeListener('service-registry:update', handler);
   },
-});
+}));
 
-contextBridge.exposeInMainWorld('identity', {
+contextBridge.exposeInMainWorld('identity', guardInternalBridge('identity', {
   hasVault: () => ipcRenderer.invoke('identity:has-vault'),
   isUnlocked: () => ipcRenderer.invoke('identity:is-unlocked'),
   getStatus: () => ipcRenderer.invoke('identity:get-status'),
@@ -317,17 +325,17 @@ contextBridge.exposeInMainWorld('identity', {
   changePassword: (currentPassword, newPassword) => ipcRenderer.invoke('identity:change-password', currentPassword, newPassword),
   deleteVault: (password) => ipcRenderer.invoke('identity:delete-vault', password),
   validateMnemonic: (mnemonic) => ipcRenderer.invoke('identity:validate-mnemonic', mnemonic),
-});
+}));
 
-contextBridge.exposeInMainWorld('quickUnlock', {
+contextBridge.exposeInMainWorld('quickUnlock', guardInternalBridge('quickUnlock', {
   canUseTouchId: () => ipcRenderer.invoke('quick-unlock:can-use-touch-id'),
   isEnabled: () => ipcRenderer.invoke('quick-unlock:is-enabled'),
   enable: (password) => ipcRenderer.invoke('quick-unlock:enable', password),
   unlock: () => ipcRenderer.invoke('quick-unlock:unlock'),
   disable: () => ipcRenderer.invoke('quick-unlock:disable'),
-});
+}));
 
-contextBridge.exposeInMainWorld('wallet', {
+contextBridge.exposeInMainWorld('wallet', guardInternalBridge('wallet', {
   // Balance operations
   getBalances: (address) => ipcRenderer.invoke('wallet:get-balances', address),
   getBalancesCached: (address) => ipcRenderer.invoke('wallet:get-balances-cached', address),
@@ -369,9 +377,9 @@ contextBridge.exposeInMainWorld('wallet', {
 
   // RPC proxy (renderer CSP blocks direct fetch to external endpoints)
   proxyRpc: (rpcUrl, method, params) => ipcRenderer.invoke('wallet:proxy-rpc', { rpcUrl, method, params }),
-});
+}));
 
-contextBridge.exposeInMainWorld('chainRegistry', {
+contextBridge.exposeInMainWorld('chainRegistry', guardInternalBridge('chainRegistry', {
   getChains: () => ipcRenderer.invoke('chain-registry:get-chains'),
   getTokens: (chainId) => ipcRenderer.invoke('chain-registry:get-tokens', chainId),
   getChain: (chainId) => ipcRenderer.invoke('chain-registry:get-chain', chainId),
@@ -382,9 +390,9 @@ contextBridge.exposeInMainWorld('chainRegistry', {
   removeToken: (key) => ipcRenderer.invoke('chain-registry:remove-token', key),
   getAvailableChains: () => ipcRenderer.invoke('chain-registry:get-available-chains'),
   isChainAvailable: (chainId) => ipcRenderer.invoke('chain-registry:is-chain-available', chainId),
-});
+}));
 
-contextBridge.exposeInMainWorld('rpcManager', {
+contextBridge.exposeInMainWorld('rpcManager', guardInternalBridge('rpcManager', {
   // Get all available RPC providers (Alchemy, Infura, DRPC, etc.)
   getProviders: () => ipcRenderer.invoke('rpc:get-providers'),
   // Get list of provider IDs that have API keys configured
@@ -401,17 +409,17 @@ contextBridge.exposeInMainWorld('rpcManager', {
   getProviderSupportedChains: () => ipcRenderer.invoke('rpc:get-provider-supported-chains'),
   // Get effective RPC URLs for a chain (includes provider URLs)
   getEffectiveUrls: (chainId) => ipcRenderer.invoke('rpc:get-effective-urls', chainId),
-});
+}));
 
-contextBridge.exposeInMainWorld('dappPermissions', {
+contextBridge.exposeInMainWorld('dappPermissions', guardInternalBridge('dappPermissions', {
   getPermission: (origin) => ipcRenderer.invoke('dapp:get-permission', origin),
   grantPermission: (origin, walletIndex, chainId) => ipcRenderer.invoke('dapp:grant-permission', origin, walletIndex, chainId),
   revokePermission: (origin) => ipcRenderer.invoke('dapp:revoke-permission', origin),
   getAllPermissions: () => ipcRenderer.invoke('dapp:get-all-permissions'),
   updateLastUsed: (origin, chainId) => ipcRenderer.invoke('dapp:update-last-used', origin, chainId),
-});
+}));
 
-contextBridge.exposeInMainWorld('dvpn', {
+contextBridge.exposeInMainWorld('dvpn', guardInternalBridge('dvpn', {
   start: () => ipcRenderer.invoke('dvpn:start'),
   stop: () => ipcRenderer.invoke('dvpn:stop'),
   getStatus: () => ipcRenderer.invoke('dvpn:getStatus'),
@@ -424,9 +432,9 @@ contextBridge.exposeInMainWorld('dvpn', {
   createWallet: () => ipcRenderer.invoke('dvpn:createWallet'),
   getWalletAddress: () => ipcRenderer.invoke('dvpn:getWalletAddress'),
   generateQR: (text, options) => ipcRenderer.invoke('dvpn:generateQr', text, options),
-});
+}));
 
-contextBridge.exposeInMainWorld('jacktrip', {
+contextBridge.exposeInMainWorld('jacktrip', guardInternalBridge('jacktrip', {
   connect: (options) => ipcRenderer.invoke('jacktrip:connect', options),
   disconnect: () => ipcRenderer.invoke('jacktrip:disconnect'),
   getStatus: () => ipcRenderer.invoke('jacktrip:getStatus'),
@@ -442,4 +450,4 @@ contextBridge.exposeInMainWorld('jacktrip', {
     ipcRenderer.invoke('jacktrip:getStatus').then(callback);
     return () => ipcRenderer.removeListener('jacktrip:statusUpdate', handler);
   },
-});
+}));
