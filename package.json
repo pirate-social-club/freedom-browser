@@ -248,6 +248,6 @@
   "title": "Freedom",
   "displayName": "Freedom",
   "overrides": {
-    "tmp": "0.2.6"
+    "tmp": "0.2.7"
   }
 }
