@@ -249,6 +249,39 @@ describe('preload', () => {
     );
   });
 
+  test('blocks privileged preload bridges outside trusted file contexts', async () => {
+    const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const { exposures, ipcRenderer } = loadPreloadModule({
+      location: {
+        href: 'https://attacker.example/app',
+        pathname: '/app',
+        protocol: 'https:',
+      },
+    });
+
+    ipcRenderer.invoke.mockClear();
+    ipcRenderer.send.mockClear();
+
+    await expect(exposures.wallet.getActiveAddress())
+      .rejects
+      .toThrow('freedomAPI is only available on Freedom internal pages');
+    await expect(exposures.identity.hasVault())
+      .rejects
+      .toThrow('freedomAPI is only available on Freedom internal pages');
+    await expect(exposures.dappPermissions.grantPermission('https://attacker.example', 0, 1))
+      .rejects
+      .toThrow('freedomAPI is only available on Freedom internal pages');
+    await expect(exposures.electronAPI.closeWindow())
+      .rejects
+      .toThrow('freedomAPI is only available on Freedom internal pages');
+
+    expect(ipcRenderer.invoke).not.toHaveBeenCalled();
+    expect(ipcRenderer.send).not.toHaveBeenCalled();
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      '[freedomAPI] blocked "wallet.getActiveAddress" on non-internal page: https://attacker.example/app'
+    );
+  });
+
   test('registers electronAPI, github bridge, and service registry listeners with cleanup', () => {
     const { exposures, ipcRenderer } = loadPreloadModule();
 

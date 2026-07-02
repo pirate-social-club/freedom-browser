@@ -47,10 +47,19 @@ function createMainWindow(initialUrl = null) {
       preload: path.join(__dirname, '..', 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
       webviewTag: true,
       enableRemoteModule: false,
     },
   });
+
+  const wc = window.webContents;
+  if (wc) {
+    wc.on('will-navigate', (event) => {
+      event.preventDefault();
+    });
+    wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+  }
 
   // Load index.html with optional initial URL as query parameter
   const indexPath = path.join(__dirname, '..', '..', 'renderer', 'index.html');
@@ -82,7 +91,6 @@ function createMainWindow(initialUrl = null) {
     window.webContents.send('menus:close');
   });
 
-  const wc = window.webContents;
   if (wc) {
     wc.on('render-process-gone', (_event, details) => {
       log.error('[render-process-gone]', details);
