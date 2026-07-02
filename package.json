@@ -248,6 +248,8 @@
   "title": "Freedom",
   "displayName": "Freedom",
   "overrides": {
+    "js-yaml": "4.2.0",
+    "uuid": "11.1.1",
     "tmp": "0.2.7"
   }
 }
