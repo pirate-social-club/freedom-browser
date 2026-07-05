@@ -734,6 +734,69 @@ describe('navigation', () => {
     expect(ctx.elements.addressInput.focus).toHaveBeenCalled();
   });
 
+  test('preserves previous tab URL when a blank new tab clears the address input', async () => {
+    const firstTab = createTab(1, 'https://first.example', {
+      navigationState: {
+        addressBarSnapshot: '',
+      },
+      webview: createWebview('https://first.example', {
+        webContentsId: 21,
+      }),
+    });
+    const newTab = createTab(2, 'file:///app/pages/home.html', {
+      title: 'New Tab',
+      webview: createWebview('file:///app/pages/home.html', {
+        webContentsId: 22,
+      }),
+    });
+    const ctx = await loadNavigationModule({
+      tabs: [firstTab, newTab],
+      activeTab: firstTab,
+    });
+
+    ctx.navigationUtilsMocks.deriveSwitchedTabDisplay.mockImplementation(
+      ({ url, addressBarSnapshot }) => {
+        if (url === ctx.pageUrlsMocks.homeUrl) return '';
+        return addressBarSnapshot || (url ? `switched:${url}` : '');
+      }
+    );
+    ctx.tabsRef.list = [firstTab, newTab];
+    ctx.activeRef.tab = firstTab;
+    await ctx.mod.initNavigation();
+
+    ctx.tabsMocks.webviewEventHandler('tab-switched', {
+      tabId: firstTab.id,
+      tab: firstTab,
+      previousTabId: null,
+      previousTab: null,
+      isNewTab: false,
+    });
+
+    ctx.elements.addressInput.value = '';
+    ctx.activeRef.tab = newTab;
+    ctx.tabsMocks.webviewEventHandler('tab-switched', {
+      tabId: newTab.id,
+      tab: newTab,
+      previousTabId: firstTab.id,
+      previousTab: firstTab,
+      isNewTab: true,
+    });
+
+    expect(firstTab.navigationState.addressBarSnapshot).toBe('switched:https://first.example');
+    expect(ctx.elements.addressInput.value).toBe('');
+
+    ctx.activeRef.tab = firstTab;
+    ctx.tabsMocks.webviewEventHandler('tab-switched', {
+      tabId: firstTab.id,
+      tab: firstTab,
+      previousTabId: newTab.id,
+      previousTab: newTab,
+      isNewTab: false,
+    });
+
+    expect(ctx.elements.addressInput.value).toBe('switched:https://first.example');
+  });
+
   test('loads a captured background webview without clearing the active tab address', async () => {
     const firstTab = createTab(1, 'https://first.example', {
       webview: createWebview('https://first.example', {

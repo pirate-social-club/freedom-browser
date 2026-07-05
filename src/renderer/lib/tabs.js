@@ -919,6 +919,9 @@ export const switchTab = (tabId, options = {}) => {
   const tab = tabState.tabs.find((t) => t.id === tabId);
   if (!tab) return;
 
+  const previousTabId = tabState.activeTabId;
+  const previousTab = tabState.tabs.find((t) => t.id === previousTabId) || null;
+
   tabState.activeTabId = tabId;
 
   // Hide all webviews, show active one
@@ -940,7 +943,13 @@ export const switchTab = (tabId, options = {}) => {
 
   // Notify navigation module
   if (onWebviewEvent) {
-    onWebviewEvent('tab-switched', { tabId, tab, isNewTab: options.isNewTab || false });
+    onWebviewEvent('tab-switched', {
+      tabId,
+      tab,
+      previousTabId,
+      previousTab,
+      isNewTab: options.isNewTab || false,
+    });
   }
 
   renderTabs();

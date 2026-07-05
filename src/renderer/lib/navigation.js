@@ -92,6 +92,10 @@ const setNavigationDisplay = (navContext, value = '') => {
   }
 };
 
+const setActiveNavigationDisplay = (value = '') => {
+  setNavigationDisplay(getNavigationContext(), value);
+};
+
 const electronAPI = window.electronAPI;
 const RADICLE_DISABLED_MESSAGE =
   'Radicle integration is disabled. Enable it in Settings > Experimental';
@@ -111,8 +115,6 @@ let bookmarkBarOverride = false;
 
 // Track previous active tab ID to save address bar state when switching
 let previousActiveTabId = null;
-
-
 
 // Last recorded URL to avoid duplicates in quick succession
 let lastRecordedUrl = null;
@@ -211,6 +213,33 @@ const deriveDisplayForUrl = (url, navState = getNavState()) =>
     knownEnsNames: state.knownEnsNames,
     displayAliases: navState?.displayAliases,
   });
+
+const deriveTabDisplay = (tab) => {
+  if (!tab) return '';
+  const navState = tab.navigationState || {};
+  const url = tab.url || navState.currentPageUrl || navState.pendingNavigationUrl || '';
+  if (!url || url === 'about:blank') return '';
+
+  return deriveSwitchedTabDisplay({
+    url,
+    isLoading: tab.isLoading || false,
+    addressBarSnapshot: navState.addressBarSnapshot,
+    isViewingSource: navState.isViewingSource || url.startsWith('view-source:'),
+    bzzRoutePrefix: state.bzzRoutePrefix,
+    homeUrlNormalized,
+    ipfsRoutePrefix: state.ipfsRoutePrefix,
+    ipnsRoutePrefix: state.ipnsRoutePrefix,
+    radicleApiPrefix: state.radicleApiPrefix,
+    knownEnsNames: state.knownEnsNames,
+    displayAliases: navState.displayAliases,
+  });
+};
+
+const getPreviousTabAddressSnapshot = (tab, visibleAddressValue = '') => {
+  const visibleValue = visibleAddressValue || '';
+  if (visibleValue) return visibleValue;
+  return deriveTabDisplay(tab);
+};
 
 const buildSpaceBrowserUrl = (result = {}, requestedHandle = '') => {
   const pageUrl = new URL('pages/space-browser.html', window.location.href);
@@ -990,7 +1019,7 @@ const stopLoadingAndRestore = () => {
     : navState.currentPageUrl;
   if (targetUrl) {
     const display = deriveDisplayForUrl(targetUrl, navState);
-    addressInput.value = display;
+    setActiveNavigationDisplay(display);
     pushDebug(`[AddressBar] Restored to: ${display} (raw: ${targetUrl})`);
   }
   reloadBtn.dataset.state = 'reload';
@@ -1007,7 +1036,7 @@ export const loadHomePage = () => {
   syncBzzBase(null);
   syncIpfsBase(null);
   syncRadBase(null);
-  addressInput.value = landingUrl;
+  setActiveNavigationDisplay(landingUrl);
   updateProtocolIcon();
   clearPendingHnsNavigation(navState);
   navState.pendingNavigationUrl = landingUrlNormalized;
@@ -1025,7 +1054,7 @@ export const resumePendingHnsNavigationIfReady = () => {
   if (!webview || !pendingHnsUrl) return false;
 
   clearPendingHnsNavigation(navState);
-  addressInput.value = pendingHnsUrl;
+  setActiveNavigationDisplay(pendingHnsUrl);
   navState.pendingTitleForUrl = pendingHnsUrl;
   navState.pendingNavigationUrl = pendingHnsUrl;
   navState.hasNavigatedDuringCurrentLoad = false;
@@ -1113,7 +1142,7 @@ const handleNavigationEvent = (event) => {
         displayAliases: navState.displayAliases,
       });
       const displayUrl = `view-source:${displayInner || event.url}`;
-      addressInput.value = displayUrl;
+      setActiveNavigationDisplay(displayUrl);
       pushDebug(`[AddressBar] View source: ${displayUrl}`);
       navState.currentPageUrl = webviewUrl;
       // Update tab title to "view-source:<address>"
@@ -1129,7 +1158,7 @@ const handleNavigationEvent = (event) => {
     // Check for internal pages first
     const internalPageName = getInternalPageName(event.url);
     if (internalPageName) {
-      addressInput.value = internalPageName === 'home' ? '' : `freedom://${internalPageName}`;
+      setActiveNavigationDisplay(internalPageName === 'home' ? '' : `freedom://${internalPageName}`);
       pushDebug(`[AddressBar] Internal page: freedom://${internalPageName}`);
       electronAPI?.setWindowTitle?.(
         internalPageName === 'home'
@@ -1150,7 +1179,7 @@ const handleNavigationEvent = (event) => {
     // Check for rad-browser.html URLs (Radicle protocol)
     const radicleDisplayUrl = getRadicleDisplayUrl(event.url);
     if (radicleDisplayUrl) {
-      addressInput.value = radicleDisplayUrl;
+      setActiveNavigationDisplay(radicleDisplayUrl);
       pushDebug(`[AddressBar] Radicle page: ${radicleDisplayUrl}`);
       navState.pendingTitleForUrl = event.url;
       navState.pendingNavigationUrl = event.url;
@@ -1169,14 +1198,14 @@ const handleNavigationEvent = (event) => {
         const originalUrl = parsed.searchParams.get('url');
         if (originalUrl) {
           const display = deriveDisplayForUrl(originalUrl, navState);
-          addressInput.value = display;
+          setActiveNavigationDisplay(display);
           pushDebug(`[AddressBar] Error Page -> Original: ${display}`);
         } else {
-          addressInput.value = 'Error';
+          setActiveNavigationDisplay('Error');
         }
       } catch (err) {
         pushDebug(`[Nav] Could not parse error page URL: ${err.message}`);
-        addressInput.value = 'Error';
+        setActiveNavigationDisplay('Error');
       }
       electronAPI?.setWindowTitle?.('Error');
     } else {
@@ -1196,9 +1225,10 @@ const handleNavigationEvent = (event) => {
       if (event.url === 'about:blank' && addressInput.value) {
         pushDebug(`[AddressBar] Preserved (about:blank navigation)`);
       } else if (addressInput.value !== derived) {
-        addressInput.value = derived;
+        setActiveNavigationDisplay(derived);
         pushDebug(`[AddressBar] Updated to: ${derived} (derived from ${event.url})`);
       } else {
+        navState.addressBarSnapshot = derived;
         pushDebug(`[AddressBar] Skipped update (already ${derived})`);
       }
 
@@ -1313,9 +1343,9 @@ export const initNavigation = () => {
       event.preventDefault();
       const navState = getNavState();
       if (!stopLoadingAndRestore() && navState.addressBarSnapshot) {
-        addressInput.value = navState.addressBarSnapshot;
+        setActiveNavigationDisplay(navState.addressBarSnapshot);
       } else if (navState.pendingTitleForUrl) {
-        addressInput.value = deriveDisplayForUrl(navState.pendingTitleForUrl, navState);
+        setActiveNavigationDisplay(deriveDisplayForUrl(navState.pendingTitleForUrl, navState));
       }
       updateProtocolIcon();
       addressInput.blur();
@@ -1616,11 +1646,18 @@ export const initNavigation = () => {
 
       case 'tab-switched':
         // Save address bar state to previous tab before switching
-        if (previousActiveTabId && previousActiveTabId !== data.tabId) {
-          const prevTab = getTabs().find((t) => t.id === previousActiveTabId);
-          if (prevTab && prevTab.navigationState) {
-            prevTab.navigationState.addressBarSnapshot = addressInput.value;
-            prevTab.navigationState.isViewingSource = isViewingSource;
+        {
+          const switchedFromTabId = data.previousTabId || previousActiveTabId;
+          if (switchedFromTabId && switchedFromTabId !== data.tabId) {
+            const prevTab =
+              data.previousTab || getTabs().find((t) => t.id === switchedFromTabId);
+            if (prevTab && prevTab.navigationState) {
+              prevTab.navigationState.addressBarSnapshot = getPreviousTabAddressSnapshot(
+                prevTab,
+                addressInput.value
+              );
+              prevTab.navigationState.isViewingSource = isViewingSource;
+            }
           }
         }
         previousActiveTabId = data.tabId;
@@ -1654,7 +1691,14 @@ export const initNavigation = () => {
           if (url === 'about:blank' && addressInput.value) {
             // Keep existing address bar value
           } else {
-            addressInput.value = display;
+            setNavigationDisplay(
+              {
+                webview: data.tab.webview,
+                tab: data.tab,
+                navState: tabNavState,
+              },
+              display
+            );
           }
           // Update bookmarks bar visibility based on current page
           updateBookmarkBarState(url);
@@ -1770,7 +1814,7 @@ export const upgradeHomePageIfNeeded = (oldHomeUrl) => {
       syncIpfsBase(null);
       syncRadBase(null);
       if (addressInput) {
-        addressInput.value = landingUrl;
+        setActiveNavigationDisplay(landingUrl);
       }
     }
 
