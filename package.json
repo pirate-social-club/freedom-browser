@@ -42,6 +42,7 @@
     "ant:download": "node scripts/fetch-ant.js",
     "hns:download": "node scripts/fetch-hns.js",
     "hns:test-fixture:download": "node scripts/fetch-hns-test-fixture.js",
+    "hns:mainnet:smoke": "node test-e2e/hns-mainnet-smoke.js",
     "ant:init": "node scripts/init-ant.js",
     "ant:start": "echo 'ant:start is a legacy alias for system-ant:start (repo-root ant-data on ecosystem port 1633).'; npm run system-ant:start",
     "ant:stop": "echo 'ant:stop is a legacy alias for system-ant:stop.'; npm run system-ant:stop",
