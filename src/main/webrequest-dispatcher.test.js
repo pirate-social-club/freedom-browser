@@ -25,6 +25,26 @@ beforeEach(() => {
 });
 
 describe('attachWebRequestDispatcher', () => {
+  test('is the sole source owner of Electron webRequest registrations', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const mainDir = __dirname;
+    const eventRegistration = /\.webRequest\.(onBeforeRequest|onBeforeSendHeaders|onHeadersReceived|onCompleted|onErrorOccurred)\s*\(/;
+    const sourceFiles = (directory) => fs.readdirSync(directory, { withFileTypes: true })
+      .flatMap((entry) => {
+        const absolute = path.join(directory, entry.name);
+        if (entry.isDirectory()) return sourceFiles(absolute);
+        return entry.isFile() && entry.name.endsWith('.js') ? [absolute] : [];
+      });
+    const offenders = sourceFiles(mainDir)
+      .filter((file) => !file.endsWith('.test.js'))
+      .filter((file) => path.basename(file) !== 'webrequest-dispatcher.js')
+      .filter((file) => eventRegistration.test(fs.readFileSync(file, 'utf8')))
+      .map((file) => path.relative(mainDir, file));
+
+    expect(offenders).toEqual([]);
+  });
+
   test('does not attach a listener for an event with no handlers', () => {
     const session = makeSessionMock();
     attachWebRequestDispatcher(session);

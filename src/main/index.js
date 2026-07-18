@@ -129,6 +129,7 @@ const { BrowserWindow, protocol, session } = require('electron');
 const { registerBaseIpcHandlers, broadcastProfileUpdated } = require('./ipc-handlers');
 const { watchProfileRegistry } = require('./profile-registry-watcher');
 const { installRequestRewriter } = require('./request-rewriter');
+const { installHnsRequestGate } = require('./hns-request-gate');
 const { attachWebRequestDispatcher } = require('./webrequest-dispatcher');
 const { installX402Interception } = require('./x402/intercept');
 const { registerX402Ipc } = require('./x402/ipc');
@@ -305,6 +306,7 @@ async function bootstrap() {
   }
   // All consumers register their handlers first, then the dispatcher
   // attaches exactly one Electron listener per event to the session.
+  installHnsRequestGate();
   installRequestRewriter();
   installX402Interception();
   attachWebRequestDispatcher(defaultSession);
