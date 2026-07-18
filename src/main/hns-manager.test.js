@@ -2,12 +2,17 @@ jest.mock('electron', () => ({
   app: { isPackaged: false },
   BrowserWindow: { getAllWindows: jest.fn(() => []) },
   ipcMain: { handle: jest.fn() },
+  session: { defaultSession: {} },
 }));
 jest.mock('./profile-paths', () => ({
   getHnsDataDir: jest.fn(() => '/profiles/default/hns-data'),
 }));
 jest.mock('../shared/hns-hosts', () => ({
   refreshHnsPublicSuffixes: jest.fn(() => Promise.resolve(['.pirate'])),
+}));
+jest.mock('./hns-cert-verifier', () => ({
+  clearHnsCertificateVerifier: jest.fn(),
+  configureHnsCertificateVerifier: jest.fn(() => 'AA:BB'),
 }));
 jest.mock('./service-registry', () => ({
   MODE: { BUNDLED: 'bundled', DISABLED: 'disabled' },
@@ -60,6 +65,7 @@ jest.mock('readline', () => ({
 
 const IPC = require('../shared/ipc-channels');
 const registry = require('./service-registry');
+const certVerifier = require('./hns-cert-verifier');
 const { ipcMain } = require('electron');
 const manager = require('./hns-manager');
 
@@ -114,6 +120,27 @@ describe('hns-manager lifecycle boundary', () => {
     ]));
   });
 
+  test('keeps registry fail-closed when the helper CA cannot be pinned', () => {
+    certVerifier.configureHnsCertificateVerifier.mockImplementationOnce(() => {
+      throw new Error('invalid CA');
+    });
+    manager.parseHelperEvent(JSON.stringify({
+      type: 'ready',
+      proxyAddr: '127.0.0.1:44041',
+      caPath: '/profile/hns-data/ca.pem',
+    }));
+    expect(manager.getHnsStatus().status).toBe(manager.STATUS.ERROR);
+    expect(registry.clearService).toHaveBeenCalledWith('hns');
+    expect(registry.setErrorState).toHaveBeenCalledWith(
+      'hns',
+      'HNS certificate trust failed: invalid CA'
+    );
+
+    registry.updateService.mockClear();
+    manager.parseHelperEvent(JSON.stringify({ type: 'sync', synced: true, height: 999 }));
+    expect(registry.updateService).not.toHaveBeenCalled();
+  });
+
   test('restarts after an unexpected exit and resets backoff after recovery', async () => {
     await manager.startHns();
     expect(mockSpawned).toHaveLength(1);
@@ -157,6 +184,8 @@ describe('hns-manager lifecycle boundary', () => {
     const child = mockSpawned[0];
 
     const stopping = manager.stopHns();
+    expect(registry.clearService).toHaveBeenCalledWith('hns');
+    expect(certVerifier.clearHnsCertificateVerifier).toHaveBeenCalled();
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
     await jest.advanceTimersByTimeAsync(4999);
     expect(child.kill).not.toHaveBeenCalledWith('SIGKILL');

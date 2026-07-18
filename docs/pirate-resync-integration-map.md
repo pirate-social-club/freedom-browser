@@ -41,6 +41,12 @@ This note records the integration boundaries to use while re-porting Pirate feat
 - Upstream `bzz:`, `ipfs:`, and `ipns:` are privileged custom schemes owned by their protocol handlers. HNS HTTPS routing should not alter those origins or route them through legacy gateway rewriting.
 - Re-derive the legacy PAC/HNS behavior against the dispatcher and current `request-rewriter.js`. Keep host admission fail-closed and retain the current log-redaction conventions.
 - Treat the local HNS proxy certificate verifier as an explicit boundary: document which local CA/fingerprint is trusted, which host class may enter the proxy, and how rotation works.
+- The verifier loads the CA file path emitted by the current profile's
+  Fingertip process and pins its exact X.509 fingerprint. The override applies
+  only when that fingerprint occurs in the presented chain *and* the hostname
+  passes `isHnsHost`; all other certificates use Chromium verification. A
+  Fingertip restart may rotate the CA: routing remains fail-closed while the
+  old verifier is cleared and the newly emitted fingerprint is installed.
 - DoH fallback is an explicit, profile-scoped setting and defaults off. It may
   be enabled only with a configured trusted endpoint; local sync lag must not
   silently disclose names to a third-party resolver.

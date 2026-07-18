@@ -1,5 +1,5 @@
 const log = require('./logger');
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, session } = require('electron');
 const { spawn } = require('child_process');
 const dgram = require('dgram');
 const fs = require('fs');
@@ -8,6 +8,10 @@ const path = require('path');
 const readline = require('readline');
 const IPC = require('../shared/ipc-channels');
 const { refreshHnsPublicSuffixes } = require('../shared/hns-hosts');
+const {
+  clearHnsCertificateVerifier,
+  configureHnsCertificateVerifier,
+} = require('./hns-cert-verifier');
 const { getHnsDataDir } = require('./profile-paths');
 const {
   MODE,
@@ -192,6 +196,15 @@ function parseHelperEvent(line) {
   if (event.type === 'ready') {
     proxyAddr = event.proxyAddr || null;
     caPemPath = event.caPath || null;
+    try {
+      configureHnsCertificateVerifier(session.defaultSession, caPemPath);
+    } catch (error) {
+      resetRuntimeState();
+      clearService('hns');
+      setErrorState('hns', `HNS certificate trust failed: ${error.message}`);
+      updateState(STATUS.ERROR, 'HNS certificate trust could not be established');
+      return;
+    }
     currentState = STATUS.RUNNING;
     clearErrorState('hns');
     publishSyncState();
@@ -202,6 +215,7 @@ function parseHelperEvent(line) {
   }
 
   if (event.type === 'sync') {
+    if (currentState === STATUS.ERROR || currentState === STATUS.STOPPING) return;
     height = Number.isSafeInteger(event.height) ? event.height : height;
     synced = event.synced === true || event.canaryReady === true;
     syncProgress = Number.isFinite(event.progress) ? event.progress : null;
@@ -287,6 +301,7 @@ async function startHns() {
       forceKillTimeout = null;
       const wasStopping = currentState === STATUS.STOPPING;
       const exitError = code === 0 ? null : lastProcessError || `Exited with code ${code}`;
+      clearHnsCertificateVerifier(session.defaultSession);
       clearService('hns');
       resetRuntimeState();
       updateState(STATUS.STOPPED, wasStopping ? null : exitError);
@@ -314,6 +329,7 @@ function stopHns() {
     restartTimer = null;
     restartResetTimer = null;
     if (!helperProcess) {
+      clearHnsCertificateVerifier(session.defaultSession);
       clearService('hns');
       resetRuntimeState();
       updateState(STATUS.STOPPED);
@@ -321,6 +337,8 @@ function stopHns() {
       return;
     }
     helperProcess.once('close', () => resolve(getHnsStatus()));
+    clearService('hns');
+    clearHnsCertificateVerifier(session.defaultSession);
     updateState(STATUS.STOPPING);
     forceKillTimeout = setTimeout(() => {
       helperProcess?.kill('SIGKILL');
