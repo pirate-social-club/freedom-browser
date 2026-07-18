@@ -8,8 +8,8 @@ const { X509Certificate } = require('crypto');
 const fs = require('fs');
 const net = require('net');
 const tls = require('tls');
-const StubResolver = require('bns/lib/resolver/stub');
-const wire = require('bns/lib/wire');
+const StubResolver = require('./hns-fixture/node_modules/bns/lib/resolver/stub');
+const wire = require('./hns-fixture/node_modules/bns/lib/wire');
 const {
   ACCEPT_CERTIFICATE,
   USE_CHROMIUM_VERIFICATION,
