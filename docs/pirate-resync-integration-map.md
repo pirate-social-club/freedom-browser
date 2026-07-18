@@ -1,6 +1,6 @@
 # Pirate Resync Integration Map
 
-Baseline: upstream `main` at `bc831cec1570f018720a27c592956e3f043c745d` (Freedom `0.8.1-dev`).
+Baseline: upstream `main` at `076e0d84452f6bcbfc1ad21e28d8ef395f023963` (Freedom `0.8.1-dev`).
 
 This note records the integration boundaries to use while re-porting Pirate features. It does not change upstream module ownership: protocol and lifecycle logic remains in the main process, renderer code remains UI, and IPC contracts remain in `src/shared/`.
 
