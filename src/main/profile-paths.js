@@ -85,6 +85,10 @@ function getIpfsDataDir() {
   return resolveDir('FREEDOM_IPFS_DATA', 'ipfs-data');
 }
 
+function getHnsDataDir() {
+  return ensureDir(path.join(getProfileUserDataDir(), 'hns-data'));
+}
+
 function getRadicleDataDir() {
   const override = process.env.FREEDOM_RADICLE_DATA;
   if (override) {
@@ -160,6 +164,7 @@ module.exports = {
   getAntDataDir,
   getBeeDataDir,
   getIdentityDataDir,
+  getHnsDataDir,
   getIpfsDataDir,
   getProfileCrashDir,
   getProfileTempDir,

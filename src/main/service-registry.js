@@ -43,6 +43,19 @@ const registry = {
     tempMessage: null,
     tempMessageTimeout: null,
   },
+  hns: {
+    api: null,
+    gateway: null,
+    mode: MODE.NONE,
+    statusMessage: null,
+    tempMessage: null,
+    tempMessageTimeout: null,
+    height: 0,
+    synced: false,
+    syncProgress: null,
+    rootAddr: null,
+    recursiveAddr: null,
+  },
 };
 
 // Default ports
@@ -75,6 +88,7 @@ function getRegistry() {
     ipfs: { ...registry.ipfs },
     ant: { ...registry.ant },
     radicle: { ...registry.radicle },
+    hns: { ...registry.hns },
   };
 }
 
@@ -176,6 +190,13 @@ function clearService(service) {
     statusMessage: null,
     tempMessage: null,
     tempMessageTimeout: null,
+    ...(service === 'hns' && {
+      height: 0,
+      synced: false,
+      syncProgress: null,
+      rootAddr: null,
+      recursiveAddr: null,
+    }),
   };
 
   broadcastRegistryUpdate();
@@ -241,6 +262,10 @@ function getRadicleApiUrl() {
   return registry.radicle.api;
 }
 
+function getHnsApiUrl() {
+  return registry.hns.api;
+}
+
 /**
  * Register IPC handlers for service registry
  */
@@ -267,6 +292,7 @@ module.exports = {
   getAntApiUrl,
   getAntGatewayUrl,
   getRadicleApiUrl,
+  getHnsApiUrl,
   broadcastRegistryUpdate,
   registerServiceRegistryIpc,
 };

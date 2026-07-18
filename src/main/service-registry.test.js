@@ -26,6 +26,7 @@ describe('service-registry', () => {
     expect(mod.getAntApiUrl()).toBeNull();
     expect(mod.getAntGatewayUrl()).toBeNull();
     expect(mod.getRadicleApiUrl()).toBeNull();
+    expect(mod.getHnsApiUrl()).toBeNull();
   });
 
   test('returns service URLs after registry hydration', () => {
@@ -46,12 +47,18 @@ describe('service-registry', () => {
       gateway: 'http://127.0.0.1:18780',
       mode: mod.MODE.BUNDLED,
     });
+    mod.updateService('hns', {
+      api: 'http://127.0.0.1:13000',
+      mode: mod.MODE.BUNDLED,
+      height: 1234,
+    });
 
     expect(mod.getIpfsApiUrl()).toBe('http://127.0.0.1:15001');
     expect(mod.getIpfsGatewayUrl()).toBe('http://localhost:18080');
     expect(mod.getAntApiUrl()).toBe('http://127.0.0.1:11633');
     expect(mod.getAntGatewayUrl()).toBe('http://127.0.0.1:11633');
     expect(mod.getRadicleApiUrl()).toBe('http://127.0.0.1:18780');
+    expect(mod.getHnsApiUrl()).toBe('http://127.0.0.1:13000');
   });
 
   test('updates a service and broadcasts the new registry state', () => {
