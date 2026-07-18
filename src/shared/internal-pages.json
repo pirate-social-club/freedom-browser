@@ -9,5 +9,5 @@
     "publish": "publish.html",
     "settings": "settings.html"
   },
-  "other": ["error.html", "rad-browser.html", "ens-conflict.html", "ens-unverified.html"]
+  "other": ["error.html", "hns-syncing.html", "rad-browser.html", "ens-conflict.html", "ens-unverified.html"]
 }

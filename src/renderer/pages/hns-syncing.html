@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self';" />
+    <title>Handshake is starting</title>
+    <style>
+      html, body { height: 100%; margin: 0; }
+      body { display: grid; place-items: center; padding: 32px; box-sizing: border-box; background: #1f2020; color: #eee; font: 15px/1.5 system-ui, sans-serif; }
+      main { width: min(520px, 100%); padding: 28px; border: 1px solid #3a3b3b; border-radius: 16px; background: #272828; }
+      h1 { margin: 0 0 10px; font-size: 24px; }
+      p { margin: 8px 0; color: #bbb; }
+      .destination { color: #fff; overflow-wrap: anywhere; }
+      .status { margin-top: 22px; padding-top: 18px; border-top: 1px solid #3a3b3b; }
+      @media (prefers-color-scheme: light) { body { background: #f5f6f7; color: #202124; } main { background: white; border-color: #ddd; } p { color: #5f6368; } .destination { color: #202124; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Handshake is starting</h1>
+      <p>Freedom blocked this name locally until your profile's resolver is ready.</p>
+      <p class="destination" id="destination">Loading destination…</p>
+      <div class="status" aria-live="polite">
+        <strong id="state">Checking node status…</strong>
+        <p id="detail">No name has been sent to system DNS.</p>
+      </div>
+    </main>
+    <script src="scripts/hns-syncing.js"></script>
+  </body>
+</html>

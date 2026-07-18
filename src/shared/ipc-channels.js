@@ -39,6 +39,7 @@ module.exports = {
   HNS_GET_STATUS: 'hns:getStatus',
   HNS_STATUS_UPDATE: 'hns:statusUpdate',
   HNS_CHECK_BINARY: 'hns:checkBinary',
+  HNS_GET_PENDING_NAVIGATION: 'hns:getPendingNavigation',
 
   // ENS resolution
   ENS_RESOLVE: 'ens:resolve',
