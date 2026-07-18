@@ -15,6 +15,7 @@ import {
   isEnsBackedDisplay,
   normalizeLegacyEnsBookmarkUrl,
   isValidRadicleId,
+  parseSpacesRootInput,
   parseRadicleInput,
   formatRadicleUrl,
   deriveRadBaseFromUrl,
@@ -1267,6 +1268,27 @@ describe('url-utils', () => {
     test('returns input for null/undefined', () => {
       expect(deriveRadicleDisplayValue(null, RAD_PREFIX)).toBe(null);
       expect(deriveRadicleDisplayValue(undefined, RAD_PREFIX)).toBe(undefined);
+    });
+  });
+
+  describe('parseSpacesRootInput', () => {
+    test('normalizes a root handle for resolver routing', () => {
+      expect(parseSpacesRootInput(' @Pirate ')).toEqual({
+        routeKey: '@pirate',
+        displayValue: '@Pirate',
+      });
+      expect(parseSpacesRootInput('@😀')).toEqual({
+        routeKey: '@😀',
+        displayValue: '@😀',
+      });
+    });
+
+    test('rejects non-root and ambiguous Spaces input', () => {
+      expect(parseSpacesRootInput('name@space')).toBeNull();
+      expect(parseSpacesRootInput('@')).toBeNull();
+      expect(parseSpacesRootInput('@@space')).toBeNull();
+      expect(parseSpacesRootInput('@space/path')).toBeNull();
+      expect(parseSpacesRootInput('@space query')).toBeNull();
     });
   });
 });
