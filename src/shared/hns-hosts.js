@@ -2,6 +2,7 @@ const DEFAULT_HNS_PUBLIC_SUFFIXES = Object.freeze(['.pirate']);
 const DEFAULT_NAMESPACE_URL = 'https://api.pirate.sc/public-namespaces';
 
 let dynamicHnsPublicSuffixes = [];
+const hostPolicyListeners = new Set();
 
 function normalizeHnsPublicSuffix(value = '') {
   const normalized = String(value).trim().toLowerCase().replace(/^\.+|\.+$/g, '');
@@ -21,8 +22,20 @@ function getHnsPublicRoots() {
 }
 
 function setDynamicHnsPublicSuffixes(values = []) {
-  dynamicHnsPublicSuffixes = [...new Set(values.map(normalizeHnsPublicSuffix).filter(Boolean))];
-  return getHnsPublicSuffixes();
+  const next = [...new Set(values.map(normalizeHnsPublicSuffix).filter(Boolean))];
+  const changed = JSON.stringify(next) !== JSON.stringify(dynamicHnsPublicSuffixes);
+  dynamicHnsPublicSuffixes = next;
+  const suffixes = getHnsPublicSuffixes();
+  if (changed) {
+    for (const listener of hostPolicyListeners) listener(suffixes);
+  }
+  return suffixes;
+}
+
+function subscribeHnsHostPolicy(listener) {
+  if (typeof listener !== 'function') throw new TypeError('HNS host-policy listener must be a function');
+  hostPolicyListeners.add(listener);
+  return () => hostPolicyListeners.delete(listener);
 }
 
 function isValidHostnameLabel(value = '') {
@@ -84,4 +97,5 @@ module.exports = {
   normalizeHnsPublicSuffix,
   refreshHnsPublicSuffixes,
   setDynamicHnsPublicSuffixes,
+  subscribeHnsHostPolicy,
 };

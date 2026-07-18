@@ -6,6 +6,7 @@ const {
   normalizeHnsPublicSuffix,
   refreshHnsPublicSuffixes,
   setDynamicHnsPublicSuffixes,
+  subscribeHnsHostPolicy,
 } = require('./hns-hosts');
 
 describe('HNS host classification', () => {
@@ -67,5 +68,16 @@ describe('HNS host classification', () => {
       fetchImpl: async () => ({ ok: false, status: 503 }),
     })).rejects.toThrow('public namespace fetch failed with 503');
     expect(getHnsPublicSuffixes()).toEqual(['.pirate', '.existing']);
+  });
+
+  test('notifies policy subscribers only when the effective imported set changes', () => {
+    const listener = jest.fn();
+    const unsubscribe = subscribeHnsHostPolicy(listener);
+    setDynamicHnsPublicSuffixes(['new-root']);
+    setDynamicHnsPublicSuffixes(['new-root']);
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    setDynamicHnsPublicSuffixes(['other-root']);
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 });

@@ -6,6 +6,9 @@ jest.mock('electron', () => ({
 jest.mock('./profile-paths', () => ({
   getHnsDataDir: jest.fn(() => '/profiles/default/hns-data'),
 }));
+jest.mock('../shared/hns-hosts', () => ({
+  refreshHnsPublicSuffixes: jest.fn(() => Promise.resolve(['.pirate'])),
+}));
 jest.mock('./service-registry', () => ({
   MODE: { BUNDLED: 'bundled', DISABLED: 'disabled' },
   clearErrorState: jest.fn(),

@@ -57,6 +57,7 @@ const registry = {
     recursiveAddr: null,
   },
 };
+const registryListeners = new Set();
 
 // Default ports
 const DEFAULTS = {
@@ -216,6 +217,21 @@ function broadcastRegistryUpdate() {
       // Window might be closing
     }
   }
+
+  for (const listener of registryListeners) {
+    try {
+      listener(state);
+    } catch {
+      // Registry observers are isolated like renderer broadcasts.
+    }
+  }
+}
+
+function subscribeServiceRegistry(listener, { emitCurrent = true } = {}) {
+  if (typeof listener !== 'function') throw new TypeError('Registry listener must be a function');
+  registryListeners.add(listener);
+  if (emitCurrent) listener(getRegistry());
+  return () => registryListeners.delete(listener);
 }
 
 /**
@@ -294,5 +310,6 @@ module.exports = {
   getRadicleApiUrl,
   getHnsApiUrl,
   broadcastRegistryUpdate,
+  subscribeServiceRegistry,
   registerServiceRegistryIpc,
 };

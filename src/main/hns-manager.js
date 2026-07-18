@@ -7,6 +7,7 @@ const net = require('net');
 const path = require('path');
 const readline = require('readline');
 const IPC = require('../shared/ipc-channels');
+const { refreshHnsPublicSuffixes } = require('../shared/hns-hosts');
 const { getHnsDataDir } = require('./profile-paths');
 const {
   MODE,
@@ -194,6 +195,9 @@ function parseHelperEvent(line) {
     currentState = STATUS.RUNNING;
     clearErrorState('hns');
     publishSyncState();
+    refreshHnsPublicSuffixes().catch((error) => {
+      log.warn(`[HNS] Public namespace refresh failed: ${error.message}`);
+    });
     return;
   }
 

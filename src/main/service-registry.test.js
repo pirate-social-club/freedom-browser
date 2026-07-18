@@ -98,6 +98,26 @@ describe('service-registry', () => {
     expect(closingWindow.webContents.send).toHaveBeenCalled();
   });
 
+  test('notifies process-local subscribers and supports unsubscribe', () => {
+    const { mod } = loadServiceRegistry();
+    const listener = jest.fn();
+    const unsubscribe = mod.subscribeServiceRegistry(listener);
+
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+      hns: expect.objectContaining({ mode: mod.MODE.NONE }),
+    }));
+    listener.mockClear();
+    mod.updateService('hns', { mode: mod.MODE.BUNDLED, synced: true });
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+      hns: expect.objectContaining({ mode: mod.MODE.BUNDLED, synced: true }),
+    }));
+
+    unsubscribe();
+    listener.mockClear();
+    mod.clearService('hns');
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   test('temporary messages override status and auto-clear back to the permanent message', () => {
     const { mod } = loadServiceRegistry();
 

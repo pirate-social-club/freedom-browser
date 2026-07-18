@@ -130,6 +130,7 @@ const { registerBaseIpcHandlers, broadcastProfileUpdated } = require('./ipc-hand
 const { watchProfileRegistry } = require('./profile-registry-watcher');
 const { installRequestRewriter } = require('./request-rewriter');
 const { installHnsRequestGate } = require('./hns-request-gate');
+const { startHnsPacLifecycle, stopHnsPacLifecycle } = require('./hns-pac');
 const { attachWebRequestDispatcher } = require('./webrequest-dispatcher');
 const { installX402Interception } = require('./x402/intercept');
 const { registerX402Ipc } = require('./x402/ipc');
@@ -310,6 +311,7 @@ async function bootstrap() {
   installRequestRewriter();
   installX402Interception();
   attachWebRequestDispatcher(defaultSession);
+  startHnsPacLifecycle(defaultSession);
   allowInteractivePermissions(defaultSession);
   registerWebContentsHandlers();
   setupApplicationMenu();
@@ -462,6 +464,7 @@ app.on('before-quit', async (event) => {
 
   log.info('[App] Waiting for Ant, IPFS, Radicle, and HNS to stop...');
   await Promise.all([stopAnt(), stopIpfs(), stopRadicle(), stopHns()]);
+  await stopHnsPacLifecycle();
   log.info('[App] All processes stopped, quitting...');
 
   app.quit();
