@@ -91,6 +91,35 @@ async function startInfrastructure({ matching = true } = {}) {
   };
 }
 
+async function launchElectronProfile(hnsInfrastructure, label = 'electron') {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-hns-electron-profile-'));
+  const app = await electron.launch({
+    args: ['.'],
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      FREEDOM_TEST_MODE: '1',
+      FREEDOM_HNS_E2E: '1',
+      FREEDOM_TEST_USER_DATA: userDataDir,
+      FREEDOM_HNS_TEST_BIN_DIR: hnsInfrastructure.binDir,
+      FREEDOM_HNS_TEST_SEED: hnsInfrastructure.seed,
+      ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
+      LANG: 'en_US.UTF-8',
+    },
+    timeout: 30_000,
+  });
+  app.process().stdout?.on('data', (data) => process.stdout.write(`[${label}] ${data}`));
+  app.process().stderr?.on('data', (data) => process.stderr.write(`[${label}] ${data}`));
+  return {
+    app,
+    userDataDir,
+    async close() {
+      try { await app.close(); } catch { /* already closed */ }
+      fs.rmSync(userDataDir, { recursive: true, force: true });
+    },
+  };
+}
+
 const test = base.extend({
   hnsTlsaMatches: [true, { option: true }],
 
@@ -101,27 +130,9 @@ const test = base.extend({
   },
 
   electronApp: async ({ hnsInfrastructure }, use) => {
-    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-hns-electron-profile-'));
-    const app = await electron.launch({
-      args: ['.'],
-      cwd: repoRoot,
-      env: {
-        ...process.env,
-        FREEDOM_TEST_MODE: '1',
-        FREEDOM_HNS_E2E: '1',
-        FREEDOM_TEST_USER_DATA: userDataDir,
-        FREEDOM_HNS_TEST_BIN_DIR: hnsInfrastructure.binDir,
-        FREEDOM_HNS_TEST_SEED: hnsInfrastructure.seed,
-        ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
-        LANG: 'en_US.UTF-8',
-      },
-      timeout: 30_000,
-    });
-    app.process().stdout?.on('data', (data) => process.stdout.write(`[electron] ${data}`));
-    app.process().stderr?.on('data', (data) => process.stderr.write(`[electron] ${data}`));
-    await use(app);
-    try { await app.close(); } catch { /* already closed */ }
-    fs.rmSync(userDataDir, { recursive: true, force: true });
+    const profile = await launchElectronProfile(hnsInfrastructure, 'electron-a');
+    await use(profile.app);
+    await profile.close();
   },
 
   window: async ({ electronApp }, use) => {
@@ -132,4 +143,10 @@ const test = base.extend({
   },
 });
 
-module.exports = { expect, PAGE_MARKER, startInfrastructure, test };
+module.exports = {
+  expect,
+  launchElectronProfile,
+  PAGE_MARKER,
+  startInfrastructure,
+  test,
+};

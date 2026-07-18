@@ -367,6 +367,9 @@ jobs:
           npm ci --prefix test-e2e/hns-fixture --ignore-scripts
           npm run --prefix test-e2e/hns-fixture prepare:hsd
 
+      - name: Install browser dependencies
+        run: npm ci
+
       - name: Fetch independently pinned HNS artifacts
         env:
           GITHUB_TOKEN: ${{ github.token }}
