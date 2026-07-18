@@ -16,6 +16,12 @@ coverage and fixed a dangling-restart defect: deliberate stop/disable now
 cancels pending crash-backoff and restart-reset timers, so HNS cannot restart
 itself after the user turns it off.
 
+Module disposition: legacy `hns-local-resolver.js` is superseded by
+Fingertip's local proxy/resolver path plus registry-backed health telemetry;
+its independent resolution state machine will not be ported. Legacy
+`hns-doh-resolver.js` is superseded by a smaller future fallback module that
+requires an explicit profile setting and trusted endpoint and defaults off.
+
 | Legacy | Intent | Slice | Disposition |
 |---|---|---:|---|
 | `5bfae86` | Restore Spaces TLS verification | Spaces | pending |
