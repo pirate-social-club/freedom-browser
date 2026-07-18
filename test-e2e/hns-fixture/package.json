@@ -1,0 +1,13 @@
+{
+  "name": "freedom-hns-e2e-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MPL-2.0",
+  "scripts": {
+    "prepare:hsd": "node prepare-hsd.js",
+    "start": "NODE_BACKEND=js node fixture-server.js"
+  },
+  "dependencies": {
+    "hsd": "4.0.1"
+  }
+}
