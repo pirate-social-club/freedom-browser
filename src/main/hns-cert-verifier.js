@@ -44,14 +44,35 @@ function leafMatchesHostAndValidity(request, {
   }
 }
 
+function leafIsSignedByPinnedCa(request, trustedCertificate, {
+  Certificate = X509Certificate,
+} = {}) {
+  if (!trustedCertificate?.publicKey) return false;
+  try {
+    const leaf = new Certificate(request?.certificate?.data);
+    return leaf.verify(trustedCertificate.publicKey) === true;
+  } catch {
+    return false;
+  }
+}
+
 function createCertificateVerifyProc(trustedFingerprint, options) {
   if (!trustedFingerprint) throw new Error('Trusted Fingertip fingerprint is required');
   return (request, callback) => {
     const admittedHost = isHnsHost(request?.hostname || '');
-    const pinnedChain = chainContainsFingerprint(request?.certificate, trustedFingerprint);
+    // Electron exposes both the presented leaf and Chromium's validated chain.
+    // For an intentionally untrusted local CA, only the latter is guaranteed to
+    // retain the root certificate needed for our explicit pin comparison.
+    const pinnedChain = chainContainsFingerprint(request?.certificate, trustedFingerprint) ||
+      chainContainsFingerprint(request?.validatedCertificate, trustedFingerprint);
+    const pinnedSignature = leafIsSignedByPinnedCa(
+      request,
+      options?.trustedCertificate,
+      options,
+    );
     const validLeaf = leafMatchesHostAndValidity(request, options);
     callback(
-      admittedHost && pinnedChain && validLeaf
+      admittedHost && (pinnedChain || pinnedSignature) && validLeaf
         ? ACCEPT_CERTIFICATE
         : USE_CHROMIUM_VERIFICATION
     );
@@ -62,8 +83,15 @@ function configureHnsCertificateVerifier(targetSession, pemPath, options) {
   if (!targetSession?.setCertificateVerifyProc) {
     throw new Error('Electron certificate verifier is unavailable');
   }
-  const fingerprint = loadCaFingerprint(pemPath, options);
-  targetSession.setCertificateVerifyProc(createCertificateVerifyProc(fingerprint, options));
+  const readFile = options?.readFile || fs.readFileSync;
+  const Certificate = options?.Certificate || X509Certificate;
+  const trustedCertificate = new Certificate(readFile(pemPath, 'utf8'));
+  const fingerprint = trustedCertificate.fingerprint;
+  if (!fingerprint) throw new Error('Fingertip CA fingerprint is missing');
+  targetSession.setCertificateVerifyProc(createCertificateVerifyProc(fingerprint, {
+    ...options,
+    trustedCertificate,
+  }));
   return fingerprint;
 }
 
@@ -78,6 +106,7 @@ module.exports = {
   clearHnsCertificateVerifier,
   configureHnsCertificateVerifier,
   createCertificateVerifyProc,
+  leafIsSignedByPinnedCa,
   leafMatchesHostAndValidity,
   loadCaFingerprint,
 };

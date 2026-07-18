@@ -26,6 +26,7 @@ if (process.env.FREEDOM_TEST_USER_DATA) {
   app.setPath('userData', process.env.FREEDOM_TEST_USER_DATA);
 }
 const TEST_MODE = process.env.FREEDOM_TEST_MODE === '1';
+const HNS_E2E_MODE = TEST_MODE && process.env.FREEDOM_HNS_E2E === '1';
 const { migrateBeeDataToAntData, migrateUserData } = require('./migrate-user-data');
 if (app.isPackaged && !process.env.FREEDOM_TEST_USER_DATA) {
   migrateUserData({ logger: console });
@@ -395,9 +396,10 @@ async function bootstrap() {
     if (settings.enableRadicleIntegration && settings.startRadicleAtLaunch) {
       startRadicle();
     }
-    if (activeProfile?.metadata?.nodes?.hns?.mode !== 'disabled') {
-      startHns();
-    }
+  }
+  if ((!TEST_MODE || HNS_E2E_MODE)
+    && activeProfile?.metadata?.nodes?.hns?.mode !== 'disabled') {
+    startHns();
   }
 
   // Initialize auto-updater (pass menu update callback). Skipped in

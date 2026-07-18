@@ -38,6 +38,10 @@ const { success, failure } = require('./ipc-contract');
 const { updateService, MODE, setStatusMessage } = require('./service-registry');
 
 const TEST_MODE_ENABLED = process.env.FREEDOM_TEST_MODE === '1';
+// The HNS integration project deliberately exercises Chromium's real HTTP(S)
+// stack through PAC + Fingertip. Keep the rest of the deterministic harness,
+// but do not claim the two schemes that test exists to prove.
+const HNS_E2E_ENABLED = TEST_MODE_ENABLED && process.env.FREEDOM_HNS_E2E === '1';
 
 function isTestMode() {
   return TEST_MODE_ENABLED;
@@ -170,12 +174,16 @@ function registerStubProtocols(targetSession) {
   // replaced. The webview tag in tabs.js doesn't set a `partition`
   // attribute, which per Electron's <webview> docs means it uses the
   // app default session — i.e. this same one we're attaching to.
-  for (const scheme of ['http', 'https']) {
-    try {
-      targetSession.protocol.handle(scheme, makeHttpStubHandler(scheme));
-      log.info(`[test-harness] registered stub ${scheme}: handler (owns scheme)`);
-    } catch (err) {
-      log.error(`[test-harness] failed to register stub ${scheme}: handler`, err);
+  if (HNS_E2E_ENABLED) {
+    log.info('[test-harness] HNS E2E mode — leaving http: and https: on the real network stack');
+  } else {
+    for (const scheme of ['http', 'https']) {
+      try {
+        targetSession.protocol.handle(scheme, makeHttpStubHandler(scheme));
+        log.info(`[test-harness] registered stub ${scheme}: handler (owns scheme)`);
+      } catch (err) {
+        log.error(`[test-harness] failed to register stub ${scheme}: handler`, err);
+      }
     }
   }
 }

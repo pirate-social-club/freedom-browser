@@ -126,9 +126,12 @@ Emitted on initial status and whenever height/readiness materially changes:
 ```
 
 - `height`: required non-negative safe integer;
-- `synced`: required boolean; true only when the local recursive resolver can
-  answer `app.pirate.` from its current chain state. CI supplies that name from
-  a deterministic fixture peer; mainnet supplies the production record;
+- `synced`: required boolean; true only when the local recursive resolver
+  returns an authenticated TLSA answer for `_443._tcp.app.pirate.` from its
+  current chain state. An A-only readiness probe is insufficient because it can
+  release the browser's home navigation before the DANE trust path is usable.
+  CI supplies that name from a deterministic fixture peer; mainnet supplies the
+  production record;
 - `progress`: optional finite number in `0..1`, omitted when no trustworthy tip
   estimate is available.
 

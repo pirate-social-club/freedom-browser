@@ -383,3 +383,15 @@ jobs:
             -w /app/test-e2e/hns-fixture \
             node@sha256:eb2c73a27cf714b4b6b030f88ab72e62192c38b7d313ea3456695b8ae03c5f3c \
             npm run test:proxy
+
+      - name: Build pinned Electron HNS test image
+        run: docker build -f test-e2e/hns-fixture/Dockerfile.electron -t freedom-hns-electron-e2e .
+
+      - name: Prove Electron DANE navigation and fail-closed mismatch
+        run: |
+          docker run --rm --network bridge \
+            --cap-drop ALL \
+            --sysctl net.ipv4.ip_unprivileged_port_start=0 \
+            -v "${{ github.workspace }}:/app:ro" \
+            -w /app freedom-hns-electron-e2e \
+            bash -lc 'Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >/tmp/xvfb.log 2>&1 & export DISPLAY=:99; npm run test:e2e:hns -- --output=/tmp/hns-test-results; status=$?; pkill Xvfb; exit $status'
