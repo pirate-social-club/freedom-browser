@@ -6,10 +6,10 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const REPOSITORY = 'pirate-social-club/fingertipd';
-const RELEASE_TAG = 'v0.1.8';
+const RELEASE_TAG = 'v0.1.10';
 const ARCHIVE_NAME = 'freedom-hns-linux-x64.tar.gz';
 const SUMS_NAME = 'SHA256SUMS';
-const PINNED_SUMS_DIGEST = '55bc34931f2c1478629d6faedfd8e62cc13602c5eec0c6e9034d42fc2a79767f';
+const PINNED_SUMS_DIGEST = '7b454ede4953f42306613ad7549176c15a25039426c10915fa914b8e2e7b1e2e';
 const OUTPUT_DIR = path.join(__dirname, '..', 'hns-bin', 'linux-x64');
 const RELEASE_ROOT = `https://github.com/${REPOSITORY}/releases/download/${RELEASE_TAG}`;
 const REQUEST_TIMEOUT_MS = 60_000;

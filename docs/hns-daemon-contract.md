@@ -20,6 +20,17 @@ fingertipd \
   -recursive-addr 127.0.0.1:<different allocated port>
 ```
 
+The hermetic test harness may additionally pass exactly one optional argument:
+
+```text
+-hnsd-seed 127.0.0.1:<fixture hsd port>
+```
+
+The daemon rejects non-loopback seeds. Freedom passes this flag only when both
+`FREEDOM_TEST_MODE=1` and `FREEDOM_HNS_TEST_SEED` are set; production launches
+omit it and retain hnsd's pinned mainnet seed behavior. There is deliberately
+no arbitrary hnsd-arguments passthrough.
+
 All four flags are required. Unknown flags, missing values, non-absolute data
 or binary paths, non-loopback resolver addresses, equal resolver ports, and
 ports outside `1..65535` must fail before any listener or child is started.
@@ -55,6 +66,11 @@ requires both UDP and TCP DNS service on the allocated addresses.
 The release pins an exact upstream hnsd tag and source commit. The build must
 be reproducible from that pin in a pinned Linux container; the browser never
 downloads an unversioned `latest` artifact.
+
+The browser test harness may also replace the binary directory when
+`FREEDOM_TEST_MODE=1` is active. That isolated directory contains the released
+fingertipd and the independently pinned compile-time-regtest hnsd; Electron
+Builder never stages it.
 
 If `hnsd` fails to start, bind, or exits unexpectedly, `fingertipd` emits one
 error event, exits non-zero, and does not restart the child internally. Freedom

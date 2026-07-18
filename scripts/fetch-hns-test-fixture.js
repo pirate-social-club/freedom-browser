@@ -6,7 +6,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const REPOSITORY = 'pirate-social-club/fingertipd';
-const RELEASE_TAG = 'v0.1.9';
+const RELEASE_TAG = 'v0.1.10';
 const ARCHIVE_NAME = 'hnsd-regtest-linux-x64.tar.gz';
 const SUMS_NAME = 'TEST_SHA256SUMS';
 const PINNED_SUMS_DIGEST = 'a31a716e711fed690981ea6ab1b4ca8543559913700b168b9777f2061089b7d2';

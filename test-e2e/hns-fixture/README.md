@@ -29,5 +29,5 @@ the scripted regtest auction, commits NS + DS + GLUE4 on chain, synchronizes
 the compile-time-regtest hnsd, and resolves the signed A and TLSA records
 through hnsd's recursive endpoint. Because DNS referrals cannot encode a
 custom port, this test must bind loopback port 53. CI runs only this isolated
-fixture process in a rootful host-network container; Freedom and fingertipd
-remain unprivileged and never bind port 53.
+fixture DNS process in a container granted only `NET_BIND_SERVICE`; Freedom
+and fingertipd remain unprivileged and never bind port 53.

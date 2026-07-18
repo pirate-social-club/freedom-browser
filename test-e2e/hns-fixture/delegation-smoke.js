@@ -49,7 +49,7 @@ async function main() {
   try {
     // DNS referrals have no port field, so the delegated authority must use
     // the protocol-defined port 53. CI runs this isolated fixture with the
-    // bind-service capability; production hnsd never requires local port 53.
+    // NET_BIND_SERVICE capability; production hnsd never requires local port 53.
     await server.open(53, '127.0.0.1');
     await peer.mine(100);
     await peer.registerNames({ pirate: onChainRecords });
