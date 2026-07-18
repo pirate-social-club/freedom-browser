@@ -81,8 +81,11 @@ fail closed because it is a separately invokable trust boundary.
 ## Stdout protocol
 
 Stdout is newline-delimited JSON only. Each line is one object. Human logs go
-to stderr and must not contain names or URLs. Unknown JSON fields are allowed
-for forward compatibility; event names and required fields below are stable.
+to stderr and must not contain secrets or full request URLs. The pinned
+letsdane dependency may include the target hostname in a rate-limited failure
+diagnostic; the daemon must keep verbose request logging disabled. Unknown JSON
+fields are allowed for forward compatibility; event names and required fields
+below are stable.
 
 ### `ready`
 
@@ -107,8 +110,9 @@ Emitted on initial status and whenever height/readiness materially changes:
 ```
 
 - `height`: required non-negative safe integer;
-- `synced`: required boolean; true only when the local resolver can answer the
-  configured deterministic readiness fixture from its current chain state;
+- `synced`: required boolean; true only when the local recursive resolver can
+  answer `app.pirate.` from its current chain state. CI supplies that name from
+  a deterministic fixture peer; mainnet supplies the production record;
 - `progress`: optional finite number in `0..1`, omitted when no trustworthy tip
   estimate is available.
 
@@ -124,7 +128,7 @@ Emitted before a fatal exit when possible:
 {"type":"error","error":"hnsd recursive socket failed"}
 ```
 
-The message is required, concise, contains no secret/name/URL, and is followed
+The `error` field is required, concise, contains no secret or full URL, and is followed
 by a non-zero process exit for fatal errors. Recoverable per-request failures
 belong in proxy responses and stderr rate-limited diagnostics, not this event.
 
