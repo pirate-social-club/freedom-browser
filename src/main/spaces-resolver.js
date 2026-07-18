@@ -1,7 +1,5 @@
 const log = require('./logger');
 const { ipcMain } = require('electron');
-const https = require('https');
-const http = require('http');
 const IPC = require('../shared/ipc-channels');
 
 const SPACES_RESOLVER_BASE_URL =
@@ -38,39 +36,6 @@ const parseOutpoint = (value) => {
   };
 };
 
-function fetchWithTlsBypass(urlString, options = {}) {
-  return new Promise((resolve, reject) => {
-    const parsedUrl = new URL(urlString);
-    const isHttps = parsedUrl.protocol === 'https:';
-    const mod = isHttps ? https : http;
-
-    const reqOptions = {
-      hostname: parsedUrl.hostname,
-      port: parsedUrl.port || (isHttps ? 443 : 80),
-      path: parsedUrl.pathname + parsedUrl.search,
-      method: 'GET',
-      headers: options.headers || {},
-      rejectUnauthorized: false,
-    };
-
-    const req = mod.request(reqOptions, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => {
-        resolve({
-          ok: res.statusCode >= 200 && res.statusCode < 300,
-          status: res.statusCode,
-          statusText: res.statusMessage,
-          text: () => Promise.resolve(body),
-        });
-      });
-    });
-
-    req.on('error', reject);
-    req.end();
-  });
-}
-
 async function resolveViaPublicResolver(handle) {
   if (!SPACES_RESOLVER_BASE_URL) {
     throw new Error('No Spaces resolver base URL configured');
@@ -82,7 +47,7 @@ async function resolveViaPublicResolver(handle) {
   const url = new URL('resolve', normalizedBaseUrl);
   url.searchParams.set('handle', handle);
 
-  const response = await fetchWithTlsBypass(url.toString(), {
+  const response = await fetch(url.toString(), {
     headers: {
       Accept: 'application/json',
     },

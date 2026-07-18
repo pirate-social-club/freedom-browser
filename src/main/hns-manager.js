@@ -497,10 +497,6 @@ function configureCertVerification(targetSession) {
         }
       }
 
-      if (request.verificationResult === 'ok') {
-        callback(0);
-        return;
-      }
     } catch {
       // fall through
     }
