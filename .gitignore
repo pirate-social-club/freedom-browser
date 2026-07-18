@@ -30,3 +30,4 @@ identity-data/
 research/
 playwright-report/
 test-results/
+test-e2e/.hns-fixture-bin/
