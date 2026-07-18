@@ -95,6 +95,9 @@ function buildNodeConfig(ports) {
       mode: 'managed',
       backend: 'freedom-ipfs',
     },
+    hns: {
+      mode: process.platform === 'linux' ? 'managed' : 'disabled',
+    },
     radicle: {
       mode: 'managed',
       httpPort: ports.radicleHttp,
@@ -116,6 +119,10 @@ function rebaseNodeConfig(nodes = {}, ports) {
       ...defaults.ipfs,
       mode: nodes.ipfs?.mode === 'disabled' ? 'disabled' : defaults.ipfs.mode,
       backend: 'freedom-ipfs',
+    },
+    hns: {
+      ...defaults.hns,
+      mode: nodes.hns?.mode === 'disabled' ? 'disabled' : defaults.hns.mode,
     },
     radicle: {
       ...defaults.radicle,
@@ -144,6 +151,10 @@ function fillMissingNodeConfig(nodes = {}, ports) {
       ...defaults.ipfs,
       mode: nodes.ipfs?.mode === 'disabled' ? 'disabled' : defaults.ipfs.mode,
       backend: 'freedom-ipfs',
+    },
+    hns: {
+      ...defaults.hns,
+      mode: nodes.hns?.mode === 'disabled' ? 'disabled' : defaults.hns.mode,
     },
     radicle: {
       ...defaults.radicle,
@@ -765,7 +776,7 @@ function updateProfileNodeConfig(profile, protocol, updates) {
     return null;
   }
 
-  if (!['bee', 'ipfs', 'radicle'].includes(protocol)) {
+  if (!['bee', 'ipfs', 'hns', 'radicle'].includes(protocol)) {
     throw new Error(`Unsupported profile node protocol: ${protocol}`);
   }
 
@@ -774,7 +785,9 @@ function updateProfileNodeConfig(profile, protocol, updates) {
         mode: updates?.mode === 'disabled' ? 'disabled' : 'managed',
         backend: 'freedom-ipfs',
       }
-    : updates;
+    : protocol === 'hns'
+      ? { mode: updates?.mode === 'disabled' ? 'disabled' : 'managed' }
+      : updates;
 
   return withCatalogWriteLock(profile.appRoot, () => {
     const catalog = loadCatalog(profile.appRoot);
@@ -782,7 +795,7 @@ function updateProfileNodeConfig(profile, protocol, updates) {
 
     if (record) {
       record.nodes = record.nodes || {};
-      record.nodes[protocol] = protocol === 'ipfs'
+      record.nodes[protocol] = protocol === 'ipfs' || protocol === 'hns'
         ? normalizedUpdates
         : {
             ...(record.nodes[protocol] || {}),
@@ -797,7 +810,7 @@ function updateProfileNodeConfig(profile, protocol, updates) {
       : { ...profile.metadata };
 
     metadata.nodes = metadata.nodes || {};
-    metadata.nodes[protocol] = protocol === 'ipfs'
+    metadata.nodes[protocol] = protocol === 'ipfs' || protocol === 'hns'
       ? normalizedUpdates
       : {
           ...(metadata.nodes[protocol] || {}),

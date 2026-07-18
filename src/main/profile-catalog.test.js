@@ -159,6 +159,9 @@ describe('profile catalog', () => {
     const result = ensureProfile(appRoot, 'default', { defaultProfileDir: profileDir });
 
     expect(result.metadata.nodes.bee.p2pPort).toBe(12633);
+    expect(result.metadata.nodes.hns).toEqual({
+      mode: process.platform === 'linux' ? 'managed' : 'disabled',
+    });
 
     const catalog = JSON.parse(
       fs.readFileSync(path.join(appRoot, 'profile-registry.json'), 'utf-8')

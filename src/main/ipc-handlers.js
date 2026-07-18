@@ -208,11 +208,13 @@ function serializeProfileMutationResult(result) {
 const PROFILE_NODE_MODES = {
   bee: new Set(['managed', 'external', 'disabled']),
   ipfs: new Set(['managed', 'disabled']),
+  hns: new Set(['managed', 'disabled']),
   radicle: new Set(['managed', 'external', 'disabled']),
 };
 const PROFILE_NODE_FIELDS = {
   bee: ['mode', 'externalApi'],
   ipfs: ['mode'],
+  hns: ['mode'],
   radicle: ['mode', 'externalHttp'],
 };
 const EXTERNAL_FIELDS = {

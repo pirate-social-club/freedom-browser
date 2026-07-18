@@ -1144,12 +1144,14 @@
       const EDITABLE_NODE_MODES = {
         bee: ['managed', 'external', 'disabled'],
         ipfs: ['managed', 'disabled'],
+        hns: ['managed', 'disabled'],
         radicle: ['managed', 'external', 'disabled'],
       };
 
       const SERVICE_LABELS = {
         bee: 'Swarm',
         ipfs: 'IPFS',
+        hns: 'Handshake',
         radicle: 'Radicle',
       };
 
@@ -1173,6 +1175,18 @@
         }
         if (protocol === 'ipfs') {
           return ['Embedded freedom-ipfs native node'];
+        }
+        if (protocol === 'hns') {
+          const progress = Number.isFinite(service?.syncProgress)
+            ? `Header sync: ${Math.round(service.syncProgress * 100)}%`
+            : service?.synced
+              ? 'Header chain synced'
+              : 'Waiting for header sync';
+          const height = Number.isFinite(service?.height) ? `height ${service.height}` : null;
+          const resolver = service?.recursiveAddr
+            ? `Resolver ${service.recursiveAddr}`
+            : null;
+          return [[progress, height].filter(Boolean).join(' · '), resolver].filter(Boolean);
         }
         return [
           config?.externalHttp ||
@@ -1242,7 +1256,7 @@
 
       const renderProfileNodes = (profile, registry) => {
         const nodes = profile?.nodes || {};
-        const services = ['bee', 'ipfs', 'radicle'];
+        const services = ['bee', 'ipfs', 'hns', 'radicle'];
         const rows = services.map((protocol) => {
           const config = nodes[protocol] || {};
           const service = registry?.[protocol] || {};

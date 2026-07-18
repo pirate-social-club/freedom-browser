@@ -1009,6 +1009,26 @@ describe('ipc-handlers', () => {
     expect(ctx.updateActiveProfileNodeConfig).not.toHaveBeenCalled();
   });
 
+  test('accepts only managed or disabled HNS profile modes', async () => {
+    const activeProfile = {
+      id: 'work',
+      displayName: 'Work',
+      source: 'catalog',
+      metadata: { nodes: { hns: { mode: 'managed' } } },
+    };
+    const ctx = loadIpcHandlersModule({ activeProfile });
+    ctx.mod.registerBaseIpcHandlers();
+
+    await ctx.invokeProfileMutation(IPC.PROFILE_UPDATE_NODE_CONFIG, {
+      protocol: 'hns',
+      config: { mode: 'disabled', externalApi: 'http://not-accepted.invalid' },
+    });
+
+    expect(ctx.updateActiveProfileNodeConfig).toHaveBeenCalledWith('hns', {
+      mode: 'disabled',
+    });
+  });
+
   test('rejects profile node updates outside catalog profiles', async () => {
     const ctx = loadIpcHandlersModule({
       activeProfile: {

@@ -177,6 +177,7 @@ const {
   startRadicle,
   setUseInjectedIdentity: setRadicleInjectedIdentity,
 } = require('./radicle-manager');
+const { registerHnsIpc, startHns, stopHns } = require('./hns-manager');
 const { registerIdentityIpc, hasVault, setBeeLifecycle } = require('./identity-manager');
 const { registerQuickUnlockIpc } = require('./quick-unlock');
 const { registerWalletIpc } = require('./wallet/wallet-ipc');
@@ -261,6 +262,7 @@ async function bootstrap() {
   registerAntIpc();
   registerIpfsIpc();
   registerRadicleIpc();
+  registerHnsIpc();
   registerGithubBridgeIpc();
   registerServiceRegistryIpc();
   registerIdentityIpc();
@@ -377,6 +379,9 @@ async function bootstrap() {
     if (settings.enableRadicleIntegration && settings.startRadicleAtLaunch) {
       startRadicle();
     }
+    if (activeProfile?.metadata?.nodes?.hns?.mode !== 'disabled') {
+      startHns();
+    }
   }
 
   // Initialize auto-updater (pass menu update callback). Skipped in
@@ -453,8 +458,8 @@ app.on('before-quit', async (event) => {
   // Clean up any GitHub bridge temp directories
   cleanupTempDirs();
 
-  log.info('[App] Waiting for Ant, IPFS, and Radicle to stop...');
-  await Promise.all([stopAnt(), stopIpfs(), stopRadicle()]);
+  log.info('[App] Waiting for Ant, IPFS, Radicle, and HNS to stop...');
+  await Promise.all([stopAnt(), stopIpfs(), stopRadicle(), stopHns()]);
   log.info('[App] All processes stopped, quitting...');
 
   app.quit();
