@@ -20,11 +20,24 @@ This note records the integration boundaries to use while re-porting Pirate feat
 
 ## Request and protocol routing
 
+- HNS routing uses a split boundary. A profile process installs a PAC with
+  `session.defaultSession.setProxy()` to carry admitted HNS HTTPS traffic into
+  the profile's loopback Fingertip proxy. PAC installation is not a
+  `webRequest` listener and therefore does not compete with the dispatcher.
+- `src/main/webrequest-dispatcher.js` remains the sole owner of Electron
+  `webRequest` event registrations. Its HNS consumer performs fail-closed
+  admission/diagnostics; it does not replace the PAC transport.
+- The service registry is the sole readiness authority. PAC admission, the
+  home interstitial, Nodes UI, and health reporting must all derive readiness
+  from `registry.hns`, never a second manager-local readiness flag.
 - Electron permits one `webRequest` listener per event. Register HNS/PAC consumers with `src/main/webrequest-dispatcher.js`; never attach a competing listener directly.
 - `installRequestRewriter()` registers before `attachWebRequestDispatcher(session.defaultSession)` in `src/main/index.js`. Preserve this ordering.
 - Upstream `bzz:`, `ipfs:`, and `ipns:` are privileged custom schemes owned by their protocol handlers. HNS HTTPS routing should not alter those origins or route them through legacy gateway rewriting.
 - Re-derive the legacy PAC/HNS behavior against the dispatcher and current `request-rewriter.js`. Keep host admission fail-closed and retain the current log-redaction conventions.
 - Treat the local HNS proxy certificate verifier as an explicit boundary: document which local CA/fingerprint is trusted, which host class may enter the proxy, and how rotation works.
+- DoH fallback is an explicit, profile-scoped setting and defaults off. It may
+  be enabled only with a configured trusted endpoint; local sync lag must not
+  silently disclose names to a third-party resolver.
 
 ## Internal pages
 

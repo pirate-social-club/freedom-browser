@@ -11,6 +11,11 @@ The parity audit must reconcile that historical count before cutover; this
 table intentionally tracks the recoverable unique set rather than inventing
 rows for merge commits or patch-equivalent re-commits.
 
+Resync-only runtime fixes are also recorded here. `78a4e73` added supervisor
+coverage and fixed a dangling-restart defect: deliberate stop/disable now
+cancels pending crash-backoff and restart-reset timers, so HNS cannot restart
+itself after the user turns it off.
+
 | Legacy | Intent | Slice | Disposition |
 |---|---|---:|---|
 | `5bfae86` | Restore Spaces TLS verification | Spaces | pending |
