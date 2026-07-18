@@ -15,6 +15,8 @@ class HsdRegtestPeer {
       host,
       port,
       brontidePort: port + 1,
+      httpPort: port + 2,
+      walletHttpPort: port + 3,
       noDns: true,
       plugins: [require('hsd/lib/wallet/plugin')],
     });

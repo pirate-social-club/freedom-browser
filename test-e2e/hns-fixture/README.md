@@ -23,3 +23,11 @@ single ECDSA P-256 DNSSEC key signs the DNSKEY, SOA, NS, A, and TLSA RRsets; its
 SHA-256 DS plus NS/GLUE4 records are returned in hsd resource JSON form. The
 TLSA binding is DANE-EE, SPKI, SHA-256. `npm run test:dnssec` proves both the
 matching-certificate path and the required mismatched-certificate rejection.
+
+`npm run test:delegation` completes the DNS half of the trust chain: it runs
+the scripted regtest auction, commits NS + DS + GLUE4 on chain, synchronizes
+the compile-time-regtest hnsd, and resolves the signed A and TLSA records
+through hnsd's recursive endpoint. Because DNS referrals cannot encode a
+custom port, this test must bind loopback port 53. CI runs only this isolated
+fixture process in a rootful host-network container; Freedom and fingertipd
+remain unprivileged and never bind port 53.
