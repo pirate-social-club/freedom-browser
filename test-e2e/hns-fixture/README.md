@@ -17,3 +17,9 @@ The fixture will own four local components:
 4. a loopback HTTPS origin whose certificate is bound by the zone's TLSA record.
 
 No fixture dependency or binary is included by Electron Builder.
+
+`signed-zone.js` constructs the delegated `pirate.` zone entirely with bns. A
+single ECDSA P-256 DNSSEC key signs the DNSKEY, SOA, NS, A, and TLSA RRsets; its
+SHA-256 DS plus NS/GLUE4 records are returned in hsd resource JSON form. The
+TLSA binding is DANE-EE, SPKI, SHA-256. `npm run test:dnssec` proves both the
+matching-certificate path and the required mismatched-certificate rejection.
