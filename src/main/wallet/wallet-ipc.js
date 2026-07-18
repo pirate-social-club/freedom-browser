@@ -23,6 +23,12 @@ const { signAndRecord, KINDS: PAYMENT_KINDS } = require('./tx-recorder');
 const { getActiveWalletIndex } = require('../identity-manager');
 const { getEffectiveRpcUrls } = require('./rpc-manager');
 const { withVaultPrivateKey } = require('./vault-access');
+const { getPermission } = require('./dapp-permissions');
+
+function hasDappPermissionForWallet(permissionKey, walletIndex) {
+  if (!permissionKey || !Number.isInteger(walletIndex) || walletIndex < 0) return false;
+  return getPermission(permissionKey)?.walletIndex === walletIndex;
+}
 
 /**
  * Validate that an RPC URL is a known, trusted endpoint.
@@ -272,12 +278,19 @@ function registerWalletIpc() {
 
   // Renderer threads the dapp's permissionKey through as context.origin
   // so payment-history rows match the x402 permission store's keying.
-  ipcMain.handle('wallet:dapp-send-transaction', (_event, params, walletIndex, context) =>
-    handleSendTransaction(walletIndex, params, PAYMENT_KINDS.DAPP_SEND, context));
+  ipcMain.handle('wallet:dapp-send-transaction', (_event, params, walletIndex, context) => {
+    if (!hasDappPermissionForWallet(context?.origin, walletIndex)) {
+      return { success: false, error: 'Unauthorized dApp wallet access' };
+    }
+    return handleSendTransaction(walletIndex, params, PAYMENT_KINDS.DAPP_SEND, context);
+  });
 
   // Sign a personal message (EIP-191) for a dApp
-  ipcMain.handle('wallet:sign-message', async (_event, message, walletIndex) => {
+  ipcMain.handle('wallet:sign-message', async (_event, message, walletIndex, permissionKey) => {
     try {
+      if (!hasDappPermissionForWallet(permissionKey, walletIndex)) {
+        return { success: false, error: 'Unauthorized dApp wallet access' };
+      }
       if (!message) {
         return { success: false, error: 'Message is required' };
       }
@@ -294,8 +307,11 @@ function registerWalletIpc() {
   });
 
   // Sign typed data (EIP-712) for a dApp
-  ipcMain.handle('wallet:sign-typed-data', async (_event, typedData, walletIndex) => {
+  ipcMain.handle('wallet:sign-typed-data', async (_event, typedData, walletIndex, permissionKey) => {
     try {
+      if (!hasDappPermissionForWallet(permissionKey, walletIndex)) {
+        return { success: false, error: 'Unauthorized dApp wallet access' };
+      }
       if (!typedData) {
         return { success: false, error: 'Typed data is required' };
       }
@@ -349,6 +365,7 @@ function registerWalletIpc() {
 }
 
 module.exports = {
+  hasDappPermissionForWallet,
   buildTxRecordContext,
   registerWalletIpc,
 };

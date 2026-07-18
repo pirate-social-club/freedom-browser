@@ -310,7 +310,7 @@ async function autoApproveTx(permission, txParams, chainId, permissionKey) {
  * Accepts the already-fetched permission object to avoid redundant IPC.
  */
 async function autoApproveSign(permission, method, params, permissionKey) {
-  const signature = await executeSign(method, params, permission.walletIndex);
+  const signature = await executeSign(method, params, permission.walletIndex, permissionKey);
   window.dappPermissions.updateLastUsed(permissionKey);
   return signature;
 }
@@ -319,12 +319,12 @@ async function autoApproveSign(permission, method, params, permissionKey) {
  * Execute a signing operation via the wallet IPC bridge.
  * Shared by both auto-approve and manual approval paths.
  */
-async function executeSign(method, params, walletIndex) {
+async function executeSign(method, params, walletIndex, permissionKey) {
   let result;
   if (method === 'personal_sign') {
-    result = await window.wallet.signMessage(params[0], walletIndex);
+    result = await window.wallet.signMessage(params[0], walletIndex, permissionKey);
   } else if (method === 'eth_signTypedData_v4') {
-    result = await window.wallet.signTypedData(params[1], walletIndex);
+    result = await window.wallet.signTypedData(params[1], walletIndex, permissionKey);
   } else {
     throw new Error(`Unsupported signing method: ${method}`);
   }

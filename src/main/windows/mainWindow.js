@@ -60,6 +60,7 @@ function createMainWindow(initialUrl = null) {
       preload: path.join(__dirname, '..', 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
       webviewTag: true,
       enableRemoteModule: false,
     },
@@ -108,6 +109,13 @@ function createMainWindow(initialUrl = null) {
 
   const wc = window.webContents;
   if (wc) {
+    // The chrome renderer owns privileged bridges. Never let an accidental
+    // navigation or popup replace the trusted local UI while retaining them.
+    wc.on('will-navigate', (event) => {
+      event.preventDefault();
+    });
+    wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+
     wc.on('render-process-gone', (_event, details) => {
       log.error('[render-process-gone]', details);
     });

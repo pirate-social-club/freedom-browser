@@ -1,5 +1,6 @@
 const log = require('./logger');
 const { BrowserWindow, app } = require('electron');
+const path = require('path');
 const { activeBzzBases, activeRadBases } = require('./state');
 const { cleanupWebContents: cleanupX402WebContents } = require('./x402/intercept');
 
@@ -43,6 +44,19 @@ function registerWebContentsHandlers() {
     const id = contents.id;
     const type = contents.getType?.() || 'unknown';
     const tag = `[webcontents:${id}:${type}]`;
+
+    // The host renderer creates webviews dynamically. Pin every attachment to
+    // our audited preload and fail closed on renderer-supplied privilege flags.
+    if (type === 'window') {
+      contents.on('will-attach-webview', (_attachEvent, webPreferences) => {
+        webPreferences.preload = path.join(__dirname, 'webview-preload.js');
+        webPreferences.nodeIntegration = false;
+        webPreferences.contextIsolation = true;
+        webPreferences.sandbox = true;
+        webPreferences.webSecurity = true;
+        webPreferences.allowRunningInsecureContent = false;
+      });
+    }
 
     // For webview contents, fix dark defaults and intercept navigation
     if (type === 'webview') {

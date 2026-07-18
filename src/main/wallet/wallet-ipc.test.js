@@ -14,8 +14,10 @@ jest.mock('./tx-recorder', () => ({
 jest.mock('../identity-manager', () => ({}));
 jest.mock('./rpc-manager', () => ({}));
 jest.mock('./vault-access', () => ({}));
+jest.mock('./dapp-permissions', () => ({ getPermission: jest.fn() }));
 
-const { buildTxRecordContext } = require('./wallet-ipc');
+const { getPermission } = require('./dapp-permissions');
+const { buildTxRecordContext, hasDappPermissionForWallet } = require('./wallet-ipc');
 
 describe('wallet-ipc', () => {
   test('renderer context cannot override fixed payment-history kind', () => {
@@ -26,5 +28,13 @@ describe('wallet-ipc', () => {
       kind: 'dapp-send',
       origin: 'https://app.example',
     });
+  });
+
+  test('requires a matching persisted permission for dApp wallet access', () => {
+    getPermission.mockReturnValue({ walletIndex: 2 });
+    expect(hasDappPermissionForWallet('ipfs://bafy-app', 2)).toBe(true);
+    expect(hasDappPermissionForWallet('ipfs://bafy-app', 1)).toBe(false);
+    expect(hasDappPermissionForWallet('', 2)).toBe(false);
+    expect(hasDappPermissionForWallet('ipfs://bafy-app', -1)).toBe(false);
   });
 });

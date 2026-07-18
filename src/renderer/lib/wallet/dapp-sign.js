@@ -299,7 +299,7 @@ async function approveDappSign() {
       dappSignApproveBtn.textContent = 'Signing...';
     }
 
-    const signature = await executeSign(method, params, walletIndex);
+    const signature = await executeSign(method, params, walletIndex, permissionKey);
 
     if (dappSignAutoApproveCheckbox?.checked && permissionKey) {
       await window.dappPermissions.setSigningAutoApprove(permissionKey, true);

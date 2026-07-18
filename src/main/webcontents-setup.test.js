@@ -234,4 +234,30 @@ describe('webcontents-setup', () => {
       reason: 'oom',
     });
   });
+
+  test('pins webview attachments to the audited sandboxed preload', () => {
+    const ctx = loadWebContentsSetupModule();
+    const contents = createContentsMock({ id: 41, type: 'window' });
+    const webPreferences = {
+      preload: '/tmp/attacker.js',
+      nodeIntegration: true,
+      contextIsolation: false,
+      sandbox: false,
+      webSecurity: false,
+      allowRunningInsecureContent: true,
+    };
+
+    ctx.mod.registerWebContentsHandlers();
+    ctx.app.emit('web-contents-created', {}, contents);
+    contents.emit('will-attach-webview', {}, webPreferences, {});
+
+    expect(webPreferences).toMatchObject({
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+    });
+    expect(webPreferences.preload).toBe(require.resolve('./webview-preload'));
+  });
 });
