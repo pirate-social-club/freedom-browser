@@ -44,6 +44,12 @@ describe('HNS request readiness gate', () => {
     expect(gateHnsRequest({ url: 'not a URL' })).toBeNull();
   });
 
+  test('blocks HNS WebSockets while the resolver is not ready', () => {
+    registry.getService.mockReturnValue({ mode: 'bundled', synced: false, api: null });
+    expect(gateHnsRequest({ url: 'wss://room.app.pirate/socket' })).toEqual({ cancel: true });
+    expect(gateHnsRequest({ url: 'ws://single-label/socket' })).toEqual({ cancel: true });
+  });
+
   test('registers through the shared dispatcher', () => {
     installHnsRequestGate();
     expect(dispatcher.registerWebRequestHandler).toHaveBeenCalledWith(

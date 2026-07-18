@@ -4,6 +4,8 @@ const { buildPacHnsRootMap, subscribeHnsHostPolicy } = require('../shared/hns-ho
 const { subscribeServiceRegistry } = require('./service-registry');
 const { isHnsServiceReady } = require('./hns-request-gate');
 
+const BLACKHOLE_PROXY_ADDR = '127.0.0.1:1';
+
 function getProxyAddr(service) {
   if (!isHnsServiceReady(service)) return null;
   try {
@@ -79,11 +81,7 @@ function createHnsPacLifecycle({
   }
 
   async function reconcile(expectedRevision) {
-    const proxyAddr = getProxyAddr(desiredService);
-    if (!proxyAddr) {
-      if (server || appliedProxyAddr) await clearAppliedProxy();
-      return;
-    }
+    const proxyAddr = getProxyAddr(desiredService) || BLACKHOLE_PROXY_ADDR;
     if (proxyAddr === appliedProxyAddr && server && !forceRegeneration) return;
     forceRegeneration = false;
 
@@ -103,7 +101,8 @@ function createHnsPacLifecycle({
     appliedProxyAddr = proxyAddr;
     await targetSession.setProxy({ pacScript: `http://127.0.0.1:${port}/proxy.pac` });
     if (expectedRevision !== revision) {
-      await clearAppliedProxy();
+      // Keep the last local PAC active until the queued reconciliation swaps
+      // it. Clearing to DIRECT here would create a DNS-disclosure window.
       return;
     }
     await close(previousServer);
@@ -128,6 +127,7 @@ function createHnsPacLifecycle({
         return schedule({ hns: desiredService });
       });
     }
+    return chain;
   }
 
   async function stop() {
@@ -151,10 +151,10 @@ function createHnsPacLifecycle({
 
 let appLifecycle = null;
 
-function startHnsPacLifecycle(targetSession) {
+async function startHnsPacLifecycle(targetSession) {
   if (appLifecycle) return appLifecycle;
   appLifecycle = createHnsPacLifecycle({ targetSession });
-  appLifecycle.start();
+  await appLifecycle.start();
   return appLifecycle;
 }
 
@@ -167,6 +167,7 @@ async function stopHnsPacLifecycle() {
 
 module.exports = {
   buildHnsPacScript,
+  BLACKHOLE_PROXY_ADDR,
   createHnsPacLifecycle,
   getProxyAddr,
   startHnsPacLifecycle,

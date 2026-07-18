@@ -9,10 +9,10 @@ function isHnsServiceReady(service = getService('hns')) {
     service.api.length > 0;
 }
 
-function getHttpHostname(rawUrl) {
+function getNetworkHostname(rawUrl) {
   try {
     const parsed = new URL(rawUrl);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    if (!['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol)) return null;
     return parsed.hostname;
   } catch {
     return null;
@@ -20,7 +20,7 @@ function getHttpHostname(rawUrl) {
 }
 
 function gateHnsRequest(details) {
-  const hostname = getHttpHostname(details?.url);
+  const hostname = getNetworkHostname(details?.url);
   if (!hostname || !isHnsHost(hostname)) return null;
   return isHnsServiceReady() ? null : { cancel: true };
 }
@@ -31,7 +31,7 @@ function installHnsRequestGate() {
 
 module.exports = {
   gateHnsRequest,
-  getHttpHostname,
+  getNetworkHostname,
   installHnsRequestGate,
   isHnsServiceReady,
 };

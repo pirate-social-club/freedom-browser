@@ -311,7 +311,7 @@ async function bootstrap() {
   installRequestRewriter();
   installX402Interception();
   attachWebRequestDispatcher(defaultSession);
-  startHnsPacLifecycle(defaultSession);
+  await startHnsPacLifecycle(defaultSession);
   allowInteractivePermissions(defaultSession);
   registerWebContentsHandlers();
   setupApplicationMenu();

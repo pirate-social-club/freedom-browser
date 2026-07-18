@@ -30,6 +30,12 @@ This note records the integration boundaries to use while re-porting Pirate feat
 - The service registry is the sole readiness authority. PAC admission, the
   home interstitial, Nodes UI, and health reporting must all derive readiness
   from `registry.hns`, never a second manager-local readiness flag.
+- PAC remains installed in every runtime state. While HNS is not ready its
+  admitted host classes target a closed loopback port, preventing DNS prefetch
+  and other traffic outside `webRequest` from falling through to system DNS.
+- Bare single-label hosts are intentionally treated as HNS candidates. This
+  fail-closed choice also captures intranet-style names such as `printer`; they
+  are routed through Fingertip when ready and blocked locally otherwise.
 - Electron permits one `webRequest` listener per event. Register HNS/PAC consumers with `src/main/webrequest-dispatcher.js`; never attach a competing listener directly.
 - `installRequestRewriter()` registers before `attachWebRequestDispatcher(session.defaultSession)` in `src/main/index.js`. Preserve this ordering.
 - Upstream `bzz:`, `ipfs:`, and `ipns:` are privileged custom schemes owned by their protocol handlers. HNS HTTPS routing should not alter those origins or route them through legacy gateway rewriting.
