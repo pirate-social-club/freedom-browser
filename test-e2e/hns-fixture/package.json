@@ -5,7 +5,9 @@
   "license": "MPL-2.0",
   "scripts": {
     "prepare:hsd": "node prepare-hsd.js",
-    "start": "NODE_BACKEND=js node fixture-server.js"
+    "start": "NODE_BACKEND=js node fixture-server.js",
+    "test:smoke": "NODE_BACKEND=js node smoke.js",
+    "test:hnsd": "NODE_BACKEND=js node hnsd-smoke.js"
   },
   "dependencies": {
     "hsd": "4.0.1"
