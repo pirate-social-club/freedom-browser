@@ -368,7 +368,15 @@ jobs:
           npm run --prefix test-e2e/hns-fixture prepare:hsd
 
       - name: Install browser dependencies
-        run: npm ci
+        run: |
+          npm ci
+          # The hermetic runner mounts this checkout read-only.  Some hosted
+          # runner environments leave Electron's package present without its
+          # downloaded dist, and Playwright then tries (and fails) to repair it
+          # inside /app at launch time.  Materialize and verify the pinned
+          # binary before building/running the capability-dropped container.
+          node node_modules/electron/install.js
+          test -x node_modules/electron/dist/electron
 
       - name: Fetch independently pinned HNS artifacts
         env:
