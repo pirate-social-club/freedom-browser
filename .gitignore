@@ -15,6 +15,7 @@ tmp/
 *.swp
 .env
 ant-bin/
+hns-bin/
 ant-data/
 ipfs-bin/
 ipfs-data/

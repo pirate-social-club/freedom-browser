@@ -11,6 +11,7 @@ const FREEDOM_IPFS_NATIVE_PREBUILDS_DIR = path.join(
 );
 const FREEDOM_IPFS_NATIVE_ADDON = 'freedom_ipfs_native.node';
 const RADICLE_BIN_DIR = path.join(__dirname, '..', 'radicle-bin');
+const HNS_BIN_DIR = path.join(__dirname, '..', 'hns-bin');
 
 function getPlatformArch() {
   const args = process.argv.slice(2);
@@ -109,6 +110,17 @@ function checkBinaries(platforms) {
         missing.push(`radicle-httpd binary for ${platformDir}: ${httpdPath}`);
       }
     }
+
+    // HNS is Linux x64 only for the first resync release. Unsupported targets
+    // are UI-gated and must not be satisfied by placeholder binaries.
+    if (os === 'linux' && arch === 'x64') {
+      for (const binary of ['fingertipd', 'hnsd']) {
+        const binaryPath = path.join(HNS_BIN_DIR, platformDir, binary);
+        if (!fs.existsSync(binaryPath)) {
+          missing.push(`${binary} binary for ${platformDir}: ${binaryPath}`);
+        }
+      }
+    }
   }
 
   return missing;
@@ -127,6 +139,7 @@ function main() {
     console.error('  npm run ant:download');
     console.error('  npm run ipfs:download');
     console.error('  npm run radicle:download\n');
+    console.error('  npm run hns:download\n');
     process.exit(1);
   }
 
