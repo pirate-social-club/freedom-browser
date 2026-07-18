@@ -5,7 +5,7 @@
  * All URL rewriting resolves through this registry.
  */
 
-const { BrowserWindow, ipcMain } = require('electron');
+const { BrowserWindow, ipcMain, webContents } = require('electron');
 const IPC = require('../shared/ipc-channels');
 
 // Node modes
@@ -207,12 +207,13 @@ function clearService(service) {
  * Broadcast registry updates to all windows
  */
 function broadcastRegistryUpdate() {
-  const windows = BrowserWindow.getAllWindows();
   const state = getRegistry();
+  const targets = new Set(BrowserWindow.getAllWindows().map((win) => win.webContents));
+  for (const contents of webContents?.getAllWebContents?.() || []) targets.add(contents);
 
-  for (const win of windows) {
+  for (const contents of targets) {
     try {
-      win.webContents.send(IPC.SERVICE_REGISTRY_UPDATE, state);
+      contents.send(IPC.SERVICE_REGISTRY_UPDATE, state);
     } catch {
       // Window might be closing
     }

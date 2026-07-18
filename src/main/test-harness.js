@@ -414,6 +414,15 @@ function exposeGlobalShim() {
     setProbeFixture: (hash, outcome) => {
       probeFixtures.set(hash, outcome ?? { ok: true });
     },
+    setHnsState: (state = {}) => {
+      updateService('hns', {
+        api: state.api ?? null,
+        mode: state.mode || MODE.NONE,
+        synced: state.synced === true,
+        height: Number.isFinite(state.height) ? state.height : 0,
+        testDirect: state.testDirect === true,
+      });
+    },
     resetFixtures,
     // Profile-launch recording (see installProfileLaunchRecorder). Specs read
     // these to confirm a profile "open"/switch fired for the expected id.

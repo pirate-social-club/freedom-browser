@@ -13,6 +13,7 @@ const {
   installHnsRequestGate,
   isHnsServiceReady,
   registerHnsRequestGateIpc,
+  setHnsInterstitialNavigator,
   syncingPageUrl,
 } = require('./hns-request-gate');
 
@@ -61,14 +62,17 @@ describe('HNS request readiness gate', () => {
     );
   });
 
-  test('redirects a blocked top-level navigation without putting its URL in the interstitial', async () => {
+  test('cancels and replaces a blocked top-level navigation without exposing its URL', () => {
     registry.getService.mockReturnValue({ mode: 'bundled', synced: false, api: null });
     const original = 'https://app.pirate/private?token=secret';
+    const navigate = jest.fn();
+    setHnsInterstitialNavigator(navigate);
     expect(gateHnsRequest({
       url: original,
       resourceType: 'mainFrame',
       webContentsId: 42,
-    })).toEqual({ redirectURL: syncingPageUrl });
+    })).toEqual({ cancel: true });
+    expect(navigate).toHaveBeenCalledWith(42, syncingPageUrl);
     expect(syncingPageUrl).not.toContain('app.pirate');
     expect(syncingPageUrl).not.toContain('secret');
 
@@ -77,5 +81,6 @@ describe('HNS request readiness gate', () => {
     registerHnsRequestGateIpc(ipcMain);
     expect(handler({ sender: { id: 42 } })).toBe(original);
     expect(handler({ sender: { id: 42 } })).toBeNull();
+    setHnsInterstitialNavigator(null);
   });
 });

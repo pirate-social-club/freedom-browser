@@ -44,7 +44,9 @@ This note records the integration boundaries to use while re-porting Pirate feat
 - The verifier loads the CA file path emitted by the current profile's
   Fingertip process and pins its exact X.509 fingerprint. The override applies
   only when that fingerprint occurs in the presented chain *and* the hostname
-  passes `isHnsHost`; all other certificates use Chromium verification. A
+  passes `isHnsHost`. The parsed leaf must also match the requested hostname
+  through `X509Certificate.checkHost()` and be inside its validity window; all
+  other certificates use Chromium verification. A
   Fingertip restart may rotate the CA: routing remains fail-closed while the
   old verifier is cleared and the newly emitted fingerprint is installed.
 - DoH fallback is an explicit, profile-scoped setting and defaults off. It may

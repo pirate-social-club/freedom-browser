@@ -81,6 +81,11 @@ function createHnsPacLifecycle({
   }
 
   async function reconcile(expectedRevision) {
+    const harnessDirect = process.env.FREEDOM_TEST_MODE === '1' && desiredService?.testDirect === true;
+    if (harnessDirect) {
+      if (server || appliedProxyAddr) await clearAppliedProxy();
+      return;
+    }
     const proxyAddr = getProxyAddr(desiredService) || BLACKHOLE_PROXY_ADDR;
     if (proxyAddr === appliedProxyAddr && server && !forceRegeneration) return;
     forceRegeneration = false;

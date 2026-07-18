@@ -63,6 +63,7 @@ describe('service-registry', () => {
 
   test('updates a service and broadcasts the new registry state', () => {
     const firstWindow = { webContents: { send: jest.fn() } };
+    const guestWebContents = { send: jest.fn() };
     const closingWindow = {
       webContents: {
         send: jest.fn(() => {
@@ -70,7 +71,12 @@ describe('service-registry', () => {
         }),
       },
     };
-    const { mod } = loadServiceRegistry({ windows: [firstWindow, closingWindow] });
+    const { mod } = loadServiceRegistry({
+      windows: [firstWindow, closingWindow],
+      electronOverrides: {
+        webContents: { getAllWebContents: jest.fn(() => [guestWebContents]) },
+      },
+    });
 
     mod.updateService('ipfs', {
       api: 'http://127.0.0.1:5999',
@@ -96,6 +102,12 @@ describe('service-registry', () => {
       })
     );
     expect(closingWindow.webContents.send).toHaveBeenCalled();
+    expect(guestWebContents.send).toHaveBeenCalledWith(
+      IPC.SERVICE_REGISTRY_UPDATE,
+      expect.objectContaining({
+        ipfs: expect.objectContaining({ api: 'http://127.0.0.1:5999' }),
+      })
+    );
   });
 
   test('notifies process-local subscribers and supports unsubscribe', () => {

@@ -27,12 +27,34 @@ function chainContainsFingerprint(certificate, trustedFingerprint) {
   return false;
 }
 
-function createCertificateVerifyProc(trustedFingerprint) {
+function leafMatchesHostAndValidity(request, {
+  Certificate = X509Certificate,
+  now = () => Date.now(),
+} = {}) {
+  try {
+    const leaf = new Certificate(request?.certificate?.data);
+    if (!leaf.checkHost(request?.hostname || '')) return false;
+    const validFrom = Date.parse(leaf.validFrom);
+    const validTo = Date.parse(leaf.validTo);
+    const currentTime = now();
+    return Number.isFinite(validFrom) && Number.isFinite(validTo) &&
+      currentTime >= validFrom && currentTime <= validTo;
+  } catch {
+    return false;
+  }
+}
+
+function createCertificateVerifyProc(trustedFingerprint, options) {
   if (!trustedFingerprint) throw new Error('Trusted Fingertip fingerprint is required');
   return (request, callback) => {
     const admittedHost = isHnsHost(request?.hostname || '');
     const pinnedChain = chainContainsFingerprint(request?.certificate, trustedFingerprint);
-    callback(admittedHost && pinnedChain ? ACCEPT_CERTIFICATE : USE_CHROMIUM_VERIFICATION);
+    const validLeaf = leafMatchesHostAndValidity(request, options);
+    callback(
+      admittedHost && pinnedChain && validLeaf
+        ? ACCEPT_CERTIFICATE
+        : USE_CHROMIUM_VERIFICATION
+    );
   };
 }
 
@@ -41,7 +63,7 @@ function configureHnsCertificateVerifier(targetSession, pemPath, options) {
     throw new Error('Electron certificate verifier is unavailable');
   }
   const fingerprint = loadCaFingerprint(pemPath, options);
-  targetSession.setCertificateVerifyProc(createCertificateVerifyProc(fingerprint));
+  targetSession.setCertificateVerifyProc(createCertificateVerifyProc(fingerprint, options));
   return fingerprint;
 }
 
@@ -56,5 +78,6 @@ module.exports = {
   clearHnsCertificateVerifier,
   configureHnsCertificateVerifier,
   createCertificateVerifyProc,
+  leafMatchesHostAndValidity,
   loadCaFingerprint,
 };

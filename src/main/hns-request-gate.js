@@ -6,6 +6,7 @@ const { pathToFileURL } = require('url');
 const IPC = require('../shared/ipc-channels');
 
 const pendingNavigations = new Map();
+let interstitialNavigator = null;
 const syncingPageUrl = pathToFileURL(
   path.join(__dirname, '..', 'renderer', 'pages', 'hns-syncing.html')
 ).toString();
@@ -33,7 +34,8 @@ function gateHnsRequest(details) {
   if (isHnsServiceReady()) return null;
   if (details.resourceType === 'mainFrame' && Number.isInteger(details.webContentsId)) {
     pendingNavigations.set(details.webContentsId, details.url);
-    return { redirectURL: syncingPageUrl };
+    interstitialNavigator?.(details.webContentsId, syncingPageUrl);
+    return { cancel: true };
   }
   return { cancel: true };
 }
@@ -51,11 +53,16 @@ function registerHnsRequestGateIpc(ipcMain) {
   });
 }
 
+function setHnsInterstitialNavigator(navigator) {
+  interstitialNavigator = typeof navigator === 'function' ? navigator : null;
+}
+
 module.exports = {
   gateHnsRequest,
   getNetworkHostname,
   installHnsRequestGate,
   isHnsServiceReady,
   registerHnsRequestGateIpc,
+  setHnsInterstitialNavigator,
   syncingPageUrl,
 };
