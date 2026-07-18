@@ -29,5 +29,12 @@ the scripted regtest auction, commits NS + DS + GLUE4 on chain, synchronizes
 the compile-time-regtest hnsd, and resolves the signed A and TLSA records
 through hnsd's recursive endpoint. Because DNS referrals cannot encode a
 custom port, this test must bind loopback port 53. CI runs only this isolated
-fixture DNS process in a container granted only `NET_BIND_SERVICE`; Freedom
-and fingertipd remain unprivileged and never bind port 53.
+fixture in its own network namespace with
+`net.ipv4.ip_unprivileged_port_start=0`, as an unprivileged UID with every
+Linux capability dropped. Freedom and fingertipd never bind port 53.
+
+`npm run test:proxy` adds the shipping proxy layer. It requires hnsd to return
+an authenticated TLSA response before opening CONNECT, then trusts only the
+profile-local CA emitted by fingertipd. The matching TLSA must render the
+fixture marker through letsdane; a separately generated, signed but mismatched
+TLSA must fail before reaching the HTTPS origin.

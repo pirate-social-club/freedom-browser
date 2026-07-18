@@ -346,3 +346,40 @@ jobs:
             playwright-report/
           if-no-files-found: ignore
           retention-days: 14
+
+  # Full HNS trust chain: regtest auction/proof, delegated DNSSEC, TLSA,
+  # fingertipd/letsdane interception, and profile-local CA verification.
+  hns-dane-hermetic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install isolated hsd fixture
+        run: |
+          npm ci --prefix test-e2e/hns-fixture --ignore-scripts
+          npm run --prefix test-e2e/hns-fixture prepare:hsd
+
+      - name: Fetch independently pinned HNS artifacts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/fetch-hns.js
+          node scripts/fetch-hns-test-fixture.js
+
+      - name: Prove DANE enforcement through shipping proxy
+        run: |
+          docker run --rm --network bridge \
+            --user 1000:1000 --cap-drop ALL \
+            --sysctl net.ipv4.ip_unprivileged_port_start=0 \
+            -v "${{ github.workspace }}:/app:ro" \
+            -w /app/test-e2e/hns-fixture \
+            node@sha256:eb2c73a27cf714b4b6b030f88ab72e62192c38b7d313ea3456695b8ae03c5f3c \
+            npm run test:proxy

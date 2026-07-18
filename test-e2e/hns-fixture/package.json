@@ -9,7 +9,8 @@
     "test:smoke": "NODE_BACKEND=js node smoke.js",
     "test:hnsd": "NODE_BACKEND=js node hnsd-smoke.js",
     "test:dnssec": "NODE_BACKEND=js node signed-zone-smoke.js",
-    "test:delegation": "NODE_BACKEND=js node delegation-smoke.js"
+    "test:delegation": "NODE_BACKEND=js node delegation-smoke.js",
+    "test:proxy": "NODE_BACKEND=js node proxy-smoke.js"
   },
   "dependencies": {
     "hsd": "4.0.1"
