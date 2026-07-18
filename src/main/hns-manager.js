@@ -43,6 +43,8 @@ let height = 0;
 let synced = false;
 let syncProgress = null;
 let lastProcessError = null;
+let restartTimer = null;
+let restartResetTimer = null;
 
 function getTargetKey() {
   return `${process.platform}-${process.arch}`;
@@ -218,10 +220,13 @@ function scheduleRestart() {
     return;
   }
   const delay = Math.min(1000 * (2 ** (restartCount - 1)), 30_000);
-  setTimeout(() => {
+  restartTimer = setTimeout(() => {
+    restartTimer = null;
     if (currentState === STATUS.STOPPED) startHns();
   }, delay);
-  setTimeout(() => {
+  if (restartResetTimer) clearTimeout(restartResetTimer);
+  restartResetTimer = setTimeout(() => {
+    restartResetTimer = null;
     if (currentState === STATUS.RUNNING) restartCount = 0;
   }, RESTART_RESET_MS);
 }
@@ -300,6 +305,10 @@ function stopHns() {
   return new Promise((resolve) => {
     pendingStart = false;
     restartCount = 0;
+    if (restartTimer) clearTimeout(restartTimer);
+    if (restartResetTimer) clearTimeout(restartResetTimer);
+    restartTimer = null;
+    restartResetTimer = null;
     if (!helperProcess) {
       clearService('hns');
       resetRuntimeState();
@@ -315,6 +324,21 @@ function stopHns() {
     }, 5000);
     helperProcess.kill('SIGTERM');
   });
+}
+
+function resetForTests() {
+  if (forceKillTimeout) clearTimeout(forceKillTimeout);
+  if (restartTimer) clearTimeout(restartTimer);
+  if (restartResetTimer) clearTimeout(restartResetTimer);
+  currentState = STATUS.STOPPED;
+  lastError = null;
+  helperProcess = null;
+  pendingStart = false;
+  forceKillTimeout = null;
+  restartTimer = null;
+  restartResetTimer = null;
+  restartCount = 0;
+  resetRuntimeState();
 }
 
 function registerHnsIpc() {
@@ -338,6 +362,7 @@ module.exports = {
   isSupportedPlatform,
   parseHelperEvent,
   registerHnsIpc,
+  _resetForTests: resetForTests,
   startHns,
   stopHns,
 };
