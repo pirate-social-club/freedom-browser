@@ -68,6 +68,23 @@ export const isValidRadicleId = (str) => {
   return false;
 };
 
+// Spaces address-bar shorthand is intentionally root-only. Published
+// destinations come from the proof-verified resolver response; accepting a
+// suffix here would imply path semantics that the Spaces protocol has not
+// defined yet.
+export const parseSpacesRootInput = (str) => {
+  if (!str || typeof str !== 'string') return null;
+
+  const trimmed = str.trim();
+  const match = trimmed.match(/^@([^\s/?#:@]+)$/u);
+  if (!match) return null;
+
+  return {
+    routeKey: `@${match[1].normalize('NFKC').toLowerCase()}`,
+    displayValue: trimmed,
+  };
+};
+
 // Check if a string looks like a domain name (not a Swarm hash)
 const looksLikeDomain = (str) => {
   // Must contain at least one dot

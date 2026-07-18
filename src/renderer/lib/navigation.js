@@ -28,6 +28,7 @@ import {
   buildEnsDisplayUri,
   isEnsBackedDisplay,
   isSupportedEnsTransport,
+  parseSpacesRootInput,
 } from './url-utils.js';
 import {
   getActiveWebview,
@@ -132,6 +133,37 @@ const buildErrorPageUrl = (errorCode, targetUrl, extras = {}) => {
   if (extras.protocol) errorUrl.searchParams.set('protocol', extras.protocol);
   if (extras.retry) errorUrl.searchParams.set('retry', extras.retry);
   return errorUrl.toString();
+};
+
+const buildSpacesResultPageUrl = (result, requestedHandle) => {
+  const txid = result?.txid || '';
+  const n = Number.isInteger(result?.n) ? String(result.n) : '';
+  return buildInternalPageUrl('space-browser.html', {
+    type: result?.type || 'error',
+    handle: result?.handle || requestedHandle,
+    reason: result?.reason,
+    message: result?.message,
+    canonicalHandle: result?.canonicalHandle,
+    outpoint: txid && n ? `${txid}:${n}` : '',
+    rootPubkey: result?.rootPubkey,
+    proofRootHash: result?.proofRootHash,
+    acceptedAnchorHeight: result?.acceptedAnchorHeight,
+    acceptedAnchorBlockHash: result?.acceptedAnchorBlockHash,
+    acceptedAnchorRootHash: result?.acceptedAnchorRootHash,
+    controlClass: result?.controlClass,
+    operationClass: result?.operationClass,
+    observationProvider: result?.observationProvider,
+  });
+};
+
+const getSpacesHandleFromResultPage = (url) => {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.pathname.endsWith('/pages/space-browser.html')) return null;
+    return parseSpacesRootInput(parsed.searchParams.get('handle'))?.routeKey || null;
+  } catch {
+    return null;
+  }
 };
 
 // True when the IPFS node can't currently serve content — disabled for this
@@ -1102,6 +1134,52 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null, 
     return;
   }
 
+  // Resolve root-only Spaces shorthand before ordinary web/name dispatch.
+  // The verifier response is treated as untrusted navigation input: the main
+  // process admits only proof-verified results and a small URL-scheme allowlist.
+  const spacesInput = parseSpacesRootInput(value);
+  if (spacesInput) {
+    const capturedWebview = webview;
+    const capturedTabId = getTabIdForWebview(capturedWebview);
+    setLoading(true, capturedTabId);
+    setAddressDisplayForTab(displayOverride || spacesInput.displayValue, capturedTabId);
+    pushDebug(`[Spaces] Resolving ${spacesInput.routeKey}`);
+
+    if (!electronAPI?.resolveSpace) {
+      setLoading(false, capturedTabId);
+      capturedWebview.loadURL(buildSpacesResultPageUrl({
+        type: 'error',
+        reason: 'RESOLVER_UNAVAILABLE',
+        message: 'Spaces resolution is unavailable in this build.',
+      }, spacesInput.routeKey));
+      return;
+    }
+
+    electronAPI.resolveSpace(spacesInput.routeKey)
+      .then((result) => {
+        setLoading(false, capturedTabId);
+        if (result?.type === 'ok' && result.proofVerified === true && result.selectedUrl) {
+          loadTarget(
+            result.selectedUrl,
+            displayOverride || spacesInput.displayValue,
+            capturedWebview
+          );
+          return;
+        }
+        capturedWebview.loadURL(buildSpacesResultPageUrl(result, spacesInput.routeKey));
+      })
+      .catch((error) => {
+        setLoading(false, capturedTabId);
+        pushDebug(`[Spaces] Resolution error for ${spacesInput.routeKey}: ${error.message}`);
+        capturedWebview.loadURL(buildSpacesResultPageUrl({
+          type: 'error',
+          reason: 'SPACES_RESOLUTION_ERROR',
+          message: 'Freedom could not obtain a verified Spaces result.',
+        }, spacesInput.routeKey));
+      });
+    return;
+  }
+
   // Try Ethereum names first (legacy ens:// plus supported name suffixes)
   const ens = parseEnsInput(value);
   if (ens && electronAPI?.resolveEns) {
@@ -1696,6 +1774,21 @@ const handleNavigationEvent = (event) => {
     }
 
     // Check for internal pages first
+    const spacesHandle = getSpacesHandleFromResultPage(event.url);
+    if (spacesHandle) {
+      addressInput.value = spacesHandle;
+      navState.pendingTitleForUrl = event.url;
+      navState.pendingNavigationUrl = event.url;
+      navState.currentPageUrl = event.url;
+      navState.hasNavigatedDuringCurrentLoad = true;
+      updateNavigationState();
+      updateBookmarkButtonVisibility();
+      updateGithubBridgeIcon();
+      updateProtocolIcon();
+      navState.addressBarSnapshot = addressInput.value;
+      return;
+    }
+
     const internalPageName = getInternalPageName(event.url);
     if (internalPageName && internalPageName !== 'home') {
       addressInput.value = `freedom://${internalPageName}`;

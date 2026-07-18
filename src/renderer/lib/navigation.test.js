@@ -249,6 +249,11 @@ const loadNavigationModule = async (options = {}) => {
     isSupportedEnsTransport: jest.fn(
       (protocol) => protocol === 'bzz' || protocol === 'ipfs' || protocol === 'ipns'
     ),
+    parseSpacesRootInput: jest.fn((input) => {
+      const match = (input || '').trim().match(/^@([^\s/?#:@]+)$/u);
+      if (!match) return null;
+      return { routeKey: `@${match[1].toLowerCase()}`, displayValue: input.trim() };
+    }),
     SUPPORTED_ENS_TRANSPORTS: ['bzz', 'ipfs', 'ipns'],
   };
   const pageUrlsMocks = {
@@ -318,6 +323,7 @@ const loadNavigationModule = async (options = {}) => {
       electronHandlers.toggleBookmarkBar = handler;
     }),
     resolveEns: jest.fn(),
+    resolveSpace: jest.fn(),
     invalidateEnsContent: jest.fn().mockResolvedValue(true),
   };
 
@@ -648,6 +654,63 @@ describe('navigation', () => {
     ctx.tabsMocks.webviewEventHandler('dom-ready', {});
     await flushMicrotasks();
     expect(ctx.debugMocks.pushDebug).toHaveBeenCalledWith('Webview ready.');
+  });
+
+  describe('Spaces navigation', () => {
+    test('loads a proof-verified published target and preserves the handle display', async () => {
+      const ctx = await loadNavigationModule();
+      await ctx.mod.initNavigation();
+      ctx.electronAPI.resolveSpace.mockResolvedValue({
+        type: 'ok',
+        handle: '@pirate',
+        proofVerified: true,
+        selectedUrl: 'https://app.pirate/',
+      });
+
+      ctx.mod.loadTarget('@Pirate');
+      await flushMicrotasks();
+
+      expect(ctx.electronAPI.resolveSpace).toHaveBeenCalledWith('@pirate');
+      expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith('https://app.pirate/');
+      expect(ctx.elements.addressInput.value).toBe('@Pirate');
+    });
+
+    test('renders a local result page instead of navigating an unverified result', async () => {
+      const ctx = await loadNavigationModule();
+      await ctx.mod.initNavigation();
+      ctx.electronAPI.resolveSpace.mockResolvedValue({
+        type: 'error',
+        handle: '@pirate',
+        reason: 'RESOLVER_UNAVAILABLE',
+        message: 'The Spaces resolver is unavailable or returned an unverified response.',
+      });
+
+      ctx.mod.loadTarget('@pirate');
+      await flushMicrotasks();
+
+      const loadedUrl = ctx.activeRef.tab.webview.loadURL.mock.calls[0][0];
+      expect(loadedUrl).toContain('file:///app/pages/space-browser.html?');
+      expect(loadedUrl).toContain('type=error');
+      expect(loadedUrl).toContain('handle=%40pirate');
+      expect(loadedUrl).not.toContain('app.pirate');
+    });
+
+    test('keeps async resolution scoped to the originating tab', async () => {
+      const tabA = createTab(1, 'https://a.example');
+      const tabB = createTab(2, 'https://b.example');
+      const ctx = await loadNavigationModule({ tabs: [tabA, tabB], activeTab: tabA });
+      await ctx.mod.initNavigation();
+
+      let settle;
+      ctx.electronAPI.resolveSpace.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
+      ctx.mod.loadTarget('@pirate', null, tabA.webview);
+      ctx.activeRef.tab = tabB;
+      settle({ type: 'ok', proofVerified: true, selectedUrl: 'https://app.pirate/' });
+      await flushMicrotasks();
+
+      expect(tabA.webview.loadURL).toHaveBeenCalledWith('https://app.pirate/');
+      expect(tabB.webview.loadURL).not.toHaveBeenCalled();
+    });
   });
 
   describe('bzz navigation probe', () => {

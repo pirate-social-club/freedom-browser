@@ -134,6 +134,7 @@ describe('preload', () => {
       [exposures.electronAPI, 'resolveEns', ['myname.box'], IPC.ENS_RESOLVE, [{ name: 'myname.box' }]],
       [exposures.electronAPI, 'resolveEnsAddress', ['vitalik.eth'], IPC.ENS_RESOLVE_ADDRESS, [{ name: 'vitalik.eth' }]],
       [exposures.electronAPI, 'resolveEnsReverse', ['0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045'], IPC.ENS_RESOLVE_REVERSE, [{ address: '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045' }]],
+      [exposures.electronAPI, 'resolveSpace', ['@pirate'], IPC.SPACES_RESOLVE, [{ handle: '@pirate' }]],
       [exposures.electronAPI, 'getHistory', [{ limit: 10 }], IPC.HISTORY_GET, [{ limit: 10 }]],
       [exposures.electronAPI, 'addHistory', [{ url: 'https://example.com' }], IPC.HISTORY_ADD, [{ url: 'https://example.com' }]],
       [exposures.electronAPI, 'removeHistory', [7], IPC.HISTORY_REMOVE, [7]],

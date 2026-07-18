@@ -39,6 +39,9 @@ module.exports = {
   ENS_RESOLVE_REVERSE: 'ens:resolve-reverse',
   ENS_INVALIDATE_CONTENT: 'ens:invalidate-content',
 
+  // Spaces resolution
+  SPACES_RESOLVE: 'spaces:resolve',
+
   // Settings
   SETTINGS_GET: 'settings:get',
   SETTINGS_SAVE: 'settings:save',
