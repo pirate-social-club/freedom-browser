@@ -1,53 +1,30 @@
-const mockRequest = jest.fn();
-
-jest.mock('https', () => ({
-  request: mockRequest,
-}));
-
-jest.mock('http', () => ({
-  request: jest.fn(),
-}));
-
 jest.mock('electron', () => ({
   ipcMain: { handle: jest.fn() },
 }));
 
+const originalFetch = global.fetch;
+
+const mockResponse = (body, status = 200) => ({
+  ok: status >= 200 && status < 300,
+  status,
+  statusText: status === 200 ? 'OK' : 'Error',
+  text: jest.fn().mockResolvedValue(JSON.stringify(body)),
+});
+
 function setupMockRequest(responseBody, statusCode = 200) {
-  const res = {
-    statusCode,
-    statusMessage: statusCode === 200 ? 'OK' : 'Error',
-    on: jest.fn((event, handler) => {
-      if (event === 'data') {
-        handler(JSON.stringify(responseBody));
-      } else if (event === 'end') {
-        handler();
-      }
-      return res;
-    }),
-  };
-
-  const req = {
-    on: jest.fn(),
-    end: jest.fn(),
-  };
-
-  mockRequest.mockImplementation((_options, callback) => {
-    callback(res);
-    return req;
-  });
-
-  return req;
+  global.fetch.mockResolvedValue(mockResponse(responseBody, statusCode));
 }
 
 describe('spaces-resolver', () => {
   beforeEach(() => {
     jest.resetModules();
-    mockRequest.mockReset();
+    global.fetch = jest.fn();
     delete process.env.SPACES_RESOLVER_BASE_URL;
     delete process.env.SPACES_VERIFIER_BASE_URL;
   });
 
   afterEach(() => {
+    global.fetch = originalFetch;
     jest.restoreAllMocks();
   });
 
@@ -72,17 +49,11 @@ describe('spaces-resolver', () => {
     const { resolveSpace } = require('./spaces-resolver');
     const result = await resolveSpace('@Space');
 
-    expect(mockRequest).toHaveBeenCalledWith(
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://verifier.pirate.sc/spaces/resolve?handle=%40space',
       expect.objectContaining({
-        hostname: 'verifier.pirate.sc',
-        path: '/spaces/resolve?handle=%40space',
-        method: 'GET',
-        rejectUnauthorized: false,
-        headers: expect.objectContaining({
-          Accept: 'application/json',
-        }),
-      }),
-      expect.any(Function)
+        headers: { Accept: 'application/json' },
+      })
     );
     expect(result).toEqual({
       type: 'ok',
@@ -144,17 +115,7 @@ describe('spaces-resolver', () => {
   });
 
   test('returns resolver error details when the public endpoint fails', async () => {
-    const req = {
-      on: jest.fn((event, handler) => {
-        if (event === 'error') {
-          handler(new Error('fetch failed'));
-        }
-        return req;
-      }),
-      end: jest.fn(),
-    };
-
-    mockRequest.mockReturnValue(req);
+    global.fetch.mockRejectedValue(new Error('fetch failed'));
 
     const { resolveSpace } = require('./spaces-resolver');
     const result = await resolveSpace('@pirate');
@@ -178,11 +139,9 @@ describe('spaces-resolver', () => {
     const { resolveSpace } = require('./spaces-resolver');
     await resolveSpace('@pirate');
 
-    expect(mockRequest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        hostname: 'resolver.example',
-      }),
-      expect.any(Function)
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://resolver.example/resolve?handle=%40pirate',
+      expect.any(Object)
     );
   });
 
@@ -192,6 +151,6 @@ describe('spaces-resolver', () => {
     await expect(resolveSpace('name@space')).rejects.toThrow(
       'Spaces handle must be a root label like @space'
     );
-    expect(mockRequest).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });

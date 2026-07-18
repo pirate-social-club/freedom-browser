@@ -2,6 +2,16 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [0.7.11] - 2026-07-18
+
+### Security
+
+- Restored normal TLS certificate verification for Spaces resolver requests, removing a connection path that accepted untrusted certificates.
+
+### Fixed
+
+- Removed an ineffective lowercase certificate-verification result check from the HNS session verifier; ordinary certificates continue to use Chromium's verification result.
+
 ## [0.7.10] - 2026-06-02
 
 ### Fixed
