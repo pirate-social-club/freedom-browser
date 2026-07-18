@@ -5,7 +5,7 @@
  * All URL rewriting resolves through this registry.
  */
 
-const { BrowserWindow, ipcMain } = require('electron');
+const { BrowserWindow, ipcMain, webContents } = require('electron');
 const IPC = require('../shared/ipc-channels');
 
 // Node modes
@@ -57,6 +57,7 @@ const registry = {
     recursiveAddr: null,
   },
 };
+const registryListeners = new Set();
 
 // Default ports
 const DEFAULTS = {
@@ -206,16 +207,32 @@ function clearService(service) {
  * Broadcast registry updates to all windows
  */
 function broadcastRegistryUpdate() {
-  const windows = BrowserWindow.getAllWindows();
   const state = getRegistry();
+  const targets = new Set(BrowserWindow.getAllWindows().map((win) => win.webContents));
+  for (const contents of webContents?.getAllWebContents?.() || []) targets.add(contents);
 
-  for (const win of windows) {
+  for (const contents of targets) {
     try {
-      win.webContents.send(IPC.SERVICE_REGISTRY_UPDATE, state);
+      contents.send(IPC.SERVICE_REGISTRY_UPDATE, state);
     } catch {
       // Window might be closing
     }
   }
+
+  for (const listener of registryListeners) {
+    try {
+      listener(state);
+    } catch {
+      // Registry observers are isolated like renderer broadcasts.
+    }
+  }
+}
+
+function subscribeServiceRegistry(listener, { emitCurrent = true } = {}) {
+  if (typeof listener !== 'function') throw new TypeError('Registry listener must be a function');
+  registryListeners.add(listener);
+  if (emitCurrent) listener(getRegistry());
+  return () => registryListeners.delete(listener);
 }
 
 /**
@@ -294,5 +311,6 @@ module.exports = {
   getRadicleApiUrl,
   getHnsApiUrl,
   broadcastRegistryUpdate,
+  subscribeServiceRegistry,
   registerServiceRegistryIpc,
 };

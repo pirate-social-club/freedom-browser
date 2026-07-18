@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self';"
+      content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; script-src 'self';"
     />
     <style>
       html,
@@ -89,6 +89,9 @@
       .logo-light {
         display: none;
       }
+      .hns-status { margin-top: 24px; padding: 16px 18px; max-width: 440px; border-radius: 12px; background: rgba(20, 21, 21, 0.78); }
+      .hns-status strong { display: block; color: #fff; }
+      .hns-status span { display: block; margin-top: 6px; color: #aaa; }
 
       /* Light theme */
       @media (prefers-color-scheme: light) {
@@ -136,5 +139,10 @@
       The decentralized web is here. Powered by built-in nodes, this browser connects you directly
       to peers, keeping the network strong and user-controlled.
     </p>
+    <section class="hns-status" aria-live="polite">
+      <strong id="hns-home-state">Starting Handshake</strong>
+      <span id="hns-home-detail">Freedom will open app.pirate when your profile's resolver is ready.</span>
+    </section>
+    <script src="scripts/hns-home.js"></script>
   </body>
 </html>

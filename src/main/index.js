@@ -125,10 +125,16 @@ process.on('unhandledRejection', (reason, _promise) => {
 
 const { registerShutdownSignalHandlers } = require('./shutdown-signals');
 const unregisterShutdownSignalHandlers = registerShutdownSignalHandlers({ app, logger: log });
-const { BrowserWindow, protocol, session } = require('electron');
+const { BrowserWindow, ipcMain, protocol, session, webContents } = require('electron');
 const { registerBaseIpcHandlers, broadcastProfileUpdated } = require('./ipc-handlers');
 const { watchProfileRegistry } = require('./profile-registry-watcher');
 const { installRequestRewriter } = require('./request-rewriter');
+const {
+  installHnsRequestGate,
+  registerHnsRequestGateIpc,
+  setHnsInterstitialNavigator,
+} = require('./hns-request-gate');
+const { startHnsPacLifecycle, stopHnsPacLifecycle } = require('./hns-pac');
 const { attachWebRequestDispatcher } = require('./webrequest-dispatcher');
 const { installX402Interception } = require('./x402/intercept');
 const { registerX402Ipc } = require('./x402/ipc');
@@ -263,6 +269,14 @@ async function bootstrap() {
   registerIpfsIpc();
   registerRadicleIpc();
   registerHnsIpc();
+  registerHnsRequestGateIpc(ipcMain);
+  setHnsInterstitialNavigator((webContentsId, url) => {
+    const target = webContents.fromId(webContentsId);
+    if (!target || target.isDestroyed()) return;
+    target.loadURL(url).catch((error) => {
+      log.error(`[HNS] Failed to show readiness page: ${error.message}`);
+    });
+  });
   registerGithubBridgeIpc();
   registerServiceRegistryIpc();
   registerIdentityIpc();
@@ -305,9 +319,11 @@ async function bootstrap() {
   }
   // All consumers register their handlers first, then the dispatcher
   // attaches exactly one Electron listener per event to the session.
+  installHnsRequestGate();
   installRequestRewriter();
   installX402Interception();
   attachWebRequestDispatcher(defaultSession);
+  await startHnsPacLifecycle(defaultSession);
   allowInteractivePermissions(defaultSession);
   registerWebContentsHandlers();
   setupApplicationMenu();
@@ -460,6 +476,7 @@ app.on('before-quit', async (event) => {
 
   log.info('[App] Waiting for Ant, IPFS, Radicle, and HNS to stop...');
   await Promise.all([stopAnt(), stopIpfs(), stopRadicle(), stopHns()]);
+  await stopHnsPacLifecycle();
   log.info('[App] All processes stopped, quitting...');
 
   app.quit();

@@ -11,6 +11,17 @@ The parity audit must reconcile that historical count before cutover; this
 table intentionally tracks the recoverable unique set rather than inventing
 rows for merge commits or patch-equivalent re-commits.
 
+Resync-only runtime fixes are also recorded here. `78a4e73` added supervisor
+coverage and fixed a dangling-restart defect: deliberate stop/disable now
+cancels pending crash-backoff and restart-reset timers, so HNS cannot restart
+itself after the user turns it off.
+
+Module disposition: legacy `hns-local-resolver.js` is superseded by
+Fingertip's local proxy/resolver path plus registry-backed health telemetry;
+its independent resolution state machine will not be ported. Legacy
+`hns-doh-resolver.js` is superseded by a smaller future fallback module that
+requires an explicit profile setting and trusted endpoint and defaults off.
+
 | Legacy | Intent | Slice | Disposition |
 |---|---|---:|---|
 | `5bfae86` | Restore Spaces TLS verification | Spaces | pending |
@@ -21,12 +32,12 @@ rows for merge commits or patch-equivalent re-commits.
 | `4f13e2e` | Privileged bridge lockdown | Security | ported (`211fd37`) |
 | `0e242cb` | Preserve tab URL state | Parity | pending |
 | `a21d248` | Prefer bundled JackTrip | Live rooms | pending |
-| `df59a86` | Home readiness and resolution stabilization | HNS routing | pending |
+| `df59a86` | Home readiness and resolution stabilization | HNS routing | ported (`b2af85d`, routing regression pack) |
 | `9425f15` | Share binary-download release environment | Packaging | pending |
 | `344dd2e` | Pass release environment to Linux container | Packaging | pending |
 | `9bf88bb` | Unblock platform builds | Packaging | pending |
 | `5ed1d9c` | Satisfy dependency audit gate | Packaging | pending |
-| `f7c85fe` | Reliable local HNS resolution | HNS routing | pending |
+| `f7c85fe` | Reliable local HNS resolution | HNS routing | superseded by Fingertip + registry/PAC readiness |
 | `e3b58b9` | Ignore subframe navigation in address bar | Parity | pending |
 | `76ea7d3` | Reroute JackTrip after Linux connect | Live rooms | pending |
 | `be4ec03` | Route JackTrip host audio into Agora | Live rooms | pending |
@@ -37,23 +48,23 @@ rows for merge commits or patch-equivalent re-commits.
 | `02dd012` | Auto-start launched broadcasts | Live rooms | pending |
 | `ec9ce02` | Prevent subframe failures replacing tabs | Parity | pending |
 | `2eb2967` | Agora broadcaster controls | Live rooms | pending |
-| `e55e98b` | Gate home navigation on resolver readiness | HNS routing | pending |
+| `e55e98b` | Gate home navigation on resolver readiness | HNS routing | ported (`b2af85d`, real-session regression) |
 | `6b64ab2` | Preserve dVPN validation backlog | dVPN | pending |
 | `f736b9e` | Supply-chain hardened CI | Packaging | pending |
 | `59879f3` | Navigation IPC, internal pages, URL utilities | HNS routing | pending |
 | `d610d44` | JackTrip integration and live-room API | Live rooms | pending |
 | `58dd630` | AGPL package metadata | Foundation | superseded by current licensing structure |
-| `3ba4efb` | Compact imported-HNS PAC routing | HNS routing | pending |
+| `3ba4efb` | Compact imported-HNS PAC routing | HNS routing | ported (`1e2556a`, `82ffa11`) |
 | `df7c5c9` | Prepare v0.7.8 | Release history | superseded |
 | `0392fc2` | Spaces TLS bypass | Spaces | dropped; insecure and reverted in v0.7.11 |
 | `7121ded` | Use canonical Spaces verifier | Spaces | pending |
-| `436df66` | HNS resolver health diagnostics | HNS routing | pending |
+| `436df66` | HNS resolver health diagnostics | HNS routing | superseded by registry telemetry/readiness UX |
 | `9c19a8e` | Quiet repeated HNS runtime logs | HNS managers | pending |
-| `4c2deac` | Use `app.pirate` home target | HNS routing | pending |
-| `915417d` | Open Pirate root on app host | HNS routing | pending |
+| `4c2deac` | Use `app.pirate` home target | HNS routing | ported (`b2af85d`) |
+| `915417d` | Open Pirate root on app host | HNS routing | ported (`b2af85d`) |
 | `c740c2b` | Prepare v0.7.7 | Release history | superseded |
-| `8205850` | Refresh imported HNS suffixes | HNS routing | pending |
-| `39410e6` | Load HNS hosts over HTTPS | HNS routing | pending |
+| `8205850` | Refresh imported HNS suffixes | HNS routing | ported (`1e2556a`, `82ffa11`) |
+| `39410e6` | Load HNS hosts over HTTPS | HNS routing | superseded by WebPKI namespace API refresh |
 | `0eed90f` | Run release smoke directly | Packaging | pending |
 | `96265a6` | Smoke-test release toolchain | Packaging | pending |
 | `bb01b6f` | Bump to v0.7.4 | Release history | superseded |

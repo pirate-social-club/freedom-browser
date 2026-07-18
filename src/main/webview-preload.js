@@ -346,6 +346,13 @@ contextBridge.exposeInMainWorld('freedomAPI', {
   getServiceRegistry: guardInternal('getServiceRegistry', () =>
     ipcRenderer.invoke('service-registry:get')
   ),
+  getPendingHnsNavigation: guardInternal('getPendingHnsNavigation', () =>
+    ipcRenderer.invoke('hns:getPendingNavigation')
+  ),
+  onServiceRegistryUpdated: guardInternalSubscription(
+    'onServiceRegistryUpdated',
+    'service-registry:update'
+  ),
 
   // Opens the sidebar publish-setup checklist in the host window.
   openPublishSetup: guardInternal('openPublishSetup', () =>
