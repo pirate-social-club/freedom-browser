@@ -33,13 +33,20 @@ module.exports = defineConfig({
   projects: [
     {
       name: 'harness',
-      testMatch: /^(?!.*[\\/]live[\\/]).*\.spec\.js$/,
+      testMatch: /^(?!.*[\\/]live[\\/])(?!.*hns-electron\.spec\.js$).*\.spec\.js$/,
       // Bee/IPFS startup is stubbed in test mode, but Electron + first-
       // window ready can still take 10–15s on cold cache. 30s gives
       // headroom without hiding genuine hangs.
       timeout: 30_000,
       expect: { timeout: 7_500 },
       retries: process.env.CI ? 2 : 0,
+    },
+    {
+      name: 'hns',
+      testMatch: /hns-electron\.spec\.js$/,
+      timeout: 2 * 60_000,
+      expect: { timeout: 45_000 },
+      retries: 0,
     },
     {
       name: 'live',

@@ -346,3 +346,63 @@ jobs:
             playwright-report/
           if-no-files-found: ignore
           retention-days: 14
+
+  # Full HNS trust chain: regtest auction/proof, delegated DNSSEC, TLSA,
+  # fingertipd/letsdane interception, and profile-local CA verification.
+  hns-dane-hermetic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install isolated hsd fixture
+        run: |
+          npm ci --prefix test-e2e/hns-fixture --ignore-scripts
+          npm run --prefix test-e2e/hns-fixture prepare:hsd
+
+      - name: Install browser dependencies
+        run: |
+          npm ci
+          # The hermetic runner mounts this checkout read-only.  Some hosted
+          # runner environments leave Electron's package present without its
+          # downloaded dist, and Playwright then tries (and fails) to repair it
+          # inside /app at launch time.  Materialize and verify the pinned
+          # binary before building/running the capability-dropped container.
+          node node_modules/electron/install.js
+          test -x node_modules/electron/dist/electron
+
+      - name: Fetch independently pinned HNS artifacts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/fetch-hns.js
+          node scripts/fetch-hns-test-fixture.js
+
+      - name: Prove DANE enforcement through shipping proxy
+        run: |
+          docker run --rm --network bridge \
+            --user 1000:1000 --cap-drop ALL \
+            --sysctl net.ipv4.ip_unprivileged_port_start=0 \
+            -v "${{ github.workspace }}:/app:ro" \
+            -w /app/test-e2e/hns-fixture \
+            node@sha256:eb2c73a27cf714b4b6b030f88ab72e62192c38b7d313ea3456695b8ae03c5f3c \
+            npm run test:proxy
+
+      - name: Build pinned Electron HNS test image
+        run: docker build -f test-e2e/hns-fixture/Dockerfile.electron -t freedom-hns-electron-e2e .
+
+      - name: Prove Electron DANE navigation and fail-closed mismatch
+        run: |
+          docker run --rm --network bridge \
+            --cap-drop ALL \
+            --sysctl net.ipv4.ip_unprivileged_port_start=0 \
+            -v "${{ github.workspace }}:/app:ro" \
+            -w /app freedom-hns-electron-e2e \
+            bash -lc 'Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >/tmp/xvfb.log 2>&1 & export DISPLAY=:99; npm run test:e2e:hns -- --output=/tmp/hns-test-results; status=$?; pkill Xvfb; exit $status'

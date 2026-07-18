@@ -15,6 +15,7 @@ tmp/
 *.swp
 .env
 ant-bin/
+hns-bin/
 ant-data/
 ipfs-bin/
 ipfs-data/
@@ -29,3 +30,4 @@ identity-data/
 research/
 playwright-report/
 test-results/
+test-e2e/.hns-fixture-bin/

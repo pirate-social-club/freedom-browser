@@ -11,6 +11,7 @@ module.exports = [
       'node_modules/**',
       'src/renderer/vendor/**',
       'ant-bin/**',
+      'hns-bin/**',
       'ipfs-bin/**',
       'ant-data/**',
       'ipfs-data/**',

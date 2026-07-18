@@ -67,6 +67,7 @@ const IPC = require('../shared/ipc-channels');
 const registry = require('./service-registry');
 const certVerifier = require('./hns-cert-verifier');
 const { ipcMain } = require('electron');
+const { spawn } = require('child_process');
 const manager = require('./hns-manager');
 
 describe('hns-manager lifecycle boundary', () => {
@@ -78,12 +79,28 @@ describe('hns-manager lifecycle boundary', () => {
   });
 
   afterEach(() => {
+    delete process.env.FREEDOM_HNS_TEST_BIN_DIR;
+    delete process.env.FREEDOM_HNS_TEST_SEED;
+    delete process.env.FREEDOM_TEST_MODE;
     manager._resetForTests();
     jest.useRealTimers();
   });
 
   test('uses the active profile HNS data directory', () => {
     expect(manager.getHnsDataPath()).toBe('/profiles/default/hns-data');
+  });
+
+  test('uses fixture binaries and seed only in explicit test mode', async () => {
+    process.env.FREEDOM_TEST_MODE = '1';
+    process.env.FREEDOM_HNS_TEST_BIN_DIR = '/fixtures/hns-bin';
+    process.env.FREEDOM_HNS_TEST_SEED = '127.0.0.1:10000';
+
+    await manager.startHns();
+
+    expect(spawn).toHaveBeenCalledWith('/fixtures/hns-bin/fingertipd', expect.arrayContaining([
+      '-hnsd-path', '/fixtures/hns-bin/hnsd',
+      '-hnsd-seed', '127.0.0.1:10000',
+    ]));
   });
 
   test('publishes sync progress without installing request routing', () => {

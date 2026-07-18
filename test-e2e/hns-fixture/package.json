@@ -1,0 +1,18 @@
+{
+  "name": "freedom-hns-e2e-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MPL-2.0",
+  "scripts": {
+    "prepare:hsd": "node prepare-hsd.js",
+    "start": "NODE_BACKEND=js node fixture-server.js",
+    "test:smoke": "NODE_BACKEND=js node smoke.js",
+    "test:hnsd": "NODE_BACKEND=js node hnsd-smoke.js",
+    "test:dnssec": "NODE_BACKEND=js node signed-zone-smoke.js",
+    "test:delegation": "NODE_BACKEND=js node delegation-smoke.js",
+    "test:proxy": "NODE_BACKEND=js node proxy-smoke.js"
+  },
+  "dependencies": {
+    "hsd": "4.0.1"
+  }
+}

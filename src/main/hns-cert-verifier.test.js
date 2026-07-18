@@ -5,6 +5,7 @@ const {
   clearHnsCertificateVerifier,
   configureHnsCertificateVerifier,
   createCertificateVerifyProc,
+  leafIsSignedByPinnedCa,
   leafMatchesHostAndValidity,
   loadCaFingerprint,
 } = require('./hns-cert-verifier');
@@ -51,6 +52,44 @@ describe('HNS certificate verifier', () => {
 
     verify({ hostname: 'app.pirate', certificate: { fingerprint: 'UNPINNED' } }, callback);
     expect(callback).toHaveBeenLastCalledWith(USE_CHROMIUM_VERIFICATION);
+  });
+
+  test('accepts the pinned root from Electron validatedCertificate chain', () => {
+    const verify = createCertificateVerifyProc('ROOT', leafOptions);
+    const callback = jest.fn();
+    verify({
+      hostname: 'app.pirate',
+      certificate: { data: 'leaf PEM', fingerprint: 'LEAF' },
+      validatedCertificate: {
+        fingerprint: 'LEAF',
+        issuerCert: { fingerprint: 'ROOT' },
+      },
+    }, callback);
+    expect(callback).toHaveBeenCalledWith(ACCEPT_CERTIFICATE);
+  });
+
+  test('verifies a proxy leaf directly with the pinned CA public key', () => {
+    class SignedLeaf extends ValidLeaf {
+      verify(publicKey) { return publicKey === 'PINNED KEY'; }
+    }
+    const trustedCertificate = { publicKey: 'PINNED KEY' };
+    expect(leafIsSignedByPinnedCa(
+      { certificate: { data: 'leaf PEM' } },
+      trustedCertificate,
+      { Certificate: SignedLeaf },
+    )).toBe(true);
+
+    const verify = createCertificateVerifyProc('ROOT', {
+      Certificate: SignedLeaf,
+      now: leafOptions.now,
+      trustedCertificate,
+    });
+    const callback = jest.fn();
+    verify({
+      hostname: 'app.pirate',
+      certificate: { data: 'leaf PEM', fingerprint: 'LEAF' },
+    }, callback);
+    expect(callback).toHaveBeenCalledWith(ACCEPT_CERTIFICATE);
   });
 
   test('requires hostname match and current validity before overriding Chromium', () => {

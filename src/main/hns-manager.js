@@ -66,6 +66,9 @@ function getPlatformDirectory() {
 
 function getBinaryPath(binaryName) {
   const executable = process.platform === 'win32' ? `${binaryName}.exe` : binaryName;
+  if (process.env.FREEDOM_TEST_MODE === '1' && process.env.FREEDOM_HNS_TEST_BIN_DIR) {
+    return path.join(path.resolve(process.env.FREEDOM_HNS_TEST_BIN_DIR), executable);
+  }
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'hns-bin', executable);
   }
@@ -287,6 +290,9 @@ async function startHns() {
     '-root-addr', rootAddr,
     '-recursive-addr', recursiveAddr,
   ];
+  if (process.env.FREEDOM_TEST_MODE === '1' && process.env.FREEDOM_HNS_TEST_SEED) {
+    args.push('-hnsd-seed', process.env.FREEDOM_HNS_TEST_SEED);
+  }
   try {
     helperProcess = spawn(getHelperBinaryPath(), args);
     readline.createInterface({ input: helperProcess.stdout }).on('line', parseHelperEvent);

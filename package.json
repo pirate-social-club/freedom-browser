@@ -24,6 +24,7 @@
     "test:migration": "jest --runInBand src/main/migrate-user-data.test.js src/main/__tests__/integration/v08-upgrade.test.js src/main/profile-resolver.test.js src/main/profile-paths.test.js src/main/profile-catalog.test.js src/main/identity/__tests__/integration/postage-publisher-continuity.test.js",
     "test:e2e": "playwright test --project=harness",
     "test:e2e:live": "playwright test --project=live",
+    "test:e2e:hns": "playwright test --project=hns",
     "test:e2e:onboarding": "playwright test --project=live test-e2e/live/onboarding-identity.spec.js",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -37,8 +38,11 @@
     "dist:mac:notary-log": "dotenv -- node scripts/macos-notary.js log",
     "dist:mac:staple-notary": "dotenv -- node scripts/macos-notary.js staple",
     "dist:linux:arm64:docker": "docker run --rm -v \"$PWD\":/app -v /app/node_modules -v \"${ELECTRON_CACHE:-$HOME/Library/Caches/electron}\":/root/.cache/electron -w /app -e USE_SYSTEM_FPM=true --platform linux/arm64 node:24-trixie bash -c \"apt-get update && apt-get install -y ruby ruby-dev build-essential xz-utils && gem install fpm --no-document && npm ci && npm run radicle:download && npm run ipfs:download && npm run dist -- --linux --arm64\"",
-    "dist:linux:x64:docker": "docker run --rm -v \"$PWD\":/app -v /app/node_modules -v \"${ELECTRON_CACHE:-$HOME/Library/Caches/electron}\":/root/.cache/electron -w /app -e USE_SYSTEM_FPM=true --platform linux/amd64 node:24-trixie bash -c \"apt-get update && apt-get install -y ruby ruby-dev build-essential xz-utils && gem install fpm --no-document && npm ci && npm run radicle:download && npm run ipfs:download && npm run dist -- --linux --x64\"",
+    "dist:linux:x64:docker": "docker run --rm -v \"$PWD\":/app -v /app/node_modules -v \"${ELECTRON_CACHE:-$HOME/Library/Caches/electron}\":/root/.cache/electron -w /app -e USE_SYSTEM_FPM=true --platform linux/amd64 node:24-trixie bash -c \"apt-get update && apt-get install -y ruby ruby-dev build-essential xz-utils && gem install fpm --no-document && npm ci && npm run radicle:download && npm run ipfs:download && npm run hns:download && npm run dist -- --linux --x64\"",
     "ant:download": "node scripts/fetch-ant.js",
+    "hns:download": "node scripts/fetch-hns.js",
+    "hns:test-fixture:download": "node scripts/fetch-hns-test-fixture.js",
+    "hns:mainnet:smoke": "node test-e2e/hns-mainnet-smoke.js",
     "ant:init": "node scripts/init-ant.js",
     "ant:start": "echo 'ant:start is a legacy alias for system-ant:start (repo-root ant-data on ecosystem port 1633).'; npm run system-ant:start",
     "ant:stop": "echo 'ant:stop is a legacy alias for system-ant:stop.'; npm run system-ant:stop",
@@ -119,6 +123,14 @@
         "x-scheme-handler/bzz"
       ],
       "extraResources": [
+        {
+          "from": "hns-bin/${os}-${arch}/",
+          "to": "hns-bin",
+          "filter": [
+            "fingertipd",
+            "hnsd"
+          ]
+        },
         {
           "from": "radicle-bin/${os}-${arch}/",
           "to": "radicle-bin",
