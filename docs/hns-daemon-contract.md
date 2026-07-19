@@ -86,7 +86,10 @@ HTTPS to Chromium using the data-dir CA. It must:
 - accept connections only on its reported loopback address;
 - reject malformed proxy authorities and non-HNS/non-ICANN hostnames according
   to the pinned letsdane policy;
-- never fall back to system DNS or a public DoH resolver for HNS names;
+- never fall back to system DNS for HNS names;
+- use recursive HNS DoH only under the validation and provider policy in
+  `docs/hns-doh-transport.md`; a DoH response is untrusted input and must not
+  become a routing or TLS decision without local chain-anchored validation;
 - support HTTPS CONNECT and WebSocket upgrade traffic;
 - avoid a `DIRECT` fallback when local HNS resolution is unavailable.
 
