@@ -2,7 +2,7 @@
   "name": "freedom-browser",
   "version": "0.7.11",
   "license": "AGPL-3.0-or-later",
-  "description": "Freedom – A browser for the decentralized web, with Swarm, IPFS, and ENS as first-class protocols.",
+  "description": "Freedom \u2013 A browser for the decentralized web, with Swarm, IPFS, and ENS as first-class protocols.",
   "author": {
     "name": "Freedom Team",
     "email": "browser@freedom.baby"
@@ -248,7 +248,7 @@
   "title": "Freedom",
   "displayName": "Freedom",
   "overrides": {
-    "js-yaml": "4.2.0",
+    "js-yaml": "^4.3.0",
     "uuid": "11.1.1",
     "tmp": "0.2.7"
   }
