@@ -393,7 +393,14 @@ describe('network-manager', () => {
     );
   });
 
-  test('HNS guard falls back through HNS DoH when local recursive DNS is down', async () => {
+  // The guard's last-resort path used to resolve an HNS name (locally or over
+  // DoH) and then open a raw tunnel straight to the returned address, bypassing
+  // fingertipd. Nothing there validated DNSSEC or DANE, and the browser-side
+  // certificate check accepted any certificate for an HNS hostname, so the
+  // resolver operator could MITM any HNS name. Until the DNSSEC/DANE chain is
+  // validated before "200 Connection Established", this path must refuse.
+
+  test('HNS guard refuses to tunnel CONNECT when the local upstream fails', async () => {
     const ctx = loadNetworkManagerModule({ pacServerPort: 9181 });
     ctx.mod.setHnsProxy('127.0.0.1:5380');
 
@@ -416,28 +423,18 @@ describe('network-manager', () => {
       Buffer.alloc(0)
     );
 
-    expect(ctx.netConnect).toHaveBeenCalledWith(
-      5380,
-      '127.0.0.1',
-      expect.any(Function)
-    );
+    expect(ctx.netConnect).toHaveBeenCalledWith(5380, '127.0.0.1', expect.any(Function));
     ctx.netSockets[0].connectHandler();
     ctx.netSockets[0].emit('data', Buffer.from('HTTP/1.1 502 Bad Gateway\r\n\r\n'));
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(ctx.resolveHnsDohAddresses).toHaveBeenCalledWith('app.pirate');
-    expect(ctx.netConnect).toHaveBeenCalledWith(
-      443,
-      '173.199.93.117',
-      expect.any(Function)
-    );
-    expect(ctx.log.info).toHaveBeenCalledWith(
-      '[Network] HNS DoH last-resort CONNECT (local upstream 502): app.pirate:443 -> 173.199.93.117:443'
-    );
+    // Only the helper-proxy connection may exist; no tunnel to a resolved address.
+    expect(ctx.netConnect).toHaveBeenCalledTimes(1);
+    expect(clientSocket.write).toHaveBeenCalledWith(expect.stringContaining('502'));
   });
 
-  test('HNS guard prefers local HNS delegation fallback before DoH', async () => {
+  test('HNS guard does not consult any resolver on the refused fallback path', async () => {
     const ctx = loadNetworkManagerModule({ pacServerPort: 9181, hnsLocalAddress: '198.51.100.9' });
     ctx.mod.setHnsProxy('127.0.0.1:5380');
     ctx.mod.setHnsResolverAddrs({ rootAddr: '127.0.0.1:43000' });
@@ -466,52 +463,13 @@ describe('network-manager', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(ctx.resolveHnsLocalAddresses).toHaveBeenCalledWith('app.pirate', {
-      rootAddr: '127.0.0.1:43000',
-    });
+    // Refusing before resolution also avoids disclosing the browsed name to a
+    // third-party DoH resolver on a path we cannot validate anyway.
+    expect(ctx.resolveHnsLocalAddresses).not.toHaveBeenCalled();
     expect(ctx.resolveHnsDohAddresses).not.toHaveBeenCalled();
-    expect(ctx.netConnect).toHaveBeenCalledWith(
-      443,
-      '198.51.100.9',
-      expect.any(Function)
-    );
   });
 
-  test('HNS guard uses DoH only after local HNS delegation fallback fails', async () => {
-    const ctx = loadNetworkManagerModule({ pacServerPort: 9181, hnsLocalAddress: false });
-    ctx.mod.setHnsProxy('127.0.0.1:5380');
-    ctx.mod.setHnsResolverAddrs({ rootAddr: '127.0.0.1:43000' });
-
-    await ctx.mod.rebuild();
-
-    const guardConnect = ctx.createServerCalls[0].handlers.get('connect');
-    const clientSocket = {
-      destroyed: false,
-      destroy: jest.fn(function destroy() {
-        this.destroyed = true;
-      }),
-      on: jest.fn(),
-      pipe: jest.fn(),
-      write: jest.fn(),
-    };
-
-    guardConnect(
-      { url: 'app.pirate:443', httpVersion: '1.1', headers: {} },
-      clientSocket,
-      Buffer.alloc(0)
-    );
-
-    ctx.netSockets[0].connectHandler();
-    ctx.netSockets[0].emit('data', Buffer.from('HTTP/1.1 502 Bad Gateway\r\n\r\n'));
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(ctx.resolveHnsLocalAddresses).toHaveBeenCalled();
-    expect(ctx.resolveHnsDohAddresses).toHaveBeenCalledWith('app.pirate');
-  });
-
-  test('HNS guard falls back through HNS DoH for arbitrary HNS CONNECT hosts', async () => {
+  test('HNS guard refuses CONNECT for arbitrary HNS hosts, not just .pirate', async () => {
     const ctx = loadNetworkManagerModule({ pacServerPort: 9181, hnsDohAddress: '203.0.113.7' });
     ctx.mod.setHnsProxy('127.0.0.1:5380');
 
@@ -539,15 +497,11 @@ describe('network-manager', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(ctx.resolveHnsDohAddresses).toHaveBeenCalledWith('portal.any-hns-root');
-    expect(ctx.netConnect).toHaveBeenCalledWith(
-      443,
-      '203.0.113.7',
-      expect.any(Function)
-    );
+    expect(ctx.netConnect).toHaveBeenCalledTimes(1);
+    expect(ctx.resolveHnsDohAddresses).not.toHaveBeenCalled();
   });
 
-  test('HNS guard forwards app.pirate HTTP requests through DoH last-resort when no local upstream is available', async () => {
+  test('HNS guard refuses plain HTTP requests on the unvalidated fallback path', async () => {
     const ctx = loadNetworkManagerModule({ pacServerPort: 9181 });
     ctx.mod.setHnsProxy('127.0.0.1:5380');
 
@@ -568,18 +522,10 @@ describe('network-manager', () => {
 
     await guardHttp(req, res);
 
-    expect(ctx.resolveHnsDohAddresses).toHaveBeenCalledWith('app.pirate');
-    expect(ctx.httpRequest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        host: '173.199.93.117',
-        port: 80,
-        method: 'GET',
-        path: '/feed?tab=home',
-        headers: expect.objectContaining({ host: 'app.pirate' }),
-      }),
-      expect.any(Function)
-    );
-    expect(req.pipe).toHaveBeenCalled();
+    expect(ctx.httpRequest).not.toHaveBeenCalled();
+    expect(ctx.resolveHnsDohAddresses).not.toHaveBeenCalled();
+    expect(res.writeHead).toHaveBeenCalledWith(502);
+    expect(req.pipe).not.toHaveBeenCalled();
   });
 
   test('PAC script is valid JavaScript', () => {

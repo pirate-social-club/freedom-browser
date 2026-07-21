@@ -466,6 +466,54 @@ function updateState(newState, error = null) {
   }
 }
 
+// Extracted so this policy is directly testable: it decides whether an HNS
+// connection is trusted, and it previously shipped with no test coverage at all.
+function createCertificateVerifier(trustedFingerprint) {
+  return (request, callback) => {
+
+      try {
+        // There is deliberately NO blanket "this is an HNS hostname, accept any
+        // certificate" branch here.
+        //
+        // Such a branch used to exist, gated only on the HNS proxy being active
+        // and the hostname looking like an HNS name. It did not distinguish how
+        // the address was obtained. The guard proxy's last-resort path resolves
+        // over DoH -- which sets no DO bit and never fetches TLSA -- and then
+        // opens a raw TCP connection straight to the returned address, bypassing
+        // fingertipd. So on that path neither DANE nor ordinary certificate
+        // validation applied, and whoever operated the DoH resolver could point
+        // any HNS name at any host and terminate TLS with any certificate.
+        //
+        // Connections that actually go through fingertipd are unaffected: it
+        // performs the DANE check itself and presents a certificate under the
+        // local CA, which the fingerprint comparison below accepts.
+        //
+        // Until a validated TLSA pin is available (DS -> DNSKEY -> RRSIG from the
+        // local HNS root trust anchor, then a usage-3/selector-1 SPKI match bound
+        // to this hostname and port), anything else must fail closed. A broken
+        // page on a DNS-blocked network is the correct trade against silently
+        // accepting an arbitrary certificate.
+        const cert = request.certificate;
+        if (cert && cert.fingerprint === trustedFingerprint) {
+          callback(0);
+          return;
+        }
+
+        for (const issuer of cert.issuerCert ? [cert.issuerCert] : []) {
+          if (issuer.fingerprint === trustedFingerprint) {
+            callback(0);
+            return;
+          }
+        }
+
+      } catch {
+        // fall through
+      }
+      callback(-3);
+  
+  };
+}
+
 function configureCertVerification(targetSession) {
   if (!caCertFingerprint) {
     log.warn('[HNS] Cannot configure cert verification: no CA fingerprint');
@@ -474,34 +522,7 @@ function configureCertVerification(targetSession) {
 
   const trustedFingerprint = caCertFingerprint;
 
-  targetSession.setCertificateVerifyProc((request, callback) => {
-    try {
-      if (proxyAddr && (
-        isHnsHostname(request?.hostname) ||
-        networkManager.isHnsProxyHost?.(request?.hostname) === true
-      )) {
-        callback(0);
-        return;
-      }
-
-      const cert = request.certificate;
-      if (cert && cert.fingerprint === trustedFingerprint) {
-        callback(0);
-        return;
-      }
-
-      for (const issuer of cert.issuerCert ? [cert.issuerCert] : []) {
-        if (issuer.fingerprint === trustedFingerprint) {
-          callback(0);
-          return;
-        }
-      }
-
-    } catch {
-      // fall through
-    }
-    callback(-3);
-  });
+  targetSession.setCertificateVerifyProc(createCertificateVerifier(trustedFingerprint));
   log.info('[HNS] Certificate verification configured');
 }
 
@@ -884,6 +905,7 @@ function registerHnsIpc() {
 }
 
 module.exports = {
+  createCertificateVerifier,
   registerHnsIpc,
   startHns,
   stopHns,

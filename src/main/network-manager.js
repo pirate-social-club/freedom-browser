@@ -226,7 +226,28 @@ function writeProxyError(socket, statusCode, reason) {
   socket.destroy();
 }
 
+// The guard proxy's last-resort path resolves an HNS name and then connects
+// directly to the returned address, bypassing fingertipd. Nothing on that path
+// validates DNSSEC or DANE, and the browser-side certificate check cannot
+// compensate: it only sees a hostname, not how the address was obtained.
+//
+// Until validation lands (validate DS -> DNSKEY -> RRSIG from the local HNS
+// root trust anchor, then the A/AAAA and TLSA RRsets, and permit only a
+// usage-3/selector-1 TLSA SPKI match bound to this hostname and port, all
+// BEFORE returning "200 Connection Established"), this path must refuse rather
+// than tunnel. That costs fallback browsing on port-53-blocked networks and
+// keeps arbitrary certificates from being accepted silently.
+const HNS_UNVALIDATED_FALLBACK_ENABLED = false;
+const HNS_UNVALIDATED_FALLBACK_MESSAGE =
+  'HNS fallback disabled: this path cannot yet prove the DNSSEC/DANE chain for the name';
+
 async function forwardConnectToDohFallback(req, clientSocket, head = Buffer.alloc(0), reason = 'unavailable') {
+  if (!HNS_UNVALIDATED_FALLBACK_ENABLED) {
+    log.warn(`[Network] refusing unvalidated HNS CONNECT (${reason}): ${req.url}`);
+    writeProxyError(clientSocket, 502, HNS_UNVALIDATED_FALLBACK_MESSAGE);
+    return;
+  }
+
   let target;
   try {
     target = await resolveHnsFallbackTarget(req.url, 443);
@@ -268,6 +289,13 @@ function formatFallbackHostHeader(target) {
 }
 
 async function forwardHttpToDohFallback(req, res, host, defaultPort, requestPath, reason = 'unavailable') {
+  if (!HNS_UNVALIDATED_FALLBACK_ENABLED) {
+    log.warn(`[Network] refusing unvalidated HNS request (${reason}): ${host}`);
+    res.writeHead(502);
+    res.end(HNS_UNVALIDATED_FALLBACK_MESSAGE);
+    return;
+  }
+
   let target;
   try {
     target = await resolveHnsFallbackTarget(host, defaultPort);

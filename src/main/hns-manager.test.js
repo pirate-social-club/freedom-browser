@@ -811,3 +811,50 @@ describe('hns-manager', () => {
     expect(result.status).toBe('stopped');
   });
 });
+
+describe('createCertificateVerifier', () => {
+  const { createCertificateVerifier } = require('./hns-manager');
+  const CA = 'sha256/aa:bb:cc';
+  const verify = (request) => {
+    let result;
+    createCertificateVerifier(CA)(request, (code) => { result = code; });
+    return result;
+  };
+
+  // Regression: an unconditional "HNS hostname + proxy active -> callback(0)"
+  // branch used to accept ANY certificate here. Combined with the guard proxy's
+  // unvalidated DoH fallback, that let the resolver operator MITM any HNS name.
+  test('rejects an arbitrary certificate for an HNS hostname', () => {
+    expect(verify({
+      hostname: 'app.pirate',
+      certificate: { fingerprint: 'sha256/attacker', issuerCert: null },
+    })).toBe(-3);
+  });
+
+  test('rejects a self-signed certificate presented for an HNS hostname', () => {
+    expect(verify({
+      hostname: 'portal.any-hns-root',
+      certificate: { fingerprint: 'sha256/self', issuerCert: { fingerprint: 'sha256/self' } },
+    })).toBe(-3);
+  });
+
+  // fingertipd performs the DANE check itself and re-issues under the local CA,
+  // so that path must keep working or all HNS browsing breaks.
+  test('accepts a certificate issued by the local HNS CA', () => {
+    expect(verify({
+      hostname: 'app.pirate',
+      certificate: { fingerprint: CA, issuerCert: null },
+    })).toBe(0);
+  });
+
+  test('accepts a certificate whose issuer is the local HNS CA', () => {
+    expect(verify({
+      hostname: 'app.pirate',
+      certificate: { fingerprint: 'sha256/leaf', issuerCert: { fingerprint: CA } },
+    })).toBe(0);
+  });
+
+  test('rejects when no certificate is present', () => {
+    expect(verify({ hostname: 'app.pirate', certificate: null })).toBe(-3);
+  });
+});
