@@ -6,6 +6,7 @@ const fs = require('fs');
 const net = require('net');
 const dgram = require('dgram');
 const readline = require('readline');
+const { createHash, X509Certificate } = require('crypto');
 const IPC = require('../shared/ipc-channels');
 const { getHnsPublicSuffixes, isHnsHost } = require('../shared/hns-hosts');
 const {
@@ -468,49 +469,58 @@ function updateState(newState, error = null) {
 
 // Extracted so this policy is directly testable: it decides whether an HNS
 // connection is trusted, and it previously shipped with no test coverage at all.
+function certificateChainContainsFingerprint(certificate, trustedFingerprint) {
+  const visited = new Set();
+  let current = certificate;
+
+  while (current && !visited.has(current)) {
+    if (current.fingerprint === trustedFingerprint) {
+      return true;
+    }
+
+    visited.add(current);
+    current = current.issuerCert;
+  }
+
+  return false;
+}
+
+function chromiumCertificateFingerprint(der) {
+  return `sha256/${createHash('sha256').update(der).digest('base64')}`;
+}
+
 function createCertificateVerifier(trustedFingerprint) {
   return (request, callback) => {
-
-      try {
-        // There is deliberately NO blanket "this is an HNS hostname, accept any
-        // certificate" branch here.
-        //
-        // Such a branch used to exist, gated only on the HNS proxy being active
-        // and the hostname looking like an HNS name. It did not distinguish how
-        // the address was obtained. The guard proxy's last-resort path resolves
-        // over DoH -- which sets no DO bit and never fetches TLSA -- and then
-        // opens a raw TCP connection straight to the returned address, bypassing
-        // fingertipd. So on that path neither DANE nor ordinary certificate
-        // validation applied, and whoever operated the DoH resolver could point
-        // any HNS name at any host and terminate TLS with any certificate.
-        //
-        // Connections that actually go through fingertipd are unaffected: it
-        // performs the DANE check itself and presents a certificate under the
-        // local CA, which the fingerprint comparison below accepts.
-        //
-        // Until a validated TLSA pin is available (DS -> DNSKEY -> RRSIG from the
-        // local HNS root trust anchor, then a usage-3/selector-1 SPKI match bound
-        // to this hostname and port), anything else must fail closed. A broken
-        // page on a DNS-blocked network is the correct trade against silently
-        // accepting an arbitrary certificate.
-        const cert = request.certificate;
-        if (cert && cert.fingerprint === trustedFingerprint) {
-          callback(0);
-          return;
-        }
-
-        for (const issuer of cert.issuerCert ? [cert.issuerCert] : []) {
-          if (issuer.fingerprint === trustedFingerprint) {
-            callback(0);
-            return;
-          }
-        }
-
-      } catch {
-        // fall through
+    try {
+      // There is deliberately NO blanket "this is an HNS hostname, accept any
+      // certificate" branch here.
+      //
+      // Such a branch used to exist, gated only on the HNS proxy being active
+      // and the hostname looking like an HNS name. It did not distinguish how
+      // the address was obtained. The guard proxy's last-resort path resolves
+      // over DoH -- which sets no DO bit and never fetches TLSA -- and then
+      // opens a raw TCP connection straight to the returned address, bypassing
+      // fingertipd. So on that path neither DANE nor ordinary certificate
+      // validation applied, and whoever operated the DoH resolver could point
+      // any HNS name at any host and terminate TLS with any certificate.
+      //
+      // Connections that actually go through fingertipd are unaffected: it
+      // performs the DANE check itself and presents a certificate under the
+      // local CA, which the fingerprint comparison below accepts.
+      //
+      // Until a validated TLSA pin is available (DS -> DNSKEY -> RRSIG from the
+      // local HNS root trust anchor, then a usage-3/selector-1 SPKI match bound
+      // to this hostname and port), anything else must fail closed. A broken
+      // page on a DNS-blocked network is the correct trade against silently
+      // accepting an arbitrary certificate.
+      if (certificateChainContainsFingerprint(request.certificate, trustedFingerprint)) {
+        callback(0);
+        return;
       }
-      callback(-3);
-  
+    } catch {
+      // fall through
+    }
+    callback(-3);
   };
 }
 
@@ -534,9 +544,8 @@ function clearCertVerification(targetSession) {
 function loadCaFingerprint(pemPath) {
   try {
     const pemData = fs.readFileSync(pemPath, 'utf-8');
-    const { X509Certificate } = require('crypto');
     const cert = new X509Certificate(pemData);
-    caCertFingerprint = cert.fingerprint;
+    caCertFingerprint = chromiumCertificateFingerprint(cert.raw);
     log.info(`[HNS] CA fingerprint: ${caCertFingerprint}`);
     return true;
   } catch (err) {
@@ -905,6 +914,8 @@ function registerHnsIpc() {
 }
 
 module.exports = {
+  certificateChainContainsFingerprint,
+  chromiumCertificateFingerprint,
   createCertificateVerifier,
   registerHnsIpc,
   startHns,
