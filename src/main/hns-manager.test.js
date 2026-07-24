@@ -147,7 +147,10 @@ function loadHnsManagerModule(options = {}) {
       child_process: () => ({
         spawn,
       }),
-      crypto: () => options.cryptoMock || jest.requireActual('crypto'),
+      crypto: () => ({
+        ...jest.requireActual('crypto'),
+        ...options.cryptoMock,
+      }),
       net: () => ({
         createServer: jest.fn(() => {
           const handlers = new Map();
@@ -319,7 +322,7 @@ describe('hns-manager', () => {
     const ctx = loadHnsManagerModule({
       cryptoMock: {
         X509Certificate: class {
-          fingerprint = 'AA:BB';
+          raw = Buffer.from('test certificate');
         },
       },
       hnsHealth: {
@@ -381,7 +384,7 @@ describe('hns-manager', () => {
       hnsResolutionForHost: { resolverType: 'doh' },
       cryptoMock: {
         X509Certificate: class {
-          fingerprint = 'AA:BB';
+          raw = Buffer.from('test certificate');
         },
       },
       hnsHealth: {
@@ -433,7 +436,7 @@ describe('hns-manager', () => {
       hnsResolutionForHost: { resolverType: 'doh' },
       cryptoMock: {
         X509Certificate: class {
-          fingerprint = 'AA:BB';
+          raw = Buffer.from('test certificate');
         },
       },
       hnsHealth: {
@@ -477,7 +480,7 @@ describe('hns-manager', () => {
     const ctx = loadHnsManagerModule({
       cryptoMock: {
         X509Certificate: class {
-          fingerprint = 'AA:BB';
+          raw = Buffer.from('test certificate');
         },
       },
       hnsHealth: {
@@ -529,7 +532,7 @@ describe('hns-manager', () => {
       hnsResolutionForHost: { resolverType: 'local' },
       cryptoMock: {
         X509Certificate: class {
-          fingerprint = 'AA:BB';
+          raw = Buffer.from('test certificate');
         },
       },
       hnsHealth: {
@@ -582,7 +585,7 @@ describe('hns-manager', () => {
       effectiveHnsProxyAddr: '127.0.0.1:55000',
       cryptoMock: {
         X509Certificate: class {
-          fingerprint = 'AA:BB';
+          raw = Buffer.from('test certificate');
         },
       },
       readFileSync: () => 'test certificate',
@@ -813,7 +816,10 @@ describe('hns-manager', () => {
 });
 
 describe('createCertificateVerifier', () => {
-  const { createCertificateVerifier } = require('./hns-manager');
+  const {
+    chromiumCertificateFingerprint,
+    createCertificateVerifier,
+  } = require('./hns-manager');
   const CA = 'sha256/aa:bb:cc';
   const verify = (request) => {
     let result;
@@ -829,6 +835,11 @@ describe('createCertificateVerifier', () => {
       hostname: 'app.pirate',
       certificate: { fingerprint: 'sha256/attacker', issuerCert: null },
     })).toBe(-3);
+  });
+
+  test('formats the trusted CA fingerprint exactly as Chromium does', () => {
+    expect(chromiumCertificateFingerprint(Buffer.from('test certificate')))
+      .toBe('sha256/hq2a+yYryoxWWBBZd9kDX9c3GkKepzw291boR3DcQ1Y=');
   });
 
   test('rejects a self-signed certificate presented for an HNS hostname', () => {
@@ -851,6 +862,19 @@ describe('createCertificateVerifier', () => {
     expect(verify({
       hostname: 'app.pirate',
       certificate: { fingerprint: 'sha256/leaf', issuerCert: { fingerprint: CA } },
+    })).toBe(0);
+  });
+
+  test('accepts a certificate whose chain terminates at the local HNS CA', () => {
+    expect(verify({
+      hostname: 'app.pirate',
+      certificate: {
+        fingerprint: 'sha256/leaf',
+        issuerCert: {
+          fingerprint: 'sha256/intermediate',
+          issuerCert: { fingerprint: CA, issuerCert: null },
+        },
+      },
     })).toBe(0);
   });
 
