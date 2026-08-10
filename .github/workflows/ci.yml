@@ -14,6 +14,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          path: freedom-browser
+
+      - name: Check out sentinel-ai-connect dependency
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: Sentinel-Autonomybuilder/blue-ai-connect
+          ref: 924d472cb8be47b11f2432515f23bd5ea20d297c
+          path: blue-ai-connect
+
+      - name: Prepare sentinel-ai-connect file dependency
+        run: cp -R blue-ai-connect ../blue-ai-connect
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: freedom-browser/package-lock.json
+
+      - name: Install dependencies
+        working-directory: freedom-browser
+        run: npm ci --ignore-scripts
+
+      - name: Audit dependencies
+        working-directory: freedom-browser
+        run: npm audit --audit-level=high
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -51,10 +85,6 @@ jobs:
       - name: Install dependencies
         working-directory: freedom-browser
         run: npm ci --ignore-scripts
-
-      - name: Audit dependencies
-        working-directory: freedom-browser
-        run: npm audit --audit-level=high
 
       - name: Run lint
         working-directory: freedom-browser
@@ -135,10 +165,6 @@ jobs:
       - name: Install dependencies
         working-directory: freedom-browser
         run: npm ci --ignore-scripts
-
-      - name: Audit dependencies
-        working-directory: freedom-browser
-        run: npm audit --audit-level=high
 
       - name: Verify release toolchain
         working-directory: freedom-browser
