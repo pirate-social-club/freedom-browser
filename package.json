@@ -2,7 +2,7 @@
   "name": "freedom-browser",
   "version": "0.7.11",
   "license": "AGPL-3.0-or-later",
-  "description": "Freedom \u2013 A browser for the decentralized web, with Swarm, IPFS, and ENS as first-class protocols.",
+  "description": "Freedom \\u2013 A browser for the decentralized web, with Swarm, IPFS, and ENS as first-class protocols.",
   "author": {
     "name": "Freedom Team",
     "email": "browser@freedom.baby"
@@ -226,7 +226,7 @@
     "@eslint/js": "^10.0.1",
     "babel-jest": "^30.2.0",
     "dotenv-cli": "^11.0.0",
-    "electron": "^40.2.1",
+    "electron": "^43.3.0",
     "electron-builder": "^26.7.0",
     "eslint": "^10.0.0",
     "globals": "^17.3.0",
