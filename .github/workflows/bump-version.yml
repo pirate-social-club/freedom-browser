@@ -31,6 +31,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Require the main branch
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Version bumps must run from main"
+            exit 1
+          fi
+
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
@@ -59,38 +66,23 @@ jobs:
             require('fs').writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
 
-      - name: Generate changelog entry
-        id: changelog
-        run: |
-          DATE=$(date +%Y-%m-%d)
-          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          ENTRIES=""
-          if [ -n "$LAST_TAG" ]; then
-            while IFS= read -r line; do
-              case "$line" in
-                fix\("*") ENTRIES="$ENTRIES\n- $line" ;;
-                feat\("*") ENTRIES="$ENTRIES\n- $line" ;;
-                chore\("*"hns"*) ENTRIES="$ENTRIES\n- $line" ;;
-              esac
-            done < <(git log --pretty=format:"%s" "$LAST_TAG"..HEAD)
-          fi
-          echo "entries=$ENTRIES" >> $GITHUB_OUTPUT
-
       - name: Update CHANGELOG.md
         run: |
           NEW_VERSION="${{ steps.bump.outputs.new_version }}"
           DATE=$(date +%Y-%m-%d)
-          HEADER="## [${NEW_VERSION}] - ${DATE}"
-          # Read existing changelog
-          EXISTING=$(cat CHANGELOG.md)
-          # Build section from commits
-          SECTION="${HEADER}\n\n### Fixed\n\n"
-          while IFS= read -r line; do
-            SECTION="${SECTION}- ${line}\n"
-          done < <(git log --pretty=format:"%s" v0.7.7..HEAD | grep -E '^fix' | sed 's/^fix(\([^)]*\)): /* **\1**: /')
-          # Prepend
-          printf "${SECTION}\n${EXISTING}" > CHANGELOG.md
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          RANGE="HEAD"
+          if [ -n "$LAST_TAG" ]; then
+            RANGE="${LAST_TAG}..HEAD"
+          fi
+          TEMP_CHANGELOG=$(mktemp)
+          {
+            printf '## [%s] - %s\n\n### Changes\n\n' "$NEW_VERSION" "$DATE"
+            git log --pretty=format:'- %s' "$RANGE"
+            printf '\n\n'
+            cat CHANGELOG.md
+          } > "$TEMP_CHANGELOG"
+          mv "$TEMP_CHANGELOG" CHANGELOG.md
 
       - name: Commit and tag
         run: |
@@ -98,4 +90,4 @@ jobs:
           git add package.json CHANGELOG.md
           git commit -m "chore(release): prepare v${NEW_VERSION}"
           git tag -a "v${NEW_VERSION}" -m "v${NEW_VERSION}"
-          git push origin "v${NEW_VERSION}"
+          git push --atomic origin HEAD:main "v${NEW_VERSION}"

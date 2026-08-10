@@ -1,168 +1,74 @@
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
-const { execSync } = require('child_process');
+const { spawnSync } = require('child_process');
+const artifacts = require('./binary-artifacts.lock.json').bee;
+const { downloadVerified } = require('./download-verified');
 
-const OUTPUT_DIR = path.join(__dirname, '..', 'bee-bin');
+const outputDir = path.join(__dirname, '..', 'bee-bin');
 
-async function fetchLatestRelease() {
-  return new Promise((resolve, reject) => {
-    const headers = { 'User-Agent': 'Freedom-Updater' };
-    if (process.env.GITHUB_TOKEN) {
-      headers['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
-    }
-    const options = {
-      hostname: 'api.github.com',
-      path: '/repos/ethersphere/bee/releases/latest',
-      headers,
-    };
-
-    https
-      .get(options, (res) => {
-        let data = '';
-        res.on('data', (chunk) => (data += chunk));
-        res.on('end', () => {
-          if (res.statusCode === 200) {
-            resolve(JSON.parse(data));
-          } else {
-            reject(new Error(`Failed to fetch release: ${res.statusCode}`));
-          }
-        });
-      })
-      .on('error', reject);
-  });
+function selectedArtifacts() {
+  const args = process.argv.slice(2);
+  const targetIndex = args.indexOf('--target');
+  if (targetIndex === -1) return Object.entries(artifacts.targets);
+  const target = args[targetIndex + 1];
+  if (!artifacts.targets[target]) throw new Error(`Unsupported Bee target: ${target}`);
+  return [[target, artifacts.targets[target]]];
 }
 
-async function downloadFile(url, dest) {
-  console.log(`Downloading ${url} to ${dest}...`);
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest);
-    https
-      .get(url, { headers: { 'User-Agent': 'Freedom-Updater' } }, (response) => {
-        if (response.statusCode === 302 || response.statusCode === 301) {
-          downloadFile(response.headers.location, dest).then(resolve).catch(reject);
-          return;
-        }
-        response.pipe(file);
-        file.on('finish', () => {
-          file.close(resolve);
-        });
-      })
-      .on('error', (err) => {
-        fs.unlink(dest, () => {});
-        reject(err);
-      });
-  });
+function extract(archive, targetDir, kind) {
+  const command = kind === 'zip' ? 'unzip' : 'tar';
+  const args = kind === 'zip' ? ['-o', archive, '-d', targetDir] : ['-xzf', archive, '-C', targetDir];
+  const result = spawnSync(command, args, { stdio: 'inherit' });
+  if (result.status !== 0) throw new Error(`${command} failed with status ${result.status}`);
+}
+
+function findBinary(directory) {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const candidate = path.join(directory, entry.name);
+    if (entry.isFile() && (entry.name === 'bee' || entry.name === 'bee.exe')) return candidate;
+    if (entry.isDirectory()) {
+      const found = findBinary(candidate);
+      if (found) return found;
+    }
+  }
+  return null;
 }
 
 async function main() {
-  try {
-    console.log('Fetching latest Bee release info...');
-    const release = await fetchLatestRelease();
-    console.log(`Latest version: ${release.tag_name}`);
+  console.log(`Installing pinned Bee ${artifacts.version}`);
 
-    const assets = release.assets;
-    const targets = [
-      { os: 'mac', arch: 'arm64', keywords: ['darwin', 'arm64'] },
-      { os: 'mac', arch: 'x64', keywords: ['darwin', 'amd64'] },
-      { os: 'linux', arch: 'x64', keywords: ['linux', 'amd64'] },
-      { os: 'linux', arch: 'arm64', keywords: ['linux', 'arm64'] },
-      { os: 'win', arch: 'x64', keywords: ['windows', 'amd64'], exe: true },
-      // Note: Bee doesn't provide Windows ARM64 builds - we copy x64 as fallback below
-    ];
+  for (const [target, artifact] of selectedArtifacts()) {
+    const targetDir = path.join(outputDir, target);
+    const executable = target.startsWith('win-') ? 'bee.exe' : 'bee';
+    const destination = path.join(targetDir, executable);
+    const archiveName = path.basename(new URL(artifact.url).pathname);
+    const downloadPath = artifact.archive ? path.join(targetDir, archiveName) : destination;
+    fs.mkdirSync(targetDir, { recursive: true });
 
-    for (const target of targets) {
-      const asset = assets.find(
-        (a) =>
-          target.keywords.every((k) => a.name.toLowerCase().includes(k)) &&
-          !a.name.endsWith('.rpm') &&
-          !a.name.endsWith('.deb')
-      );
-
-      if (!asset) {
-        console.warn(`Could not find asset for ${target.os}-${target.arch}`);
-        continue;
-      }
-
-      const targetDir = path.join(OUTPUT_DIR, `${target.os}-${target.arch}`);
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
-      }
-
-      const binName = target.exe ? 'bee.exe' : 'bee';
-      const destFile = path.join(targetDir, binName);
-
-      const tempDest = path.join(targetDir, asset.name);
-      await downloadFile(asset.browser_download_url, tempDest);
-
-      if (asset.name.endsWith('.tar.gz') || asset.name.endsWith('.tgz')) {
-        console.log(`Extracting ${asset.name}...`);
-        if (process.platform === 'win32') {
-          const src = tempDest.replace(/\\/g, '/');
-          const dst = targetDir.replace(/\\/g, '/');
-          execSync(`tar -xzf "${src}" --force-local -C "${dst}"`);
-        } else {
-          execSync(`tar -xzf "${tempDest}" -C "${targetDir}"`);
-        }
-        fs.unlinkSync(tempDest);
-      } else if (asset.name.endsWith('.zip')) {
-        console.log(`Extracting ${asset.name}...`);
-        execSync(`unzip -o "${tempDest}" -d "${targetDir}"`);
-        fs.unlinkSync(tempDest);
-      } else {
-        fs.renameSync(tempDest, destFile);
-      }
-
-      if (fs.existsSync(destFile)) {
-        if (!target.exe) fs.chmodSync(destFile, '755');
-        console.log(`Successfully installed Bee for ${target.os}-${target.arch}`);
-      } else {
-        const findBee = (dir) => {
-          const entries = fs.readdirSync(dir, { withFileTypes: true });
-          for (const entry of entries) {
-            if ((entry.name === 'bee' || entry.name === 'bee.exe') && entry.isFile())
-              return path.join(dir, entry.name);
-            if (entry.isDirectory()) {
-              const found = findBee(path.join(dir, entry.name));
-              if (found) return found;
-            }
-          }
-          return null;
-        };
-
-        const foundBin = findBee(targetDir);
-        if (foundBin) {
-          fs.renameSync(foundBin, destFile);
-          if (!target.exe) fs.chmodSync(destFile, '755');
-          console.log(`Found and installed Bee binary for ${target.os}-${target.arch}`);
-        } else {
-          console.error(
-            `Failed to locate 'bee' binary after download/extraction for ${target.os}-${target.arch}`
-          );
-        }
-      }
+    await downloadVerified(artifact.url, downloadPath, 'sha256', artifact.sha256);
+    if (artifact.archive) {
+      extract(downloadPath, targetDir, artifact.archive);
+      fs.rmSync(downloadPath, { force: true });
+      const found = findBinary(targetDir);
+      if (!found) throw new Error(`Bee executable missing after extracting ${target}`);
+      if (found !== destination) fs.renameSync(found, destination);
     }
 
-    // Copy win-x64 binary to win-arm64 (Bee doesn't provide ARM64 builds, but Windows ARM64 can run x64 via emulation)
-    const winX64Dir = path.join(OUTPUT_DIR, 'win-x64');
-    const winArm64Dir = path.join(OUTPUT_DIR, 'win-arm64');
-    const winX64Bin = path.join(winX64Dir, 'bee.exe');
-    const winArm64Bin = path.join(winArm64Dir, 'bee.exe');
+    if (!target.startsWith('win-')) fs.chmodSync(destination, 0o755);
+    console.log(`Installed verified Bee for ${target}`);
+  }
 
-    if (fs.existsSync(winX64Bin)) {
-      if (!fs.existsSync(winArm64Dir)) {
-        fs.mkdirSync(winArm64Dir, { recursive: true });
-      }
-      fs.copyFileSync(winX64Bin, winArm64Bin);
-      console.log('Copied win-x64 Bee binary to win-arm64 (emulation fallback)');
-    }
-
-    console.log('All downloads complete.');
-    process.exit(0);
-  } catch (err) {
-    console.error('Error:', err);
-    process.exit(1);
+  if (selectedArtifacts().some(([target]) => target === 'win-x64')) {
+    const windowsArmDirectory = path.join(outputDir, 'win-arm64');
+    fs.mkdirSync(windowsArmDirectory, { recursive: true });
+    fs.copyFileSync(
+      path.join(outputDir, 'win-x64', 'bee.exe'),
+      path.join(windowsArmDirectory, 'bee.exe')
+    );
   }
 }
 
-main();
+main().catch((error) => {
+  console.error('Bee download failed:', error.message);
+  process.exit(1);
+});

@@ -14,13 +14,56 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  quality:
+    name: Verify release source
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          path: freedom-browser
+
+      - name: Check out sentinel-ai-connect dependency
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: Sentinel-Autonomybuilder/blue-ai-connect
+          ref: 924d472cb8be47b11f2432515f23bd5ea20d297c
+          path: blue-ai-connect
+
+      - name: Prepare sentinel-ai-connect file dependency
+        run: cp -R blue-ai-connect ../blue-ai-connect
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: freedom-browser/package-lock.json
+
+      - name: Install dependencies
+        working-directory: freedom-browser
+        run: npm ci --ignore-scripts
+
+      - name: Audit dependencies
+        working-directory: freedom-browser
+        run: npm audit --audit-level=high
+
+      - name: Run lint
+        working-directory: freedom-browser
+        run: npm run lint
+
+      - name: Run tests
+        working-directory: freedom-browser
+        run: npm run test:coverage
+
   build:
     name: Build ${{ matrix.label }}
+    needs: quality
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      RADICLE_ALLOW_EXPIRED_CERT: '1'
     strategy:
       fail-fast: false
       matrix:
@@ -56,6 +99,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: Sentinel-Autonomybuilder/blue-ai-connect
+          ref: 924d472cb8be47b11f2432515f23bd5ea20d297c
           path: blue-ai-connect
 
       - name: Prepare sentinel-ai-connect file dependency
@@ -118,11 +162,11 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
-          if [ -n "${APPLE_ID}" ] && [ -n "${APPLE_TEAM_ID}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD}" ]; then
-            ${{ matrix.build_command }}
-          else
-            ${{ matrix.build_command }} --unsigned --no-notarize
+          if [ -z "${APPLE_ID}" ] || [ -z "${APPLE_TEAM_ID}" ] || [ -z "${APPLE_APP_SPECIFIC_PASSWORD}" ]; then
+            echo "::error::macOS release signing and notarization credentials are required"
+            exit 1
           fi
+          ${{ matrix.build_command }}
 
       - name: Build non-macOS release artifacts
         if: runner.os == 'Linux'

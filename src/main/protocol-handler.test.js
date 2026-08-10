@@ -1,3 +1,4 @@
+const path = require('path');
 const {
   createFreedomProtocolHandler,
   findFreedomUrl,
@@ -64,7 +65,7 @@ describe('protocol-handler', () => {
     expect(devApp.setAsDefaultProtocolClient).toHaveBeenCalledWith(
       'freedom',
       '/usr/bin/electron',
-      [expect.stringMatching(/freedom-browser$/)]
+      [path.resolve('.')]
     );
   });
 

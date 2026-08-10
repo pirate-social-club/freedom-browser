@@ -1,0 +1,91 @@
+{
+  "bee": {
+    "version": "v2.8.1",
+    "targets": {
+      "mac-arm64": {
+        "url": "https://github.com/ethersphere/bee/releases/download/v2.8.1/bee-darwin-arm64.tar.gz",
+        "sha256": "2d3f3568e327abe66155144779959bb83ce6655861e658da4cddb7164deca92a",
+        "archive": "tar.gz"
+      },
+      "mac-x64": {
+        "url": "https://github.com/ethersphere/bee/releases/download/v2.8.1/bee-darwin-amd64.tar.gz",
+        "sha256": "a87383a289514a8f8c5d10c3891969007ae33ab1c75eab86fb5f6ea267ca51cb",
+        "archive": "tar.gz"
+      },
+      "linux-x64": {
+        "url": "https://github.com/ethersphere/bee/releases/download/v2.8.1/bee-linux-amd64",
+        "sha256": "293864beb4d989d00925ad7f3ce18de635d50ac9679a0e422ed148df0f0e496a"
+      },
+      "linux-arm64": {
+        "url": "https://github.com/ethersphere/bee/releases/download/v2.8.1/bee-linux-arm64",
+        "sha256": "d67cbcb264ac9aa36312dafe53bb59c108306198ae21f30d739694bf201cfc1f"
+      },
+      "win-x64": {
+        "url": "https://github.com/ethersphere/bee/releases/download/v2.8.1/bee-windows-amd64.zip",
+        "sha256": "964fe2def29663a1857aafb556d7acdd657992574d82299d0105e644755b8892",
+        "archive": "zip"
+      }
+    }
+  },
+  "ipfs": {
+    "version": "v0.43.0",
+    "targets": {
+      "mac-arm64": {
+        "url": "https://dist.ipfs.tech/kubo/v0.43.0/kubo_v0.43.0_darwin-arm64.tar.gz",
+        "sha512": "2377bc886b340087b20d5a9bdd025e5a6ed4b7e910ac04fa0d0e26f5b7e189b31a33f6cc682c0aaec2695a65b8a38d1f5bfce505c2948c0ea08ee64009034ef6",
+        "archive": "tar.gz"
+      },
+      "mac-x64": {
+        "url": "https://dist.ipfs.tech/kubo/v0.43.0/kubo_v0.43.0_darwin-amd64.tar.gz",
+        "sha512": "7edd038e9208b8024ef14329102a8bc40827c21337bb2d38ea52400c57a04e3c092086a11c9d342b85083a71df4bf77130fd676bdb68628b2d9e8e6f511ee305",
+        "archive": "tar.gz"
+      },
+      "linux-x64": {
+        "url": "https://dist.ipfs.tech/kubo/v0.43.0/kubo_v0.43.0_linux-amd64.tar.gz",
+        "sha512": "6af21cd24a307d94326807b3d3827064c74fb7122f83b6940af250e6ae40da250e0ec0e1f3551256b78cd204623ed56c32ce735bbe28bdcc787b36943c52458a",
+        "archive": "tar.gz"
+      },
+      "linux-arm64": {
+        "url": "https://dist.ipfs.tech/kubo/v0.43.0/kubo_v0.43.0_linux-arm64.tar.gz",
+        "sha512": "aae6c766ec2436f27bbd2d6ab5f8de7d2ced4dc83abc5b54b17bd58a80c28f1ea2e38840305e22f08bd01c55cf8263745675da1bbda2ac0bcde268e9e61e3818",
+        "archive": "tar.gz"
+      },
+      "win-x64": {
+        "url": "https://dist.ipfs.tech/kubo/v0.43.0/kubo_v0.43.0_windows-amd64.zip",
+        "sha512": "0486721fc406d36c9d70d16dc3984e70c50d5f1d1c890de3864a6904564080adb3f73546162ad30a8e1ee43024a18bf900fbda2b6c131197351ff2e8b9782178",
+        "archive": "zip"
+      },
+      "win-arm64": {
+        "url": "https://dist.ipfs.tech/kubo/v0.43.0/kubo_v0.43.0_windows-arm64.zip",
+        "sha512": "6d4bb67ca78219e45bb6375d3d46852e145fd293fe566be03380023d067c9edcccf7887d23bb1ce46152e45177b9a0af282fdd7b8b19a34d5df8fddc58412a75",
+        "archive": "zip"
+      }
+    }
+  },
+  "radicle": {
+    "version": "1.10.0",
+    "httpdVersion": "0.27.0",
+    "targets": {
+      "mac-arm64": {
+        "target": "aarch64-apple-darwin",
+        "mainSha256": "e06bda2f490af19ae13ff252d7d6f0405f1754d73641a5e9cea396f1632abef4",
+        "httpdSha256": "2a625ad1b4f97c1c4f494d5a795d01ec18f5a956419220090c04d90f74ba4a77"
+      },
+      "mac-x64": {
+        "target": "x86_64-apple-darwin",
+        "mainSha256": "de0042fd3230b294cf0cd2478008e14773a3a5a10c168f9bf5bb1d2de8ca1bb9",
+        "httpdSha256": "25c3ea4193f5c580bf30f9d645e6e440d8263dc07a56ce2bde019e85c15f3675"
+      },
+      "linux-arm64": {
+        "target": "aarch64-unknown-linux-musl",
+        "mainSha256": "2db9fdd49d85fd0a067cd07cddcba61d7136730caa926df68555f653921d3ebc",
+        "httpdSha256": "21c1e9d5e8f5b957ee2cec51b5be50c49b6c4089d99abb9e3223a67f5c06abd4"
+      },
+      "linux-x64": {
+        "target": "x86_64-unknown-linux-musl",
+        "mainSha256": "55099ff08d835bd091c0857434c0671c1ebb5df8eca4c29704ba8c5ba95de768",
+        "httpdSha256": "57d5aec9d814f936a0a737e549b875363f1d19372da915c87069128a7a8c5b21"
+      }
+    }
+  }
+}

@@ -1,144 +1,53 @@
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
-const { execSync } = require('child_process');
+const { spawnSync } = require('child_process');
+const artifacts = require('./binary-artifacts.lock.json').ipfs;
+const { downloadVerified } = require('./download-verified');
 
-const OUTPUT_DIR = path.join(__dirname, '..', 'ipfs-bin');
+const outputDir = path.join(__dirname, '..', 'ipfs-bin');
 
-// Kubo releases are hosted at dist.ipfs.tech
-const DIST_URL = 'https://dist.ipfs.tech/kubo/versions';
-
-async function fetchVersionsList() {
-  return new Promise((resolve, reject) => {
-    https
-      .get(DIST_URL, (res) => {
-        let data = '';
-        res.on('data', (chunk) => (data += chunk));
-        res.on('end', () => {
-          if (res.statusCode === 200) {
-            // Parse versions list (one per line, newest first after sorting)
-            const versions = data
-              .trim()
-              .split('\n')
-              .filter((v) => v.startsWith('v') && !v.includes('-rc'))
-              .sort((a, b) => {
-                // Sort semver descending
-                const pa = a.slice(1).split('.').map(Number);
-                const pb = b.slice(1).split('.').map(Number);
-                for (let i = 0; i < 3; i++) {
-                  if (pa[i] !== pb[i]) return pb[i] - pa[i];
-                }
-                return 0;
-              });
-            resolve(versions);
-          } else {
-            reject(new Error(`Failed to fetch versions: ${res.statusCode}`));
-          }
-        });
-      })
-      .on('error', reject);
-  });
+function selectedArtifacts() {
+  const args = process.argv.slice(2);
+  const targetIndex = args.indexOf('--target');
+  if (targetIndex === -1) return Object.entries(artifacts.targets);
+  const target = args[targetIndex + 1];
+  if (!artifacts.targets[target]) throw new Error(`Unsupported Kubo target: ${target}`);
+  return [[target, artifacts.targets[target]]];
 }
 
-async function downloadFile(url, dest) {
-  console.log(`Downloading ${url}...`);
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest);
-    https
-      .get(url, (response) => {
-        if (response.statusCode === 302 || response.statusCode === 301) {
-          file.close();
-          fs.unlinkSync(dest);
-          downloadFile(response.headers.location, dest).then(resolve).catch(reject);
-          return;
-        }
-        if (response.statusCode !== 200) {
-          file.close();
-          fs.unlinkSync(dest);
-          reject(new Error(`HTTP ${response.statusCode} for ${url}`));
-          return;
-        }
-        response.pipe(file);
-        file.on('finish', () => {
-          file.close(resolve);
-        });
-      })
-      .on('error', (err) => {
-        fs.unlink(dest, () => {});
-        reject(err);
-      });
-  });
+function extract(archive, targetDir, kind) {
+  const command = kind === 'zip' ? 'unzip' : 'tar';
+  const args = kind === 'zip' ? ['-o', archive, '-d', targetDir] : ['-xzf', archive, '-C', targetDir];
+  const result = spawnSync(command, args, { stdio: 'inherit' });
+  if (result.status !== 0) throw new Error(`${command} failed with status ${result.status}`);
 }
 
 async function main() {
-  try {
-    console.log('Fetching latest Kubo (IPFS) version...');
-    const versions = await fetchVersionsList();
-    const latestVersion = versions[0];
-    console.log(`Latest version: ${latestVersion}`);
+  console.log(`Installing pinned Kubo ${artifacts.version}`);
 
-    const targets = [
-      { os: 'mac', arch: 'arm64', distArch: 'darwin-arm64' },
-      { os: 'mac', arch: 'x64', distArch: 'darwin-amd64' },
-      { os: 'linux', arch: 'x64', distArch: 'linux-amd64' },
-      { os: 'linux', arch: 'arm64', distArch: 'linux-arm64' },
-      { os: 'win', arch: 'x64', distArch: 'windows-amd64', exe: true, zip: true },
-      { os: 'win', arch: 'arm64', distArch: 'windows-arm64', exe: true, zip: true },
-    ];
+  for (const [target, artifact] of selectedArtifacts()) {
+    const targetDir = path.join(outputDir, target);
+    const archiveName = path.basename(new URL(artifact.url).pathname);
+    const archivePath = path.join(targetDir, archiveName);
+    const executable = target.startsWith('win-') ? 'ipfs.exe' : 'ipfs';
+    const destination = path.join(targetDir, executable);
+    fs.mkdirSync(targetDir, { recursive: true });
 
-    for (const target of targets) {
-      const ext = target.zip ? 'zip' : 'tar.gz';
-      const fileName = `kubo_${latestVersion}_${target.distArch}.${ext}`;
-      const downloadUrl = `https://dist.ipfs.tech/kubo/${latestVersion}/${fileName}`;
+    await downloadVerified(artifact.url, archivePath, 'sha512', artifact.sha512);
+    extract(archivePath, targetDir, artifact.archive);
+    fs.rmSync(archivePath, { force: true });
 
-      const targetDir = path.join(OUTPUT_DIR, `${target.os}-${target.arch}`);
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
-      }
-
-      const tempDest = path.join(targetDir, fileName);
-      const binName = target.exe ? 'ipfs.exe' : 'ipfs';
-      const destFile = path.join(targetDir, binName);
-
-      await downloadFile(downloadUrl, tempDest);
-
-      console.log(`Extracting ${fileName}...`);
-      if (target.zip) {
-        execSync(`unzip -o "${tempDest}" -d "${targetDir}"`);
-      } else if (process.platform === 'win32') {
-        const src = tempDest.replace(/\\/g, '/');
-        const dst = targetDir.replace(/\\/g, '/');
-        execSync(`tar -xzf "${src}" --force-local -C "${dst}"`);
-      } else {
-        execSync(`tar -xzf "${tempDest}" -C "${targetDir}"`);
-      }
-      fs.unlinkSync(tempDest);
-
-      // Kubo extracts to kubo/ipfs (or kubo/ipfs.exe on Windows), move it up
-      const extractedBinName = target.exe ? 'ipfs.exe' : 'ipfs';
-      const extractedBin = path.join(targetDir, 'kubo', extractedBinName);
-      if (fs.existsSync(extractedBin)) {
-        fs.renameSync(extractedBin, destFile);
-        // Clean up extracted folder
-        fs.rmSync(path.join(targetDir, 'kubo'), { recursive: true, force: true });
-      }
-
-      if (fs.existsSync(destFile)) {
-        if (!target.exe) fs.chmodSync(destFile, '755');
-        console.log(`Successfully installed Kubo (IPFS) for ${target.os}-${target.arch}`);
-      } else {
-        console.error(
-          `Failed to locate 'ipfs' binary after extraction for ${target.os}-${target.arch}`
-        );
-      }
-    }
-
-    console.log('All IPFS downloads complete.');
-    process.exit(0);
-  } catch (err) {
-    console.error('Error:', err);
-    process.exit(1);
+    const extracted = path.join(targetDir, 'kubo', executable);
+    if (!fs.existsSync(extracted)) throw new Error(`Kubo executable missing after extracting ${target}`);
+    fs.rmSync(destination, { force: true });
+    fs.renameSync(extracted, destination);
+    fs.rmSync(path.join(targetDir, 'kubo'), { recursive: true, force: true });
+    if (!target.startsWith('win-')) fs.chmodSync(destination, 0o755);
+    console.log(`Installed verified Kubo for ${target}`);
   }
 }
 
-main();
+main().catch((error) => {
+  console.error('Kubo download failed:', error.message);
+  process.exit(1);
+});
