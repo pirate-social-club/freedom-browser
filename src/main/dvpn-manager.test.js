@@ -75,6 +75,8 @@ function createSdkMock(options = {}) {
   };
 }
 
+const loadedDvpnModules = [];
+
 function loadDvpnManagerModule(options = {}) {
   const ipcMain = options.ipcMain || createIpcMainMock();
   const app = options.app || createAppMock({
@@ -147,6 +149,8 @@ function loadDvpnManagerModule(options = {}) {
     },
   });
 
+  loadedDvpnModules.push(mod);
+
   return {
     mod,
     app,
@@ -169,7 +173,10 @@ function loadDvpnManagerModule(options = {}) {
 }
 
 describe('dvpn-manager', () => {
-  afterEach(() => {
+  afterEach(async () => {
+    for (const mod of loadedDvpnModules.splice(0)) {
+      await mod.stopDvpn();
+    }
     jest.clearAllMocks();
     jest.clearAllTimers();
     jest.useRealTimers();
