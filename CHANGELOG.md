@@ -2,7 +2,7 @@
 
 All notable changes to Freedom will be documented in this file.
 
-## [0.7.12] - Unreleased
+## [0.7.12] - 2026-08-12
 
 ### Fixed
 
@@ -11,7 +11,7 @@ All notable changes to Freedom will be documented in this file.
 - Aligned Electron and the native SQLite addon to a compatible release pair so native rebuilds succeed on every release runner.
 - Replaced the Linux HNS daemon with a self-contained static build so clean systems do not require an unbundled `libunbound` runtime.
 - Made Bee and Kubo archive extraction safe for Windows drive-letter paths.
-- Made untagged macOS release preflights build unsigned artifacts while retaining mandatory signing and notarization for tags.
+- Kept unsigned macOS artifacts limited to manual CI preflights; tagged releases publish Linux x64 and Windows x64 only until macOS signing and notarization credentials are available.
 
 ### Changed
 
