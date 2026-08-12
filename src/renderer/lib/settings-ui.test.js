@@ -47,6 +47,7 @@ const loadSettingsModule = async (options = {}) => {
       lastDisconnectReason: null,
       error: null,
     },
+    createWalletResult = { success: true, address: 'sent1testaddress' },
   } = options;
 
   const settingsQueue = [...settingsResponses];
@@ -215,7 +216,7 @@ const loadSettingsModule = async (options = {}) => {
       stop: jest.fn(() => ({ catch: jest.fn() })),
       getStatus: jest.fn().mockResolvedValue(dvpnStatus),
       getBalance: jest.fn().mockResolvedValue({ success: false, error: 'No wallet' }),
-      createWallet: jest.fn(),
+      createWallet: jest.fn().mockResolvedValue(createWalletResult),
       onStatusUpdate: jest.fn(),
     },
   };
@@ -270,6 +271,8 @@ const loadSettingsModule = async (options = {}) => {
       dvpnRefreshBalance,
       dvpnConnectBtn,
       dvpnDisconnectBtn,
+      dvpnErrorRow,
+      dvpnErrorValue,
       dvpnMaxSpend,
       dvpnLowBalanceStop,
       dvpnMaxDuration,
@@ -539,6 +542,22 @@ describe('settings-ui', () => {
     await Promise.resolve();
 
     expect(electronAPI.copyText).toHaveBeenCalledWith('sent1testaddress');
+  });
+
+  test('shows the secure-storage error when dVPN wallet creation is refused', async () => {
+    const error = 'Secure dVPN wallet storage requires an available, unlocked system keyring.';
+    const { mod, elements } = await loadSettingsModule({
+      createWalletResult: { success: false, error },
+    });
+
+    await mod.initSettings();
+    elements.dvpnCreateWalletBtn.dispatch('click');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(elements.dvpnErrorRow.style.display).toBe('');
+    expect(elements.dvpnErrorValue.textContent).toBe(error);
+    expect(elements.dvpnCreateWalletBtn.disabled).toBe(false);
   });
 
   test('disables HNS and dVPN controls with an explicit reason on unsupported targets', async () => {

@@ -442,6 +442,8 @@ export const initSettings = async () => {
       window.dvpn.getStatus().then(updateDvpnStatusDisplay).catch(() => {});
     } else {
       dvpnCreateWalletBtn.disabled = false;
+      if (dvpnErrorRow) dvpnErrorRow.style.display = '';
+      if (dvpnErrorValue) dvpnErrorValue.textContent = result.error || 'Failed to create dVPN wallet';
     }
   });
   dvpnRefreshBalanceBtn?.addEventListener('click', () => {

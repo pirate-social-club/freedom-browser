@@ -2,6 +2,17 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [0.7.13] - 2026-08-12
+
+### Security
+
+- Routed public IPv4 and IPv6 literals through dVPN while preserving direct access to loopback, private, unique-local, and link-local destinations.
+- Prevented dVPN mnemonic creation and loading unless Electron uses a system-keyring-backed storage backend, and blocked legacy weakly protected wallet files with an explicit remediation error.
+
+### Changed
+
+- Cached Electron and Electron Builder downloads in release CI to reduce repeated network fetches.
+
 ## [0.7.12] - 2026-08-12
 
 ### Fixed

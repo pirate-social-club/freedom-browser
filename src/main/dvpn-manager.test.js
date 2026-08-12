@@ -13,7 +13,8 @@ function flushMicrotasks() {
 function createSafeStorageMock(options = {}) {
   return {
     isEncryptionAvailable: jest.fn(() => options.available ?? true),
-    encryptString: jest.fn(() => Buffer.from('encrypted')),
+    getSelectedStorageBackend: jest.fn(() => options.backend || 'gnome_libsecret'),
+    encryptString: jest.fn(() => options.encrypted || Buffer.from('v11encrypted')),
     decryptString: jest.fn(() => options.mnemonic ?? 'word word word word word word word word word word word word'),
   };
 }
@@ -38,7 +39,7 @@ function createFsMock(options = {}) {
       if (typeof options.readFileSync === 'function') {
         return options.readFileSync(target);
       }
-      if (target === walletPath) return Buffer.from('encrypted');
+      if (target === walletPath) return options.walletContents || Buffer.from('v11encrypted');
       if (target === statePath) return JSON.stringify(options.stateContents || {});
       return '';
     }),
@@ -254,7 +255,41 @@ describe('dvpn-manager', () => {
     const result = await ctx.ipcMain.invoke(IPC.DVPN_CREATE_WALLET);
 
     expect(result.success).toBe(false);
-    expect(result.error).toBe('Device encryption not available');
+    expect(result.error).toContain('system keyring');
+    expect(ctx.sdkMock.createWallet).not.toHaveBeenCalled();
+    expect(ctx.mod.getStatus().state).toBe('error');
+  });
+
+  test.each(['basic_text', 'unknown'])('wallet creation refuses the %s storage backend', async (backend) => {
+    const ctx = loadDvpnManagerModule({
+      walletExists: false,
+      safeStorage: { backend },
+    });
+    ctx.mod.registerDvpnIpc();
+
+    const result = await ctx.ipcMain.invoke(IPC.DVPN_CREATE_WALLET);
+
+    expect(result).toEqual(expect.objectContaining({ success: false }));
+    expect(result.error).toContain('system keyring');
+    expect(ctx.sdkMock.createWallet).not.toHaveBeenCalled();
+    expect(ctx.safeStorage.encryptString).not.toHaveBeenCalled();
+  });
+
+  test('wallet creation refuses ciphertext that is not keyring-backed', async () => {
+    const ctx = loadDvpnManagerModule({
+      walletExists: false,
+      safeStorage: { encrypted: Buffer.from('v10encrypted') },
+    });
+    ctx.mod.registerDvpnIpc();
+
+    const result = await ctx.ipcMain.invoke(IPC.DVPN_CREATE_WALLET);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('system keyring');
+    expect(ctx.fsMock.writeFileSync).not.toHaveBeenCalledWith(
+      expect.stringContaining('wallet.enc'),
+      expect.anything()
+    );
   });
 
   test('wallet rehydration on init calls importWallet not createWallet', async () => {
@@ -279,8 +314,46 @@ describe('dvpn-manager', () => {
 
     await ctx.mod.initDvpn();
 
-    expect(ctx.setErrorState).toHaveBeenCalledWith('dvpn', 'Device encryption not available');
+    expect(ctx.setErrorState).toHaveBeenCalledWith('dvpn', expect.stringContaining('system keyring'));
     expect(ctx.mod.getStatus().state).toBe('error');
+  });
+
+  test('wallet rehydration blocks a legacy basic-text ciphertext without decrypting it', async () => {
+    const ctx = loadDvpnManagerModule({
+      walletExists: true,
+      walletContents: Buffer.from('v10encrypted'),
+    });
+
+    await ctx.mod.initDvpn();
+
+    expect(ctx.safeStorage.decryptString).not.toHaveBeenCalled();
+    expect(ctx.sdkMock.importWallet).not.toHaveBeenCalled();
+    expect(ctx.mod.getStatus()).toMatchObject({
+      state: 'error',
+      error: expect.stringContaining('without system-keyring protection'),
+    });
+  });
+
+  test('wallet rehydration rejects unknown ciphertext without decrypting it', async () => {
+    const ctx = loadDvpnManagerModule({
+      walletExists: true,
+      walletContents: Buffer.from('???encrypted'),
+    });
+
+    await ctx.mod.initDvpn();
+
+    expect(ctx.safeStorage.decryptString).not.toHaveBeenCalled();
+    expect(ctx.mod.getStatus().error).toContain('unrecognized storage format');
+  });
+
+  test.each([
+    ['v10payload', 'weak'],
+    ['v11payload', 'keyring'],
+    ['payload', 'unknown'],
+  ])('classifies ciphertext prefix %s as %s', (ciphertext, expected) => {
+    const ctx = loadDvpnManagerModule();
+
+    expect(ctx.mod.classifyWalletCiphertext(Buffer.from(ciphertext))).toBe(expected);
   });
 
   test('start with insufficient balance rejects with error', async () => {

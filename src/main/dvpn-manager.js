@@ -41,6 +41,15 @@ let sdkHttpHardened = false;
 const DVPN_MAX_CONNECT_ATTEMPTS = 7;
 const DVPN_IP_CHECK_URL = 'https://api.ipify.org?format=json';
 const DVPN_IP_CHECK_TIMEOUT = 10000;
+const SECURE_STORAGE_BACKENDS = new Set([
+  'gnome_libsecret',
+  'kwallet',
+  'kwallet5',
+  'kwallet6',
+]);
+const SECURE_STORAGE_ERROR = 'Secure dVPN wallet storage requires an available, unlocked system keyring.';
+const WEAK_WALLET_ERROR = 'This dVPN wallet was stored without system-keyring protection and is blocked. Configure and unlock a system keyring before restoring the wallet.';
+const UNKNOWN_WALLET_ERROR = 'This dVPN wallet has an unrecognized storage format and cannot be loaded safely.';
 
 function getDataDir() {
   const dir = path.join(app.getPath('userData'), 'dvpn');
@@ -197,27 +206,50 @@ async function resolveConnectedIp(socksPort, moduleLoader = importModuleFromFile
   }
 }
 
+function getSecureStorageError() {
+  if (!safeStorage.isEncryptionAvailable()) return SECURE_STORAGE_ERROR;
+  try {
+    const backend = safeStorage.getSelectedStorageBackend();
+    return SECURE_STORAGE_BACKENDS.has(backend) ? null : SECURE_STORAGE_ERROR;
+  } catch {
+    return SECURE_STORAGE_ERROR;
+  }
+}
+
+function classifyWalletCiphertext(encrypted) {
+  if (!Buffer.isBuffer(encrypted) || encrypted.length < 3) return 'unknown';
+  const prefix = encrypted.subarray(0, 3).toString('ascii');
+  if (prefix === 'v10') return 'weak';
+  if (prefix === 'v11') return 'keyring';
+  return 'unknown';
+}
+
 function loadMnemonic() {
   const walletPath = getWalletPath();
   if (!fs.existsSync(walletPath)) return null;
-  if (!safeStorage.isEncryptionAvailable()) {
-    log.error('[dVPN] Cannot decrypt wallet: safeStorage unavailable');
-    return null;
-  }
+  const encrypted = fs.readFileSync(walletPath);
+  const protection = classifyWalletCiphertext(encrypted);
+  if (protection === 'weak') throw new Error(WEAK_WALLET_ERROR);
+  if (protection !== 'keyring') throw new Error(UNKNOWN_WALLET_ERROR);
+
+  const storageError = getSecureStorageError();
+  if (storageError) throw new Error(storageError);
+
   try {
-    const encrypted = fs.readFileSync(walletPath);
     return safeStorage.decryptString(encrypted);
   } catch (err) {
-    log.error('[dVPN] Failed to decrypt wallet:', err);
-    return null;
+    log.error('[dVPN] Failed to decrypt wallet:', err.message);
+    throw new Error('Failed to decrypt dVPN wallet', { cause: err });
   }
 }
 
 function saveMnemonic(mnemonic) {
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error('Device encryption not available');
-  }
+  const storageError = getSecureStorageError();
+  if (storageError) throw new Error(storageError);
   const encrypted = safeStorage.encryptString(mnemonic);
+  if (classifyWalletCiphertext(encrypted) !== 'keyring') {
+    throw new Error(SECURE_STORAGE_ERROR);
+  }
   fs.writeFileSync(getWalletPath(), encrypted);
 }
 
@@ -285,15 +317,25 @@ function unsupportedResult() {
 
 async function createWallet() {
   if (!dvpnCapability.supported) return unsupportedResult();
-  if (!safeStorage.isEncryptionAvailable()) {
-    return { success: false, error: 'Device encryption not available' };
+  const storageError = getSecureStorageError();
+  if (storageError) {
+    setErrorState('dvpn', storageError);
+    updateState(STATES.ERROR, storageError);
+    return { success: false, error: storageError };
   }
 
   const sdkModule = await loadSdk();
   const result = await sdkModule.createWallet();
 
+  try {
+    saveMnemonic(result.mnemonic);
+  } catch (err) {
+    setErrorState('dvpn', err.message);
+    updateState(STATES.ERROR, err.message);
+    return { success: false, error: err.message };
+  }
+
   walletAddress = result.address;
-  saveMnemonic(result.mnemonic);
   cachedBalance = null;
   cachedFunded = false;
   lastError = null;
@@ -313,7 +355,12 @@ async function createWallet() {
 
 async function getBalance() {
   if (!dvpnCapability.supported) return unsupportedResult();
-  const mnemonic = loadMnemonic();
+  let mnemonic;
+  try {
+    mnemonic = loadMnemonic();
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
   if (!mnemonic) {
     return { success: false, error: 'No wallet' };
   }
@@ -338,7 +385,15 @@ async function startDvpn() {
     return { success: false, error: 'Already connected or connecting' };
   }
 
-  const mnemonic = loadMnemonic();
+  let mnemonic;
+  try {
+    mnemonic = loadMnemonic();
+  } catch (err) {
+    log.error('[dVPN] Wallet unavailable:', err.message);
+    setErrorState('dvpn', err.message);
+    updateState(STATES.ERROR, err.message);
+    return { success: false, error: err.message };
+  }
   if (!mnemonic) {
     log.error('[dVPN] No wallet mnemonic available');
     return { success: false, error: 'No wallet' };
@@ -584,13 +639,14 @@ async function initDvpn() {
     return;
   }
 
-  if (!safeStorage.isEncryptionAvailable()) {
-    setErrorState('dvpn', 'Device encryption not available');
-    updateState(STATES.ERROR, 'Device encryption not available');
+  let mnemonic;
+  try {
+    mnemonic = loadMnemonic();
+  } catch (err) {
+    setErrorState('dvpn', err.message);
+    updateState(STATES.ERROR, err.message);
     return;
   }
-
-  const mnemonic = loadMnemonic();
   if (!mnemonic) {
     setErrorState('dvpn', 'Failed to decrypt wallet');
     updateState(STATES.ERROR, 'Failed to decrypt wallet');
@@ -703,4 +759,6 @@ module.exports = {
   resolveConnectedIp,
   withMutedSdkWarnings,
   isSuppressedSdkWarning,
+  classifyWalletCiphertext,
+  getSecureStorageError,
 };

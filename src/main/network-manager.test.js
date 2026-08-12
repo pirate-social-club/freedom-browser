@@ -182,17 +182,53 @@ describe('network-manager', () => {
     expect(evaluatePac(pac, 'unknown-single-label')).toBe('PROXY 127.0.0.1:5380');
   });
 
-  test('loopback always DIRECT regardless of proxy config', () => {
+  test.each([
+    '127.0.0.1',
+    '127.0.1.1',
+    '10.42.0.1',
+    '172.16.0.1',
+    '172.31.255.254',
+    '192.168.1.1',
+    '169.254.10.20',
+    '::1',
+    'fc00::1',
+    'fdff:ffff::1',
+    'fe80::1',
+    'febf:ffff::1',
+    '::ffff:192.168.1.1',
+  ])('local or private literal %s remains DIRECT while dVPN is connected', (host) => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
     ctx.mod.setDvpnProxy('127.0.0.1', 10808);
 
     const pac = ctx.mod.buildPacScript();
 
-    expect(pac).toContain('shExpMatch(host, "127.0.0.*")');
-    expect(pac).toContain('host === "localhost"');
-    expect(pac).toContain('host === "::1"');
-    expect(pac.match(/DIRECT/g).length).toBeGreaterThanOrEqual(1);
+    expect(evaluatePac(pac, host)).toBe('DIRECT');
+  });
+
+  test.each([
+    '1.2.3.4',
+    '8.8.8.8',
+    '172.15.255.255',
+    '172.32.0.1',
+    '2001:4860:4860::8888',
+    '2606:4700:4700::1111',
+    '[2001:4860:4860::8888]',
+  ])('public literal %s uses dVPN instead of bypassing it', (host) => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+    ctx.mod.setDvpnProxy('127.0.0.1', 10808);
+
+    const pac = ctx.mod.buildPacScript();
+
+    expect(evaluatePac(pac, host)).toBe('SOCKS5 127.0.0.1:10808; SOCKS 127.0.0.1:10808; DIRECT');
+  });
+
+  test('localhost remains DIRECT while dVPN is connected', () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setDvpnProxy('127.0.0.1', 10808);
+
+    expect(evaluatePac(ctx.mod.buildPacScript(), 'localhost')).toBe('DIRECT');
   });
 
   test('unknown single-label hosts go to the HNS proxy when set', () => {
@@ -255,7 +291,7 @@ describe('network-manager', () => {
     const pac = ctx.mod.buildPacScript();
 
     const hnsBlockStart = pac.indexOf('hnsRoots[host.toLowerCase()] === 1');
-    const socksStart = pac.indexOf('SOCKS5');
+    const socksStart = pac.lastIndexOf('SOCKS5');
 
     expect(hnsBlockStart).toBeGreaterThan(-1);
     expect(socksStart).toBeGreaterThan(-1);
