@@ -168,21 +168,22 @@ const updateDvpnStatusDisplay = (status) => {
   }
   updateDvpnSettingsVisibility();
 
-  const hasWallet = !!status.walletAddress;
+  const walletPresent = status.walletPresent ?? !!status.walletAddress;
+  const hasUsableWallet = !!status.walletAddress;
   const isConnected = status.state === 'connected';
   const isConnecting = status.state === 'connecting';
   const isStopping =
     status.state === 'disconnecting' || status.state === 'local_off_remote_pending';
 
-  if (dvpnWalletSetup) dvpnWalletSetup.style.display = dvpnSupported && !hasWallet ? '' : 'none';
-  if (dvpnWalletDisplay) dvpnWalletDisplay.style.display = hasWallet ? '' : 'none';
+  if (dvpnWalletSetup) dvpnWalletSetup.style.display = dvpnSupported && !walletPresent ? '' : 'none';
+  if (dvpnWalletDisplay) dvpnWalletDisplay.style.display = walletPresent ? '' : 'none';
   if (dvpnWalletAddressEl) dvpnWalletAddressEl.textContent = status.walletAddress || '';
   renderDvpnQr(status.walletAddress || null);
 
-  if (dvpnBalanceRow) dvpnBalanceRow.style.display = hasWallet ? '' : 'none';
+  if (dvpnBalanceRow) dvpnBalanceRow.style.display = hasUsableWallet ? '' : 'none';
   if (dvpnBalanceValue) dvpnBalanceValue.textContent = status.balance || '—';
 
-  if (dvpnStatusRow) dvpnStatusRow.style.display = hasWallet ? '' : 'none';
+  if (dvpnStatusRow) dvpnStatusRow.style.display = walletPresent ? '' : 'none';
   if (dvpnStatusValue) {
     const stateLabels = {
       off: 'Off',
@@ -198,7 +199,7 @@ const updateDvpnStatusDisplay = (status) => {
       : 'Unavailable';
   }
 
-  if (dvpnControls) dvpnControls.style.display = hasWallet ? '' : 'none';
+  if (dvpnControls) dvpnControls.style.display = hasUsableWallet ? '' : 'none';
 
   if (dvpnNodeRow) dvpnNodeRow.style.display = status.nodeAddress ? '' : 'none';
   if (dvpnNodeValue) dvpnNodeValue.textContent = status.nodeAddress || '';
@@ -213,14 +214,15 @@ const updateDvpnStatusDisplay = (status) => {
   if (dvpnErrorValue) dvpnErrorValue.textContent = status.error || '';
 
   if (dvpnConnectBtn && dvpnDisconnectBtn) {
-    dvpnConnectBtn.disabled = !dvpnSupported || isConnected || isConnecting || isStopping || !hasWallet || !status.funded;
+    dvpnConnectBtn.disabled = !dvpnSupported || isConnected || isConnecting || isStopping || !hasUsableWallet || !status.funded;
     dvpnDisconnectBtn.disabled = !dvpnSupported || (!isConnected && !isConnecting && !isStopping);
   }
 
+  if (dvpnCreateWalletBtn) dvpnCreateWalletBtn.disabled = !dvpnSupported || walletPresent;
+  if (dvpnCopyAddressBtn) dvpnCopyAddressBtn.disabled = !dvpnSupported || !hasUsableWallet;
+  if (dvpnRefreshBalanceBtn) dvpnRefreshBalanceBtn.disabled = !dvpnSupported || !hasUsableWallet;
+
   for (const control of [
-    dvpnCreateWalletBtn,
-    dvpnCopyAddressBtn,
-    dvpnRefreshBalanceBtn,
     dvpnMaxSpendInput,
     dvpnLowBalanceStopInput,
     dvpnMaxDurationInput,

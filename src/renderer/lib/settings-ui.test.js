@@ -268,6 +268,8 @@ const loadSettingsModule = async (options = {}) => {
       hnsCapabilityNote,
       dvpnCapabilityNote,
       dvpnCreateWalletBtn,
+      dvpnWalletSetup,
+      dvpnWalletDisplay,
       dvpnRefreshBalance,
       dvpnConnectBtn,
       dvpnDisconnectBtn,
@@ -558,6 +560,37 @@ describe('settings-ui', () => {
     expect(elements.dvpnErrorRow.style.display).toBe('');
     expect(elements.dvpnErrorValue.textContent).toBe(error);
     expect(elements.dvpnCreateWalletBtn.disabled).toBe(false);
+  });
+
+  test.each([
+    'This dVPN wallet was stored without system-keyring protection and is blocked.',
+    'Secure dVPN wallet storage requires an available, unlocked system keyring.',
+  ])('preserves recovery UI for an existing unavailable wallet: %s', async (error) => {
+    const { mod, elements } = await loadSettingsModule({
+      dvpnStatus: {
+        supported: true,
+        state: 'error',
+        walletPresent: true,
+        walletAddress: null,
+        connected: false,
+        balance: null,
+        funded: false,
+        lastDisconnectReason: null,
+        error,
+      },
+    });
+
+    await mod.initSettings();
+    elements.settingsBtn.dispatch('click');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(elements.dvpnWalletSetup.style.display).toBe('none');
+    expect(elements.dvpnWalletDisplay.style.display).toBe('');
+    expect(elements.dvpnCreateWalletBtn.disabled).toBe(true);
+    expect(elements.dvpnErrorRow.style.display).toBe('');
+    expect(elements.dvpnErrorValue.textContent).toBe(error);
+    expect(elements.dvpnConnectBtn.disabled).toBe(true);
   });
 
   test('disables HNS and dVPN controls with an explicit reason on unsupported targets', async () => {

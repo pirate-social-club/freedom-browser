@@ -74,24 +74,28 @@ jobs:
         include:
           - os: macos-14
             label: macOS x64
+            binary_target: mac-x64
             artifact_name: macos-x64
             publish_on_tag: false
             workdir: freedom-browser
             build_command: node scripts/build.js --dist --mac --x64
           - os: macos-14
             label: macOS arm64
+            binary_target: mac-arm64
             artifact_name: macos-arm64
             publish_on_tag: false
             workdir: freedom-browser
             build_command: node scripts/build.js --dist --mac --arm64
           - os: ubuntu-latest
             label: Linux x64
+            binary_target: linux-x64
             artifact_name: linux-x64
             publish_on_tag: true
             workdir: freedom-browser
             build_command: npm run dist:linux:x64:docker
           - os: windows-latest
             label: Windows x64
+            binary_target: win-x64
             artifact_name: windows-x64
             publish_on_tag: true
             workdir: freedom-browser
@@ -168,10 +172,10 @@ jobs:
         working-directory: ${{ matrix.workdir }}
         shell: bash
         run: |
-          npm run bee:download
-          npm run ipfs:download
+          npm run bee:download -- --target ${{ matrix.binary_target }}
+          npm run ipfs:download -- --target ${{ matrix.binary_target }}
           if [ "$RUNNER_OS" != "Windows" ]; then
-            npm run radicle:download -- --all
+            npm run radicle:download -- --target ${{ matrix.binary_target }}
           fi
 
       - name: Build macOS release artifacts

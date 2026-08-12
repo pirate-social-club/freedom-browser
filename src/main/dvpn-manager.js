@@ -50,6 +50,7 @@ const SECURE_STORAGE_BACKENDS = new Set([
 const SECURE_STORAGE_ERROR = 'Secure dVPN wallet storage requires an available, unlocked system keyring.';
 const WEAK_WALLET_ERROR = 'This dVPN wallet was stored without system-keyring protection and is blocked. Configure and unlock a system keyring before restoring the wallet.';
 const UNKNOWN_WALLET_ERROR = 'This dVPN wallet has an unrecognized storage format and cannot be loaded safely.';
+const WALLET_EXISTS_ERROR = 'A dVPN wallet already exists. Restore access to the existing wallet before creating another one.';
 
 function getDataDir() {
   const dir = path.join(app.getPath('userData'), 'dvpn');
@@ -207,6 +208,9 @@ async function resolveConnectedIp(socksPort, moduleLoader = importModuleFromFile
 }
 
 function getSecureStorageError() {
+  if (process.platform !== 'linux') {
+    return 'Secure dVPN wallet storage has not been validated on this platform.';
+  }
   if (!safeStorage.isEncryptionAvailable()) return SECURE_STORAGE_ERROR;
   try {
     const backend = safeStorage.getSelectedStorageBackend();
@@ -216,7 +220,11 @@ function getSecureStorageError() {
   }
 }
 
-function classifyWalletCiphertext(encrypted) {
+function classifyWalletCiphertext(encrypted, platform = process.platform) {
+  // Chromium's v10 prefix identifies the hardcoded basic_text key on Linux.
+  // Prefix meanings on other platforms must be validated independently before
+  // dVPN support is enabled there.
+  if (platform !== 'linux') return 'unsupported-platform';
   if (!Buffer.isBuffer(encrypted) || encrypted.length < 3) return 'unknown';
   const prefix = encrypted.subarray(0, 3).toString('ascii');
   if (prefix === 'v10') return 'weak';
@@ -250,7 +258,12 @@ function saveMnemonic(mnemonic) {
   if (classifyWalletCiphertext(encrypted) !== 'keyring') {
     throw new Error(SECURE_STORAGE_ERROR);
   }
-  fs.writeFileSync(getWalletPath(), encrypted);
+  try {
+    fs.writeFileSync(getWalletPath(), encrypted, { flag: 'wx', mode: 0o600 });
+  } catch (err) {
+    if (err?.code === 'EEXIST') throw new Error(WALLET_EXISTS_ERROR, { cause: err });
+    throw err;
+  }
 }
 
 function persistState() {
@@ -296,6 +309,7 @@ function getStatus() {
     target: dvpnCapability.target,
     unsupportedReason: dvpnCapability.unsupportedReason,
     state: currentState,
+    walletPresent: walletExists(),
     walletAddress,
     connected: currentState === STATES.CONNECTED,
     sessionId: connectResult?.sessionId || null,
@@ -317,6 +331,11 @@ function unsupportedResult() {
 
 async function createWallet() {
   if (!dvpnCapability.supported) return unsupportedResult();
+  if (walletExists()) {
+    setErrorState('dvpn', WALLET_EXISTS_ERROR);
+    updateState(STATES.ERROR, WALLET_EXISTS_ERROR);
+    return { success: false, error: WALLET_EXISTS_ERROR };
+  }
   const storageError = getSecureStorageError();
   if (storageError) {
     setErrorState('dvpn', storageError);
