@@ -8,7 +8,7 @@ All notable changes to Freedom will be documented in this file.
 
 - Updated the bundled Linux x64 Handshake helper so the required application namespaces pass HTTPS hostname validation.
 - Added a packaged-helper HTTPS release smoke covering the required HNS host matrix.
-- Updated the native SQLite addon for compatibility with Electron 43 release builds.
+- Aligned Electron and the native SQLite addon to a compatible release pair so native rebuilds succeed on every release runner.
 
 ### Changed
 
