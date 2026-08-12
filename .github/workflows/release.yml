@@ -127,6 +127,18 @@ jobs:
           cache: npm
           cache-dependency-path: freedom-browser/package-lock.json
 
+      - name: Cache Electron build downloads
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: electron-build-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('freedom-browser/package-lock.json') }}
+
       - name: Install dependencies
         if: runner.os != 'Windows' && (github.event_name == 'workflow_dispatch' || matrix.publish_on_tag)
         working-directory: ${{ matrix.workdir }}

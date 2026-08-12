@@ -505,11 +505,78 @@ function buildPacScript() {
   return `var hnsRoots = ${hnsRootMap};
 
 function FindProxyForURL(url, host) {
-  if (shExpMatch(host, "127.0.0.*") || host === "localhost" || host === "::1") {
+  function parseIPv4(value) {
+    var match = /^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$/.exec(value);
+    if (!match) return null;
+    var octets = [Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4])];
+    for (var index = 0; index < octets.length; index += 1) {
+      if (octets[index] > 255) return null;
+    }
+    return octets;
+  }
+
+  function normalizeIPv6(value) {
+    var normalized = String(value || "").toLowerCase();
+    if (normalized.charAt(0) === "[" && normalized.charAt(normalized.length - 1) === "]") {
+      normalized = normalized.slice(1, -1);
+    }
+    return normalized;
+  }
+
+  function isIPv6Literal(value) {
+    var normalized = normalizeIPv6(value);
+    if (normalized.indexOf(":") === -1 || !/^[0-9a-f:.]+$/.test(normalized)) return false;
+    if ((normalized.match(/::/g) || []).length > 1) return false;
+
+    var parts = normalized.split(":");
+    var hasCompression = normalized.indexOf("::") !== -1;
+    var units = 0;
+    for (var index = 0; index < parts.length; index += 1) {
+      var part = parts[index];
+      if (!part) continue;
+      if (part.indexOf(".") !== -1) {
+        if (index !== parts.length - 1 || !parseIPv4(part)) return false;
+        units += 2;
+      } else {
+        if (!/^[0-9a-f]{1,4}$/.test(part)) return false;
+        units += 1;
+      }
+    }
+    return hasCompression ? units < 8 : units === 8;
+  }
+
+  function isDirectIPv4(octets) {
+    return octets[0] === 127 ||
+      octets[0] === 10 ||
+      (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+      (octets[0] === 192 && octets[1] === 168) ||
+      (octets[0] === 169 && octets[1] === 254);
+  }
+
+  function isDirectIPv6(value) {
+    var normalized = normalizeIPv6(value);
+    if (normalized === "::1") return true;
+    if (normalized.indexOf("::ffff:") === 0) {
+      var mappedIPv4 = parseIPv4(normalized.slice(7));
+      return mappedIPv4 ? isDirectIPv4(mappedIPv4) : false;
+    }
+    var firstPart = normalized.split(":")[0];
+    if (!firstPart) return false;
+    var firstUnit = parseInt(firstPart, 16);
+    return (firstUnit >= 0xfc00 && firstUnit <= 0xfdff) ||
+      (firstUnit >= 0xfe80 && firstUnit <= 0xfebf);
+  }
+
+  var ipv4 = parseIPv4(host);
+  var ipv6 = isIPv6Literal(host);
+  if (host.toLowerCase() === "localhost") {
     return "DIRECT";
   }
-  if (/^(?:\\d{1,3}\\.){3}\\d{1,3}$/.test(host) || host.indexOf(":") !== -1) {
-    return "DIRECT";
+  if (ipv4 || ipv6) {
+    if ((ipv4 && isDirectIPv4(ipv4)) || (ipv6 && isDirectIPv6(host))) {
+      return "DIRECT";
+    }
+${dvpnLine}
   }
 ${hnsLine}
 ${dvpnLine}
