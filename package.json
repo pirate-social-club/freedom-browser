@@ -158,6 +158,9 @@
       ],
       "icon": "assets/icon.png"
     },
+    "nsis": {
+      "artifactName": "${productName}.Setup.${version}.${ext}"
+    },
     "files": [
       "src/**/*",
       "package.json",

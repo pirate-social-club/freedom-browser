@@ -12,6 +12,7 @@ All notable changes to Freedom will be documented in this file.
 - Replaced the Linux HNS daemon with a self-contained static build so clean systems do not require an unbundled `libunbound` runtime.
 - Made Bee and Kubo archive extraction safe for Windows drive-letter paths.
 - Kept unsigned macOS artifacts limited to manual CI preflights; tagged releases publish Linux x64 and Windows x64 only until macOS signing and notarization credentials are available.
+- Stabilized the Windows installer filename so updater metadata and public release assets remain identical after upload.
 
 ### Changed
 
