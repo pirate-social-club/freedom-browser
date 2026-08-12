@@ -76,6 +76,21 @@ describe('capability binary checks', () => {
     expect(missing).toEqual([expect.stringContaining('not executable')]);
   });
 
+  test('rejects an HNS daemon with an unbundled libunbound dependency', () => {
+    const files = capabilityFiles(rootDir, 'hns-bin', 'linux-x64', [
+      'fingertipd',
+      'hnsd',
+      'PROVENANCE.md',
+    ]);
+    files[path.join(rootDir, 'hns-bin', 'linux-x64', 'hnsd')].contents =
+      'ELF metadata libunbound.so.8';
+    const missing = checkCapabilityBinaries('hns', { os: 'linux', arch: 'x64' }, {
+      rootDir,
+      fsImpl: createFsMock(files),
+    });
+    expect(missing).toEqual([expect.stringContaining('not self-contained')]);
+  });
+
   test('accepts complete supported capability bundles', () => {
     const hnsFiles = capabilityFiles(rootDir, 'hns-bin', 'linux-x64', [
       'fingertipd',

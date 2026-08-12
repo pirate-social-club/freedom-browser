@@ -12,6 +12,7 @@ const { spawn } = require('child_process');
 const DEFAULT_TIMEOUT_MS = 4 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 15 * 1000;
 const RETRY_DELAY_MS = 5 * 1000;
+const MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024;
 
 function parseArgs(args = process.argv.slice(2)) {
   const options = {
@@ -84,6 +85,23 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function classifyHelperStartupDiagnostics(value) {
+  const diagnostic = String(value || '');
+  if (/libunbound[^\s]*.*(?:not found|cannot open shared object)/i.test(diagnostic)) {
+    return 'the packaged HNS daemon has a missing runtime dependency';
+  }
+  if (/permission denied/i.test(diagnostic)) {
+    return 'a packaged HNS executable could not be started';
+  }
+  if (/DNS sockets did not become ready/i.test(diagnostic)) {
+    return 'the packaged HNS daemon did not open its resolver sockets';
+  }
+  if (/failed (?:starting daemon|opening (?:ns|rs))/i.test(diagnostic)) {
+    return 'the packaged HNS daemon failed during startup';
+  }
+  return null;
+}
+
 function reserveTcpPort() {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -126,12 +144,15 @@ async function reserveDualProtocolPort(excluded = new Set()) {
 function waitForHelperReady(child, timeoutMs = 30 * 1000) {
   return new Promise((resolve, reject) => {
     const lines = readline.createInterface({ input: child.stdout });
-    const timer = setTimeout(() => {
-      lines.close();
-      reject(new Error('Packaged HNS helper did not become ready'));
-    }, timeoutMs);
+    let settled = false;
+    const timer = setTimeout(
+      () => finish(new Error('Packaged HNS helper did not become ready')),
+      timeoutMs
+    );
 
     const finish = (error, event) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       lines.close();
       child.off('close', onClose);
@@ -146,6 +167,10 @@ function waitForHelperReady(child, timeoutMs = 30 * 1000) {
         const event = JSON.parse(line);
         if (event.type === 'ready' && event.proxyAddr && event.caPath) {
           finish(null, event);
+        } else if (event.type === 'error') {
+          const category = classifyHelperStartupDiagnostics(event.error) ||
+            'the packaged HNS helper reported a startup failure';
+          finish(new Error(category));
         }
       } catch {
         // Ignore non-JSON helper output.
@@ -270,9 +295,22 @@ async function runSmoke(options) {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    // Consume stderr without forwarding hostnames or other helper internals to release logs.
-    child.stderr.on('data', () => {});
-    const ready = await waitForHelperReady(child);
+    // Retain only a bounded buffer for categorical diagnostics. Raw helper
+    // output is never forwarded because it can contain requested hostnames.
+    let startupDiagnostics = '';
+    child.stderr.on('data', (data) => {
+      startupDiagnostics = `${startupDiagnostics}${data}`.slice(-MAX_STARTUP_DIAGNOSTIC_BYTES);
+    });
+    let ready;
+    try {
+      ready = await waitForHelperReady(child);
+    } catch (error) {
+      const category = classifyHelperStartupDiagnostics(startupDiagnostics);
+      if (category && !error.message.includes(category)) {
+        throw new Error(`${error.message}: ${category}`, { cause: error });
+      }
+      throw error;
+    }
     child.stdout.resume();
     const ca = fs.readFileSync(ready.caPath);
     const successful = new Map();
@@ -326,6 +364,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  classifyHelperStartupDiagnostics,
   extractStatusCode,
   getSmokeHosts,
   normalizeHostname,

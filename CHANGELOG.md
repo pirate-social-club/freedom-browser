@@ -9,6 +9,9 @@ All notable changes to Freedom will be documented in this file.
 - Updated the bundled Linux x64 Handshake helper so the required application namespaces pass HTTPS hostname validation.
 - Added a packaged-helper HTTPS release smoke covering the required HNS host matrix.
 - Aligned Electron and the native SQLite addon to a compatible release pair so native rebuilds succeed on every release runner.
+- Replaced the Linux HNS daemon with a self-contained static build so clean systems do not require an unbundled `libunbound` runtime.
+- Made Bee and Kubo archive extraction safe for Windows drive-letter paths.
+- Made untagged macOS release preflights build unsigned artifacts while retaining mandatory signing and notarization for tags.
 
 ### Changed
 
