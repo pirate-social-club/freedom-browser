@@ -253,6 +253,11 @@
   "title": "Freedom",
   "displayName": "Freedom",
   "overrides": {
+    "@cosmjs/amino": "0.39.0",
+    "@cosmjs/crypto": "0.39.0",
+    "@cosmjs/encoding": "0.39.0",
+    "@cosmjs/proto-signing": "0.39.0",
+    "@cosmjs/stargate": "0.39.0",
     "js-yaml": "^4.3.0",
     "uuid": "11.1.1",
     "tmp": "0.2.7"
