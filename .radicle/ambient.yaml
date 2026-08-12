@@ -4,11 +4,12 @@ plan:
   - action: shell
     shell: |
       cd /ci/src
-      # npm cache add accepts one package spec at a time. Run at most one
-      # worker per CI vCPU so large lockfiles do not spend the whole job
-      # launching hundreds of cache-population processes serially.
-      find /ci/deps/npm -name '*.tgz' -type f -print0 \
-        | xargs -0 -r -n 1 -P 3 npm cache add --cache /ci/cache/npm
-      npm ci --offline --ignore-scripts --cache /ci/cache/npm
+      if ! npm ci --offline --ignore-scripts --cache /ci/cache/npm; then
+        # A cold or partially populated cache is repaired from the tarballs
+        # provisioned by npm_get. Bound imports to one worker per CI vCPU.
+        find /ci/deps/npm -name '*.tgz' -type f -print0 \
+          | xargs -0 -r -n 1 -P 3 npm cache add --cache /ci/cache/npm
+        npm ci --offline --ignore-scripts --cache /ci/cache/npm
+      fi
       npm run test:unit -- --runInBand
       npm run lint
