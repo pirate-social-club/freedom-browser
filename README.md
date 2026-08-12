@@ -12,7 +12,7 @@ For the `0.7.12` release, bundled Handshake browsing and Sentinel dVPN are suppo
 
 ## Quick Start
 
-1. **Install Node.js 18+**
+1. **Install Node.js 22+**
 
 2. **Install dependencies:**
 

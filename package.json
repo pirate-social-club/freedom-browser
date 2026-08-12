@@ -221,7 +221,7 @@
     ]
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "devDependencies": {
     "@babel/preset-env": "^7.29.0",
@@ -239,7 +239,7 @@
     "@ensdomains/content-hash": "^3.0.0",
     "@metamask/browser-passworder": "^6.0.0",
     "@scure/bip39": "^2.0.1",
-    "better-sqlite3": "^12.6.2",
+    "better-sqlite3": "^13.0.3",
     "electron-log": "^5.4.3",
     "electron-updater": "^6.7.3",
     "ethers": "^6.16.0",
