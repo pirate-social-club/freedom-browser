@@ -166,11 +166,15 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
-          if [ -z "${APPLE_ID}" ] || [ -z "${APPLE_TEAM_ID}" ] || [ -z "${APPLE_APP_SPECIFIC_PASSWORD}" ]; then
-            echo "::error::macOS release signing and notarization credentials are required"
-            exit 1
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            if [ -z "${APPLE_ID}" ] || [ -z "${APPLE_TEAM_ID}" ] || [ -z "${APPLE_APP_SPECIFIC_PASSWORD}" ]; then
+              echo "::error::macOS release signing and notarization credentials are required for a tagged release"
+              exit 1
+            fi
+            ${{ matrix.build_command }}
+          else
+            ${{ matrix.build_command }} --unsigned --no-notarize
           fi
-          ${{ matrix.build_command }}
 
       - name: Build non-macOS release artifacts
         if: runner.os == 'Linux'

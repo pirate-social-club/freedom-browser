@@ -1,4 +1,5 @@
 const {
+  classifyHelperStartupDiagnostics,
   extractStatusCode,
   getSmokeHosts,
   normalizeHostname,
@@ -29,5 +30,12 @@ describe('packaged HNS HTTPS smoke', () => {
     expect(parseProxyAddress('127.0.0.1:44041')).toEqual({ host: '127.0.0.1', port: 44041 });
     expect(extractStatusCode('HTTP/1.1 200 OK')).toBe(200);
     expect(extractStatusCode('not HTTP')).toBeNull();
+  });
+
+  test('reports startup categories without echoing helper diagnostics', () => {
+    const raw = 'loader: libunbound.so.8: cannot open shared object file';
+    const category = classifyHelperStartupDiagnostics(raw);
+    expect(category).toBe('the packaged HNS daemon has a missing runtime dependency');
+    expect(category).not.toContain('libunbound.so.8');
   });
 });

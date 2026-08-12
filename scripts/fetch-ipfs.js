@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
 const artifacts = require('./binary-artifacts.lock.json').ipfs;
 const { downloadVerified } = require('./download-verified');
+const { extractArchive } = require('./extract-archive');
 
 const outputDir = path.join(__dirname, '..', 'ipfs-bin');
 
@@ -13,13 +13,6 @@ function selectedArtifacts() {
   const target = args[targetIndex + 1];
   if (!artifacts.targets[target]) throw new Error(`Unsupported Kubo target: ${target}`);
   return [[target, artifacts.targets[target]]];
-}
-
-function extract(archive, targetDir, kind) {
-  const command = kind === 'zip' ? 'unzip' : 'tar';
-  const args = kind === 'zip' ? ['-o', archive, '-d', targetDir] : ['-xzf', archive, '-C', targetDir];
-  const result = spawnSync(command, args, { stdio: 'inherit' });
-  if (result.status !== 0) throw new Error(`${command} failed with status ${result.status}`);
 }
 
 async function main() {
@@ -34,7 +27,7 @@ async function main() {
     fs.mkdirSync(targetDir, { recursive: true });
 
     await downloadVerified(artifact.url, archivePath, 'sha512', artifact.sha512);
-    extract(archivePath, targetDir, artifact.archive);
+    extractArchive(archivePath, targetDir, artifact.archive);
     fs.rmSync(archivePath, { force: true });
 
     const extracted = path.join(targetDir, 'kubo', executable);

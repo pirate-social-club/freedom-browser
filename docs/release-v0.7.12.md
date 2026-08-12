@@ -25,7 +25,9 @@ every runtime artifact declared for a supported target.
 7. Tag the unchanged, verified commit as `v0.7.12` and push the tag.
 
 The workflow publishes only for a pushed `v*` tag. A manual dispatch builds the
-release candidate without publishing it.
+release candidate without publishing it. macOS manual-dispatch artifacts are
+unsigned and unnotarized; pushed tags still require all signing and
+notarization credentials.
 
 ## Scope intentionally deferred
 
