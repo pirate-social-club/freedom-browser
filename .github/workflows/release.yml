@@ -210,6 +210,14 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
+      - name: Reject release filenames that GitHub would rewrite
+        shell: bash
+        run: |
+          if find release-artifacts -maxdepth 1 -type f -name '*[[:space:]]*' -print -quit | grep -q .; then
+            echo 'Release artifact filenames must not contain whitespace.' >&2
+            exit 1
+          fi
+
       - name: Generate checksums
         run: |
           cd release-artifacts
