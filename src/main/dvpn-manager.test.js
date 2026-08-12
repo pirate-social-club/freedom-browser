@@ -43,7 +43,12 @@ function createFsMock(options = {}) {
       if (target === statePath) return JSON.stringify(options.stateContents || {});
       return '';
     }),
-    writeFileSync: jest.fn(),
+    writeFileSync: jest.fn((target, contents, writeOptions) => {
+      if (typeof options.writeFileSync === 'function') {
+        return options.writeFileSync(target, contents, writeOptions);
+      }
+      return undefined;
+    }),
   };
 }
 
@@ -242,7 +247,50 @@ describe('dvpn-manager', () => {
     expect(result.address).toBe('sent1testaddress');
     expect(ctx.sdkMock.createWallet).toHaveBeenCalled();
     expect(ctx.safeStorage.encryptString).toHaveBeenCalled();
-    expect(ctx.fsMock.writeFileSync).toHaveBeenCalled();
+    expect(ctx.fsMock.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('wallet.enc'),
+      Buffer.from('v11encrypted'),
+      { flag: 'wx', mode: 0o600 }
+    );
+  });
+
+  test('wallet creation refuses to replace an existing wallet before calling the SDK', async () => {
+    const ctx = loadDvpnManagerModule({ walletExists: true });
+    ctx.mod.registerDvpnIpc();
+
+    const result = await ctx.ipcMain.invoke(IPC.DVPN_CREATE_WALLET);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('already exists');
+    expect(ctx.sdkMock.createWallet).not.toHaveBeenCalled();
+    expect(ctx.safeStorage.encryptString).not.toHaveBeenCalled();
+    expect(ctx.fsMock.writeFileSync).not.toHaveBeenCalledWith(
+      expect.stringContaining('wallet.enc'),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  test('exclusive wallet creation refuses an existence race without overwriting', async () => {
+    const raceError = Object.assign(new Error('already exists'), { code: 'EEXIST' });
+    const ctx = loadDvpnManagerModule({
+      walletExists: false,
+      writeFileSync: (target) => {
+        if (target.endsWith('wallet.enc')) throw raceError;
+      },
+    });
+    ctx.mod.registerDvpnIpc();
+
+    const result = await ctx.ipcMain.invoke(IPC.DVPN_CREATE_WALLET);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('already exists');
+    expect(ctx.fsMock.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('wallet.enc'),
+      expect.any(Buffer),
+      { flag: 'wx', mode: 0o600 }
+    );
+    expect(ctx.mod.getStatus()).toMatchObject({ state: 'error', walletPresent: false });
   });
 
   test('wallet creation fails when safeStorage is unavailable', async () => {
@@ -330,6 +378,7 @@ describe('dvpn-manager', () => {
     expect(ctx.sdkMock.importWallet).not.toHaveBeenCalled();
     expect(ctx.mod.getStatus()).toMatchObject({
       state: 'error',
+      walletPresent: true,
       error: expect.stringContaining('without system-keyring protection'),
     });
   });
@@ -354,6 +403,13 @@ describe('dvpn-manager', () => {
     const ctx = loadDvpnManagerModule();
 
     expect(ctx.mod.classifyWalletCiphertext(Buffer.from(ciphertext))).toBe(expected);
+  });
+
+  test.each(['win32', 'darwin'])('does not apply Linux ciphertext semantics on %s', (platform) => {
+    const ctx = loadDvpnManagerModule();
+
+    expect(ctx.mod.classifyWalletCiphertext(Buffer.from('v10payload'), platform))
+      .toBe('unsupported-platform');
   });
 
   test('start with insufficient balance rejects with error', async () => {

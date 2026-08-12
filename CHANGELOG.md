@@ -2,6 +2,18 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [0.7.14] - 2026-08-12
+
+### Security
+
+- Prevented existing dVPN wallet files from being overwritten when legacy protection, an unavailable keyring, or a write race blocks wallet restoration.
+- Kept existing-but-unavailable wallets in the recovery/error UI instead of presenting wallet creation.
+
+### Changed
+
+- Scoped Linux ciphertext-prefix policy explicitly to Linux and defaulted unvalidated platforms to unsupported.
+- Limited release binary downloads to the platform being built.
+
 ## [0.7.13] - 2026-08-12
 
 ### Security
