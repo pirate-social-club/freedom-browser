@@ -1,0 +1,4 @@
+plan:
+  - action: shell
+    shell: |
+      true
