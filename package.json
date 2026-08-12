@@ -1,6 +1,6 @@
 {
   "name": "freedom-browser",
-  "version": "0.7.11",
+  "version": "0.7.12",
   "license": "AGPL-3.0-or-later",
   "description": "Freedom \\u2013 A browser for the decentralized web, with Swarm, IPFS, and ENS as first-class protocols.",
   "author": {
@@ -20,11 +20,13 @@
     "start": "electron .",
     "test": "npm run test:unit",
     "test:unit": "jest",
+    "test:capabilities": "jest --runInBand src/shared/platform-capabilities.test.js scripts/check-binaries.test.js src/main/hns-manager.test.js src/main/dvpn-manager.test.js src/renderer/lib/settings-ui.test.js",
     "test:coverage": "jest --coverage --runInBand",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check-binaries": "node scripts/check-binaries.js",
+    "smoke:hns:packaged": "node scripts/hns-packaged-smoke.js",
     "build": "node scripts/build.js",
     "dist": "node scripts/build.js --dist",
     "dist:mac:prepare-notary": "npm run dist -- --mac --no-notarize",

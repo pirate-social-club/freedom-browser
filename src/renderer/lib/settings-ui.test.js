@@ -36,6 +36,17 @@ const loadSettingsModule = async (options = {}) => {
     ],
     saveSettingsResult = true,
     prefersDark = true,
+    hnsStatus = { supported: true, status: 'stopped', height: 0, synced: false, error: null },
+    dvpnStatus = {
+      supported: true,
+      state: 'off',
+      walletAddress: null,
+      connected: false,
+      balance: null,
+      funded: false,
+      lastDisconnectReason: null,
+      error: null,
+    },
   } = options;
 
   const settingsQueue = [...settingsResponses];
@@ -91,6 +102,8 @@ const loadSettingsModule = async (options = {}) => {
   const hnsErrorValue = createElement('span');
   const hnsStartBtn = createElement('button');
   const hnsStopBtn = createElement('button');
+  const hnsCapabilityNote = createElement('p');
+  const dvpnCapabilityNote = createElement('p');
   const mediaQueryList = {
     matches: prefersDark,
     addEventListener: jest.fn(),
@@ -149,6 +162,8 @@ const loadSettingsModule = async (options = {}) => {
       'hns-error-value': hnsErrorValue,
       'hns-start-btn': hnsStartBtn,
       'hns-stop-btn': hnsStopBtn,
+      'hns-capability-note': hnsCapabilityNote,
+      'dvpn-capability-note': dvpnCapabilityNote,
     },
   });
   const settingsUpdatedEvents = [];
@@ -192,21 +207,13 @@ const loadSettingsModule = async (options = {}) => {
     hns: {
       start: jest.fn(),
       stop: jest.fn(() => ({ catch: jest.fn() })),
-      getStatus: jest.fn().mockResolvedValue({ status: 'stopped', height: 0, synced: false, error: null }),
+      getStatus: jest.fn().mockResolvedValue(hnsStatus),
       onStatusUpdate: jest.fn(),
     },
     dvpn: {
       start: jest.fn(),
       stop: jest.fn(() => ({ catch: jest.fn() })),
-      getStatus: jest.fn().mockResolvedValue({
-        state: 'off',
-        walletAddress: null,
-        connected: false,
-        balance: null,
-        funded: false,
-        lastDisconnectReason: null,
-        error: null,
-      }),
+      getStatus: jest.fn().mockResolvedValue(dvpnStatus),
       getBalance: jest.fn().mockResolvedValue({ success: false, error: 'No wallet' }),
       createWallet: jest.fn(),
       onStatusUpdate: jest.fn(),
@@ -257,6 +264,15 @@ const loadSettingsModule = async (options = {}) => {
       hnsErrorValue,
       hnsStartBtn,
       hnsStopBtn,
+      hnsCapabilityNote,
+      dvpnCapabilityNote,
+      dvpnCreateWalletBtn,
+      dvpnRefreshBalance,
+      dvpnConnectBtn,
+      dvpnDisconnectBtn,
+      dvpnMaxSpend,
+      dvpnLowBalanceStop,
+      dvpnMaxDuration,
     },
     electronAPI,
     mediaQueryList,
@@ -523,5 +539,57 @@ describe('settings-ui', () => {
     await Promise.resolve();
 
     expect(electronAPI.copyText).toHaveBeenCalledWith('sent1testaddress');
+  });
+
+  test('disables HNS and dVPN controls with an explicit reason on unsupported targets', async () => {
+    const hnsReason = 'Handshake browsing is unavailable on this platform.';
+    const dvpnReason = 'Sentinel dVPN is unavailable on this platform.';
+    const { mod, elements } = await loadSettingsModule({
+      platform: 'darwin',
+      hnsStatus: {
+        supported: false,
+        unsupportedReason: hnsReason,
+        status: 'stopped',
+        height: 0,
+        synced: false,
+        error: null,
+      },
+      dvpnStatus: {
+        supported: false,
+        unsupportedReason: dvpnReason,
+        state: 'off',
+        walletAddress: null,
+        connected: false,
+        balance: null,
+        funded: false,
+        lastDisconnectReason: null,
+        error: null,
+      },
+    });
+
+    await mod.initTheme();
+    await mod.initSettings();
+    elements.settingsBtn.dispatch('click');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(elements.enableHnsIntegrationCheckbox.disabled).toBe(true);
+    expect(elements.startHnsAtLaunchCheckbox.disabled).toBe(true);
+    expect(elements.hnsStartBtn.disabled).toBe(true);
+    expect(elements.hnsStopBtn.disabled).toBe(true);
+    expect(elements.hnsStatusValue.textContent).toBe('Unavailable');
+    expect(elements.hnsCapabilityNote.textContent).toBe(hnsReason);
+    expect(elements.hnsCapabilityNote.style.display).toBe('');
+
+    expect(elements.showDvpnControlsCheckbox.disabled).toBe(true);
+    expect(elements.dvpnCreateWalletBtn.disabled).toBe(true);
+    expect(elements.dvpnRefreshBalance.disabled).toBe(true);
+    expect(elements.dvpnConnectBtn.disabled).toBe(true);
+    expect(elements.dvpnDisconnectBtn.disabled).toBe(true);
+    expect(elements.dvpnMaxSpend.disabled).toBe(true);
+    expect(elements.dvpnLowBalanceStop.disabled).toBe(true);
+    expect(elements.dvpnMaxDuration.disabled).toBe(true);
+    expect(elements.dvpnCapabilityNote.textContent).toBe(dvpnReason);
+    expect(elements.dvpnCapabilityNote.style.display).toBe('');
   });
 });

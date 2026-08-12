@@ -8,7 +8,8 @@ const dgram = require('dgram');
 const readline = require('readline');
 const { createHash, X509Certificate } = require('crypto');
 const IPC = require('../shared/ipc-channels');
-const { getHnsPublicSuffixes, isHnsHost } = require('../shared/hns-hosts');
+const { getHnsPublicSuffixes } = require('../shared/hns-hosts');
+const { getCapabilityStatus } = require('../shared/platform-capabilities');
 const {
   buildHnsHealthProbeHosts,
   formatHnsHealthSummary,
@@ -24,6 +25,7 @@ const {
   clearService,
 } = require('./service-registry');
 const networkManager = require('./network-manager');
+const hnsCapability = getCapabilityStatus('hns');
 
 const STATUS = {
   STOPPED: 'stopped',
@@ -76,10 +78,6 @@ let lastBroadcastReadiness = {
   dohFallbackReady: null,
   localResolverReady: null,
 };
-
-function isHnsHostname(hostname = '') {
-  return isHnsHost(hostname);
-}
 
 function normalizeHnsStderrLine(line) {
   return line.replace(/^\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2}\s+/, '');
@@ -463,7 +461,7 @@ function updateState(newState, error = null) {
   lastError = error;
   const windows = require('electron').BrowserWindow?.getAllWindows?.() || [];
   for (const win of windows) {
-    win.webContents.send(IPC.HNS_STATUS_UPDATE, { status: currentState, error: lastError });
+    win.webContents.send(IPC.HNS_STATUS_UPDATE, getHnsStatus());
   }
 }
 
@@ -677,6 +675,12 @@ function parseStdoutLine(line) {
 }
 
 async function startHns() {
+  if (!hnsCapability.supported) {
+    log.info(`[HNS] Start blocked on unsupported target ${hnsCapability.target}`);
+    setStatusMessage('hns', hnsCapability.unsupportedReason);
+    return;
+  }
+
   if (currentState === STATUS.RUNNING || currentState === STATUS.STARTING) {
     log.info(`[HNS] Ignoring start request, current state: ${currentState}`);
     return;
@@ -876,6 +880,7 @@ function stopHns() {
 }
 
 function checkBinary() {
+  if (!hnsCapability.supported) return false;
   const binPath = getHelperBinaryPath();
   return fs.existsSync(binPath) && !getHelperBinaryValidationError(binPath);
 }
@@ -883,6 +888,9 @@ function checkBinary() {
 function getHnsStatus() {
   const publishedProxyAddr = proxyAddr ? networkManager.getHnsProxyAddr() : null;
   return {
+    supported: hnsCapability.supported,
+    target: hnsCapability.target,
+    unsupportedReason: hnsCapability.unsupportedReason,
     status: currentState,
     error: lastError,
     synced,

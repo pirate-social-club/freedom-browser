@@ -1,17 +1,23 @@
 const fs = require('fs');
 const path = require('path');
+const {
+  getCapabilityBinaries,
+  getCapabilityDefinition,
+  getCapabilityStatus,
+} = require('../src/shared/platform-capabilities');
 
-const BEE_BIN_DIR = path.join(__dirname, '..', 'bee-bin');
-const IPFS_BIN_DIR = path.join(__dirname, '..', 'ipfs-bin');
-const RADICLE_BIN_DIR = path.join(__dirname, '..', 'radicle-bin');
-const HNS_BIN_DIR = path.join(__dirname, '..', 'hns-bin');
+const ROOT_DIR = path.join(__dirname, '..');
 const FORBIDDEN_HNS_BINARY_STRINGS = [['shake', 'station'].join('')];
 
-function findForbiddenBinaryString(binaryPath, forbiddenStrings) {
-  if (!fs.existsSync(binaryPath)) return null;
+function findForbiddenBinaryString(binaryPath, forbiddenStrings, fsImpl = fs) {
+  if (!fsImpl.existsSync(binaryPath)) return null;
 
-  const binaryData = fs.readFileSync(binaryPath);
+  const binaryData = fsImpl.readFileSync(binaryPath);
   return forbiddenStrings.find((value) => binaryData.includes(Buffer.from(value))) || null;
+}
+
+function isExecutable(binaryPath, fsImpl = fs) {
+  return (fsImpl.statSync(binaryPath).mode & 0o111) !== 0;
 }
 
 function getPlatformArch() {
@@ -77,57 +83,94 @@ function getPlatformArch() {
   return platforms;
 }
 
-function checkBinaries(platforms) {
+function checkCapabilityBinaries(capability, platform, options = {}) {
+  const rootDir = options.rootDir || ROOT_DIR;
+  const fsImpl = options.fsImpl || fs;
+  const status = getCapabilityStatus(capability, platform.os, platform.arch);
+  const definition = getCapabilityDefinition(capability);
+
+  if (!status.supported) {
+    options.onUnsupported?.(
+      `${definition.displayName} is intentionally unsupported for ${status.target}.`
+    );
+    return [];
+  }
+
+  const platformDir = path.join(rootDir, definition.binaryDirectory, status.target);
   const missing = [];
+
+  for (const binary of getCapabilityBinaries(capability, platform.os)) {
+    const binaryPath = path.join(platformDir, binary.name);
+    if (!fsImpl.existsSync(binaryPath)) {
+      missing.push(`${definition.displayName} artifact for ${status.target}: ${binaryPath}`);
+      continue;
+    }
+
+    if (binary.executable && platform.os !== 'win' && !isExecutable(binaryPath, fsImpl)) {
+      missing.push(`${definition.displayName} artifact is not executable for ${status.target}: ${binaryPath}`);
+    }
+
+    if (capability === 'hns' && binary.name.startsWith('fingertipd')) {
+      const forbiddenString = findForbiddenBinaryString(
+        binaryPath,
+        FORBIDDEN_HNS_BINARY_STRINGS,
+        fsImpl
+      );
+      if (forbiddenString) {
+        missing.push(
+          `${definition.displayName} artifact for ${status.target} contains obsolete string "${forbiddenString}": ${binaryPath}`
+        );
+      }
+    }
+  }
+
+  return missing;
+}
+
+function checkBinaries(platforms, options = {}) {
+  const rootDir = options.rootDir || ROOT_DIR;
+  const fsImpl = options.fsImpl || fs;
+  const onUnsupported = options.onUnsupported || ((message) => console.warn(message));
+  const missing = [];
+  const beeBinDir = path.join(rootDir, 'bee-bin');
+  const ipfsBinDir = path.join(rootDir, 'ipfs-bin');
+  const radicleBinDir = path.join(rootDir, 'radicle-bin');
 
   for (const { os, arch } of platforms) {
     const platformDir = `${os}-${arch}`;
     const beeExt = os === 'win' ? '.exe' : '';
     const ipfsExt = os === 'win' ? '.exe' : '';
-    const hnsExt = os === 'win' ? '.exe' : '';
 
-    const beePath = path.join(BEE_BIN_DIR, platformDir, `bee${beeExt}`);
-    const ipfsPath = path.join(IPFS_BIN_DIR, platformDir, `ipfs${ipfsExt}`);
-    const hnsPlatformDir = path.join(HNS_BIN_DIR, platformDir);
-    const fingertipdPath = path.join(HNS_BIN_DIR, platformDir, `fingertipd${hnsExt}`);
-    const hnsdPath = path.join(HNS_BIN_DIR, platformDir, `hnsd${hnsExt}`);
+    const beePath = path.join(beeBinDir, platformDir, `bee${beeExt}`);
+    const ipfsPath = path.join(ipfsBinDir, platformDir, `ipfs${ipfsExt}`);
 
-    if (!fs.existsSync(beePath)) {
+    if (!fsImpl.existsSync(beePath)) {
       missing.push(`bee binary for ${platformDir}: ${beePath}`);
     }
-    if (!fs.existsSync(ipfsPath)) {
+    if (!fsImpl.existsSync(ipfsPath)) {
       missing.push(`ipfs binary for ${platformDir}: ${ipfsPath}`);
     }
-    if (fs.existsSync(hnsPlatformDir)) {
-      if (!fs.existsSync(fingertipdPath)) {
-        missing.push(`fingertipd binary for ${platformDir}: ${fingertipdPath}`);
-      } else {
-        const forbiddenString = findForbiddenBinaryString(
-          fingertipdPath,
-          FORBIDDEN_HNS_BINARY_STRINGS
-        );
-        if (forbiddenString) {
-          missing.push(
-            `fingertipd binary for ${platformDir} contains obsolete string "${forbiddenString}": ${fingertipdPath}`
-          );
-        }
-      }
-      if (!fs.existsSync(hnsdPath)) {
-        missing.push(`hnsd binary for ${platformDir}: ${hnsdPath}`);
-      }
-    } else {
-      console.warn(`Skipping HNS binary check for ${platformDir}; ${hnsPlatformDir} is not bundled.`);
-    }
+
+    missing.push(...checkCapabilityBinaries('hns', { os, arch }, {
+      rootDir,
+      fsImpl,
+      onUnsupported,
+    }));
+    missing.push(...checkCapabilityBinaries('dvpn', { os, arch }, {
+      rootDir,
+      fsImpl,
+      onUnsupported,
+    }));
 
     // Radicle: no official Windows binaries yet — skip check for win targets
     if (os !== 'win') {
-      const nodePath = path.join(RADICLE_BIN_DIR, platformDir, 'radicle-node');
-      const httpdPath = path.join(RADICLE_BIN_DIR, platformDir, 'radicle-httpd');
+      const nodePath = path.join(radicleBinDir, platformDir, 'radicle-node');
+      const httpdPath = path.join(radicleBinDir, platformDir, 'radicle-httpd');
 
-      if (!fs.existsSync(nodePath)) {
+      if (!fsImpl.existsSync(nodePath)) {
         missing.push(`radicle-node binary for ${platformDir}: ${nodePath}`);
       }
-      if (!fs.existsSync(httpdPath)) {
+      if (!fsImpl.existsSync(httpdPath)) {
         missing.push(`radicle-httpd binary for ${platformDir}: ${httpdPath}`);
       }
     }
@@ -156,4 +199,14 @@ function main() {
   process.exit(0);
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  checkBinaries,
+  checkCapabilityBinaries,
+  findForbiddenBinaryString,
+  getPlatformArch,
+  isExecutable,
+};

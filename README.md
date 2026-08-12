@@ -6,6 +6,8 @@
 Freedom is a browser for the decentralized web, with Swarm, IPFS, Radicle, and ENS as first-class protocols.
 It ships with integrated Swarm, IPFS, and Radicle nodes, enabling direct peer-to-peer network access without relying on centralized HTTP gateways. Radicle is available on macOS and Linux; the Windows build ships without Radicle until official Windows binaries are published upstream.
 
+For the `0.7.12` release, bundled Handshake browsing and Sentinel dVPN are supported on Linux x64 only. Their settings remain visible but disabled with an explanation on macOS, Windows, and Linux ARM. This limitation is encoded in `src/shared/platform-capabilities.json` and enforced during packaging.
+
 ---
 
 ## Quick Start
@@ -45,6 +47,17 @@ When a user enters a `bzz://`, `ipfs://`, `ipns://`, `rad://`, or ENS URL, the m
 ---
 
 ## Features
+
+### Platform capabilities
+
+| Capability | Linux x64 | Linux ARM64 | macOS x64/ARM64 | Windows x64 |
+| --- | --- | --- | --- | --- |
+| Handshake browsing | Supported | Unavailable | Unavailable | Unavailable |
+| Sentinel dVPN | Supported | Unavailable | Unavailable | Unavailable |
+| Swarm and IPFS | Supported | Supported | Supported | Supported |
+| Radicle | Supported | Supported | Supported | Unavailable |
+
+Build validation fails when a capability marked supported is missing any declared runtime artifact. Unsupported capabilities are disabled in both the main process and Settings UI rather than failing later at startup.
 
 ### Triple Node Architecture
 
@@ -113,7 +126,7 @@ Enter any of the following in the address bar:
 | IPFS URL    | `ipfs://QmHash.../path`                         |
 | IPNS URL    | `ipns://k51...` or `ipns://domain.eth`          |
 | Radicle ID  | `rad://z3gqc...`                                |
-| ENS Domain  | `vitalik.eth`, `mysite.box`, `mysite.eth/about` |
+| ENS Domain  | `workspace_owner.eth`, `mysite.box`, `mysite.eth/about` |
 | HTTP(S) URL | `https://example.com`                           |
 | Domain      | `example.com` (auto-prefixes `https://`)        |
 

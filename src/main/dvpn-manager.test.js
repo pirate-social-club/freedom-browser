@@ -145,6 +145,15 @@ function loadDvpnManagerModule(options = {}) {
       [require.resolve('./settings-store')]: () => ({
         loadSettings,
       }),
+      [require.resolve('../shared/platform-capabilities')]: () => ({
+        getCapabilityStatus: jest.fn(() => ({
+          supported: options.dvpnSupported ?? true,
+          target: options.dvpnTarget || 'linux-x64',
+          unsupportedReason: options.dvpnSupported === false
+            ? 'Sentinel dVPN is unavailable on this platform.'
+            : null,
+        })),
+      }),
       'sentinel-ai-connect': () => sdkMock,
     },
   });
@@ -181,6 +190,32 @@ describe('dvpn-manager', () => {
     jest.clearAllTimers();
     jest.useRealTimers();
     jest.restoreAllMocks();
+  });
+
+  test('blocks initialization and user operations on unsupported targets', async () => {
+    const ctx = loadDvpnManagerModule({
+      dvpnSupported: false,
+      dvpnTarget: 'win-x64',
+      walletExists: true,
+    });
+
+    await ctx.mod.initDvpn();
+    await expect(ctx.mod.startDvpn()).resolves.toEqual({
+      success: false,
+      error: 'Sentinel dVPN is unavailable on this platform.',
+    });
+
+    expect(ctx.sdkMock.importWallet).not.toHaveBeenCalled();
+    expect(ctx.sdkMock.connect).not.toHaveBeenCalled();
+    expect(ctx.setStatusMessage).toHaveBeenCalledWith(
+      'dvpn',
+      'Sentinel dVPN is unavailable on this platform.'
+    );
+    expect(ctx.mod.getStatus()).toMatchObject({
+      supported: false,
+      target: 'win-x64',
+      state: 'off',
+    });
   });
 
   test('init with no wallet sets state to OFF', async () => {
