@@ -1,31 +1,8 @@
 pre_plan:
-  - action: http_get
-    items:
-      - url: https://codeload.github.com/Sentinel-Autonomybuilder/blue-ai-connect/tar.gz/924d472cb8be47b11f2432515f23bd5ea20d297c
-        filename: blue-ai-connect-924d472cb8be47b11f2432515f23bd5ea20d297c.tar.gz
-  - action: shell
-    shell: |
-      printf '%s  %s\n' \
-        'bb710a0b6d1aa17bd3a3f166728ba7cefeea0f94d8182c91c13fa3852bc413d6' \
-        '/ci/deps/blue-ai-connect-924d472cb8be47b11f2432515f23bd5ea20d297c.tar.gz' \
-        | sha256sum --check -
-      install -d /blue-ai-connect
-      tar -xzf /ci/deps/blue-ai-connect-924d472cb8be47b11f2432515f23bd5ea20d297c.tar.gz \
-        -C /blue-ai-connect --strip-components=1
-      cd /blue-ai-connect
-      npm ci --ignore-scripts --audit=false --fund=false \
-        --cache /ci/cache/npm
   - action: npm_get
 plan:
   - action: shell
     shell: |
-      printf '%s  %s\n' \
-        'bb710a0b6d1aa17bd3a3f166728ba7cefeea0f94d8182c91c13fa3852bc413d6' \
-        '/ci/deps/blue-ai-connect-924d472cb8be47b11f2432515f23bd5ea20d297c.tar.gz' \
-        | sha256sum --check -
-      install -d /blue-ai-connect
-      tar -xzf /ci/deps/blue-ai-connect-924d472cb8be47b11f2432515f23bd5ea20d297c.tar.gz \
-        -C /blue-ai-connect --strip-components=1
       cd /ci/src
       # npm cache add accepts one package spec at a time. Run at most one
       # worker per CI vCPU so large lockfiles do not spend the whole job

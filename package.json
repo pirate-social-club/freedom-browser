@@ -248,7 +248,7 @@
     "ethers": "^6.16.0",
     "micro-key-producer": "^0.8.2",
     "qrcode": "^1.5.4",
-    "sentinel-ai-connect": "file:../../blue-ai-connect"
+    "sentinel-ai-connect": "https://codeload.github.com/Sentinel-Autonomybuilder/blue-ai-connect/tar.gz/924d472cb8be47b11f2432515f23bd5ea20d297c"
   },
   "title": "Freedom",
   "displayName": "Freedom",
