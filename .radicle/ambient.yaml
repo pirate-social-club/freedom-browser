@@ -1,4 +1,10 @@
+pre_plan:
+  - action: npm_get
 plan:
   - action: shell
     shell: |
-      true
+      cd /ci/src
+      find /ci/deps/npm -name '*.tgz' -type f -exec npm cache add {} \;
+      npm ci --offline --ignore-scripts
+      npm run test:unit -- --runInBand
+      npm run lint
