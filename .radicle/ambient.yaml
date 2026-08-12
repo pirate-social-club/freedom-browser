@@ -15,7 +15,11 @@ plan:
       tar -xzf /ci/deps/blue-ai-connect-924d472cb8be47b11f2432515f23bd5ea20d297c.tar.gz \
         -C /blue-ai-connect --strip-components=1
       cd /ci/src
-      find /ci/deps/npm -name '*.tgz' -type f -exec npm cache add {} \;
+      # npm cache add accepts one package spec at a time. Run at most one
+      # worker per CI vCPU so large lockfiles do not spend the whole job
+      # launching hundreds of cache-population processes serially.
+      find /ci/deps/npm -name '*.tgz' -type f -print0 \
+        | xargs -0 -r -n 1 -P 3 npm cache add
       npm ci --offline --ignore-scripts
       npm run test:unit -- --runInBand
       npm run lint
