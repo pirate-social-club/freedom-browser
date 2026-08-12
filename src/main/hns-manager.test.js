@@ -216,6 +216,15 @@ function loadHnsManagerModule(options = {}) {
         pruneUnknownSingleLabelHistory,
       }),
       [require.resolve('./hns-health')]: () => options.hnsHealth || jest.requireActual('./hns-health'),
+      [require.resolve('../shared/platform-capabilities')]: () => ({
+        getCapabilityStatus: jest.fn(() => ({
+          supported: options.hnsSupported ?? true,
+          target: options.hnsTarget || 'linux-x64',
+          unsupportedReason: options.hnsSupported === false
+            ? 'Handshake browsing is unavailable on this platform.'
+            : null,
+        })),
+      }),
     },
   });
 
@@ -271,6 +280,9 @@ describe('hns-manager', () => {
     const ctx = loadHnsManagerModule();
     const status = ctx.mod.getHnsStatus();
     expect(status).toEqual({
+      supported: true,
+      target: 'linux-x64',
+      unsupportedReason: null,
       status: 'stopped',
       error: null,
       synced: false,
@@ -657,6 +669,27 @@ describe('hns-manager', () => {
     await ctx.mod.startHns();
     expect(ctx.mod.getHnsStatus().status).toBe('error');
     expect(ctx.mod.getHnsStatus().error).toContain('Helper binary not found');
+  });
+
+  test('startHns refuses unsupported targets before inspecting or spawning binaries', async () => {
+    const ctx = loadHnsManagerModule({
+      hnsSupported: false,
+      hnsTarget: 'mac-arm64',
+    });
+
+    await ctx.mod.startHns();
+
+    expect(ctx.spawn).not.toHaveBeenCalled();
+    expect(ctx.fsMock.existsSync).not.toHaveBeenCalled();
+    expect(ctx.setStatusMessage).toHaveBeenCalledWith(
+      'hns',
+      'Handshake browsing is unavailable on this platform.'
+    );
+    expect(ctx.mod.getHnsStatus()).toMatchObject({
+      supported: false,
+      target: 'mac-arm64',
+      status: 'stopped',
+    });
   });
 
   test('startHns sets error when hnsd binary not found', async () => {

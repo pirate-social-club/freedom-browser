@@ -266,6 +266,13 @@
 }
 
 /* HNS Status Display */
+.settings-capability-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .hns-status-display {
   margin-top: 10px;
   padding: 10px 12px;

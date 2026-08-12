@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "capabilities": {
+    "hns": {
+      "displayName": "Handshake browsing",
+      "supportedTargets": [
+        "linux-x64"
+      ],
+      "binaryDirectory": "hns-bin",
+      "binaries": {
+        "default": [
+          {
+            "name": "fingertipd",
+            "executable": true
+          },
+          {
+            "name": "hnsd",
+            "executable": true
+          },
+          {
+            "name": "PROVENANCE.md",
+            "executable": false
+          }
+        ],
+        "win": [
+          {
+            "name": "fingertipd.exe",
+            "executable": true
+          },
+          {
+            "name": "hnsd.exe",
+            "executable": true
+          },
+          {
+            "name": "PROVENANCE.md",
+            "executable": false
+          }
+        ]
+      },
+      "unsupportedReason": "Handshake browsing is unavailable on this platform. This release supports it on Linux x64 only."
+    },
+    "dvpn": {
+      "displayName": "Sentinel dVPN",
+      "supportedTargets": [
+        "linux-x64"
+      ],
+      "binaryDirectory": "dvpn-bin",
+      "binaries": {
+        "default": [
+          {
+            "name": "v2ray",
+            "executable": true
+          },
+          {
+            "name": "geoip.dat",
+            "executable": false
+          },
+          {
+            "name": "geosite.dat",
+            "executable": false
+          }
+        ],
+        "win": [
+          {
+            "name": "v2ray.exe",
+            "executable": true
+          },
+          {
+            "name": "geoip.dat",
+            "executable": false
+          },
+          {
+            "name": "geosite.dat",
+            "executable": false
+          }
+        ]
+      },
+      "unsupportedReason": "Sentinel dVPN is unavailable on this platform. This release supports it on Linux x64 only."
+    }
+  }
+}

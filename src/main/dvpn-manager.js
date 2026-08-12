@@ -5,6 +5,7 @@ const fs = require('fs');
 const { pathToFileURL } = require('url');
 const QRCode = require('qrcode');
 const IPC = require('../shared/ipc-channels');
+const { getCapabilityStatus } = require('../shared/platform-capabilities');
 const {
   updateService,
   setStatusMessage,
@@ -13,6 +14,7 @@ const {
 } = require('./service-registry');
 const networkManager = require('./network-manager');
 const { loadSettings } = require('./settings-store');
+const dvpnCapability = getCapabilityStatus('dvpn');
 
 const STATES = {
   OFF: 'off',
@@ -258,6 +260,9 @@ function updateState(newState, error = null) {
 
 function getStatus() {
   return {
+    supported: dvpnCapability.supported,
+    target: dvpnCapability.target,
+    unsupportedReason: dvpnCapability.unsupportedReason,
     state: currentState,
     walletAddress,
     connected: currentState === STATES.CONNECTED,
@@ -274,7 +279,12 @@ function getStatus() {
   };
 }
 
+function unsupportedResult() {
+  return { success: false, error: dvpnCapability.unsupportedReason };
+}
+
 async function createWallet() {
+  if (!dvpnCapability.supported) return unsupportedResult();
   if (!safeStorage.isEncryptionAvailable()) {
     return { success: false, error: 'Device encryption not available' };
   }
@@ -302,6 +312,7 @@ async function createWallet() {
 }
 
 async function getBalance() {
+  if (!dvpnCapability.supported) return unsupportedResult();
   const mnemonic = loadMnemonic();
   if (!mnemonic) {
     return { success: false, error: 'No wallet' };
@@ -322,6 +333,7 @@ async function getBalance() {
 }
 
 async function startDvpn() {
+  if (!dvpnCapability.supported) return unsupportedResult();
   if (currentState === STATES.CONNECTED || currentState === STATES.CONNECTING) {
     return { success: false, error: 'Already connected or connecting' };
   }
@@ -558,6 +570,12 @@ async function stopDvpn() {
 
 async function initDvpn() {
   log.info('[dVPN] Initializing...');
+  if (!dvpnCapability.supported) {
+    log.info(`[dVPN] Disabled on unsupported target ${dvpnCapability.target}`);
+    setStatusMessage('dvpn', dvpnCapability.unsupportedReason);
+    return;
+  }
+
   if (!walletExists()) {
     log.info('[dVPN] No wallet found, state=OFF');
     cachedBalance = null;
@@ -651,10 +669,12 @@ function registerDvpnIpc() {
   });
 
   ipcMain.handle(IPC.DVPN_GET_WALLET_ADDRESS, () => {
+    if (!dvpnCapability.supported) return unsupportedResult();
     return { success: true, address: walletAddress };
   });
 
   ipcMain.handle(IPC.DVPN_GENERATE_QR, async (_event, text, options = {}) => {
+    if (!dvpnCapability.supported) return unsupportedResult();
     try {
       const dataUrl = await QRCode.toDataURL(text, {
         width: options.width || 192,

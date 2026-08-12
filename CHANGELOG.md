@@ -2,6 +2,19 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [0.7.12] - Unreleased
+
+### Fixed
+
+- Updated the bundled Linux x64 Handshake helper so the required application namespaces pass HTTPS hostname validation.
+- Added a packaged-helper HTTPS release smoke covering the required HNS host matrix.
+
+### Changed
+
+- Declared Handshake browsing and Sentinel dVPN as Linux x64-only capabilities for this release.
+- Unsupported platforms now disable those runtime paths and controls with an explicit explanation.
+- Release artifact checks now require every binary declared for a supported capability and verify executable permissions on Unix targets.
+
 ## [0.7.11] - 2026-07-18
 
 ### Security

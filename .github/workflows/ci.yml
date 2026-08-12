@@ -94,6 +94,10 @@ jobs:
         working-directory: freedom-browser
         run: npm run test:coverage
 
+      - name: Verify platform capability matrix
+        working-directory: freedom-browser
+        run: npm run test:capabilities
+
       - name: Upload coverage artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

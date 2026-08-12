@@ -57,6 +57,10 @@ jobs:
         working-directory: freedom-browser
         run: npm run test:coverage
 
+      - name: Verify platform capability matrix
+        working-directory: freedom-browser
+        run: npm run test:capabilities
+
   build:
     name: Build ${{ matrix.label }}
     needs: quality
@@ -179,6 +183,14 @@ jobs:
         working-directory: ${{ matrix.workdir }}
         shell: pwsh
         run: ${{ matrix.build_command }}
+
+      - name: Smoke packaged HNS HTTPS
+        if: runner.os == 'Linux'
+        working-directory: ${{ matrix.workdir }}
+        shell: bash
+        env:
+          FREEDOM_HNS_SMOKE_EXTRA_HOST: ${{ secrets.FREEDOM_HNS_SMOKE_EXTRA_HOST }}
+        run: npm run smoke:hns:packaged -- --resources-dir dist/linux-unpacked/resources
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
