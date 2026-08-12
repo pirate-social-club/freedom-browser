@@ -24,10 +24,11 @@ every runtime artifact declared for a supported target.
    platform capabilities.
 7. Tag the unchanged, verified commit as `v0.7.12` and push the tag.
 
-The workflow publishes only for a pushed `v*` tag. A manual dispatch builds the
-release candidate without publishing it. macOS manual-dispatch artifacts are
-unsigned and unnotarized; pushed tags still require all signing and
-notarization credentials.
+The workflow publishes only for a pushed `v*` tag. For v0.7.12, tagged runs
+publish Linux x64 and Windows x64 artifacts only. A manual dispatch still
+builds all four release-candidate targets without publishing; its macOS
+artifacts are explicitly unsigned and unnotarized. macOS distribution remains
+disabled until signing and notarization credentials are available.
 
 ## Scope intentionally deferred
 

@@ -75,21 +75,25 @@ jobs:
           - os: macos-14
             label: macOS x64
             artifact_name: macos-x64
+            publish_on_tag: false
             workdir: freedom-browser
             build_command: node scripts/build.js --dist --mac --x64
           - os: macos-14
             label: macOS arm64
             artifact_name: macos-arm64
+            publish_on_tag: false
             workdir: freedom-browser
             build_command: node scripts/build.js --dist --mac --arm64
           - os: ubuntu-latest
             label: Linux x64
             artifact_name: linux-x64
+            publish_on_tag: true
             workdir: freedom-browser
             build_command: npm run dist:linux:x64:docker
           - os: windows-latest
             label: Windows x64
             artifact_name: windows-x64
+            publish_on_tag: true
             workdir: freedom-browser
             build_command: node scripts/build.js --dist --win --x64
 
@@ -124,13 +128,13 @@ jobs:
           cache-dependency-path: freedom-browser/package-lock.json
 
       - name: Install dependencies
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && (github.event_name == 'workflow_dispatch' || matrix.publish_on_tag)
         working-directory: ${{ matrix.workdir }}
         shell: bash
         run: npm ci
 
       - name: Audit dependencies
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && (github.event_name == 'workflow_dispatch' || matrix.publish_on_tag)
         working-directory: ${{ matrix.workdir }}
         shell: bash
         run: npm audit --audit-level=high
@@ -148,6 +152,7 @@ jobs:
         run: npm audit --audit-level=high
 
       - name: Download platform binaries
+        if: github.event_name == 'workflow_dispatch' || matrix.publish_on_tag
         working-directory: ${{ matrix.workdir }}
         shell: bash
         run: |
@@ -158,23 +163,10 @@ jobs:
           fi
 
       - name: Build macOS release artifacts
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && github.event_name == 'workflow_dispatch'
         working-directory: ${{ matrix.workdir }}
         shell: bash
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            if [ -z "${APPLE_ID}" ] || [ -z "${APPLE_TEAM_ID}" ] || [ -z "${APPLE_APP_SPECIFIC_PASSWORD}" ]; then
-              echo "::error::macOS release signing and notarization credentials are required for a tagged release"
-              exit 1
-            fi
-            ${{ matrix.build_command }}
-          else
-            ${{ matrix.build_command }} --unsigned --no-notarize
-          fi
+        run: ${{ matrix.build_command }} --unsigned --no-notarize
 
       - name: Build non-macOS release artifacts
         if: runner.os == 'Linux'
@@ -197,6 +189,7 @@ jobs:
         run: npm run smoke:hns:packaged -- --resources-dir dist/linux-unpacked/resources
 
       - name: Upload build artifacts
+        if: github.event_name == 'workflow_dispatch' || matrix.publish_on_tag
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ${{ matrix.artifact_name }}
