@@ -1,6 +1,13 @@
+const net = require('net');
 const log = require('./logger');
 const { ipcMain } = require('electron');
 const IPC = require('../shared/ipc-channels');
+const { normalizeSpaceHandle, parseSpacesHandleInput } = require('../shared/spaces-handle');
+const {
+  buildSpacesProxyUrl,
+  rememberSpacesBinding,
+  startSpacesProxy,
+} = require('./spaces-proxy');
 
 const SPACES_RESOLVER_BASE_URL =
   process.env.SPACES_RESOLVER_BASE_URL?.trim()
@@ -9,19 +16,41 @@ const SPACES_RESOLVER_BASE_URL =
 const SPACES_CACHE_TTL_MS = 30 * 1000;
 const spaceResultCache = new Map();
 
-const normalizeSpaceHandle = (handle) => {
-  const trimmed = (handle || '').trim();
-  if (!trimmed) {
-    throw new Error('Spaces handle is empty');
-  }
-  const match = trimmed.match(/^@([^\s/?#:@]+)$/u);
-  if (!match) {
-    throw new Error('Spaces handle must be a root label like @space');
-  }
-
-  const normalizedLabel = match[1].normalize('NFKC').toLowerCase();
-  return `@${normalizedLabel}`;
+let fabricLoader = async () => {
+  const { Fabric } = await import('@spacesprotocol/fabric-web');
+  const seeds = process.env.SPACES_FABRIC_SEEDS
+    ?.split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return new Fabric(seeds?.length ? { seeds } : {});
 };
+
+let fabricClientPromise = null;
+
+function setFabricLoader(loader) {
+  fabricLoader = loader;
+  fabricClientPromise = null;
+}
+
+function resetSpacesResolverForTests() {
+  spaceResultCache.clear();
+  fabricClientPromise = null;
+}
+
+async function getFabric() {
+  if (!fabricLoader) {
+    return null;
+  }
+  if (!fabricClientPromise) {
+    fabricClientPromise = Promise.resolve()
+      .then(() => fabricLoader())
+      .catch((error) => {
+        log.warn(`[spaces] Fabric client unavailable: ${error.message}`);
+        return null;
+      });
+  }
+  return fabricClientPromise;
+}
 
 const parseOutpoint = (value) => {
   if (!value || typeof value !== 'string') {
@@ -35,6 +64,86 @@ const parseOutpoint = (value) => {
     n: Number.isInteger(parsedN) ? parsedN : null,
   };
 };
+
+function collectAddrValues(records, key) {
+  if (!records) return [];
+
+  if (Array.isArray(records)) {
+    return records
+      .filter((record) => record?.type === 'addr' && record.key === key)
+      .flatMap((record) => (Array.isArray(record.value) ? record.value : [record.value]));
+  }
+
+  const addrMap = records.addr || {};
+  const values = addrMap[key];
+  if (!values) return [];
+  return Array.isArray(values) ? values : [values];
+}
+
+function extractIpv4(zone) {
+  if (!zone) return null;
+  const json = typeof zone.toJson === 'function' ? zone.toJson() : zone;
+  const values = collectAddrValues(json.records, 'ipv4');
+  return values.find((value) => net.isIP(String(value)) === 4) || null;
+}
+
+async function attachProxyFields(result) {
+  if (result?.type !== 'ok' || !result.ipv4) {
+    return result;
+  }
+  rememberSpacesBinding(result.handle, result.ipv4, result.port || 80);
+  await startSpacesProxy();
+  return {
+    ...result,
+    proxyUrl: buildSpacesProxyUrl(result.handle, '/'),
+  };
+}
+
+async function resolveViaFabric(handle) {
+  const fabric = await getFabric();
+  if (!fabric?.resolve) {
+    return null;
+  }
+
+  const zone = await fabric.resolve(handle);
+  if (!zone) {
+    return null;
+  }
+
+  const ipv4 = extractIpv4(zone);
+  if (!ipv4) {
+    return null;
+  }
+
+  const resolvedHandle = typeof zone.handle === 'string'
+    ? normalizeSpaceHandle(zone.handle)
+    : handle;
+
+  return attachProxyFields({
+    type: 'ok',
+    handle: resolvedHandle,
+    canonicalHandle: resolvedHandle,
+    ipv4,
+    port: 80,
+    scheme: 'http',
+    source: 'fabric',
+    webUrl: null,
+    freedomUrl: null,
+    selectedUrl: null,
+    txid: null,
+    n: null,
+    scriptPubkey: null,
+    rootPubkey: null,
+    proofRootHash: null,
+    acceptedAnchorHeight: null,
+    acceptedAnchorBlockHash: null,
+    acceptedAnchorRootHash: null,
+    controlClass: null,
+    operationClass: null,
+    observationProvider: null,
+    proofVerified: false,
+  });
+}
 
 async function resolveViaPublicResolver(handle) {
   if (!SPACES_RESOLVER_BASE_URL) {
@@ -105,19 +214,34 @@ async function resolveViaPublicResolver(handle) {
     observationProvider:
       typeof data.observation_provider === 'string' ? data.observation_provider : null,
     proofVerified: data.proof_verified === true,
+    ipv4: null,
+    port: 80,
+    scheme: 'http',
+    proxyUrl: null,
   };
 }
 
 async function resolveSpace(handle) {
-  const normalizedHandle = normalizeSpaceHandle(handle);
+  const parsed = parseSpacesHandleInput(handle);
+  if (!parsed) {
+    throw new Error('Spaces handle must be name@space or @space without credentials or dotted space labels');
+  }
+  const normalizedHandle = parsed.handle;
   const cached = spaceResultCache.get(normalizedHandle);
   if (cached && Date.now() - cached.timestamp < SPACES_CACHE_TTL_MS) {
     return cached.result;
   }
 
-  log.info(`[spaces] Resolving ${normalizedHandle} via ${SPACES_RESOLVER_BASE_URL}`);
+  log.info(`[spaces] Resolving ${normalizedHandle}`);
 
   try {
+    const fabricResult = await resolveViaFabric(normalizedHandle);
+    if (fabricResult) {
+      spaceResultCache.set(normalizedHandle, { result: fabricResult, timestamp: Date.now() });
+      return fabricResult;
+    }
+
+    log.info(`[spaces] No Fabric ipv4 for ${normalizedHandle}, trying public resolver`);
     const result = await resolveViaPublicResolver(normalizedHandle);
     spaceResultCache.set(normalizedHandle, { result, timestamp: Date.now() });
     return result;
@@ -128,10 +252,23 @@ async function resolveSpace(handle) {
       reason: 'RESOLVER_UNAVAILABLE',
       message: err.message,
     };
-    log.warn(`[spaces] Public resolver failed for ${normalizedHandle}: ${err.message}`, err.cause || '');
+    log.warn(`[spaces] Resolution failed for ${normalizedHandle}: ${err.message}`, err.cause || '');
     spaceResultCache.set(normalizedHandle, { result, timestamp: Date.now() });
     return result;
   }
+}
+
+async function resolveSpacesHandles(handles = []) {
+  const unique = [...new Set(handles.map((value) => {
+    try {
+      return normalizeSpaceHandle(value);
+    } catch {
+      return null;
+    }
+  }).filter(Boolean))];
+
+  const results = await Promise.all(unique.map((handle) => resolveSpace(handle)));
+  return Object.fromEntries(unique.map((handle, index) => [handle, results[index]]));
 }
 
 function registerSpacesIpc() {
@@ -141,7 +278,11 @@ function registerSpacesIpc() {
 }
 
 module.exports = {
+  extractIpv4,
   normalizeSpaceHandle,
   registerSpacesIpc,
+  resetSpacesResolverForTests,
   resolveSpace,
+  resolveSpacesHandles,
+  setFabricLoader,
 };

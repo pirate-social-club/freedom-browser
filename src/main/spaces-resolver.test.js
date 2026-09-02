@@ -15,6 +15,14 @@ function setupMockRequest(responseBody, statusCode = 200) {
   global.fetch.mockResolvedValue(mockResponse(responseBody, statusCode));
 }
 
+function loadResolver() {
+  const proxy = require('./spaces-proxy');
+  const resolver = require('./spaces-resolver');
+  resolver.setFabricLoader(async () => null);
+  resolver.resetSpacesResolverForTests();
+  return { resolver, proxy };
+}
+
 describe('spaces-resolver', () => {
   beforeEach(() => {
     jest.resetModules();
@@ -23,9 +31,15 @@ describe('spaces-resolver', () => {
     delete process.env.SPACES_VERIFIER_BASE_URL;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     global.fetch = originalFetch;
     jest.restoreAllMocks();
+    try {
+      const { resetSpacesProxyForTests } = require('./spaces-proxy');
+      await resetSpacesProxyForTests();
+    } catch {
+      // proxy module may not be loaded
+    }
   });
 
   test('resolves an existing space root through the public resolver', async () => {
@@ -46,8 +60,8 @@ describe('spaces-resolver', () => {
       observation_provider: 'spaced_rpc+veritas_native',
     });
 
-    const { resolveSpace } = require('./spaces-resolver');
-    const result = await resolveSpace('@Space');
+    const { resolver } = loadResolver();
+    const result = await resolver.resolveSpace('@Space');
 
     expect(global.fetch).toHaveBeenCalledWith(
       'https://verifier.pirate.sc/spaces/resolve?handle=%40space',
@@ -75,6 +89,10 @@ describe('spaces-resolver', () => {
       source: 'resolver',
       observationProvider: 'spaced_rpc+veritas_native',
       proofVerified: true,
+      ipv4: null,
+      port: 80,
+      scheme: 'http',
+      proxyUrl: null,
     });
   });
 
@@ -90,8 +108,8 @@ describe('spaces-resolver', () => {
       observation_provider: 'spaced_rpc+veritas_native',
     });
 
-    const { resolveSpace } = require('./spaces-resolver');
-    const result = await resolveSpace('@bitcoin');
+    const { resolver } = loadResolver();
+    const result = await resolver.resolveSpace('@bitcoin');
 
     expect(result.webUrl).toBe('https://example.com');
   });
@@ -103,8 +121,8 @@ describe('spaces-resolver', () => {
       reason: 'root_not_found',
     });
 
-    const { resolveSpace } = require('./spaces-resolver');
-    const result = await resolveSpace('@missing');
+    const { resolver } = loadResolver();
+    const result = await resolver.resolveSpace('@missing');
 
     expect(result).toEqual({
       type: 'not_found',
@@ -117,8 +135,8 @@ describe('spaces-resolver', () => {
   test('returns resolver error details when the public endpoint fails', async () => {
     global.fetch.mockRejectedValue(new Error('fetch failed'));
 
-    const { resolveSpace } = require('./spaces-resolver');
-    const result = await resolveSpace('@pirate');
+    const { resolver } = loadResolver();
+    const result = await resolver.resolveSpace('@pirate');
 
     expect(result).toEqual({
       type: 'error',
@@ -136,8 +154,8 @@ describe('spaces-resolver', () => {
       reason: 'root_not_found',
     });
 
-    const { resolveSpace } = require('./spaces-resolver');
-    await resolveSpace('@pirate');
+    const { resolver } = loadResolver();
+    await resolver.resolveSpace('@pirate');
 
     expect(global.fetch).toHaveBeenCalledWith(
       'https://resolver.example/resolve?handle=%40pirate',
@@ -146,11 +164,71 @@ describe('spaces-resolver', () => {
   });
 
   test('rejects invalid handles before calling resolver', async () => {
-    const { resolveSpace } = require('./spaces-resolver');
+    const { resolver } = loadResolver();
 
-    await expect(resolveSpace('name@space')).rejects.toThrow(
-      'Spaces handle must be a root label like @space'
+    await expect(resolver.resolveSpace('user@example.com')).rejects.toThrow(
+      /dotted space/
+    );
+    await expect(resolver.resolveSpace('alice:secret@space')).rejects.toThrow(
+      /credentials or dotted space/
     );
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  test('selects addr ipv4 records from Fabric and binds a proxy URL', async () => {
+    const { resolver, proxy } = loadResolver();
+    await proxy.startSpacesProxy();
+    resolver.setFabricLoader(async () => ({
+      resolve: async () => ({
+        handle: 'void@space',
+        toJson: () => ({
+          records: [
+            { type: 'txt', key: 'website', value: ['https://example.com'] },
+            { type: 'addr', key: 'ipv4', value: ['203.0.113.10'] },
+          ],
+        }),
+      }),
+    }));
+
+    const result = await resolver.resolveSpace('void@space');
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({
+      type: 'ok',
+      handle: 'void@space',
+      ipv4: '203.0.113.10',
+      port: 80,
+      scheme: 'http',
+      source: 'fabric',
+    }));
+    expect(result.proxyUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/void%40space\/$/);
+    expect(proxy.getSpacesBinding('void@space')).toEqual({
+      handle: 'void@space',
+      ipv4: '203.0.113.10',
+      port: 80,
+    });
+  });
+
+  test('falls back to the public resolver when Fabric has no ipv4 record', async () => {
+    setupMockRequest({
+      resolved: true,
+      handle: '@space',
+      canonical_handle: '@space',
+      web_url: 'https://example.com',
+    });
+    const { resolver } = loadResolver();
+    resolver.setFabricLoader(async () => ({
+      resolve: async () => ({
+        handle: '@space',
+        toJson: () => ({
+          records: [{ type: 'addr', key: 'btc', value: ['bc1qexample'] }],
+        }),
+      }),
+    }));
+
+    const result = await resolver.resolveSpace('@space');
+    expect(result.webUrl).toBe('https://example.com');
+    expect(result.source).toBe('resolver');
+    expect(result.ipv4).toBeNull();
   });
 });

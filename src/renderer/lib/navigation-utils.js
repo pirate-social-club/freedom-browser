@@ -23,6 +23,11 @@ export const resolveProtocolIconType = ({
     protocol = 'ipns';
   } else if (normalizedValue.startsWith('rad://') && enableRadicleIntegration) {
     protocol = 'radicle';
+  } else if (
+    normalizedValue.startsWith('spaces://')
+    || globalThis.FREEDOM_SPACES_HANDLE?.parseSpacesHandleInput?.(value)
+  ) {
+    protocol = 'spaces';
   } else if (normalizedValue.startsWith('freedom://')) {
     protocol = null;
   } else if (normalizedValue.startsWith('https://') || currentPageSecure) {

@@ -91,6 +91,9 @@ contextBridge.exposeInMainWorld('electronAPI', guardInternalBridge('electronAPI'
   setRadBase: (webContentsId, baseUrl) =>
     ipcRenderer.invoke('rad:set-base', { webContentsId, baseUrl }),
   clearRadBase: (webContentsId) => ipcRenderer.invoke('rad:clear-base', { webContentsId }),
+  setSpacesBase: (webContentsId, baseUrl) =>
+    ipcRenderer.invoke('spaces:set-base', { webContentsId, baseUrl }),
+  clearSpacesBase: (webContentsId) => ipcRenderer.invoke('spaces:clear-base', { webContentsId }),
   setWindowTitle: (title) => ipcRenderer.send('window:set-title', title),
   closeWindow: () => ipcRenderer.send('window:close'),
   minimizeWindow: () => ipcRenderer.send('window:minimize'),

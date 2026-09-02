@@ -1,3 +1,4 @@
+import '../../shared/spaces-handle.js';
 import {
   ensureTrailingSlash,
   composeTargetUrl,
@@ -6,6 +7,7 @@ import {
   formatBzzUrl,
   deriveDisplayValue,
   parseSpacesRootInput,
+  parseSpacesHandleInput,
   isValidCid,
   parseIpfsInput,
   deriveIpfsBaseFromUrl,
@@ -412,22 +414,38 @@ describe('url-utils', () => {
   describe('Spaces shorthand helpers', () => {
     test('parses root-only spaces input', () => {
       expect(parseSpacesRootInput('@space')).toEqual({
-        routeKey: '@space',
+        handle: '@space',
+        suffix: '',
         displayValue: '@space',
       });
 
       expect(parseSpacesRootInput('@😀')).toEqual({
-        routeKey: '@😀',
+        handle: '@😀',
+        suffix: '',
         displayValue: '@😀',
       });
     });
 
+    test('parses name@space handles and suffixes', () => {
+      expect(parseSpacesHandleInput('void@space')).toEqual({
+        handle: 'void@space',
+        suffix: '',
+        displayValue: 'void@space',
+      });
+      expect(parseSpacesHandleInput('@space/submit')).toEqual({
+        handle: '@space',
+        suffix: '/submit',
+        displayValue: '@space/submit',
+      });
+    });
+
     test('rejects invalid spaces shorthand input', () => {
-      expect(parseSpacesRootInput('name@space')).toBeNull();
+      expect(parseSpacesRootInput('user@example.com')).toBeNull();
+      expect(parseSpacesRootInput('alice:secret@space')).toBeNull();
       expect(parseSpacesRootInput('@')).toBeNull();
       expect(parseSpacesRootInput('@@space')).toBeNull();
       expect(parseSpacesRootInput('@space path')).toBeNull();
-      expect(parseSpacesRootInput('@space/submit')).toBeNull();
+      expect(parseSpacesRootInput('void@space.tld')).toBeNull();
       expect(parseSpacesRootInput('https://pirate.sc/c/@space')).toBeNull();
     });
   });

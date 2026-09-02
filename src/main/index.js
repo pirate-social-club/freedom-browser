@@ -48,6 +48,7 @@ const { registerHistoryIpc, closeDb: closeHistoryDb } = require('./history');
 const { registerFaviconsIpc } = require('./favicons');
 const { registerEnsIpc } = require('./ens-resolver');
 const { registerSpacesIpc } = require('./spaces-resolver');
+const { startSpacesProxy } = require('./spaces-proxy');
 const { registerBeeIpc, stopBee, startBee, setUseInjectedIdentity: setBeeInjectedIdentity } = require('./bee-manager');
 const { registerIpfsIpc, stopIpfs, startIpfs, setUseInjectedIdentity: setIpfsInjectedIdentity } = require('./ipfs-manager');
 const { registerRadicleIpc, stopRadicle, startRadicle, setUseInjectedIdentity: setRadicleInjectedIdentity } = require('./radicle-manager');
@@ -144,6 +145,9 @@ async function bootstrap() {
   registerFaviconsIpc();
   registerEnsIpc();
   registerSpacesIpc();
+  startSpacesProxy().catch((error) => {
+    log.warn(`[spaces-proxy] failed to start: ${error.message}`);
+  });
   registerBeeIpc();
   registerIpfsIpc();
   registerRadicleIpc();

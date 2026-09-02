@@ -1,3 +1,5 @@
+require('../../shared/spaces-handle');
+
 const originalWindow = global.window;
 
 const loadNavigationUtils = async () => {
@@ -24,6 +26,8 @@ describe('navigation-utils', () => {
       expect(resolveProtocolIconType({ value: 'ipfs://cid' })).toBe('ipfs');
       expect(resolveProtocolIconType({ value: 'ipns://name' })).toBe('ipns');
       expect(resolveProtocolIconType({ value: 'https://example.com' })).toBe('https');
+      expect(resolveProtocolIconType({ value: 'void@space' })).toBe('spaces');
+      expect(resolveProtocolIconType({ value: 'spaces://void@space/docs' })).toBe('spaces');
     });
 
     test('maps ens names through resolved protocols', async () => {

@@ -143,6 +143,12 @@
   stroke: #9b59b6;
 }
 
+/* Spaces - use the HTTP mark until a dedicated icon lands */
+.protocol-icon[data-protocol='spaces'] .icon-http {
+  display: block;
+  stroke: var(--muted);
+}
+
 /* HTTP - muted */
 .protocol-icon[data-protocol='http'] .icon-http {
   display: block;

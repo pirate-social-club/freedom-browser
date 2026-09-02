@@ -1,5 +1,7 @@
 const log = require('./logger');
-const { activeBzzBases, activeIpfsBases, activeRadBases } = require('./state');
+const { activeBzzBases, activeIpfsBases, activeRadBases, activeSpacesBases } = require('./state');
+const { parseSpacesHandleInput, applySpacesSuffix } = require('../shared/spaces-handle');
+const { isSpacesProxyUrl } = require('./spaces-proxy');
 const { getBeeApiUrl, getIpfsGatewayUrl, getRadicleApiUrl } = require('./service-registry');
 const { loadSettings } = require('./settings-store');
 const { isHnsHost } = require('../shared/hns-hosts');
@@ -26,7 +28,8 @@ const sanitizeUrlForLog = (rawUrl) => {
       parsed.protocol === 'bzz:' ||
       parsed.protocol === 'ipfs:' ||
       parsed.protocol === 'ipns:' ||
-      parsed.protocol === 'freedom:'
+      parsed.protocol === 'freedom:' ||
+      parsed.protocol === 'spaces:'
     ) {
       return `${parsed.protocol}//<redacted>`;
     }
@@ -36,7 +39,8 @@ const sanitizeUrlForLog = (rawUrl) => {
       rawUrl.startsWith('bzz://') ||
       rawUrl.startsWith('ipfs://') ||
       rawUrl.startsWith('ipns://') ||
-      rawUrl.startsWith('freedom://')
+      rawUrl.startsWith('freedom://') ||
+      rawUrl.startsWith('spaces://')
     ) {
       return `${rawUrl.split('://')[0]}://<redacted>`;
     }
@@ -315,6 +319,25 @@ function registerRequestRewriter(targetSession) {
     const webContentsId = details.webContentsId;
     logUnknownSingleLabelRequest(details);
 
+    const spacesInput = !isSpacesProxyUrl(details.url) ? parseSpacesHandleInput(details.url) : null;
+    if (spacesInput) {
+      Promise.resolve()
+        .then(() => require('./spaces-resolver').resolveSpace(spacesInput.handle))
+        .then((result) => {
+          if (result?.type === 'ok' && result.ipv4 && result.proxyUrl) {
+            const redirectURL = applySpacesSuffix(result.proxyUrl, spacesInput.suffix);
+            log.info(
+              `[rewrite:spaces] ${sanitizeUrlForLog(details.url)} -> ${sanitizeUrlForLog(redirectURL)}`
+            );
+            callback({ redirectURL });
+            return;
+          }
+          callback({});
+        })
+        .catch(() => callback({}));
+      return;
+    }
+
     // First, check for custom protocol URLs (bzz://, ipfs://, ipns://)
     const { converted, url: convertedUrl } = convertProtocolUrl(details.url);
     if (converted) {
@@ -353,6 +376,24 @@ function registerRequestRewriter(targetSession) {
           );
           callback({ redirectURL: redirectTarget });
           return;
+        }
+      }
+    }
+
+    const spacesBaseUrl = activeSpacesBases.get(webContentsId);
+    if (spacesBaseUrl) {
+      const baseHref = String(spacesBaseUrl.href || spacesBaseUrl);
+      if (!details.url.startsWith(baseHref)) {
+        const { shouldRewrite } = shouldRewriteRequest(details.url, spacesBaseUrl);
+        if (shouldRewrite) {
+          const redirectTarget = buildRewriteTarget(details.url, spacesBaseUrl);
+          if (redirectTarget) {
+            log.info(
+              `[rewrite:spaces-base] ${sanitizeUrlForLog(details.url)} -> ${sanitizeUrlForLog(redirectTarget)}`
+            );
+            callback({ redirectURL: redirectTarget });
+            return;
+          }
         }
       }
     }

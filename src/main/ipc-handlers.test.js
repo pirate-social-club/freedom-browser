@@ -63,6 +63,7 @@ function loadIpcHandlersModule(options = {}) {
   state.activeBzzBases.clear();
   state.activeIpfsBases.clear();
   state.activeRadBases.clear();
+  state.activeSpacesBases.clear();
 
   return {
     app,
@@ -193,6 +194,23 @@ describe('ipc-handlers', () => {
       })
     ).resolves.toEqual(success());
     expect(enabledCtx.state.activeRadBases.has(12)).toBe(false);
+
+    await expect(
+      ctx.ipcMain.invoke(IPC.SPACES_SET_BASE, {
+        webContentsId: 41,
+        baseUrl: 'http://127.0.0.1:9/void%40space/',
+      })
+    ).resolves.toEqual(success());
+    expect(ctx.state.activeSpacesBases.get(41)?.toString()).toBe(
+      'http://127.0.0.1:9/void%40space/'
+    );
+
+    await expect(
+      ctx.ipcMain.invoke(IPC.SPACES_CLEAR_BASE, {
+        webContentsId: 41,
+      })
+    ).resolves.toEqual(success());
+    expect(ctx.state.activeSpacesBases.has(41)).toBe(false);
   });
 
   test('registers window, app, and internal routing handlers', async () => {
