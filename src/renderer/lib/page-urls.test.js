@@ -1,3 +1,5 @@
+require('../../shared/spaces-handle');
+
 describe('page-urls', () => {
   const originalWindow = global.window;
 
@@ -39,6 +41,8 @@ describe('page-urls', () => {
     expect(mod.detectProtocol('ipfs://cid')).toBe('ipfs');
     expect(mod.detectProtocol('ipns://name')).toBe('ipns');
     expect(mod.detectProtocol('rad://rid')).toBe('radicle');
+    expect(mod.detectProtocol('spaces://void@space')).toBe('spaces');
+    expect(mod.detectProtocol('void@space/docs')).toBe('spaces');
     expect(mod.detectProtocol('https://example.com')).toBe('https');
     expect(mod.detectProtocol('http://example.com')).toBe('http');
     expect(mod.detectProtocol('')).toBe('unknown');

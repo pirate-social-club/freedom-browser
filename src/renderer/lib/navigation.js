@@ -24,7 +24,9 @@ import {
   deriveRadBaseFromUrl,
   normalizeLocalhostInput,
   normalizeHnsHostInput,
+  parseSpacesHandleInput,
   parseSpacesRootInput,
+  applySpacesSuffix,
 } from './url-utils.js';
 import {
   getActiveWebview,
@@ -297,6 +299,7 @@ const loadSpacesResultPage = ({
   syncBzzBase(null, context);
   syncIpfsBase(null, context);
   syncRadBase(null, context);
+  syncSpacesBase(null, context);
   if (isNavigationContextActive(context)) {
     updateProtocolIcon();
   }
@@ -319,6 +322,7 @@ const loadHnsNotReadyPage = (webview, navState, inputValue, hnsUrl, hnsState, na
   syncBzzBase(null, context);
   syncIpfsBase(null, context);
   syncRadBase(null, context);
+  syncSpacesBase(null, context);
 };
 
 const clearPendingHnsNavigation = (navState) => {
@@ -547,6 +551,33 @@ const syncRadBase = (nextBase, navContext = null) => {
     });
 };
 
+const syncSpacesBase = (nextBase, navContext = null) => {
+  const navState = navContext?.navState || getNavState();
+  const webview = navContext?.webview || getActiveWebview();
+  if (!electronAPI || (!electronAPI.setSpacesBase && !electronAPI.clearSpacesBase)) {
+    return;
+  }
+  if (!navState) {
+    return;
+  }
+  if (navState.currentSpacesBase === nextBase) {
+    return;
+  }
+  navState.currentSpacesBase = nextBase || null;
+  ensureWebContentsId(webview, navState)
+    .then((id) => {
+      if (!id) return;
+      if (navState.currentSpacesBase) {
+        electronAPI.setSpacesBase?.(id, navState.currentSpacesBase);
+      } else {
+        electronAPI.clearSpacesBase?.(id);
+      }
+    })
+    .catch((err) => {
+      console.error('Failed to sync spaces base', err);
+    });
+};
+
 export const loadTarget = (value, displayOverride = null, targetWebview = null) => {
   // Use provided webview or fall back to active webview
   const navContext = getNavigationContext(targetWebview);
@@ -704,12 +735,13 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     return;
   }
 
-  const spacesInput = parseSpacesRootInput(value);
+  const spacesInput = parseSpacesHandleInput(value) || parseSpacesRootInput(value);
   if (spacesInput) {
     const displayValue = displayOverride || spacesInput.displayValue;
     const capturedWebview = webview;
     const capturedNavState = navState;
     const capturedNavContext = navContext;
+    const requestedHandle = spacesInput.handle || spacesInput.routeKey;
 
     if (!electronAPI?.resolveSpace) {
       loadSpacesResultPage({
@@ -718,22 +750,40 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
         navContext: capturedNavContext,
         result: {
           type: 'error',
-          handle: spacesInput.routeKey,
+          handle: requestedHandle,
           reason: 'RESOLVER_UNAVAILABLE',
           message: 'Spaces resolver is unavailable in this build.',
         },
         displayValue,
-        requestedHandle: spacesInput.routeKey,
+        requestedHandle,
       });
       return;
     }
 
     setLoading(true, navContext);
-    pushDebug(`[AddressBar] Resolving Spaces handle: ${spacesInput.routeKey}`);
+    pushDebug(`[AddressBar] Resolving Spaces handle: ${requestedHandle}`);
     electronAPI
-      .resolveSpace(spacesInput.routeKey)
+      .resolveSpace(requestedHandle)
       .then((result) => {
         setLoading(false, capturedNavContext);
+
+        if (result?.type === 'ok' && result.ipv4 && result.proxyUrl) {
+          const targetUrl = applySpacesSuffix(result.proxyUrl, spacesInput.suffix || '/') || result.proxyUrl;
+          setNavigationDisplay(capturedNavContext, displayValue);
+          rememberDisplayAlias(capturedNavState, targetUrl, displayValue);
+          capturedNavState.pendingTitleForUrl = targetUrl;
+          capturedNavState.pendingNavigationUrl = targetUrl;
+          capturedNavState.hasNavigatedDuringCurrentLoad = false;
+          safeLoadUrl(capturedWebview, targetUrl, 'spaces');
+          syncSpacesBase(result.proxyUrl, capturedNavContext);
+          syncBzzBase(null, capturedNavContext);
+          syncIpfsBase(null, capturedNavContext);
+          syncRadBase(null, capturedNavContext);
+          if (isNavigationContextActive(capturedNavContext)) {
+            updateProtocolIcon();
+          }
+          return;
+        }
 
         const selectedUrl = selectSpacesTargetUrl(result);
         if (result?.type === 'ok' && selectedUrl) {
@@ -748,12 +798,12 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
           result:
             result || {
               type: 'error',
-              handle: spacesInput.routeKey,
+              handle: requestedHandle,
               reason: 'EMPTY_RESOLUTION',
               message: 'Spaces resolver returned no data.',
             },
           displayValue,
-          requestedHandle: spacesInput.routeKey,
+          requestedHandle,
         });
       })
       .catch((err) => {
@@ -765,12 +815,12 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
           navContext: capturedNavContext,
           result: {
             type: 'error',
-            handle: spacesInput.routeKey,
+            handle: requestedHandle,
             reason: 'SPACES_RESOLUTION_ERROR',
             message: err.message,
           },
           displayValue,
-          requestedHandle: spacesInput.routeKey,
+          requestedHandle,
         });
       });
     return;
@@ -786,6 +836,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
       navState.hasNavigatedDuringCurrentLoad = false;
       safeLoadUrl(webview, disabledUrl, 'radicle-disabled');
       syncRadBase(null, navContext);
+      syncSpacesBase(null, navContext);
       syncBzzBase(null, navContext);
       syncIpfsBase(null, navContext);
       return;
@@ -809,6 +860,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
       pushDebug(`Loading ${radicleTarget.displayValue} via ${radicleTarget.targetUrl}`);
       // rad-browser.html handles its own API calls, no base sync needed
       syncRadBase(null, navContext);
+      syncSpacesBase(null, navContext);
       syncBzzBase(null, navContext);
       syncIpfsBase(null, navContext);
       updateActiveProtocolIcon();
@@ -825,6 +877,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     navState.hasNavigatedDuringCurrentLoad = false;
     safeLoadUrl(webview, errorUrl.toString(), 'radicle-error');
     syncRadBase(null, navContext);
+    syncSpacesBase(null, navContext);
     syncBzzBase(null, navContext);
     syncIpfsBase(null, navContext);
     return;
@@ -851,7 +904,8 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     pushDebug(`Loading ${ipfsTarget.displayValue} via ${ipfsTarget.targetUrl}`);
     syncIpfsBase(ipfsTarget.baseUrl || null, navContext);
     syncBzzBase(null, navContext); // Clear bzz base when loading IPFS
-    syncRadBase(null, navContext); // Clear rad base when loading IPFS
+    syncRadBase(null, navContext);
+    syncSpacesBase(null, navContext);
     return;
   }
 
@@ -874,7 +928,8 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     pushDebug(`Loading ${target.displayValue} via ${target.targetUrl}`);
     syncBzzBase(target.baseUrl || null, navContext);
     syncIpfsBase(null, navContext); // Clear ipfs base when loading bzz
-    syncRadBase(null, navContext); // Clear rad base when loading bzz
+    syncRadBase(null, navContext);
+    syncSpacesBase(null, navContext);
     return;
   }
 
@@ -906,6 +961,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
       syncBzzBase(null, navContext);
       syncIpfsBase(null, navContext);
       syncRadBase(null, navContext);
+      syncSpacesBase(null, navContext);
       return;
     }
   }
@@ -923,6 +979,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     syncBzzBase(null, navContext);
     syncIpfsBase(null, navContext);
     syncRadBase(null, navContext);
+    syncSpacesBase(null, navContext);
     return;
   }
 
@@ -938,6 +995,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
     syncBzzBase(null, navContext);
     syncIpfsBase(null, navContext);
     syncRadBase(null, navContext);
+    syncSpacesBase(null, navContext);
     return;
   }
 
@@ -968,6 +1026,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null) 
       syncBzzBase(null, navContext);
       syncIpfsBase(null, navContext);
       syncRadBase(null, navContext);
+      syncSpacesBase(null, navContext);
       return;
     }
   }
@@ -1007,6 +1066,7 @@ export const loadHomePage = () => {
   syncBzzBase(null);
   syncIpfsBase(null);
   syncRadBase(null);
+  syncSpacesBase(null);
   addressInput.value = landingUrl;
   updateProtocolIcon();
   clearPendingHnsNavigation(navState);
@@ -1034,6 +1094,7 @@ export const resumePendingHnsNavigationIfReady = () => {
   syncBzzBase(null);
   syncIpfsBase(null);
   syncRadBase(null);
+  syncSpacesBase(null);
   updateProtocolIcon();
   return true;
 };
@@ -1668,6 +1729,9 @@ export const initNavigation = () => {
           if (tabNavState.currentRadBase) {
             syncRadBase(tabNavState.currentRadBase);
           }
+          if (tabNavState.currentSpacesBase) {
+            syncSpacesBase(tabNavState.currentSpacesBase);
+          }
           // Sync navigationState.currentPageUrl if tab.url is more recent
           if (data.tab.url && data.tab.url !== tabNavState.currentPageUrl) {
             tabNavState.currentPageUrl = data.tab.url;
@@ -1769,6 +1833,7 @@ export const upgradeHomePageIfNeeded = (oldHomeUrl) => {
       syncBzzBase(null);
       syncIpfsBase(null);
       syncRadBase(null);
+      syncSpacesBase(null);
       if (addressInput) {
         addressInput.value = landingUrl;
       }

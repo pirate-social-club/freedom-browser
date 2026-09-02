@@ -139,6 +139,8 @@ describe('preload', () => {
       [exposures.electronAPI, 'clearIpfsBase', [21], IPC.IPFS_CLEAR_BASE, [{ webContentsId: 21 }]],
       [exposures.electronAPI, 'setRadBase', [31, 'http://127.0.0.1:8780/api/v1/repos/rid/'], IPC.RAD_SET_BASE, [{ webContentsId: 31, baseUrl: 'http://127.0.0.1:8780/api/v1/repos/rid/' }]],
       [exposures.electronAPI, 'clearRadBase', [31], IPC.RAD_CLEAR_BASE, [{ webContentsId: 31 }]],
+      [exposures.electronAPI, 'setSpacesBase', [41, 'http://127.0.0.1:9/void%40space/'], IPC.SPACES_SET_BASE, [{ webContentsId: 41, baseUrl: 'http://127.0.0.1:9/void%40space/' }]],
+      [exposures.electronAPI, 'clearSpacesBase', [41], IPC.SPACES_CLEAR_BASE, [{ webContentsId: 41 }]],
       [exposures.electronAPI, 'getPlatform', [], IPC.WINDOW_GET_PLATFORM, []],
       [exposures.electronAPI, 'getSettings', [], IPC.SETTINGS_GET, []],
       [exposures.electronAPI, 'saveSettings', [{ theme: 'dark' }], IPC.SETTINGS_SAVE, [{ theme: 'dark' }]],

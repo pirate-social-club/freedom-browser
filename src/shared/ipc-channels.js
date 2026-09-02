@@ -92,6 +92,10 @@ module.exports = {
   RAD_SET_BASE: 'rad:set-base',
   RAD_CLEAR_BASE: 'rad:clear-base',
 
+  // Spaces routing
+  SPACES_SET_BASE: 'spaces:set-base',
+  SPACES_CLEAR_BASE: 'spaces:clear-base',
+
   // Window
   WINDOW_SET_TITLE: 'window:set-title',
   WINDOW_CLOSE: 'window:close',
