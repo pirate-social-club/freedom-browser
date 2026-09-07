@@ -1,6 +1,7 @@
 const log = require('./logger');
 const { app } = require('electron');
-const { activeBzzBases, activeIpfsBases, activeRadBases } = require('./state');
+const { parseSpacesHandleInput } = require('../shared/spaces-handle');
+const { activeBzzBases, activeIpfsBases, activeRadBases, activeSpacesBases } = require('./state');
 
 const sanitizeUrlForLog = (rawUrl) => {
   if (!rawUrl || typeof rawUrl !== 'string') return 'unknown';
@@ -13,7 +14,8 @@ const sanitizeUrlForLog = (rawUrl) => {
       parsed.protocol === 'bzz:' ||
       parsed.protocol === 'ipfs:' ||
       parsed.protocol === 'ipns:' ||
-      parsed.protocol === 'freedom:'
+      parsed.protocol === 'freedom:' ||
+      parsed.protocol === 'spaces:'
     ) {
       return `${parsed.protocol}//<redacted>`;
     }
@@ -23,7 +25,8 @@ const sanitizeUrlForLog = (rawUrl) => {
       rawUrl.startsWith('bzz://') ||
       rawUrl.startsWith('ipfs://') ||
       rawUrl.startsWith('ipns://') ||
-      rawUrl.startsWith('freedom://')
+      rawUrl.startsWith('freedom://') ||
+      rawUrl.startsWith('spaces://')
     ) {
       return `${rawUrl.split('://')[0]}://<redacted>`;
     }
@@ -56,6 +59,7 @@ function registerWebContentsHandlers() {
       activeBzzBases.delete(contents.id);
       activeIpfsBases.delete(contents.id);
       activeRadBases.delete(contents.id);
+      activeSpacesBases.delete(contents.id);
     });
 
     const id = contents.id;
@@ -99,7 +103,9 @@ function registerWebContentsHandlers() {
           url.startsWith('bzz://') ||
           url.startsWith('ipfs://') ||
           url.startsWith('ipns://') ||
-          url.startsWith('rad:')
+          url.startsWith('rad:') ||
+          url.startsWith('spaces://') ||
+          parseSpacesHandleInput(url)
         ) {
           log.info(`${tag} intercepted custom protocol navigation: ${sanitizeUrlForLog(url)}`);
           event.preventDefault();

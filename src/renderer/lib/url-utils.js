@@ -114,7 +114,7 @@ const looksLikeHnsHost = (str) => {
   if (hostPart.startsWith('/') || hostPart.startsWith('.')) return false;
   if (hostPart.includes(':')) return false;
 
-  const knownPrefixes = ['bzz:', 'ipfs:', 'ipns:', 'rad:', 'ens:', 'freedom:', 'http:', 'https:'];
+  const knownPrefixes = ['bzz:', 'ipfs:', 'ipns:', 'rad:', 'ens:', 'freedom:', 'http:', 'https:', 'spaces:'];
   for (const prefix of knownPrefixes) {
     if (hostPart.toLowerCase().startsWith(prefix)) return false;
   }
@@ -149,25 +149,13 @@ export const normalizeHnsHostInput = (str) => {
   return `https://${host}${rest || '/'}`;
 };
 
-export const parseSpacesRootInput = (str) => {
-  if (!str || typeof str !== 'string') return null;
+export const parseSpacesHandleInput = (str) =>
+  globalThis.FREEDOM_SPACES_HANDLE?.parseSpacesHandleInput?.(str) || null;
 
-  const trimmed = str.trim();
-  if (!trimmed.startsWith('@')) return null;
+export const parseSpacesRootInput = (str) => parseSpacesHandleInput(str);
 
-  // Raw address-bar Spaces support is root-only for now. Once Freedom can
-  // resolve published web targets, suffix handling can move back in here.
-  const match = trimmed.match(/^@([^\s/?#:@]+)$/u);
-  if (!match) return null;
-
-  const [, label] = match;
-  if (!label) return null;
-
-  return {
-    routeKey: `@${label}`,
-    displayValue: trimmed,
-  };
-};
+export const applySpacesSuffix = (baseUrl, suffix) =>
+  globalThis.FREEDOM_SPACES_HANDLE?.applySpacesSuffix?.(baseUrl, suffix) || null;
 
 export const parseHashInput = (rawInput, bzzRoutePrefix) => {
   const withoutScheme = rawInput.replace(/^bzz:\/\//i, '').replace(/^\/+/, '');

@@ -76,6 +76,8 @@ export const detectProtocol = (url) => {
   if (url.startsWith('ipfs://')) return 'ipfs';
   if (url.startsWith('ipns://')) return 'ipns';
   if (url.startsWith('rad:')) return 'radicle';
+  if (url.startsWith('spaces://')) return 'spaces';
+  if (globalThis.FREEDOM_SPACES_HANDLE?.parseSpacesHandleInput?.(url)) return 'spaces';
   if (url.startsWith('https://')) return 'https';
   if (url.startsWith('http://')) return 'http';
   return 'unknown';

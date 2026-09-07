@@ -2,7 +2,7 @@ const log = require('./logger');
 const { ipcMain, app, dialog, clipboard, nativeImage } = require('electron');
 const { URL } = require('url');
 const path = require('path');
-const { activeBzzBases, activeIpfsBases, activeRadBases } = require('./state');
+const { activeBzzBases, activeIpfsBases, activeRadBases, activeSpacesBases } = require('./state');
 const { loadSettings } = require('./settings-store');
 const { fetchBuffer, fetchToFile } = require('./http-fetch');
 const { success, failure, validateWebContentsId } = require('./ipc-contract');
@@ -130,6 +130,37 @@ function registerBaseIpcHandlers(callbacks = {}) {
       return failure('INVALID_WEB_CONTENTS_ID', 'Invalid webContentsId', { webContentsId });
     }
     activeRadBases.delete(webContentsId);
+    return success();
+  });
+
+  ipcMain.handle(IPC.SPACES_SET_BASE, (_event, payload = {}) => {
+    const { webContentsId, baseUrl } = payload;
+    if (!validateWebContentsId(webContentsId)) {
+      return failure('INVALID_WEB_CONTENTS_ID', 'Invalid webContentsId', { webContentsId });
+    }
+    if (!baseUrl) {
+      return failure('INVALID_BASE_URL', 'Missing baseUrl');
+    }
+    if (!isAllowedBaseUrl(baseUrl)) {
+      log.warn('[ipc] Rejecting non-local spaces base URL');
+      return failure('INVALID_BASE_URL', 'Base URL must be localhost or 127.0.0.1', { baseUrl });
+    }
+    try {
+      const normalized = new URL(baseUrl);
+      activeSpacesBases.set(webContentsId, normalized);
+      return success();
+    } catch (err) {
+      log.error('Invalid Spaces base URL received from renderer', err);
+      return failure('INVALID_BASE_URL', 'Invalid baseUrl', { baseUrl });
+    }
+  });
+
+  ipcMain.handle(IPC.SPACES_CLEAR_BASE, (_event, payload = {}) => {
+    const { webContentsId } = payload;
+    if (!validateWebContentsId(webContentsId)) {
+      return failure('INVALID_WEB_CONTENTS_ID', 'Invalid webContentsId', { webContentsId });
+    }
+    activeSpacesBases.delete(webContentsId);
     return success();
   });
 

@@ -168,7 +168,9 @@
       "!**/coverage/**"
     ],
     "asarUnpack": [
-      "**/node_modules/better-sqlite3/**"
+      "**/node_modules/better-sqlite3/**",
+      "**/node_modules/@spacesprotocol/**/*.wasm",
+      "**/node_modules/@spacesprotocol/libveritas/**"
     ],
     "extraResources": [
       {
@@ -232,7 +234,7 @@
     "babel-jest": "^30.2.0",
     "dotenv-cli": "^11.0.0",
     "electron": "^42.8.1",
-    "electron-builder": "^26.7.0",
+    "electron-builder": "^26.16.1",
     "eslint": "^10.0.0",
     "globals": "^17.3.0",
     "jest": "^30.2.0",
@@ -242,6 +244,7 @@
     "@ensdomains/content-hash": "^3.0.0",
     "@metamask/browser-passworder": "^6.0.0",
     "@scure/bip39": "^2.0.1",
+    "@spacesprotocol/fabric-web": "^0.2.9",
     "better-sqlite3": "^12.11.1",
     "electron-log": "^5.4.3",
     "electron-updater": "^6.7.3",

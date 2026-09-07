@@ -26,6 +26,7 @@
  */
 
 const { execSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
 const args = process.argv.slice(2);
@@ -122,3 +123,16 @@ if (verifyTools) {
 
 console.log(`\n→ Running: ${cmd}\n`);
 execSync(cmd, { stdio: 'inherit', env });
+
+// electron-builder writes Intel macOS apps to dist/mac; keep that
+// next to dist/mac-arm64 as dist/mac-amd64.
+if (platform === 'mac' && archs.includes('x64')) {
+  const projectRoot = path.resolve(__dirname, '..');
+  const from = path.join(projectRoot, 'dist', 'mac');
+  const to = path.join(projectRoot, 'dist', 'mac-amd64');
+  if (fs.existsSync(from)) {
+    fs.rmSync(to, { recursive: true, force: true });
+    fs.renameSync(from, to);
+    console.log(`\n→ Relocated Intel app to ${to}\n`);
+  }
+}

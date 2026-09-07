@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../libveritas"
+		},
+		{
+			"path": "../certrelay"
+		}
+	],
+	"settings": {}
+}

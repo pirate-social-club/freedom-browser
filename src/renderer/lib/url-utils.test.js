@@ -1,3 +1,4 @@
+import '../../shared/spaces-handle.js';
 import {
   ensureTrailingSlash,
   composeTargetUrl,
@@ -6,6 +7,7 @@ import {
   formatBzzUrl,
   deriveDisplayValue,
   parseSpacesRootInput,
+  parseSpacesHandleInput,
   isValidCid,
   parseIpfsInput,
   deriveIpfsBaseFromUrl,
@@ -412,22 +414,48 @@ describe('url-utils', () => {
   describe('Spaces shorthand helpers', () => {
     test('parses root-only spaces input', () => {
       expect(parseSpacesRootInput('@space')).toEqual({
-        routeKey: '@space',
+        handle: '@space',
+        requestHost: '@space',
+        suffix: '',
         displayValue: '@space',
       });
 
       expect(parseSpacesRootInput('@😀')).toEqual({
-        routeKey: '@😀',
+        handle: '@😀',
+        requestHost: '@😀',
+        suffix: '',
         displayValue: '@😀',
       });
     });
 
+    test('parses name@space handles and suffixes', () => {
+      expect(parseSpacesHandleInput('void@space')).toEqual({
+        handle: 'void@space',
+        requestHost: 'void@space',
+        suffix: '',
+        displayValue: 'void@space',
+      });
+      expect(parseSpacesHandleInput('@space/submit')).toEqual({
+        handle: '@space',
+        requestHost: '@space',
+        suffix: '/submit',
+        displayValue: '@space/submit',
+      });
+      expect(parseSpacesHandleInput('npub1abc.extra@space/docs')).toEqual({
+        handle: 'extra@space',
+        requestHost: 'npub1abc.extra@space',
+        suffix: '/docs',
+        displayValue: 'npub1abc.extra@space/docs',
+      });
+    });
+
     test('rejects invalid spaces shorthand input', () => {
-      expect(parseSpacesRootInput('name@space')).toBeNull();
+      expect(parseSpacesRootInput('user@example.com')).toBeNull();
+      expect(parseSpacesRootInput('alice:secret@space')).toBeNull();
       expect(parseSpacesRootInput('@')).toBeNull();
       expect(parseSpacesRootInput('@@space')).toBeNull();
       expect(parseSpacesRootInput('@space path')).toBeNull();
-      expect(parseSpacesRootInput('@space/submit')).toBeNull();
+      expect(parseSpacesRootInput('void@space.tld')).toBeNull();
       expect(parseSpacesRootInput('https://pirate.sc/c/@space')).toBeNull();
     });
   });

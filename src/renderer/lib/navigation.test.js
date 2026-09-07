@@ -189,6 +189,30 @@ const loadNavigationModule = async (options = {}) => {
     }),
     normalizeHnsHostInput: jest.fn(() => null),
     parseSpacesRootInput: jest.fn(() => null),
+    parseSpacesHandleInput: jest.fn((value) => {
+      if (value === 'void@space/docs') {
+        return {
+          handle: 'void@space',
+          requestHost: 'void@space',
+          suffix: '/docs',
+          displayValue: 'void@space/docs',
+        };
+      }
+      if (value === 'npub1abc.extra@space/docs') {
+        return {
+          handle: 'extra@space',
+          requestHost: 'npub1abc.extra@space',
+          suffix: '/docs',
+          displayValue: 'npub1abc.extra@space/docs',
+        };
+      }
+      return null;
+    }),
+    applySpacesSuffix: jest.fn((base, suffix) => {
+      const normalized = String(base || '').replace(/\/$/, '');
+      if (!suffix || suffix === '/') return `${normalized}/`;
+      return `${normalized}${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
+    }),
   };
   const pageUrlsMocks = {
     homeUrl,
@@ -230,6 +254,9 @@ const loadNavigationModule = async (options = {}) => {
     clearIpfsBase: jest.fn(),
     setRadBase: jest.fn(),
     clearRadBase: jest.fn(),
+    setSpacesBase: jest.fn(),
+    clearSpacesBase: jest.fn(),
+    resolveSpace: jest.fn(),
     onToggleBookmarkBar: jest.fn((handler) => {
       electronHandlers.toggleBookmarkBar = handler;
     }),
@@ -767,6 +794,70 @@ describe('navigation', () => {
     expect(ctx.electronAPI.setBzzBase).toHaveBeenCalledWith(
       21,
       'https://gateway.example/bzz/abcdef/'
+    );
+  });
+
+  test('loads Fabric ipv4 Spaces handles through the local HTTP proxy', async () => {
+    const tab = createTab(1, 'file:///app/pages/home.html', {
+      webview: createWebview('file:///app/pages/home.html', {
+        webContentsId: 31,
+      }),
+    });
+    const ctx = await loadNavigationModule({
+      tabs: [tab],
+      activeTab: tab,
+    });
+    ctx.tabsRef.list = [tab];
+    ctx.activeRef.tab = tab;
+    ctx.electronAPI.resolveSpace.mockResolvedValue({
+      type: 'ok',
+      handle: 'void@space',
+      ipv4: '203.0.113.10',
+      proxyUrl: 'http://127.0.0.1:9/void%40space/',
+    });
+    await ctx.mod.initNavigation();
+
+    ctx.mod.loadTarget('void@space/docs');
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(ctx.electronAPI.resolveSpace).toHaveBeenCalledWith('void@space');
+    expect(tab.webview.loadURL).toHaveBeenCalledWith('http://127.0.0.1:9/void%40space/docs');
+    expect(tab.navigationState.addressBarSnapshot).toBe('void@space/docs');
+    expect(ctx.electronAPI.setSpacesBase).toHaveBeenCalledWith(31, 'http://127.0.0.1:9/void%40space/');
+  });
+
+  test('loads dotted Spaces names through the lookup handle and full Host path', async () => {
+    const tab = createTab(1, 'file:///app/pages/home.html', {
+      webview: createWebview('file:///app/pages/home.html', {
+        webContentsId: 32,
+      }),
+    });
+    const ctx = await loadNavigationModule({
+      tabs: [tab],
+      activeTab: tab,
+    });
+    ctx.tabsRef.list = [tab];
+    ctx.activeRef.tab = tab;
+    ctx.electronAPI.resolveSpace.mockResolvedValue({
+      type: 'ok',
+      handle: 'extra@space',
+      requestHost: 'npub1abc.extra@space',
+      ipv4: '203.0.113.10',
+      proxyUrl: 'http://127.0.0.1:9/npub1abc.extra%40space/',
+    });
+    await ctx.mod.initNavigation();
+
+    ctx.mod.loadTarget('npub1abc.extra@space/docs');
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(ctx.electronAPI.resolveSpace).toHaveBeenCalledWith('npub1abc.extra@space');
+    expect(tab.webview.loadURL).toHaveBeenCalledWith('http://127.0.0.1:9/npub1abc.extra%40space/docs');
+    expect(tab.navigationState.addressBarSnapshot).toBe('npub1abc.extra@space/docs');
+    expect(ctx.electronAPI.setSpacesBase).toHaveBeenCalledWith(
+      32,
+      'http://127.0.0.1:9/npub1abc.extra%40space/'
     );
   });
 

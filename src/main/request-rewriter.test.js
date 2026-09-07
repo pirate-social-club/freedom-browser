@@ -1,3 +1,7 @@
+jest.mock('./spaces-resolver', () => ({
+  resolveSpace: jest.fn(),
+}));
+const { resolveSpace } = require('./spaces-resolver');
 const {
   shouldRewriteRequest,
   buildRewriteTarget,
@@ -6,7 +10,7 @@ const {
   registerRequestRewriter,
 } = require('./request-rewriter');
 const log = require('./logger');
-const { activeRadBases } = require('./state');
+const { activeRadBases, activeSpacesBases } = require('./state');
 const { formatRadicleUrl, deriveRadBaseFromUrl, deriveDisplayValue } = require('../renderer/lib/url-utils.js');
 
 // Mock service-registry so convertProtocolUrl can resolve gateway URLs
@@ -29,7 +33,9 @@ const originalHnsDiagnostics = process.env.FREEDOM_HNS_DIAGNOSTICS;
 describe('request-rewriter', () => {
   afterEach(() => {
     activeRadBases.clear();
+    activeSpacesBases.clear();
     loadSettings.mockReturnValue({ enableRadicleIntegration: true });
+    resolveSpace.mockReset();
     if (originalHnsDiagnostics === undefined) {
       delete process.env.FREEDOM_HNS_DIAGNOSTICS;
     } else {
@@ -574,6 +580,66 @@ describe('request-rewriter', () => {
 
       expect(callback).toHaveBeenCalledWith({});
       expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    test('rewrites same-origin Spaces child paths under the handle base', () => {
+      const sessionMock = {
+        webRequest: {
+          onBeforeRequest: jest.fn(),
+        },
+      };
+      const baseUrl = 'http://127.0.0.1:9/void%40space/';
+      activeSpacesBases.set(7, new URL(baseUrl));
+      registerRequestRewriter(sessionMock);
+      const [handler] = sessionMock.webRequest.onBeforeRequest.mock.calls[0];
+      const callback = jest.fn();
+
+      handler({ webContentsId: 7, url: 'http://127.0.0.1:9/css/app.css' }, callback);
+
+      expect(callback).toHaveBeenCalledWith({
+        redirectURL: 'http://127.0.0.1:9/void%40space/css/app.css',
+      });
+    });
+
+    test('leaves ordinary DNS hosts untouched', () => {
+      const sessionMock = {
+        webRequest: {
+          onBeforeRequest: jest.fn(),
+        },
+      };
+      activeSpacesBases.set(7, new URL('http://127.0.0.1:9/void%40space/'));
+      registerRequestRewriter(sessionMock);
+      const [handler] = sessionMock.webRequest.onBeforeRequest.mock.calls[0];
+      const callback = jest.fn();
+
+      handler({ webContentsId: 7, url: 'https://example.com/app.js' }, callback);
+
+      expect(callback).toHaveBeenCalledWith({});
+      expect(resolveSpace).not.toHaveBeenCalled();
+    });
+
+    test('rewrites dotted Spaces http URLs using the full request host', async () => {
+      resolveSpace.mockResolvedValue({
+        type: 'ok',
+        ipv4: '203.0.113.10',
+        proxyUrl: 'http://127.0.0.1:9/npub1abc.extra%40space/',
+      });
+      const sessionMock = {
+        webRequest: {
+          onBeforeRequest: jest.fn(),
+        },
+      };
+      registerRequestRewriter(sessionMock);
+      const [handler] = sessionMock.webRequest.onBeforeRequest.mock.calls[0];
+      const callback = jest.fn();
+
+      handler({ webContentsId: 8, url: 'http://npub1abc.extra@space/docs' }, callback);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(resolveSpace).toHaveBeenCalledWith('npub1abc.extra@space');
+      expect(callback).toHaveBeenCalledWith({
+        redirectURL: 'http://127.0.0.1:9/npub1abc.extra%40space/docs',
+      });
     });
   });
 });
