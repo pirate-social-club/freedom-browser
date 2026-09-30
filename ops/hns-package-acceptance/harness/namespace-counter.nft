@@ -1,0 +1,7 @@
+table ip freedom_count {
+ counter gateway_syn { }
+ chain output {
+  type filter hook output priority -110; policy accept;
+  ip daddr { 81.15.150.167, 94.103.168.209 } tcp dport 443 tcp flags & (syn|ack) == syn counter name gateway_syn
+ }
+}
