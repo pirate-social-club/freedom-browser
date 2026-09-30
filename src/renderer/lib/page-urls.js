@@ -6,26 +6,12 @@
 const ROUTABLE_PAGES = window.internalPages?.routable || {};
 
 const INTERNAL_HOME_URL = new URL(`pages/${ROUTABLE_PAGES.home || 'home.html'}`, window.location.href).toString();
-const HOME_ICANN_URL = 'https://pirate.sc/';
-const HOME_HNS_URL = 'https://app.pirate/';
 
-export let homeUrl = INTERNAL_HOME_URL;
-export let homeUrlNormalized = INTERNAL_HOME_URL;
-export let landingUrl = HOME_ICANN_URL;
-export let landingUrlNormalized = HOME_ICANN_URL;
+export const homeUrl = INTERNAL_HOME_URL;
+export const homeUrlNormalized = INTERNAL_HOME_URL;
 
-export const isHomeUrl = (url = '') => {
-  const normalizedUrl = url.replace(/\/$/, '');
-  const knownHomeUrls = [
-    INTERNAL_HOME_URL,
-    HOME_ICANN_URL,
-    HOME_HNS_URL,
-    landingUrl,
-    landingUrlNormalized,
-  ].map((value) => value.replace(/\/$/, ''));
-
-  return knownHomeUrls.includes(normalizedUrl);
-};
+export const isHomeUrl = (url = '') =>
+  url.replace(/\/$/, '') === INTERNAL_HOME_URL.replace(/\/$/, '');
 
 export const isHnsHomeReady = () => {
   const hns = window.__rendererState?.registry?.hns;
@@ -33,14 +19,6 @@ export const isHnsHomeReady = () => {
   if (window.__rendererState?.enableHnsIntegration !== true) return false;
   if (hns.mode !== 'bundled') return false;
   if (hns.localResolverReady !== true) return false;
-  return true;
-};
-
-export const updateHomeUrl = () => {
-  const newUrl = isHnsHomeReady() ? HOME_HNS_URL : HOME_ICANN_URL;
-  if (newUrl === landingUrl) return false;
-  landingUrl = newUrl;
-  landingUrlNormalized = newUrl;
   return true;
 };
 

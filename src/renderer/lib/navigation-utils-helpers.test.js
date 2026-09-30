@@ -160,13 +160,15 @@ describe('navigation-utils extracted helpers', () => {
       })
     ).toBe('');
 
-    expect(
-      mod.deriveSwitchedTabDisplay({
-        url: 'https://pirate.sc/',
-        bzzRoutePrefix: 'http://127.0.0.1:1633/bzz/',
-        homeUrlNormalized: 'https://pirate/',
-      })
-    ).toBe('');
+    for (const url of ['https://pirate.sc/', 'https://app.pirate/']) {
+      expect(
+        mod.deriveSwitchedTabDisplay({
+          url,
+          bzzRoutePrefix: 'http://127.0.0.1:1633/bzz/',
+          homeUrlNormalized: 'file:///app/pages/home.html',
+        })
+      ).toBe(url);
+    }
   });
 
   test('computes bookmark bar state and extracts original urls from error pages', async () => {
@@ -184,17 +186,25 @@ describe('navigation-utils extracted helpers', () => {
       visible: true,
     });
 
+    for (const url of ['https://pirate.sc/', 'https://app.pirate/']) {
+      expect(
+        mod.getBookmarkBarState({
+          url,
+          bookmarkBarOverride: false,
+          homeUrl: 'file:///app/pages/home.html',
+          homeUrlNormalized: 'file:///app/pages/home.html',
+        })
+      ).toEqual({ isHomePage: false, visible: false });
+    }
+
     expect(
       mod.getBookmarkBarState({
-        url: 'https://pirate.sc/',
+        url: 'file:///app/pages/home.html',
         bookmarkBarOverride: false,
-        homeUrl: 'https://pirate/',
-        homeUrlNormalized: 'https://pirate/',
+        homeUrl: 'file:///app/pages/home.html',
+        homeUrlNormalized: 'file:///app/pages/home.html',
       })
-    ).toEqual({
-      isHomePage: true,
-      visible: true,
-    });
+    ).toEqual({ isHomePage: true, visible: true });
 
     expect(
       mod.getBookmarkBarState({

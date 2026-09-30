@@ -39,8 +39,6 @@ import {
 import {
   homeUrl,
   homeUrlNormalized,
-  landingUrl,
-  landingUrlNormalized,
   isHomeUrl,
   isHnsHomeReady,
   errorUrlBase,
@@ -51,9 +49,6 @@ import {
   parseEnsInput,
   resolveFreedomInternalUrl,
 } from './page-urls.js';
-
-const HOME_ICANN_URL = 'https://pirate.sc/';
-const HOME_HNS_URL = 'https://app.pirate/';
 
 // Helper to get active tab's navigation state (with fallback to empty object)
 const getNavState = () => getActiveTabState() || {};
@@ -1010,12 +1005,12 @@ export const loadHomePage = () => {
   syncBzzBase(null);
   syncIpfsBase(null);
   syncRadBase(null);
-  addressInput.value = landingUrl;
+  addressInput.value = homeUrl;
   updateProtocolIcon();
   clearPendingHnsNavigation(navState);
-  navState.pendingNavigationUrl = landingUrlNormalized;
+  navState.pendingNavigationUrl = homeUrlNormalized;
   navState.hasNavigatedDuringCurrentLoad = false;
-  safeLoadUrl(webview, landingUrl, 'home');
+  safeLoadUrl(webview, homeUrl, 'home');
   pushDebug('Loading home page');
 };
 
@@ -1744,44 +1739,4 @@ export const initNavigation = () => {
   });
 
   // Note: No initial loadHomePage() - tabs module handles the first tab
-};
-
-export const upgradeHomePageIfNeeded = (oldHomeUrl) => {
-  if (oldHomeUrl === HOME_HNS_URL && landingUrl === HOME_ICANN_URL) {
-    pushDebug(`Homepage downgrade skipped: ${oldHomeUrl} -> ${landingUrl}`);
-    return;
-  }
-
-  const tabs = getTabs();
-  if (!tabs.length) return;
-
-  let upgradedCount = 0;
-
-  for (const tab of tabs) {
-    const currentUrl = tab.webview?.getURL?.() || tab.url || tab.navigationState?.currentPageUrl || '';
-    if (currentUrl !== oldHomeUrl) continue;
-
-    tab.url = landingUrl;
-    if (tab.navigationState) {
-      tab.navigationState.currentPageUrl = landingUrl;
-      tab.navigationState.pendingNavigationUrl = landingUrlNormalized;
-      tab.navigationState.hasNavigatedDuringCurrentLoad = false;
-    }
-
-    if (tab.id === getActiveTab()?.id) {
-      syncBzzBase(null);
-      syncIpfsBase(null);
-      syncRadBase(null);
-      if (addressInput) {
-        addressInput.value = landingUrl;
-      }
-    }
-
-    tab.webview?.loadURL?.(landingUrl);
-    upgradedCount++;
-  }
-
-  if (upgradedCount > 0) {
-    pushDebug(`Homepage upgraded: ${oldHomeUrl} -> ${landingUrl} (${upgradedCount} tab(s))`);
-  }
 };
