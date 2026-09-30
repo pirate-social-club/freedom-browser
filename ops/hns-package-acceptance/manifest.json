@@ -1,7 +1,7 @@
 {
   "README.md": "31fe26379188d262ff150d0860e3772a0061127e75470b05aa4132820311ff20",
   "agent-browser-pin.json": "b056d3ac845656934e2eecaa978c62d16b53623bf75734a6c1b529832e0325f2",
-  "cold-setup.py": "db6befc6b34dd865b076dd829adbacae0b35f29a15072acfa604ebeb807eb633",
+  "cold-setup.py": "70b7bf062ffaa48ab7fc327f616349d2226a04e70aea1bcaa25fc41997fa035a",
   "harness/authenticated-route.py": "4ee9eb8883b1c3a23c8492c9d0ef02b9435e21dbb7b7cc9ead5b4e93c9826dd0",
   "harness/capture-wire.py": "b7a601f25caf938a78045b4ec6179c0af6a2e602391d13f953386d299bb0a73f",
   "harness/checkpoint-integrity.json": "4edab3ec782db36dac70a50a7e6390b2d6b6c98d95e3574d15970e46952c126d",
