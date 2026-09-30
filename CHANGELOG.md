@@ -9,6 +9,7 @@ All notable changes to Freedom will be documented in this file.
 - Require DNSSEC-authenticated Handshake address records for browsing and reject invalid proofs without retrying an insecure address path.
 - Update bundled Handshake helper validation while preserving DANE certificate checks.
 - Update browser cryptography dependencies and Electron security patches.
+- Update the dVPN integration’s Axios dependency to fix proxy/DNS bypass and request-handling vulnerabilities.
 
 ### Changed
 
