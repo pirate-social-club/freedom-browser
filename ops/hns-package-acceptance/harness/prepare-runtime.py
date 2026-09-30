@@ -3,11 +3,34 @@ from pathlib import Path
 p=Path(__file__).parent
 # Public preparation diagnostics contain only fixed phases/categories and numeric exit codes.
 preparation_phase='source_pins'
-def preparation_progress(status='running',category=None,returncode=None):
+def preparation_progress(status='running',category=None,returncode=None,builder_markers=None):
  record={'phase':preparation_phase,'status':status}
  if category is not None:record['category']=category
  if returncode is not None:record['returncode']=returncode
+ if builder_markers is not None:record['builder_markers']=builder_markers
  (p/'preparation-progress.json').write_text(json.dumps(record,indent=2)+'\n')
+def offline_builder_markers():
+ # Inspect at most16KiB of private output and emit only fixed codes, never matched bytes.
+ try:
+  with (p/'offline-build.log').open('rb') as private_log:
+   private_log.seek(0,os.SEEK_END);size=private_log.tell()
+   private_log.seek(max(0,size-16384));tail=private_log.read(16384)
+ except OSError:return ['log_unavailable']
+ markers=[]
+ patterns=[
+  ('module_missing_marker',[b'MODULE_NOT_FOUND']),
+  ('esm_loader_marker',[b'ERR_REQUIRE_ESM']),
+  ('configuration_marker',[b'Invalid configuration object.',b'InvalidConfigurationError']),
+  ('electron_dist_missing_marker',[b'The specified electronDist does not exist:']),
+  ('permission_marker',[b'EACCES',b'EPERM']),
+  ('file_missing_marker',[b'ENOENT']),
+  ('native_load_marker',[b'ERR_DLOPEN_FAILED']),
+  ('network_error_marker',[b'ENOTFOUND',b'ENETUNREACH',b'ECONNREFUSED']),
+ ]
+ for code,needles in patterns:
+  if any(needle in tail for needle in needles):markers.append(code)
+ if b'app-builder' in tail and b'spawn' in tail:markers.append('app_builder_spawn_marker')
+ return markers or ['unclassified']
 class NamespacePermissionDenied(Exception):pass
 def preparation_exception(_kind,error,_traceback):
  category='internal_error';returncode=None
@@ -15,7 +38,8 @@ def preparation_exception(_kind,error,_traceback):
  elif isinstance(error,AssertionError):category='assertion'
  elif isinstance(error,subprocess.TimeoutExpired):category='timeout'
  elif isinstance(error,subprocess.CalledProcessError):category='child_failed';returncode=error.returncode
- preparation_progress('failed',category,returncode)
+ markers=offline_builder_markers() if preparation_phase=='offline_build' and category=='child_failed' else None
+ preparation_progress('failed',category,returncode,markers)
 sys.excepthook=preparation_exception
 preparation_progress()
 freedom=Path(os.environ['FREEDOM_REPOSITORY']);app_sha=os.environ['FREEDOM_SOURCE_SHA'];assert re.fullmatch('[0-9a-f]{40}',app_sha)
@@ -43,7 +67,8 @@ if probe.returncode:
  raise subprocess.CalledProcessError(probe.returncode,'namespace_probe')
 preparation_phase='offline_build';preparation_progress()
 command=['unshare','--user','--map-root-user','--net','node','node_modules/electron-builder/cli.js','--linux','--x64','--dir','--publish','never','-c.electronDist='+str(freedom/'node_modules/electron/dist'),'-c.npmRebuild=false','-c.nodeGypRebuild=false','-c.directories.output='+str(p/'build')]
-run(command,cwd=freedom,env={**os.environ,'ELECTRON_SKIP_BINARY_DOWNLOAD':'1','npm_config_offline':'true','CSC_IDENTITY_AUTO_DISCOVERY':'false'})
+with (p/'offline-build.log').open('wb') as build_log:
+ run(command,cwd=freedom,env={**os.environ,'ELECTRON_SKIP_BINARY_DOWNLOAD':'1','npm_config_offline':'true','CSC_IDENTITY_AUTO_DISCOVERY':'false'},stdout=build_log,stderr=subprocess.STDOUT)
 preparation_phase='source_resources_native';preparation_progress()
 base=p/'build/linux-unpacked';assert (base/'freedom').is_file();shutil.copytree(base,p/'package',symlinks=True)
 assert (p/'package/freedom').read_bytes()==(freedom/'node_modules/electron/dist/electron').read_bytes(),'Electron executable mismatch'
