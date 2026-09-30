@@ -21,7 +21,8 @@ installed=json.loads((browser/'package-lock.json').read_text())['packages']['nod
 binary=browser/'node_modules/agent-browser/bin/agent-browser-linux-x64';assert binary.is_file(),'native CLI missing from pinned npm archive; no unverified GitHub fallback'
 assert hashlib.sha256(binary.read_bytes()).hexdigest()==pin['native_sha256'],'CLI native executable differs from previously tested artifact';binary.chmod(0o755)
 # No agent-browser install/open command. Attachment is explicit --cdp in the later phase.
-assert not Path('/root/.agent-browser/config.json').exists() and not (repo/'agent-browser.json').exists(),'unexpected browser automation configuration'
+run(['sudo','-n','test','!','-e','/root/.agent-browser/config.json'])
+assert not (repo/'agent-browser.json').exists(),'unexpected browser automation configuration'
 electron_ldd=subprocess.check_output(['ldd',str(repo/'node_modules/electron/dist/electron')],text=True,timeout=5);assert 'not found' not in electron_ldd,'Electron runtime library missing'
 for path in [repo/'node_modules/electron/dist/electron',repo/'node_modules/better-sqlite3/build/Release/better_sqlite3.node',repo/'hns-bin/linux-x64/hnsd',repo/'hns-bin/linux-x64/fingertipd']:assert path.is_file()
 for flags in [['-l'],['-d']]:
