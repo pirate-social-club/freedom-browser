@@ -1,6 +1,5 @@
 // Renderer process entry point
 import { updateRegistry, setRadicleIntegrationEnabled, setHnsIntegrationEnabled } from './lib/state.js';
-import { updateHomeUrl, landingUrl } from './lib/page-urls.js';
 import { initBeeUi, updateBeeStatusLine, updateBeeToggleState } from './lib/bee-ui.js';
 import { initIpfsUi, updateIpfsStatusLine, updateIpfsToggleState } from './lib/ipfs-ui.js';
 import {
@@ -39,7 +38,6 @@ import {
   hardReloadPage,
   onSettingsChanged,
   setOnHistoryRecorded,
-  upgradeHomePageIfNeeded,
   resumePendingHnsNavigationIfReady,
 } from './lib/navigation.js';
 import {
@@ -58,14 +56,6 @@ import { initWalletUi } from './lib/wallet-ui.js';
 
 const electronAPI = window.electronAPI;
 
-const syncHomeUrl = () => {
-  const oldHome = landingUrl;
-  const homeChanged = updateHomeUrl();
-  if (homeChanged) {
-    upgradeHomePageIfNeeded(oldHome);
-  }
-};
-
 // Apply theme early to avoid flash
 initTheme();
 
@@ -73,7 +63,6 @@ initTheme();
 window.serviceRegistry?.onUpdate?.((registry) => {
   pushDebug(`[ServiceRegistry] Update received: ${JSON.stringify(registry)}`);
   updateRegistry(registry);
-  syncHomeUrl();
   resumePendingHnsNavigationIfReady();
   updateBeeStatusLine();
   updateBeeToggleState();
@@ -88,7 +77,6 @@ window.serviceRegistry?.getRegistry?.().then((registry) => {
   if (registry) {
     pushDebug(`[ServiceRegistry] Initial state: ${JSON.stringify(registry)}`);
     updateRegistry(registry);
-    syncHomeUrl();
     resumePendingHnsNavigationIfReady();
   }
 });
@@ -200,16 +188,13 @@ window.addEventListener('DOMContentLoaded', async () => {
     const settings = await electronAPI.getSettings();
     setRadicleIntegrationEnabled(settings?.enableRadicleIntegration === true);
     setHnsIntegrationEnabled(settings?.enableHnsIntegration === true);
-    syncHomeUrl();
   } catch {
     setRadicleIntegrationEnabled(false);
     setHnsIntegrationEnabled(false);
-    syncHomeUrl();
   }
   window.addEventListener('settings:updated', (event) => {
     setRadicleIntegrationEnabled(event.detail?.enableRadicleIntegration === true);
     setHnsIntegrationEnabled(event.detail?.enableHnsIntegration === true);
-    syncHomeUrl();
   });
 
   initMenuBackdrop(closeAllOverlays);

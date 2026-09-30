@@ -3,7 +3,7 @@ const { createDocument, createElement } = require('../../../test/helpers/fake-do
 const originalWindow = global.window;
 const originalDocument = global.document;
 
-const HOME_URL = 'freedom://home';
+const HOME_URL = 'file:///app/pages/home.html';
 
 const flushMicrotasks = async () => {
   await Promise.resolve();
@@ -163,10 +163,7 @@ const loadTabsModule = async (options = {}) => {
   jest.doMock('./bookmarks-ui.js', () => bookmarksMocks);
   jest.doMock('./menu-backdrop.js', () => backdropMocks);
   jest.doMock('./page-context-menu.js', () => pageContextMenuMocks);
-  jest.doMock('./page-urls.js', () => ({
-    homeUrl: HOME_URL,
-    isHomeUrl: (url) => url === HOME_URL || url === 'https://pirate.sc/' || url === 'https://app.pirate/',
-  }));
+  jest.dontMock('./page-urls.js');
   jest.doMock('./url-utils.js', () => ({
     normalizeLocalhostInput: (value) => {
       if (value === 'localhost:5173') return 'http://localhost:5173/';
@@ -226,6 +223,8 @@ describe('tabs ui behavior', () => {
     expect(pageContextMenuMocks.setupWebviewContextMenu).toHaveBeenCalledWith(createdWebviews[0]);
     expect(mod.getTabs()).toHaveLength(1);
     expect(mod.getActiveTab().url).toBe(HOME_URL);
+    expect(createdWebviews[0].getAttribute('src')).toBe(HOME_URL);
+    expect(mod.getActiveTab().navigationState.currentPageUrl).toBe(HOME_URL);
 
     const initialTab = mod.getActiveTab();
     const secondTab = mod.createTab('https://second.example');
@@ -267,6 +266,40 @@ describe('tabs ui behavior', () => {
       { id: initialTab.id, url: initialTab.url, title: initialTab.title, isActive: false },
       { id: thirdTab.id, url: thirdTab.url, title: thirdTab.title, isActive: true },
     ]);
+  });
+
+  test('warm-ready startup and new tabs use the local welcome', async () => {
+    const { mod, electronHandlers, elements } = await loadTabsModule();
+    window.__rendererState = {
+      enableHnsIntegration: true,
+      registry: { hns: { mode: 'bundled', localResolverReady: true } },
+    };
+    await mod.initTabs();
+    const firstWebview = mod.getActiveTab().webview;
+    expect(firstWebview.getAttribute('src')).toBe(HOME_URL);
+    expect(mod.getActiveTab().navigationState.currentPageUrl).toBe(HOME_URL);
+    window.__rendererState.registry.hns.localResolverReady = false;
+    expect(mod.createTab().webview.getAttribute('src')).toBe(HOME_URL);
+    window.__rendererState.registry.hns.localResolverReady = true;
+    electronHandlers.newTab();
+    expect(mod.getActiveTab().url).toBe(HOME_URL);
+    elements.newTabBtn.dispatch('click');
+    expect(mod.getActiveTab().url).toBe(HOME_URL);
+    expect(firstWebview.getAttribute('src')).toBe(HOME_URL);
+  });
+
+  test('preserves an explicit initial URL instead of opening the welcome', async () => {
+    jest.useFakeTimers();
+    const target = 'https://app.pirate/';
+    const { mod, elements } = await loadTabsModule({ search: '?initialUrl=' + encodeURIComponent(target) });
+    const loadTarget = jest.fn();
+    mod.setLoadTargetHandler(loadTarget);
+    await mod.initTabs();
+    const tab = mod.getActiveTab();
+    expect(tab.webview.getAttribute('src')).toBe('about:blank');
+    expect(elements.addressInput.value).toBe(target);
+    jest.advanceTimersByTime(50);
+    expect(loadTarget).toHaveBeenCalledWith(target, null, tab.webview);
   });
 
   test('normalizes bare localhost URLs before assigning initial webview src', async () => {
@@ -399,13 +432,13 @@ describe('tabs ui behavior', () => {
     const firstLoad = await loadTabsModule();
     await firstLoad.mod.initTabs();
 
-    const reopenTab = firstLoad.mod.createTab('https://reopen.example');
+    const reopenTab = firstLoad.mod.createTab('https://app.pirate/');
     firstLoad.mod.closeTab(reopenTab.id);
     expect(firstLoad.mod.getTabs()).toHaveLength(1);
 
     firstLoad.mod.reopenLastClosedTab();
     expect(firstLoad.mod.getTabs()).toHaveLength(2);
-    expect(firstLoad.mod.getActiveTab().url).toBe('https://reopen.example');
+    expect(firstLoad.mod.getActiveTab().url).toBe('https://app.pirate/');
 
     const lastWindowLoad = await loadTabsModule();
     await lastWindowLoad.mod.initTabs();

@@ -1,9 +1,6 @@
 const HOME_ICANN_URL = 'https://pirate.sc/';
-const HOME_HNS_URL = 'https://app.pirate/';
-const REDIRECT_DELAY_MS = 350;
 
 let activeSettings = { enableHnsIntegration: true };
-let redirectTimeout = null;
 
 const statusEl = document.getElementById('home-status');
 const destinationEl = document.getElementById('home-destination');
@@ -11,19 +8,6 @@ const heightRowEl = document.getElementById('home-height-row');
 const heightEl = document.getElementById('home-height');
 const openLinkEl = document.getElementById('home-open-link');
 const noteEl = document.getElementById('home-note');
-
-function clearRedirect() {
-  if (!redirectTimeout) return;
-  clearTimeout(redirectTimeout);
-  redirectTimeout = null;
-}
-
-function scheduleRedirect(url) {
-  clearRedirect();
-  redirectTimeout = setTimeout(() => {
-    window.location.replace(url);
-  }, REDIRECT_DELAY_MS);
-}
 
 function isHnsReady(registry) {
   const hns = registry?.hns;
@@ -37,12 +21,9 @@ function isHnsReady(registry) {
 function updateHome(registry = {}) {
   const hns = registry?.hns || {};
   const ready = isHnsReady(registry);
-  const destinationUrl = ready ? HOME_HNS_URL : HOME_ICANN_URL;
-  const destinationLabel = ready ? 'app.pirate' : 'pirate.sc';
-
-  destinationEl.textContent = destinationLabel;
-  openLinkEl.href = destinationUrl;
-  openLinkEl.textContent = ready ? 'Open app.pirate' : 'Open pirate.sc';
+  destinationEl.textContent = 'Local welcome';
+  openLinkEl.href = HOME_ICANN_URL;
+  openLinkEl.textContent = 'Open pirate.sc';
 
   if (typeof hns.height === 'number' && hns.height > 0) {
     heightRowEl.hidden = false;
@@ -54,22 +35,19 @@ function updateHome(registry = {}) {
 
   if (ready) {
     statusEl.textContent = 'Ready';
-    noteEl.textContent = 'Opening app.pirate/';
-    scheduleRedirect(HOME_HNS_URL);
+    noteEl.textContent = 'Enter an HNS address in the address bar.';
     return;
   }
 
-  clearRedirect();
-
   if (activeSettings.enableHnsIntegration !== true) {
     statusEl.textContent = 'Disabled';
-    noteEl.textContent = 'HNS is off. Using the web fallback.';
+    noteEl.textContent = 'HNS is off. You can still browse regular websites.';
     return;
   }
 
   if (hns.mode === 'bundled') {
     statusEl.textContent = hns.statusMessage || 'Syncing';
-    noteEl.textContent = 'Using pirate.sc until HNS is ready.';
+    noteEl.textContent = 'The HNS resolver is not ready yet. Choose an address to browse.';
     return;
   }
 

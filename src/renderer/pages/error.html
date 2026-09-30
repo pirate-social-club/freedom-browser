@@ -160,6 +160,7 @@
       const error = params.get('error');
       const url = params.get('url');
       const height = params.get('height');
+      const syncStatus = params.get('syncStatus');
       const protocolUrl = toProtocolUrl(url);
       const protocol = detectProtocol(url);
 
@@ -215,7 +216,7 @@
           titleEl.textContent = 'Handshake Resolver Not Ready';
           descriptionEl.textContent =
             'Freedom cannot query Handshake names yet. The resolver may still be starting, syncing, or recovering.';
-          detailsEl.textContent = height ? `${url}\n\nCurrent height: ${height}` : url || 'Handshake resolver not ready';
+          detailsEl.textContent = [url, syncStatus || (height ? `Current height: ${height}` : '')].filter(Boolean).join('\n\n');
           return;
         }
 
@@ -267,6 +268,16 @@
       }
 
       displayError();
+      if (error === 'HNS_NOT_READY') {
+        const updateSyncDetails = (registry) => {
+          const hns = registry?.hns;
+          if (!hns) return;
+          const message = hns.statusMessage || (hns.synced ? 'Chain synchronized; retrying the requested site.' : `Current height: ${hns.height || 0}`);
+          detailsEl.textContent = [url, message].filter(Boolean).join('\n\n');
+        };
+        window.freedomAPI?.onServiceRegistryUpdate?.(updateSyncDetails);
+        window.freedomAPI?.getServiceRegistry?.().then(updateSyncDetails).catch(() => {});
+      }
 
       // Retry the original URL
       document.getElementById('retry-btn').onclick = () => {

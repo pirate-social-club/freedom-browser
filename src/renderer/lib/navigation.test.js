@@ -61,7 +61,6 @@ const loadNavigationModule = async (options = {}) => {
   jest.resetModules();
 
   const homeUrl = 'file:///app/pages/home.html';
-  const landingUrl = 'https://pirate.sc/';
   const historyUrl = 'file:///app/pages/history.html';
   const errorUrlBase = 'file:///app/pages/error.html';
   const state = {
@@ -193,9 +192,7 @@ const loadNavigationModule = async (options = {}) => {
   const pageUrlsMocks = {
     homeUrl,
     homeUrlNormalized: homeUrl,
-    landingUrl,
-    landingUrlNormalized: landingUrl,
-    isHomeUrl: jest.fn((url) => url === homeUrl || url === landingUrl || url === 'https://app.pirate/'),
+    isHomeUrl: jest.fn((url) => url === homeUrl),
     isHnsHomeReady: jest.fn(() => false),
     errorUrlBase,
     internalPages: {
@@ -376,7 +373,7 @@ describe('navigation', () => {
 
     ctx.elements.homeBtn.dispatch('click');
 
-    expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(ctx.pageUrlsMocks.landingUrl);
+    expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(ctx.pageUrlsMocks.homeUrl);
 
     await ctx.mod.toggleBookmarkBar();
     expect(ctx.electronAPI.setBookmarkBarChecked).toHaveBeenLastCalledWith(false);
@@ -644,6 +641,17 @@ describe('navigation', () => {
     );
   });
 
+  test('allows a community host after chain sync even when app.pirate health fails', async () => {
+    const ctx = await loadNavigationModule({ initialSettings: { showBookmarkBar: true }, enableHnsIntegration: true });
+    ctx.state.enableHnsIntegration = true;
+    ctx.state.registry.hns = { mode: 'bundled', synced: true, canaryReady: false, localResolverReady: false };
+    ctx.urlUtilsMocks.normalizeHnsHostInput.mockReturnValue('https://member.pirate/');
+    await ctx.mod.initNavigation();
+    ctx.elements.addressInput.value = 'member.pirate';
+    ctx.elements.navForm.dispatch('submit', { preventDefault: jest.fn() });
+    expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith('https://member.pirate/');
+  });
+
   test('shows lookup failed instead of syncing once bundled HNS is synced', async () => {
     const ctx = await loadNavigationModule({
       initialSettings: { showBookmarkBar: true },
@@ -770,79 +778,21 @@ describe('navigation', () => {
     );
   });
 
-  test('upgrades all untouched home tabs when the canonical homepage changes', async () => {
-    const oldHomeUrl = 'https://pirate.sc/';
-    const newHomeUrl = 'https://app.pirate/';
-    const activeTab = createTab(1, oldHomeUrl, {
-      title: 'New Tab',
-      webview: createWebview(oldHomeUrl, {
-        webContentsId: 21,
-      }),
+  test('resolver readiness leaves manual remote tabs untouched until Home is clicked', async () => {
+    const tab = createTab(1, 'https://app.pirate/', {
+      webview: createWebview('https://app.pirate/'),
     });
-    const secondHomeTab = createTab(2, oldHomeUrl, {
-      title: 'New Tab',
-      webview: createWebview(oldHomeUrl, {
-        webContentsId: 22,
-      }),
-    });
-    const navigatedTab = createTab(3, 'https://pirate.sc/docs', {
-      title: 'Docs',
-      webview: createWebview('https://pirate.sc/docs', {
-        webContentsId: 23,
-      }),
-    });
-
-    const ctx = await loadNavigationModule({
-      tabs: [activeTab, secondHomeTab, navigatedTab],
-      activeTab,
-    });
-
-    ctx.tabsRef.list = [activeTab, secondHomeTab, navigatedTab];
-    ctx.activeRef.tab = activeTab;
-    ctx.pageUrlsMocks.landingUrl = newHomeUrl;
-    ctx.pageUrlsMocks.landingUrlNormalized = newHomeUrl;
-    ctx.pageUrlsMocks.isHomeUrl.mockImplementation(
-      (url) => url === oldHomeUrl || url === newHomeUrl || url === 'file:///app/pages/home.html'
-    );
-
+    const ctx = await loadNavigationModule({ tabs: [tab], activeTab: tab });
     await ctx.mod.initNavigation();
-
-    ctx.mod.upgradeHomePageIfNeeded(oldHomeUrl);
-
-    expect(activeTab.webview.loadURL).toHaveBeenCalledWith(newHomeUrl);
-    expect(secondHomeTab.webview.loadURL).toHaveBeenCalledWith(newHomeUrl);
-    expect(navigatedTab.webview.loadURL).not.toHaveBeenCalledWith(newHomeUrl);
-    expect(activeTab.navigationState.currentPageUrl).toBe(newHomeUrl);
-    expect(secondHomeTab.navigationState.currentPageUrl).toBe(newHomeUrl);
-    expect(navigatedTab.navigationState.currentPageUrl).toBe('https://pirate.sc/docs');
-    expect(ctx.elements.addressInput.value).toBe(newHomeUrl);
-  });
-
-  test('does not force downgrade HNS home tabs when local readiness flickers off', async () => {
-    const oldHomeUrl = 'https://app.pirate/';
-    const newHomeUrl = 'https://pirate.sc/';
-    const activeTab = createTab(1, oldHomeUrl, {
-      title: 'New Tab',
-      webview: createWebview(oldHomeUrl, {
-        webContentsId: 21,
-      }),
-    });
-
-    const ctx = await loadNavigationModule({
-      tabs: [activeTab],
-      activeTab,
-    });
-
-    ctx.tabsRef.list = [activeTab];
-    ctx.activeRef.tab = activeTab;
-    ctx.pageUrlsMocks.landingUrl = newHomeUrl;
-    ctx.pageUrlsMocks.landingUrlNormalized = newHomeUrl;
-
-    await ctx.mod.initNavigation();
-
-    ctx.mod.upgradeHomePageIfNeeded(oldHomeUrl);
-
-    expect(activeTab.webview.loadURL).not.toHaveBeenCalledWith(newHomeUrl);
-    expect(activeTab.navigationState.currentPageUrl).toBe(oldHomeUrl);
+    ctx.state.enableHnsIntegration = true;
+    ctx.state.registry = { hns: { mode: 'bundled', synced: true, localResolverReady: false } };
+    ctx.pageUrlsMocks.isHnsHomeReady.mockImplementation(() => ctx.state.registry.hns.localResolverReady);
+    ctx.mod.resumePendingHnsNavigationIfReady();
+    ctx.state.registry.hns.localResolverReady = true;
+    ctx.mod.resumePendingHnsNavigationIfReady();
+    expect(tab.webview.loadURL).not.toHaveBeenCalled();
+    expect(tab.navigationState.currentPageUrl).toBe('https://app.pirate/');
+    ctx.elements.homeBtn.dispatch('click');
+    expect(tab.webview.loadURL).toHaveBeenCalledWith('file:///app/pages/home.html');
   });
 });

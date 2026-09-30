@@ -75,7 +75,7 @@ describe('home page bootstrap', () => {
     jest.restoreAllMocks();
   });
 
-  test('shows pirate.sc fallback while HNS is not ready', async () => {
+  test('keeps the local welcome while HNS syncs and becomes ready', async () => {
     const ctx = loadHomePageModule({
       registry: {
         hns: {
@@ -89,16 +89,26 @@ describe('home page bootstrap', () => {
 
     await ctx.document.handlers.DOMContentLoaded();
 
-    expect(ctx.destination.textContent).toBe('pirate.sc');
+    expect(ctx.destination.textContent).toBe('Local welcome');
     expect(ctx.status.textContent).toBe('Syncing block 325297');
     expect(ctx.heightRow.hidden).toBe(false);
     expect(ctx.height.textContent).toBe('325297');
     expect(ctx.openLink.href).toBe('https://pirate.sc/');
-    expect(ctx.note.textContent).toBe('Using pirate.sc until HNS is ready.');
+    expect(ctx.note.textContent).toBe('The HNS resolver is not ready yet. Choose an address to browse.');
+    expect(ctx.replace).not.toHaveBeenCalled();
+
+    const updateRegistry = ctx.freedomAPI.onServiceRegistryUpdate.mock.calls[0][0];
+    updateRegistry({ hns: { mode: 'bundled', localResolverReady: true, height: 325298 } });
+    jest.advanceTimersByTime(1000);
+
+    expect(ctx.status.textContent).toBe('Ready');
+    expect(ctx.height.textContent).toBe('325298');
+    expect(ctx.destination.textContent).toBe('Local welcome');
+    expect(ctx.openLink.href).toBe('https://pirate.sc/');
     expect(ctx.replace).not.toHaveBeenCalled();
   });
 
-  test('redirects to app.pirate once bundled HNS is ready', async () => {
+  test('keeps the local welcome when bundled HNS is ready', async () => {
     const ctx = loadHomePageModule({
       registry: {
         hns: {
@@ -112,17 +122,17 @@ describe('home page bootstrap', () => {
 
     await ctx.document.handlers.DOMContentLoaded();
 
-    expect(ctx.destination.textContent).toBe('app.pirate');
+    expect(ctx.destination.textContent).toBe('Local welcome');
     expect(ctx.status.textContent).toBe('Ready');
-    expect(ctx.openLink.href).toBe('https://app.pirate/');
-    expect(ctx.note.textContent).toBe('Opening app.pirate/');
+    expect(ctx.openLink.href).toBe('https://pirate.sc/');
+    expect(ctx.note.textContent).toBe('Enter an HNS address in the address bar.');
 
     jest.advanceTimersByTime(350);
 
-    expect(ctx.replace).toHaveBeenCalledWith('https://app.pirate/');
+    expect(ctx.replace).not.toHaveBeenCalled();
   });
 
-  test('stays on pirate.sc when HNS integration is disabled', async () => {
+  test('keeps the local welcome when HNS integration is disabled', async () => {
     const ctx = loadHomePageModule({
       settings: {
         enableHnsIntegration: false,
@@ -138,10 +148,10 @@ describe('home page bootstrap', () => {
 
     await ctx.document.handlers.DOMContentLoaded();
 
-    expect(ctx.destination.textContent).toBe('pirate.sc');
+    expect(ctx.destination.textContent).toBe('Local welcome');
     expect(ctx.status.textContent).toBe('Disabled');
     expect(ctx.openLink.href).toBe('https://pirate.sc/');
-    expect(ctx.note.textContent).toBe('HNS is off. Using the web fallback.');
+    expect(ctx.note.textContent).toBe('HNS is off. You can still browse regular websites.');
     expect(ctx.replace).not.toHaveBeenCalled();
   });
 });

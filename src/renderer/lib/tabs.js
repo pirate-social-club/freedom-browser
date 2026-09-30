@@ -4,7 +4,7 @@ import { closeMenus } from './menus.js';
 import { hideBookmarkContextMenu } from './bookmarks-ui.js';
 import { showMenuBackdrop, hideMenuBackdrop } from './menu-backdrop.js';
 import { setupWebviewContextMenu } from './page-context-menu.js';
-import { homeUrl, landingUrl, isHomeUrl } from './page-urls.js';
+import { homeUrl, isHomeUrl } from './page-urls.js';
 import { setupWebviewProvider, setActiveWebview, unregisterWebviewProvider } from './dapp-provider.js';
 import { normalizeLocalhostInput } from './url-utils.js';
 
@@ -1217,6 +1217,6 @@ export const initTabs = async () => {
       setTimeout(() => onLoadTarget(initialUrl, null, tab.webview), 50);
     }
   } else {
-    createTab(landingUrl);
+    createTab(homeUrl);
   }
 };

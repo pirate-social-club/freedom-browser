@@ -54,6 +54,8 @@ const registry = {
     localResolverReady: false,
     dohFallbackReady: false,
     height: 0,
+    peerCount: 0,
+    syncProgress: 0,
     publicSuffixes: ['.pirate'],
   },
   dvpn: {
@@ -249,6 +251,8 @@ const SERVICE_DEFAULTS = {
     localResolverReady: false,
     dohFallbackReady: false,
     height: 0,
+    peerCount: 0,
+    syncProgress: 0,
     publicSuffixes: ['.pirate'],
   },
   dvpn: {

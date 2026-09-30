@@ -141,6 +141,8 @@ describe('service-registry', () => {
       localResolverReady: false,
       dohFallbackReady: false,
       height: 0,
+      peerCount: 0,
+      syncProgress: 0,
       publicSuffixes: ['.pirate'],
     });
   });

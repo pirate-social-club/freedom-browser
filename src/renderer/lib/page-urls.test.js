@@ -27,7 +27,6 @@ describe('page-urls', () => {
       'protocol-test': 'file:///app/pages/protocol-test.html',
     });
     expect(mod.homeUrl).toBe('file:///app/pages/home.html');
-    expect(mod.landingUrl).toBe('https://pirate.sc/');
     expect(mod.errorUrlBase).toBe('file:///app/pages/error.html');
   });
 
@@ -104,8 +103,6 @@ describe('page-urls', () => {
     const mod = await loadModule();
     expect(mod.homeUrl).toBe('file:///app/pages/home.html');
     expect(mod.homeUrlNormalized).toBe('file:///app/pages/home.html');
-    expect(mod.landingUrl).toBe('https://pirate.sc/');
-    expect(mod.landingUrlNormalized).toBe('https://pirate.sc/');
   });
 
   test('isHnsHomeReady returns false when no registry state', async () => {
@@ -113,12 +110,12 @@ describe('page-urls', () => {
     expect(mod.isHnsHomeReady()).toBe(false);
   });
 
-  test('isHomeUrl treats both ICANN and HNS homepages as equivalent', async () => {
+  test('isHomeUrl only recognizes the local welcome page', async () => {
     const mod = await loadModule();
 
     expect(mod.isHomeUrl('file:///app/pages/home.html')).toBe(true);
-    expect(mod.isHomeUrl('https://pirate.sc/')).toBe(true);
-    expect(mod.isHomeUrl('https://app.pirate/')).toBe(true);
+    expect(mod.isHomeUrl('https://pirate.sc/')).toBe(false);
+    expect(mod.isHomeUrl('https://app.pirate/')).toBe(false);
     expect(mod.isHomeUrl('https://pirate.sc/docs')).toBe(false);
     expect(mod.isHomeUrl('https://example.com')).toBe(false);
   });
@@ -171,74 +168,16 @@ describe('page-urls', () => {
     delete global.window.__rendererState;
   });
 
-  test('updateHomeUrl switches to HNS URL when ready', async () => {
+  test('local home remains stable through resolver readiness and settings changes', async () => {
     const mod = await loadModule();
-    global.window.__rendererState = {
-      enableHnsIntegration: true,
-      registry: {
-        hns: { mode: 'bundled', canaryReady: true, localResolverReady: true },
-      },
-    };
-    const changed = mod.updateHomeUrl();
-    expect(changed).toBe(true);
-    expect(mod.homeUrl).toBe('file:///app/pages/home.html');
-    expect(mod.homeUrlNormalized).toBe('file:///app/pages/home.html');
-    expect(mod.landingUrl).toBe('https://app.pirate/');
-    expect(mod.landingUrlNormalized).toBe('https://app.pirate/');
-    delete global.window.__rendererState;
-  });
-
-  test('updateHomeUrl keeps ICANN URL when not ready', async () => {
-    const mod = await loadModule();
-    global.window.__rendererState = {
-      enableHnsIntegration: true,
-      registry: {
-        hns: { mode: 'bundled', canaryReady: true, localResolverReady: false },
-      },
-    };
-    const changed = mod.updateHomeUrl();
-    expect(changed).toBe(false);
-    expect(mod.homeUrl).toBe('file:///app/pages/home.html');
-    expect(mod.landingUrl).toBe('https://pirate.sc/');
-    delete global.window.__rendererState;
-  });
-
-  test('updateHomeUrl returns false when URL already matches', async () => {
-    const mod = await loadModule();
-    global.window.__rendererState = {
-      enableHnsIntegration: true,
-      registry: {
-        hns: { mode: 'bundled', canaryReady: true, localResolverReady: true },
-      },
-    };
-    mod.updateHomeUrl();
-    const changed = mod.updateHomeUrl();
-    expect(changed).toBe(false);
-    delete global.window.__rendererState;
-  });
-
-  test('updateHomeUrl reverts to ICANN when HNS becomes unavailable', async () => {
-    const mod = await loadModule();
-    global.window.__rendererState = {
-      enableHnsIntegration: true,
-      registry: {
-        hns: { mode: 'bundled', canaryReady: true, localResolverReady: true },
-      },
-    };
-    mod.updateHomeUrl();
-    expect(mod.homeUrl).toBe('file:///app/pages/home.html');
-    expect(mod.landingUrl).toBe('https://app.pirate/');
-
-    global.window.__rendererState = {
-      enableHnsIntegration: true,
-      registry: {
-        hns: { mode: 'bundled', canaryReady: true, localResolverReady: false },
-      },
-    };
-    const changed = mod.updateHomeUrl();
-    expect(changed).toBe(true);
-    expect(mod.homeUrl).toBe('file:///app/pages/home.html');
-    expect(mod.landingUrl).toBe('https://pirate.sc/');
-    delete global.window.__rendererState;
+    for (const [enabled, ready] of [[true, false], [true, true], [true, false], [false, true]]) {
+      global.window.__rendererState = {
+        enableHnsIntegration: enabled,
+        registry: { hns: { mode: 'bundled', localResolverReady: ready } },
+      };
+      expect(mod.isHnsHomeReady()).toBe(enabled && ready);
+      expect(mod.homeUrl).toBe('file:///app/pages/home.html');
+      expect(mod.homeUrlNormalized).toBe('file:///app/pages/home.html');
+    }
   });
 });
