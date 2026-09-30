@@ -1,0 +1,8 @@
+{
+  "version": "0.21.1",
+  "registry_metadata": "https://registry.npmjs.org/agent-browser/0.21.1",
+  "tarball": "https://registry.npmjs.org/agent-browser/-/agent-browser-0.21.1.tgz",
+  "integrity": "sha512-yx0GTG745PjCYR3ZSpI7x1LAer3E9diS65Vywm53CC8g6DCmbEBPWTEZw2vPlkWGKY7htWKP67dBkleYAuy6GQ==",
+  "native_sha256": "b99f239f67254decbb00fdc03fdb30ff2a84d3b79b4d6d5e5d33f43d7dc71f5c",
+  "native_sha_basis": "Previously tested local 0.21.1 executable; hosted npm archive must contain identical native binary or stop; postinstall downloads are disabled."
+}

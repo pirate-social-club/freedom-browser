@@ -1,0 +1,7 @@
+table ip freedom_fixture {
+ chain output {
+  type nat hook output priority dstnat; policy accept;
+  ip daddr { 81.15.150.167, 94.103.168.209 } udp dport 53 redirect to :1053
+  ip daddr { 81.15.150.167, 94.103.168.209 } tcp dport 53 redirect to :1053
+ }
+}

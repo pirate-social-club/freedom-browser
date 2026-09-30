@@ -1,0 +1,140 @@
+name: HNS public-host diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hns-public-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact diagnostic source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          path: freedom-browser
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check out pinned file dependency
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: Sentinel-Autonomybuilder/blue-ai-connect
+          ref: 924d472cb8be47b11f2432515f23bd5ea20d297c
+          path: blue-ai-connect
+          persist-credentials: false
+      - name: Prepare file dependency
+        run: cp -R blue-ai-connect ../blue-ai-connect
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: freedom-browser/package-lock.json
+      - name: Install locked diagnostic dependencies without lifecycle scripts
+        working-directory: freedom-browser
+        run: npm ci --ignore-scripts
+      - name: Require approved Axios lock and installed version
+        working-directory: freedom-browser
+        run: |
+          node -e "if(require('./package-lock.json').packages['node_modules/axios'].version!=='1.20.0'||require('axios/package.json').version!=='1.20.0')process.exit(1)"
+          npm audit --audit-level=high
+      - name: Assemble helper-only resources and run bounded public diagnostic
+        working-directory: freedom-browser
+        shell: bash
+        env:
+          FREEDOM_HNS_SMOKE_EXTRA_HOST: ${{ secrets.FREEDOM_HNS_SMOKE_EXTRA_HOST }}
+        run: |
+          set -euo pipefail
+          set +x
+          umask 077
+          smoke_dir="$(mktemp -d "$RUNNER_TEMP/freedom-hns-diagnostic.XXXXXX")"
+          smoke_unit="freedom-hns-diagnostic-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          smoke_started=$SECONDS
+          stopped_state() {
+            if printf '%s\n' "$status" | grep -qx 'ActiveState=inactive' && printf '%s\n' "$status" | grep -qx 'SubState=dead'; then
+              return 0
+            fi
+            if printf '%s\n' "$status" | grep -qx 'ActiveState=failed' && printf '%s\n' "$status" | grep -qx 'SubState=failed'; then
+              return 0
+            fi
+            return 1
+          }
+          cleanup() {
+            result=$?
+            trap - EXIT
+            set +e
+            stop_result=0
+            timeout --kill-after=1s 5s sudo systemctl stop "$smoke_unit" >/dev/null 2>&1 || stop_result=$?
+            status="$(timeout --kill-after=1s 2s sudo systemctl show "$smoke_unit" -p MainPID -p ControlPID -p ControlGroup -p LoadState -p ActiveState -p SubState -p Result -p ExecMainStatus 2>/dev/null)"
+            status_result=$?
+            printf '%s\n' "$status"
+            if [ "$status_result" -ne 0 ] || ! printf '%s\n' "$status" | grep -qx 'MainPID=0' || ! printf '%s\n' "$status" | grep -qx 'ControlPID=0' || ! printf '%s\n' "$status" | grep -qx 'ControlGroup=' || ! stopped_state || ! printf '%s\n' "$status" | grep -Eq '^LoadState=(loaded|not-found)$' || [ -e "/sys/fs/cgroup/system.slice/$smoke_unit.service" ]; then
+              echo 'Diagnostic cleanup proof unavailable'
+              result=1
+            fi
+            if [ "$result" -eq 0 ] && { ! printf '%s\n' "$status" | grep -qx 'Result=success' || ! printf '%s\n' "$status" | grep -qx 'ExecMainStatus=0'; }; then
+              echo 'Successful service completion proof unavailable'
+              result=1
+            fi
+            echo "Diagnostic stop command status: $stop_result"
+            timeout --kill-after=1s 5s sudo rm -rf -- "$smoke_dir" || result=1
+            if [ "$((SECONDS - smoke_started))" -gt 300 ]; then
+              echo 'Diagnostic envelope exceeded'
+              result=1
+            fi
+            exit "$result"
+          }
+          trap cleanup EXIT
+          export FREEDOM_DIAGNOSTIC_DIRECTORY="$smoke_dir"
+          export FREEDOM_DIAGNOSTIC_UNIT="$smoke_unit"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import { createRequire } from 'node:module';
+          import { createPackage } from '@electron/asar';
+          const require = createRequire(import.meta.url);
+          const { getSmokeHosts } = require('./scripts/hns-packaged-smoke');
+          const hosts = getSmokeHosts();
+          if (hosts.length !== 3) throw new Error('Three distinct configured public targets are required');
+          const root = process.env.FREEDOM_DIAGNOSTIC_DIRECTORY;
+          const quote = (value) => {
+            if (/[\r\n\0]/.test(value)) throw new Error('Invalid diagnostic environment encoding');
+            return '"' + value.replaceAll('\\', '\\\\').replaceAll('"', '\\"') + '"';
+          };
+          const temporary = path.join(root, 'temporary-state');
+          fs.mkdirSync(temporary, { mode: 0o700 });
+          const environment = {
+            FREEDOM_HNS_SMOKE_EXTRA_HOST: hosts[2], TMPDIR: temporary,
+            FREEDOM_DIAGNOSTIC_RESOURCES: path.join(root, 'resources'),
+            FREEDOM_DIAGNOSTIC_UNIT: process.env.FREEDOM_DIAGNOSTIC_UNIT,
+          };
+          fs.writeFileSync(path.join(root, 'private.env'), Object.entries(environment)
+            .map(([key, value]) => key + '=' + quote(value)).join('\n') + '\n', { mode: 0o600 });
+          const resources = path.join(root, 'resources');
+          const code = path.join(root, 'validator-source');
+          fs.mkdirSync(path.join(resources, 'hns-bin'), { recursive: true });
+          fs.mkdirSync(path.join(resources, 'assets/hns'), { recursive: true });
+          fs.mkdirSync(path.join(code, 'src/main'), { recursive: true });
+          for (const name of ['fingertipd', 'hnsd', 'PROVENANCE.md']) {
+            fs.copyFileSync(path.join('hns-bin/linux-x64', name), path.join(resources, 'hns-bin', name));
+          }
+          fs.chmodSync(path.join(resources, 'hns-bin/fingertipd'), 0o755);
+          fs.chmodSync(path.join(resources, 'hns-bin/hnsd'), 0o755);
+          fs.copyFileSync('assets/hns/checkpoint_main.dat', path.join(resources, 'assets/hns/checkpoint_main.dat'));
+          fs.copyFileSync('src/main/hns-checkpoint.js', path.join(code, 'src/main/hns-checkpoint.js'));
+          await createPackage(code, path.join(resources, 'app.asar'));
+          console.log('Diagnostic resources assembled from tracked helper/checkpoint/validator source; no Electron package built');
+          NODE
+          timeout --signal=TERM --kill-after=3s 260s sudo systemd-run --wait --pipe --unit="$smoke_unit" \
+            --property=CPUQuota=100% --property=CPUAffinity=0 --property=MemoryMax=512M \
+            --property=MemorySwapMax=0 --property=Nice=19 --property=RuntimeMaxSec=250s --property=TimeoutStopSec=5s \
+            --property=KillMode=control-group --property=LimitCORE=0 --property=Slice=system.slice \
+            --property="EnvironmentFile=$smoke_dir/private.env" \
+            --working-directory="$PWD" \
+            "$(command -v node)" "$PWD/scripts/hns-public-diagnostic.js"
