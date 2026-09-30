@@ -644,6 +644,17 @@ describe('navigation', () => {
     );
   });
 
+  test('allows a community host after chain sync even when app.pirate health fails', async () => {
+    const ctx = await loadNavigationModule({ initialSettings: { showBookmarkBar: true }, enableHnsIntegration: true });
+    ctx.state.enableHnsIntegration = true;
+    ctx.state.registry.hns = { mode: 'bundled', synced: true, canaryReady: false, localResolverReady: false };
+    ctx.urlUtilsMocks.normalizeHnsHostInput.mockReturnValue('https://member.pirate/');
+    await ctx.mod.initNavigation();
+    ctx.elements.addressInput.value = 'member.pirate';
+    ctx.elements.navForm.dispatch('submit', { preventDefault: jest.fn() });
+    expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith('https://member.pirate/');
+  });
+
   test('shows lookup failed instead of syncing once bundled HNS is synced', async () => {
     const ctx = await loadNavigationModule({
       initialSettings: { showBookmarkBar: true },

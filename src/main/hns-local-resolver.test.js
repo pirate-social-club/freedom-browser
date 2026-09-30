@@ -2,6 +2,8 @@ const dgram = require('dgram');
 const net = require('net');
 const {
   DNS_TYPE_A,
+  DNS_CLASS_HS,
+  DNS_TYPE_TXT,
   DNS_TYPE_CNAME,
   DNS_TYPE_NS,
   clearHnsLocalCache,
@@ -106,6 +108,31 @@ describe('hns-local-resolver', () => {
     clearHnsLocalCache();
     jest.clearAllMocks();
     jest.useRealTimers();
+  });
+
+  test('reads internal Hesiod TXT metadata over the local DNS wire', async () => {
+    const server = dgram.createSocket('udp4');
+    await bindUdp(server, 0);
+    let questionClass;
+    server.on('message', (query, remote) => {
+      questionClass = query.readUInt16BE(query.length - 2);
+      const header = Buffer.alloc(12);
+      header.writeUInt16BE(query.readUInt16BE(0), 0);
+      header.writeUInt16BE(0x8000, 2);
+      header.writeUInt16BE(1, 4);
+      header.writeUInt16BE(1, 6);
+      const answer = Buffer.alloc(12);
+      answer.writeUInt16BE(0xc00c, 0);
+      answer.writeUInt16BE(DNS_TYPE_TXT, 2);
+      answer.writeUInt16BE(DNS_CLASS_HS, 4);
+      answer.writeUInt16BE(6, 10);
+      server.send(Buffer.concat([header, query.subarray(12), answer, Buffer.from([5]), Buffer.from('false')]), remote.port, remote.address);
+    });
+    try {
+      const result = await queryDns({ host: '127.0.0.1', port: server.address().port, hostname: 'synced.chain.hnsd', type: DNS_TYPE_TXT, klass: DNS_CLASS_HS, tcpFallback: false });
+      expect(questionClass).toBe(DNS_CLASS_HS);
+      expect(result.answers[0]).toMatchObject({ name: 'synced.chain.hnsd', klass: DNS_CLASS_HS, text: ['false'] });
+    } finally { server.close(); }
   });
 
   test('resolves a delegated HNS name through local root glue and authoritative nameserver', async () => {

@@ -115,6 +115,10 @@ function loadHnsManagerModule(options = {}) {
   });
   const isHnsProxyHost = jest.fn(() => options.isHnsProxyHost ?? false);
   const pruneUnknownSingleLabelHistory = jest.fn();
+  const installHnsCheckpoint = jest.fn(() => {
+    if (options.checkpointError) throw new Error(options.checkpointError);
+    return true;
+  });
   const spawnedProcesses = [];
   const tcpPorts = [...(options.tcpPorts || [41001, 41002, 41003, 41004])];
   const unavailableUdpPorts = new Set(options.unavailableUdpPorts || []);
@@ -215,7 +219,13 @@ function loadHnsManagerModule(options = {}) {
       [require.resolve('./browser-state-sanitizer')]: () => ({
         pruneUnknownSingleLabelHistory,
       }),
-      [require.resolve('./hns-health')]: () => options.hnsHealth || jest.requireActual('./hns-health'),
+      [require.resolve('./hns-checkpoint')]: () => ({ installHnsCheckpoint }),
+      [require.resolve('./hns-health')]: () => ({
+        ...(options.hnsHealth || jest.requireActual('./hns-health')),
+        probeHnsChainState: options.probeHnsChainState || jest.fn(async () => ({
+          synced: Boolean(options.hnsHealth), height: 326149, progress: 0.99, peers: 2,
+        })),
+      }),
       [require.resolve('../shared/platform-capabilities')]: () => ({
         getCapabilityStatus: jest.fn(() => ({
           supported: options.hnsSupported ?? true,
@@ -235,6 +245,7 @@ function loadHnsManagerModule(options = {}) {
     BrowserWindow,
     session,
     fsMock,
+    installHnsCheckpoint,
     log,
     updateService,
     setStatusMessage,
@@ -276,6 +287,14 @@ describe('hns-manager', () => {
     expect(ctx.mod.STATUS).toHaveProperty('ERROR');
   });
 
+  test('does not launch the helper when the bundled checkpoint is invalid', async () => {
+    const ctx = loadHnsManagerModule({ checkpointError: 'invalid checkpoint digest' });
+    await ctx.mod.startHns();
+    expect(ctx.mod.getHnsStatus().status).toBe('error');
+    expect(ctx.spawn).not.toHaveBeenCalled();
+    expect(ctx.setStatusMessage).toHaveBeenCalledWith('hns', 'HNS checkpoint unavailable or invalid');
+  });
+
   test('getHnsStatus returns initial state', () => {
     const ctx = loadHnsManagerModule();
     const status = ctx.mod.getHnsStatus();
@@ -290,6 +309,8 @@ describe('hns-manager', () => {
       localResolverReady: false,
       dohFallbackReady: false,
       height: 0,
+      peerCount: 0,
+      syncProgress: 0,
       proxyAddr: null,
       caPemPath: null,
       rootAddr: null,
@@ -487,7 +508,7 @@ describe('hns-manager', () => {
     ))).toHaveLength(1);
   });
 
-  test('sync height progress does not reset established local resolver readiness', async () => {
+  test('helper canary changes do not override independently observed chain readiness', async () => {
     jest.useFakeTimers();
     const ctx = loadHnsManagerModule({
       cryptoMock: {
@@ -536,6 +557,51 @@ describe('hns-manager', () => {
     expect(ctx.mod.getHnsStatus().synced).toBe(true);
     expect(ctx.mod.getHnsStatus().localResolverReady).toBe(true);
     expect(ctx.mod.getHnsStatus().dohFallbackReady).toBe(false);
+  });
+
+  test('a quiet stalled height and a successful helper canary cannot establish chain sync', async () => {
+    jest.useFakeTimers();
+    const ctx = loadHnsManagerModule({
+      cryptoMock: { X509Certificate: class { raw = Buffer.from('test certificate'); } },
+      readFileSync: () => 'test certificate',
+      probeHnsChainState: jest.fn(async () => ({ synced: false, height: 136149, progress: 0.4, peers: 0 })),
+    });
+    await ctx.mod.startHns();
+    ctx.readlineHandlers.get('line')?.(JSON.stringify({ type: 'ready', proxyAddr: '127.0.0.1:44041', caPath: '/tmp/hns-ca.pem' }));
+    await Promise.resolve();
+    ctx.readlineHandlers.get('line')?.(JSON.stringify({ type: 'sync', synced: true, height: 136149 }));
+    await jest.advanceTimersByTimeAsync(30000);
+    expect(ctx.mod.getHnsStatus()).toMatchObject({ synced: false, canaryReady: true, localResolverReady: false, height: 136149, peerCount: 0 });
+    expect(ctx.setStatusMessage).toHaveBeenLastCalledWith('hns', expect.stringContaining('without new headers'));
+  });
+
+  test('losing chain sync or metadata clears previously established readiness', async () => {
+    jest.useFakeTimers();
+    let chain = { synced: true, height: 349265, progress: 1, peers: 2 };
+    const ctx = loadHnsManagerModule({
+      cryptoMock: { X509Certificate: class { raw = Buffer.from('test certificate'); } },
+      readFileSync: () => 'test certificate',
+      probeHnsChainState: jest.fn(async () => { if (chain instanceof Error) throw chain; return chain; }),
+      hnsHealth: {
+        buildHnsHealthProbeHosts: () => ['app.pirate'],
+        formatHnsHealthSummary: () => 'app.pirate=OK',
+        probeHnsResolver: async () => ({ ok: true, results: [{ host: 'app.pirate', ok: true, addresses: ['203.0.113.10'] }] }),
+      },
+    });
+    await ctx.mod.startHns();
+    ctx.readlineHandlers.get('line')?.(JSON.stringify({ type: 'ready', proxyAddr: '127.0.0.1:44041', caPath: '/tmp/hns-ca.pem' }));
+    await Promise.resolve();
+    await jest.advanceTimersByTimeAsync(6000);
+    expect(ctx.mod.getHnsStatus().localResolverReady).toBe(true);
+    chain = { ...chain, synced: false };
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(ctx.mod.getHnsStatus()).toMatchObject({ synced: false, localResolverReady: false });
+    chain = { ...chain, synced: true };
+    await jest.advanceTimersByTimeAsync(6000);
+    expect(ctx.mod.getHnsStatus().synced).toBe(true);
+    chain = new Error('resolver stopped responding');
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(ctx.mod.getHnsStatus()).toMatchObject({ synced: false, localResolverReady: false });
   });
 
   test('localResolverReady reports local delegation when recursive DNS is unavailable', async () => {
@@ -588,7 +654,7 @@ describe('hns-manager', () => {
       'HNS recursive resolver recovering; using local delegation resolver'
     );
     expect(ctx.log.info).toHaveBeenCalledWith(
-      '[HNS] Local recursive resolver unavailable (sync): pirate=FAIL(ETIMEOUT), app.pirate=FAIL(ETIMEOUT); local delegation resolver ready; retrying in 5000ms'
+      '[HNS] Local recursive resolver unavailable (chain sync): pirate=FAIL(ETIMEOUT), app.pirate=FAIL(ETIMEOUT); local delegation resolver ready; retrying in 5000ms'
     );
   });
 
@@ -624,7 +690,7 @@ describe('hns-manager', () => {
     expect(ctx.mod.getHnsStatus().proxyAddr).toBe('127.0.0.1:55000');
   });
 
-  test('uses helper sync status even when obsolete canary is unavailable', async () => {
+  test('helper sync event reports only canary health before chain observation', async () => {
     const ctx = loadHnsManagerModule();
 
     await ctx.mod.startHns();
@@ -636,11 +702,10 @@ describe('hns-manager', () => {
     }));
 
     expect(ctx.mod.getHnsStatus()).toEqual(expect.objectContaining({
-      synced: true,
+      synced: false,
       canaryReady: true,
-      height: 326149,
+      height: 0,
     }));
-    expect(ctx.setStatusMessage).toHaveBeenLastCalledWith('hns', null);
   });
 
   test('checkBinary returns true when fingertipd exists', () => {

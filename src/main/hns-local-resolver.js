@@ -10,6 +10,8 @@ const DNS_TYPE_NS = 2;
 const DNS_TYPE_CNAME = 5;
 const DNS_TYPE_AAAA = 28;
 const DNS_CLASS_IN = 1;
+const DNS_CLASS_HS = 4;
+const DNS_TYPE_TXT = 16;
 const DEFAULT_TIMEOUT_MS = 2500;
 const DEFAULT_CACHE_TTL_SECONDS = 60;
 const NEGATIVE_CACHE_TTL_MS = 10 * 1000;
@@ -46,7 +48,7 @@ function encodeDnsName(hostname) {
   return Buffer.concat(parts);
 }
 
-function buildDnsQuery(hostname, type = DNS_TYPE_A, recursive = false) {
+function buildDnsQuery(hostname, type = DNS_TYPE_A, recursive = false, klass = DNS_CLASS_IN) {
   const id = crypto.randomInt(0, 0x10000);
   const header = Buffer.alloc(12);
   header.writeUInt16BE(id, 0);
@@ -55,7 +57,7 @@ function buildDnsQuery(hostname, type = DNS_TYPE_A, recursive = false) {
 
   const question = Buffer.alloc(4);
   question.writeUInt16BE(type, 0);
-  question.writeUInt16BE(DNS_CLASS_IN, 2);
+  question.writeUInt16BE(klass, 2);
 
   return {
     id,
@@ -129,6 +131,18 @@ function parseRecord(buffer, offset) {
     type,
   };
 
+  if (type === DNS_TYPE_TXT && (klass === DNS_CLASS_IN || klass === DNS_CLASS_HS)) {
+    record.klass = klass;
+    record.text = [];
+    let cursor = 0;
+    while (cursor < data.length) {
+      const length = data[cursor++];
+      if (cursor + length > data.length) throw new Error('Truncated DNS TXT string');
+      record.text.push(data.toString('utf8', cursor, cursor + length));
+      cursor += length;
+    }
+  }
+
   if (klass === DNS_CLASS_IN && type === DNS_TYPE_A && rdLength === 4) {
     record.address = Array.from(data).join('.');
     record.family = 4;
@@ -191,9 +205,9 @@ function parseDnsMessage(buffer, expectedId) {
   };
 }
 
-function queryDnsUdp({ host, hostname, port = 53, recursive = false, timeoutMs = DEFAULT_TIMEOUT_MS, type }) {
+function queryDnsUdp({ host, hostname, port = 53, recursive = false, timeoutMs = DEFAULT_TIMEOUT_MS, type, klass }) {
   return new Promise((resolve, reject) => {
-    const query = buildDnsQuery(hostname, type, recursive);
+    const query = buildDnsQuery(hostname, type, recursive, klass);
     const socket = dgram.createSocket(net.isIP(host) === 6 ? 'udp6' : 'udp4');
     socket.unref?.();
     const timeout = setTimeout(() => {
@@ -222,9 +236,9 @@ function queryDnsUdp({ host, hostname, port = 53, recursive = false, timeoutMs =
   });
 }
 
-function queryDnsTcp({ host, hostname, port = 53, recursive = false, timeoutMs = DEFAULT_TIMEOUT_MS, type }) {
+function queryDnsTcp({ host, hostname, port = 53, recursive = false, timeoutMs = DEFAULT_TIMEOUT_MS, type, klass }) {
   return new Promise((resolve, reject) => {
-    const query = buildDnsQuery(hostname, type, recursive);
+    const query = buildDnsQuery(hostname, type, recursive, klass);
     const length = Buffer.alloc(2);
     length.writeUInt16BE(query.message.length, 0);
     const framedQuery = Buffer.concat([length, query.message]);
@@ -685,6 +699,8 @@ async function resolveHnsLocalAddresses(hostname, options = {}) {
 }
 
 module.exports = {
+  DNS_CLASS_HS,
+  DNS_TYPE_TXT,
   DNS_TYPE_A,
   DNS_TYPE_AAAA,
   DNS_TYPE_CNAME,

@@ -14,8 +14,10 @@ const {
   buildHnsHealthProbeHosts,
   formatHnsHealthSummary,
   probeHnsResolver,
+  probeHnsChainState,
 } = require('./hns-health');
 const { pruneUnknownSingleLabelHistory } = require('./browser-state-sanitizer');
+const { installHnsCheckpoint } = require('./hns-checkpoint');
 const {
   MODE,
   updateService,
@@ -43,7 +45,7 @@ let forceKillTimeout = null;
 let restartCount = 0;
 const MAX_RESTARTS = 5;
 const RESTART_RESET_MS = 10 * 60 * 1000;
-const HNS_SYNC_QUIET_MS = 20 * 1000;
+const HNS_CHAIN_POLL_MS = 2000;
 const HNS_STDERR_REPEAT_WINDOW_MS = 30 * 1000;
 const HNS_HEALTH_INITIAL_DELAY_MS = 1000;
 const HNS_HEALTH_RETRY_BASE_MS = 5000;
@@ -61,12 +63,15 @@ let canaryReady = false;
 let localResolverReady = false;
 let dohFallbackReady = false;
 let height = 0;
-let lastLoggedHeight = 0;
 let lastHeightChangeAt = 0;
 let rootAddr = null;
 let recursiveAddr = null;
 let lastProcessError = null;
 const hnsStderrLogState = new Map();
+let hnsChainTimer = null;
+let hnsChainGeneration = 0;
+let peerCount = 0;
+let syncProgress = 0;
 let hnsHealthTimer = null;
 let hnsHealthInFlight = false;
 let hnsHealthAttempt = 0;
@@ -137,6 +142,11 @@ function logHnsStderr(data) {
 }
 
 function clearHnsHealthState() {
+  hnsChainGeneration += 1;
+  if (hnsChainTimer) clearTimeout(hnsChainTimer);
+  hnsChainTimer = null;
+  peerCount = 0;
+  syncProgress = 0;
   if (hnsHealthTimer) {
     clearTimeout(hnsHealthTimer);
     hnsHealthTimer = null;
@@ -197,6 +207,43 @@ function updateLocalResolverReadiness(candidateReady) {
       `[HNS] localResolverReady=true->false after ${HNS_LOCAL_READY_FAILURE_THRESHOLD} consecutive failed probes`
     );
   }
+}
+
+function scheduleHnsChainCheck(delayMs = HNS_CHAIN_POLL_MS) {
+  if (currentState !== STATUS.RUNNING || !rootAddr || hnsChainTimer) return;
+  const generation = hnsChainGeneration;
+  hnsChainTimer = setTimeout(async () => {
+    hnsChainTimer = null;
+    const active = () => generation === hnsChainGeneration && currentState === STATUS.RUNNING;
+    try {
+      const state = await probeHnsChainState({ rootAddr });
+      if (!active()) return;
+      if (state.height !== height || lastHeightChangeAt === 0) lastHeightChangeAt = Date.now();
+      height = state.height;
+      peerCount = state.peers;
+      syncProgress = state.progress;
+      synced = state.synced;
+      if (synced) {
+        scheduleHnsHealthCheck('chain sync');
+      } else {
+        resetHnsReadiness();
+        const idle = Math.max(0, Math.floor((Date.now() - lastHeightChangeAt) / 1000));
+        setStatusMessage('hns', `Syncing block ${height}; ${peerCount} peers; ${idle}s without new headers`);
+      }
+    } catch (error) {
+      if (!active()) return;
+      synced = false;
+      resetHnsReadiness();
+      setStatusMessage('hns', 'Waiting for HNS chain status');
+      log.warn(`[HNS] Chain status unavailable: ${error.message}`);
+    } finally {
+      if (active()) {
+        updateService('hns', { synced, canaryReady, localResolverReady, dohFallbackReady, height, peerCount, syncProgress });
+        scheduleHnsChainCheck();
+      }
+    }
+  }, delayMs);
+  hnsChainTimer.unref?.();
 }
 
 function canProbeHnsHealth() {
@@ -599,6 +646,7 @@ async function handleReady(event) {
   setStatusMessage('hns', null);
 
   updateState(STATUS.RUNNING);
+  scheduleHnsChainCheck(0);
   log.info(`[HNS] Helper ready: proxy=${publishedProxyAddr || 'unavailable'}, upstream=${proxyAddr}, ca=${caPemPath}`);
 }
 
@@ -614,46 +662,10 @@ function parseStdoutLine(line) {
         break;
 
       case 'sync':
-        {
-          const nextHeight = event.height || 0;
-          if (nextHeight > height) {
-            lastHeightChangeAt = Date.now();
-          }
-          height = nextHeight;
-
-          const helperReady = event.synced === true || event.canaryReady === true;
-          const heightReady =
-            height > 0 &&
-            lastHeightChangeAt > 0 &&
-            Date.now() - lastHeightChangeAt >= HNS_SYNC_QUIET_MS;
-
-          const readyNow = helperReady || heightReady;
-          synced = synced || readyNow;
-          canaryReady = canaryReady || readyNow;
-          if (!synced) {
-            resetHnsReadiness();
-          }
-        }
-
-        updateService('hns', {
-          synced,
-          canaryReady,
-          localResolverReady,
-          dohFallbackReady,
-          height,
-        });
-
-        if (synced) {
-          clearErrorState('hns');
-          setStatusMessage('hns', null);
-          if (height !== lastLoggedHeight) {
-            lastLoggedHeight = height;
-            log.info(`[HNS] Synced at height ${height}`);
-          }
-          scheduleHnsHealthCheck('sync');
-        } else {
-          setStatusMessage('hns', `Syncing block ${height}`);
-        }
+        // fingertipd 0.1.12 calls its app.pirate TLSA canary "synced".
+        // Chain synchronization comes only from hnsd's local Hesiod metadata.
+        canaryReady = event.synced === true || event.canaryReady === true;
+        updateService('hns', { canaryReady });
         break;
 
       case 'error':
@@ -712,6 +724,20 @@ async function startHns() {
   }
 
   const dataDir = getHnsDataPath();
+
+  try {
+    const assetsDir = app.isPackaged
+      ? path.join(process.resourcesPath, 'assets')
+      : path.join(__dirname, '..', '..', 'assets');
+    if (installHnsCheckpoint(path.join(assetsDir, 'hns', 'checkpoint_main.dat'), dataDir)) {
+      log.info('[HNS] Installed the bundled mainnet checkpoint for a fresh profile');
+    }
+  } catch (error) {
+    updateState(STATUS.ERROR, `HNS checkpoint initialization failed: ${error.message}`);
+    setErrorState('hns', 'HNS checkpoint integrity check failed');
+    setStatusMessage('hns', 'HNS checkpoint unavailable or invalid');
+    return;
+  }
 
   const hnsdPath = getHnsdBinaryPath();
   if (!fs.existsSync(hnsdPath)) {
@@ -898,6 +924,8 @@ function getHnsStatus() {
     localResolverReady,
     dohFallbackReady,
     height,
+    peerCount,
+    syncProgress,
     proxyAddr: publishedProxyAddr,
     caPemPath,
     rootAddr,

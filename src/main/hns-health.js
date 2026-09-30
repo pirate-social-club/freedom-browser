@@ -1,4 +1,5 @@
 const { Resolver } = require('dns').promises;
+const { DNS_CLASS_HS, DNS_TYPE_TXT, queryDns } = require('./hns-local-resolver');
 
 const DEFAULT_QUERY_TIMEOUT_MS = 3000;
 
@@ -87,3 +88,44 @@ module.exports = {
   formatHnsHealthSummary,
   probeHnsResolver,
 };
+
+// Local hnsd metadata is separate from any website's DNS/DANE canary.
+async function probeHnsChainState({ rootAddr, query = queryDns }) {
+  const match = /^127\.0\.0\.1:(\d+)$/.exec(rootAddr || '');
+  if (!match || Number(match[1]) < 1 || Number(match[1]) > 65535) {
+    throw new Error('HNS metadata requires the local root resolver');
+  }
+  const params = {
+    host: '127.0.0.1', port: Number(match[1]), klass: DNS_CLASS_HS,
+    type: DNS_TYPE_TXT, timeoutMs: 1000,
+  };
+  const [chain, pool] = await Promise.all([
+    query({ ...params, hostname: 'chain.hnsd' }),
+    query({ ...params, hostname: 'size.pool.hnsd' }),
+  ]);
+  const text = (response, name) => {
+    if (response.rcode !== 0 || response.truncated) throw new Error('HNS metadata unavailable');
+    const records = response.answers.filter((record) => (
+      record.name.replace(/\.$/, '') === name && record.klass === DNS_CLASS_HS &&
+      record.type === DNS_TYPE_TXT && record.text?.length === 1
+    ));
+    if (records.length !== 1) throw new Error(`Missing HNS metadata: ${name}`);
+    return records[0].text[0];
+  };
+  const synced = text(chain, 'synced.chain.hnsd');
+  const heightText = text(chain, 'height.tip.chain.hnsd');
+  const progressText = text(chain, 'progress.chain.hnsd');
+  const peersText = text(pool, 'size.pool.hnsd');
+  const height = Number(heightText);
+  const progress = Number(progressText);
+  const peers = Number(peersText);
+  if (!['true', 'false'].includes(synced) || !/^\d+$/.test(heightText) ||
+      !/^\d+$/.test(peersText) || !Number.isSafeInteger(height) ||
+      !Number.isSafeInteger(peers) || !/^\d+(?:\.\d+)?$/.test(progressText) ||
+      !Number.isFinite(progress) || progress < 0 || progress > 1) {
+    throw new Error('Invalid HNS chain metadata');
+  }
+  return { synced: synced === 'true', height, progress, peers };
+}
+
+module.exports.probeHnsChainState = probeHnsChainState;

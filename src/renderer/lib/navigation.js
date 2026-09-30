@@ -154,14 +154,14 @@ const isSubframeNavigationEvent = (event) => event?.isMainFrame === false;
 
 const isBundledHnsReady = () => {
   if (!state.enableHnsIntegration) return false;
-  return state.registry?.hns?.localResolverReady === true;
+  return state.registry?.hns?.synced === true;
 };
 
 const shouldShowHnsNotReady = () => {
   if (!state.enableHnsIntegration || isBundledHnsReady()) return false;
   const hnsState = state.registry?.hns || {};
   if (hnsState.mode !== 'bundled') return true;
-  return hnsState.synced !== true || hnsState.canaryReady !== true;
+  return hnsState.synced !== true;
 };
 
 const normalizeExplicitHnsUrlInput = (value = '') => {
@@ -309,6 +309,9 @@ const loadHnsNotReadyPage = (webview, navState, inputValue, hnsUrl, hnsState, na
   errorUrl.searchParams.set('url', hnsUrl);
   if (hnsState?.height > 0) {
     errorUrl.searchParams.set('height', String(hnsState.height));
+  }
+  if (hnsState?.statusMessage) {
+    errorUrl.searchParams.set('syncStatus', hnsState.statusMessage);
   }
   setNavigationDisplay(context, inputValue);
   navState.pendingHnsUrl = hnsUrl;
