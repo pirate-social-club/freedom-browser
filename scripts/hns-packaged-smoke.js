@@ -8,10 +8,13 @@ const os = require('os');
 const path = require('path');
 const readline = require('readline');
 const { spawn } = require('child_process');
+const { performance } = require('perf_hooks');
+const { installHnsCheckpoint } = require('../src/main/hns-checkpoint');
 
 const DEFAULT_TIMEOUT_MS = 4 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 15 * 1000;
 const RETRY_DELAY_MS = 5 * 1000;
+const CLEANUP_RESERVE_MS = 7000;
 const MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024;
 
 function parseArgs(args = process.argv.slice(2)) {
@@ -33,8 +36,8 @@ function parseArgs(args = process.argv.slice(2)) {
   if (!options.resourcesDir) {
     throw new Error('--resources-dir is required');
   }
-  if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) {
-    throw new Error('--timeout-ms must be a positive number');
+  if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= CLEANUP_RESERVE_MS) {
+    throw new Error('--timeout-ms must exceed the cleanup reserve');
   }
 
   return options;
@@ -102,41 +105,149 @@ function classifyHelperStartupDiagnostics(value) {
   return null;
 }
 
-function reserveTcpPort() {
+function createSmokeBudget(timeoutMs, now = () => performance.now()) {
+  const deadline = now() + timeoutMs;
+  return {
+    remaining: () => Math.max(0, deadline - now()),
+    requestTimeout: (maximum = REQUEST_TIMEOUT_MS) => {
+      const remaining = deadline - now() - CLEANUP_RESERVE_MS;
+      if (remaining <= 0) throw new Error('Smoke work deadline reached');
+      return Math.min(maximum, remaining);
+    },
+  };
+}
+
+function classifyRequestFailure(error) {
+  const message = String(error?.message || '');
+  const connect = /^Proxy CONNECT returned (\d{3})$/.exec(message);
+  if (connect) return `connect-status-${connect[1]}`;
+  const response = /^HTTPS request returned (\d{3})$/.exec(message);
+  if (response) return `http-status-${response[1]}`;
+  if (message === 'HTTPS request timed out') return 'request-timeout';
+  if (message === 'Smoke work deadline reached') return 'work-deadline';
+  const code = String(error?.code || '');
+  if (/CERT|TLS|SSL/.test(code)) return 'tls-validation-or-protocol';
+  if (['ECONNREFUSED', 'ECONNRESET', 'EPIPE'].includes(code)) return 'transport-error';
+  return 'request-failure';
+}
+
+async function installPackagedCheckpoint(resourcesDir, dataDir, readPackagedSource, assertActive = () => {}) {
+  const modulePath = require.resolve('../src/main/hns-checkpoint');
+  let packagedSource;
+  if (readPackagedSource) {
+    packagedSource = await readPackagedSource();
+  } else {
+    const { extractFile } = await import('@electron/asar');
+    packagedSource = extractFile(path.join(resourcesDir, 'app.asar'), 'src/main/hns-checkpoint.js');
+  }
+  if (!Buffer.from(packagedSource).equals(fs.readFileSync(modulePath))) {
+    throw new Error('Packaged checkpoint validator differs from reviewed source');
+  }
+  assertActive();
+  return installHnsCheckpoint(path.join(resourcesDir, 'assets/hns/checkpoint_main.dat'), dataDir);
+}
+
+async function installCheckpointWithinBudget(resourcesDir, dataDir, budget, readPackagedSource) {
+  let closed = false;
+  try {
+    const timeout = budget.requestTimeout(30000);
+    return await withTimeout(installPackagedCheckpoint(resourcesDir, dataDir, readPackagedSource, () => {
+      if (closed) throw new Error('Checkpoint stage closed');
+      budget.requestTimeout();
+    }), timeout);
+  } finally {
+    // A timed-out import may still finish. It must never recreate cleaned state.
+    closed = true;
+  }
+}
+
+async function reservePortWithinBudget(excluded, budget) {
+  const cancellation = new AbortController();
+  try {
+    const timeout = budget.requestTimeout();
+    return await withTimeout(reserveDualProtocolPort(excluded, cancellation.signal), timeout);
+  } finally {
+    cancellation.abort();
+  }
+}
+
+async function withTimeout(promise, timeoutMs) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('Smoke work deadline reached')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function reserveTcpPort(signal) {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
     server.unref();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      server.close((error) => {
-        if (error) reject(error);
-        else resolve(address.port);
-      });
+    let settled = false;
+    const finish = (error, port) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', abort);
+      if (error) {
+        server.close(() => {});
+        reject(error);
+      } else resolve(port);
+    };
+    const abort = () => finish(new Error('Port reservation cancelled'));
+    server.once('error', (error) => finish(error));
+    // Keep this guard installed after cancellation: listen may complete late.
+    server.once('listening', () => {
+      if (settled || signal?.aborted) {
+        server.close(() => {});
+        return;
+      }
+      const port = server.address().port;
+      server.close((error) => finish(error, port));
     });
+    if (signal?.aborted) { abort(); return; }
+    signal?.addEventListener('abort', abort, { once: true });
+    server.listen(0, '127.0.0.1');
   });
 }
 
-function canBindUdpPort(port) {
+function canBindUdpPort(port, signal) {
   return new Promise((resolve) => {
     const socket = dgram.createSocket('udp4');
+    socket.unref();
+    let settled = false;
+    const close = () => {
+      try { socket.close(); } catch { /* Already closed or not yet bound. */ }
+    };
     const finish = (available) => {
-      try {
-        socket.close();
-      } catch {
-        // Ignore cleanup failures after a bind error.
-      }
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', abort);
+      close();
       resolve(available);
     };
+    const abort = () => finish(false);
     socket.once('error', () => finish(false));
-    socket.bind(port, '127.0.0.1', () => finish(true));
+    socket.once('listening', () => {
+      if (settled || signal?.aborted) close();
+      else finish(true);
+    });
+    if (signal?.aborted) { abort(); return; }
+    signal?.addEventListener('abort', abort, { once: true });
+    socket.bind(port, '127.0.0.1');
   });
 }
 
-async function reserveDualProtocolPort(excluded = new Set()) {
+async function reserveDualProtocolPort(excluded = new Set(), signal) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const port = await reserveTcpPort();
-    if (!excluded.has(port) && await canBindUdpPort(port)) return port;
+    if (signal?.aborted) throw new Error('Port reservation cancelled');
+    const port = await reserveTcpPort(signal);
+    if (!excluded.has(port) && await canBindUdpPort(port, signal)) return port;
   }
   throw new Error('Could not reserve an HNS resolver port');
 }
@@ -156,12 +267,15 @@ function waitForHelperReady(child, timeoutMs = 30 * 1000) {
       clearTimeout(timer);
       lines.close();
       child.off('close', onClose);
+      child.off('error', onError);
       if (error) reject(error);
       else resolve(event);
     };
+    const onError = () => finish(new Error('Packaged HNS helper could not start'));
     const onClose = (code) => finish(new Error(`Packaged HNS helper exited before ready (${code})`));
 
     child.once('close', onClose);
+    child.once('error', onError);
     lines.on('line', (line) => {
       try {
         const event = JSON.parse(line);
@@ -252,16 +366,20 @@ function requestHttpsThroughProxy({ proxyAddr, ca, hostname, timeoutMs = REQUEST
 }
 
 async function stopHelper(child) {
-  if (!child || child.exitCode !== null) return;
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  let closed = false;
+  const close = new Promise((resolve) => child.once('close', () => { closed = true; resolve(); }));
   child.kill('SIGTERM');
-  await Promise.race([
-    new Promise((resolve) => child.once('close', resolve)),
-    delay(5000),
-  ]);
-  if (child.exitCode === null) child.kill('SIGKILL');
+  await Promise.race([close, delay(3000)]);
+  if (!closed) {
+    child.kill('SIGKILL');
+    await Promise.race([close, delay(2000)]);
+  }
+  if (!closed) throw new Error('Packaged helper cleanup did not complete');
 }
 
 async function runSmoke(options) {
+  const budget = createSmokeBudget(options.timeoutMs);
   const resourcesDir = path.resolve(options.resourcesDir);
   const hnsBinDir = path.join(resourcesDir, 'hns-bin');
   const helperPath = path.join(hnsBinDir, 'fingertipd');
@@ -272,82 +390,74 @@ async function runSmoke(options) {
       throw new Error(`Packaged HNS resource is missing: ${path.basename(requiredPath)}`);
     }
   }
-
   const hosts = getSmokeHosts();
-  if (hosts.length !== 3) {
-    throw new Error('The release smoke requires three distinct HNS hosts');
-  }
-
+  if (hosts.length !== 3) throw new Error('The release smoke requires three distinct HNS hosts');
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-hns-release-smoke-'));
-  const excludedPorts = new Set();
-  const rootPort = await reserveDualProtocolPort(excludedPorts);
-  excludedPorts.add(rootPort);
-  const recursivePort = await reserveDualProtocolPort(excludedPorts);
   let child = null;
-
+  const failures = new Map();
+  const successful = new Map();
   try {
+    await installCheckpointWithinBudget(resourcesDir, dataDir, budget);
+    console.log('Packaged fresh-profile checkpoint integrity and validator source passed');
+    const excludedPorts = new Set();
+    const rootPort = await reservePortWithinBudget(excludedPorts, budget);
+    excludedPorts.add(rootPort);
+    const recursivePort = await reservePortWithinBudget(excludedPorts, budget);
+    budget.requestTimeout();
     child = spawn(helperPath, [
       '-data-dir', dataDir,
       '-hnsd-path', hnsdPath,
       '-root-addr', `127.0.0.1:${rootPort}`,
       '-recursive-addr', `127.0.0.1:${recursivePort}`,
-    ], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    // Retain only a bounded buffer for categorical diagnostics. Raw helper
-    // output is never forwarded because it can contain requested hostnames.
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
     let startupDiagnostics = '';
     child.stderr.on('data', (data) => {
       startupDiagnostics = `${startupDiagnostics}${data}`.slice(-MAX_STARTUP_DIAGNOSTIC_BYTES);
     });
     let ready;
     try {
-      ready = await waitForHelperReady(child);
-    } catch (error) {
-      const category = classifyHelperStartupDiagnostics(startupDiagnostics);
-      if (category && !error.message.includes(category)) {
-        throw new Error(`${error.message}: ${category}`, { cause: error });
-      }
-      throw error;
+      ready = await waitForHelperReady(child, budget.requestTimeout(30000));
+    } catch {
+      throw new Error(classifyHelperStartupDiagnostics(startupDiagnostics) ||
+        'the packaged HNS helper failed readiness');
     }
     child.stdout.resume();
     const ca = fs.readFileSync(ready.caPath);
-    const successful = new Map();
-    const deadline = Date.now() + options.timeoutMs;
-
-    while (Date.now() < deadline && successful.size < hosts.length) {
+    while (budget.remaining() > CLEANUP_RESERVE_MS && successful.size < hosts.length) {
       for (let index = 0; index < hosts.length; index += 1) {
         if (successful.has(index)) continue;
+        if (budget.remaining() <= CLEANUP_RESERVE_MS) break;
         try {
           const statusCode = await requestHttpsThroughProxy({
-            proxyAddr: ready.proxyAddr,
-            ca,
-            hostname: hosts[index],
+            proxyAddr: ready.proxyAddr, ca, hostname: hosts[index],
+            timeoutMs: budget.requestTimeout(),
           });
           successful.set(index, statusCode);
           console.log(`Required HNS host ${index + 1}/${hosts.length} passed with HTTP ${statusCode}`);
-        } catch {
-          // A fresh helper may need time to synchronize before proofs are available.
+        } catch (error) {
+          const category = classifyRequestFailure(error);
+          failures.set(index, category);
+          console.log(`Required HNS host ${index + 1}/${hosts.length} failed: ${category}`);
         }
       }
-      if (successful.size < hosts.length) await delay(RETRY_DELAY_MS);
+      if (successful.size < hosts.length && budget.remaining() > CLEANUP_RESERVE_MS) {
+        await delay(budget.requestTimeout(RETRY_DELAY_MS));
+      }
     }
-
     if (successful.size !== hosts.length) {
-      const failedIndexes = hosts
-        .map((_host, index) => index)
-        .filter((index) => !successful.has(index))
-        .map((index) => index + 1)
-        .join(', ');
-      throw new Error(`Packaged HNS HTTPS smoke failed for required host index(es): ${failedIndexes}`);
+      const failed = hosts.map((_host, index) => index).filter((index) => !successful.has(index))
+        .map((index) => `${index + 1}:${failures.get(index) || 'not-attempted-before-deadline'}`).join(', ');
+      throw new Error(`Packaged HNS HTTPS smoke failed for required indexes/categories: ${failed}`);
     }
-
-    console.log(`Packaged HNS HTTPS smoke passed for ${hosts.length}/${hosts.length} required hosts.`);
   } finally {
-    await stopHelper(child);
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    try {
+      await stopHelper(child);
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
   }
+  if (budget.remaining() === 0) throw new Error('Smoke total deadline exceeded during cleanup');
+  console.log(`Packaged HNS HTTPS smoke passed for ${hosts.length}/${hosts.length} required hosts.`);
 }
 
 async function main() {
@@ -365,6 +475,12 @@ if (require.main === module) {
 
 module.exports = {
   classifyHelperStartupDiagnostics,
+  classifyRequestFailure,
+  createSmokeBudget,
+  installPackagedCheckpoint,
+  installCheckpointWithinBudget,
+  reserveTcpPort,
+  canBindUdpPort,
   extractStatusCode,
   getSmokeHosts,
   normalizeHostname,
