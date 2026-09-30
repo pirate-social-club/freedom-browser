@@ -2,6 +2,23 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [0.7.15] - 2026-09-30
+
+### Security
+
+- Require DNSSEC-authenticated Handshake address records for browsing and reject invalid proofs without retrying an insecure address path.
+- Update bundled Handshake helper validation while preserving DANE certificate checks.
+- Update browser cryptography dependencies and Electron security patches.
+- Update the dVPN integration’s Axios dependency to fix proxy/DNS bypass and request-handling vulnerabilities.
+
+### Changed
+
+- Keep startup, new tabs and the Home button on the local welcome page, including after the Handshake resolver becomes ready. Remote sites remain manual destinations.
+
+### Fixed
+
+- Seed new Handshake profiles from a bundled public checkpoint and distinguish chain synchronization from local resolver readiness.
+
 ## [0.7.14] - 2026-08-12
 
 ### Security
