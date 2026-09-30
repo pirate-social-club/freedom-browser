@@ -15,7 +15,7 @@
   "harness/observe-welcome.py": "54e3f1899d71a40b926ae00db9fcc8ba999d14363a3c8c76d2a4ad7a37cce9a6",
   "harness/os-dns.py": "33a44f0fc54f4715b7db81d2c15dd5c0fca27fe727bbd1e990bf6dd6ca4ee950",
   "harness/prepare-candidate.py": "909166ac4e887158f9bc5fc791b540341bbc69ec8c95e52526f8d1900504b444",
-  "harness/prepare-runtime.py": "28d5eb3394e6d94b9814291970e74497289f8bc3da41e0f9038e2fe70775a587",
+  "harness/prepare-runtime.py": "b16ecf5399059cc583a020c1064a80feae4bbeea94362b81f9aa7219be4ac5d5",
   "harness/profile-settings-fixture.json": "0770764bc3a7d1ccf3f76bb4162c99bf9310d3e3e4fef816f638338b04dd58f5",
   "harness/public-fixture-base.json": "d246639143a1bd7857ad93cbcd23437bce08bf735e5b5bb35f23eabc77cd5fbb",
   "harness/readback.py": "c5b39805d789f621a560c1c8b4cdeb69cb2a6dcb36556bce49a318aa26312123",
@@ -24,7 +24,7 @@
   "harness/warm-checkpoint-main.dat": "c23b485e961e406d9d302932feeb2aaea8f39c47001a04435c426c03414ceea1",
   "harness/wrong-tls.py": "942b20b81ca68277cbc731194f302658e76052cc723f3ec093aec8c72a9150ac",
   "hns-current-package-acceptance.yml": "335d73c02c51ff62aa57c4f42c60992bd2c415aceec4df28efae4af8533a5c17",
-  "launch.py": "a660a6927b348243c141d07c0c2fa77b46fda5e4d59e1a341b0684834e5d359c",
+  "launch.py": "db0420da02fc4d7f98688b2ff5239237a12bf8801c5f865c1f5abda694ba0a2c",
   "python-wheel-pins.json": "12bec3d3d647ad38a403502f4df8ba9a8bda13c0d3fa3c5fe9f6025982be5e1a",
   "requirements.txt": "05bbd77cf30d45eb47f1ed042f5208ba7afb5fa00be12afb8d4b5c716876cefc",
   "runtime-source-pins.json": "df4c13bb1e194ab0f6550845f963c15e2b0519dc6d3e9bdd8c089e3980a250fc"
