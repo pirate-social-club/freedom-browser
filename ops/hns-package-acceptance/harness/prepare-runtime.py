@@ -62,6 +62,11 @@ def asar_failure_response(output):
  except (ValueError,UnicodeDecodeError):return 'unknown'
  if not isinstance(record,dict) or set(record)!={'passed','code'} or record['passed'] is not False or not isinstance(record['code'],str) or record['code'] not in allowed:return 'unknown'
  return record['code']
+def asar_receipt_failure(output,subtype):
+ known=asar_failure_response(output)
+ if known!='unknown':return known
+ allowed={'success_receipt_missing','success_receipt_read_error','success_receipt_invalid_json','success_receipt_invalid_shape'}
+ return subtype if subtype in allowed else 'unknown'
 class NamespacePermissionDenied(Exception):pass
 def preparation_exception(_kind,error,_traceback):
  category='internal_error';returncode=None
@@ -119,10 +124,17 @@ if asar_check.returncode:
  asar_failure=asar_failure_response(asar_check.stdout)
  raise subprocess.CalledProcessError(asar_check.returncode,'asar_integrity')
 try:
- asar_success=json.loads((p/'asar-integrity.json').read_text())
- assert isinstance(asar_success,dict) and asar_success.get('passed') is True
-except (OSError,ValueError,AssertionError):
- asar_failure='success_proof_missing';raise AssertionError('ASAR success proof missing')
+ asar_text=(p/'asar-integrity.json').read_text()
+except FileNotFoundError:
+ asar_failure=asar_receipt_failure(asar_check.stdout,'success_receipt_missing');raise AssertionError('ASAR success proof missing')
+except (OSError,UnicodeError):
+ asar_failure=asar_receipt_failure(asar_check.stdout,'success_receipt_read_error');raise AssertionError('ASAR success proof missing')
+try:
+ asar_success=json.loads(asar_text)
+except ValueError:
+ asar_failure=asar_receipt_failure(asar_check.stdout,'success_receipt_invalid_json');raise AssertionError('ASAR success proof missing')
+if not isinstance(asar_success,dict) or asar_success.get('passed') is not True:
+ asar_failure=asar_receipt_failure(asar_check.stdout,'success_receipt_invalid_shape');raise AssertionError('ASAR success proof missing')
 preparation_phase='source_resources_native';preparation_progress()
 # Every configured extraResources file present at cold setup must be byte-identical.
 for directory,out in [('assets','assets'),('hns-bin/linux-x64','hns-bin'),('bee-bin/linux-x64','bee-bin'),('ipfs-bin/linux-x64','ipfs-bin'),('radicle-bin/linux-x64','radicle-bin'),('dvpn-bin/linux-x64','dvpn-bin'),('scripts/jacktrip','jacktrip-scripts')]:

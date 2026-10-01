@@ -178,13 +178,16 @@ async function verifyAsar({ repository, archive, sourceManifest }, overrides = {
 
 if (require.main === module) {
   const [repository, sourceManifest, archive, receipt] = process.argv.slice(2);
+  const keepAlive = setInterval(() => {}, 1000);
   verifyAsar({ repository, sourceManifest, archive }).then((proof) => {
     const { private_production_mapping: privateMapping, ...publicProof } = proof;
     fs.writeFileSync(path.join(path.dirname(receipt), 'asar-production-mapping.json'), JSON.stringify(privateMapping, null, 2) + '\n');
     fs.writeFileSync(receipt, JSON.stringify(publicProof, null, 2) + '\n');
+    clearInterval(keepAlive);
   }).catch((error) => {
-    emitFailure(error, process.stdout);
-    process.exitCode = 1;
+    clearInterval(keepAlive);
+    fs.writeSync(process.stdout.fd, JSON.stringify({ passed: false, code: failureCode(error) }) + '\n');
+    process.exit(1);
   });
 }
 
