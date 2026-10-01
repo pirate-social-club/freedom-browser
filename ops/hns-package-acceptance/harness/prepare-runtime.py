@@ -2,7 +2,7 @@ import hashlib,json,shutil,subprocess,time,os,sys,re
 from pathlib import Path
 p=Path(__file__).parent
 # Public preparation diagnostics contain only fixed phases/categories and numeric exit codes.
-preparation_phase='source_pins';namespace_access=None;asar_failure=None
+preparation_phase='source_pins';namespace_access=None;asar_failure=None;asar_top=None
 def preparation_progress(status='running',category=None,returncode=None,builder_markers=None):
  record={'phase':preparation_phase,'status':status}
  if category is not None:record['category']=category
@@ -10,6 +10,7 @@ def preparation_progress(status='running',category=None,returncode=None,builder_
  if builder_markers is not None:record['builder_markers']=builder_markers
  if namespace_access is not None:record['namespace_access']=namespace_access
  if asar_failure is not None:record['asar_failure_code']=asar_failure
+ if asar_top is not None:record['asar_top_diagnostic']=asar_top
  (p/'preparation-progress.json').write_text(json.dumps(record,indent=2)+'\n')
 def offline_builder_markers():
  # Inspect at most16KiB of private output and emit only fixed codes, never matched bytes.
@@ -55,7 +56,16 @@ def namespace_access_response(returncode,output):
  except (ValueError,UnicodeDecodeError):return unknown
  if not isinstance(record,dict) or set(record)!=keys or not all(type(value) is bool for value in record.values()):return unknown
  return {**record,'probe_valid':True}
+def asar_top_response(output):
+ if len(output)>512:return None
+ try:record=json.loads(output)
+ except (ValueError,UnicodeDecodeError):return None
+ fields={'top_source_count','top_destination_root','axios_120_count','axios_other_version_present'}
+ if not isinstance(record,dict) or set(record)!=fields|{'passed','code'} or record['passed'] is not False or record['code']!='mapping_top_axios_changed':return None
+ if record['top_source_count'] not in ('zero','one','many') or record['axios_120_count'] not in ('zero','one','many') or type(record['top_destination_root']) is not bool or type(record['axios_other_version_present']) is not bool:return None
+ return {field:record[field] for field in sorted(fields)}
 def asar_failure_response(output):
+ if asar_top_response(output) is not None:return 'mapping_top_axios_changed'
  allowed={'mapping_ambiguous', 'extractor_axios_nested_code_missing_entry', 'extractor_axios_metadata_missing_entry', 'extractor_app_metadata_read_error', 'extractor_axios_metadata_read_error', 'mapping_owner_missing', 'collector_empty', 'extractor_axios_code_missing_entry', 'extractor_axios_nested_code_read_error', 'extractor_axios_nested_metadata_missing_entry', 'extractor_app_code_read_error', 'collector_changed', 'extractor_app_code_missing_entry', 'mapping_top_axios_changed', 'extractor_app_metadata_missing_entry', 'mapping_version_changed', 'mapping_invalid_destination', 'extractor_axios_nested_metadata_read_error', 'extractor_axios_code_read_error'} | {'raw_source_changed', 'transformer_changed', 'axios_version_changed', 'app_metadata_proof_missing', 'success_proof_missing', 'app_metadata_mismatch', 'packaged_code_mismatch', 'builder_version_changed', 'unexpected_metadata_config', 'axios_metadata_mismatch','axios_nested_metadata_mismatch', 'unknown', 'app_code_mismatch', 'runtime_field_changed', 'axios_metadata_proof_missing', 'runtime_field_presence_changed', 'extractor_failure', 'axios_code_mismatch', 'invalid_source_digest', 'invalid_source_path'}
  if len(output)>256:return 'unknown'
  try:record=json.loads(output)
@@ -121,6 +131,7 @@ for f in axios_files:checks[str(f.relative_to(freedom))]=hashlib.sha256(f.read_b
 preparation_phase='asar_integrity';preparation_progress()
 asar_check=run(['/usr/bin/unshare','--user','--map-root-user','--net','node',str(p/'verify-asar.js'),str(freedom),str(p/'source-files.json'),str(p/'package/resources/app.asar'),str(p/'asar-integrity.json')],cwd=freedom,check=False,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
 if asar_check.returncode:
+ asar_top=asar_top_response(asar_check.stdout)
  asar_failure=asar_failure_response(asar_check.stdout)
  raise subprocess.CalledProcessError(asar_check.returncode,'asar_integrity')
 try:

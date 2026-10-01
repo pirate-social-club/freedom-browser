@@ -54,8 +54,28 @@ function extractionScope(name) {
   return nested ? (name.endsWith('/package.json') ? 'axios_nested_metadata' : 'axios_nested_code') : (name.endsWith('/package.json') ? 'axios_metadata' : 'axios_code');
 }
 
+const TOP_FIELDS = ['top_source_count', 'top_destination_root', 'axios_120_count', 'axios_other_version_present'];
+const countKind = (count) => count === 0 ? 'zero' : count === 1 ? 'one' : 'many';
+class TopAxiosFailure extends Error {
+  constructor(entries, root) {
+    super();
+    const top = entries.filter((entry) => entry.source === root);
+    const axios = entries.filter((entry) => entry.name === 'axios');
+    this.diagnostic = Object.freeze({ top_source_count: countKind(top.length), top_destination_root: top.some((entry) => entry.destination === 'node_modules/axios'), axios_120_count: countKind(axios.filter((entry) => entry.version === '1.20.0').length), axios_other_version_present: axios.some((entry) => entry.version !== '1.20.0') });
+  }
+}
+function failurePayload(error) {
+  const payload = { passed: false, code: failureCode(error) };
+  if (!(error instanceof TopAxiosFailure)) return payload;
+  const diagnostic = error.diagnostic;
+  if (!diagnostic || Object.keys(diagnostic).length !== 4 || !TOP_FIELDS.every((field) => Object.hasOwn(diagnostic, field))) return payload;
+  if (!['zero', 'one', 'many'].includes(diagnostic.top_source_count) || !['zero', 'one', 'many'].includes(diagnostic.axios_120_count) || typeof diagnostic.top_destination_root !== 'boolean' || typeof diagnostic.axios_other_version_present !== 'boolean') return payload;
+  return { ...payload, top_source_count: diagnostic.top_source_count, top_destination_root: diagnostic.top_destination_root, axios_120_count: diagnostic.axios_120_count, axios_other_version_present: diagnostic.axios_other_version_present };
+}
+
 const FAILURE_CODES = Object.freeze([...new Set([...Object.values(FAILURE_MESSAGES), 'extractor_failure', 'unknown', 'success_proof_missing', ...EXTRACT_SCOPES.flatMap((scope) => ['missing_entry', 'read_error'].map((kind) => `extractor_${scope}_${kind}`))])]);
 function failureCode(error) {
+  if (error instanceof TopAxiosFailure) return 'mapping_top_axios_changed';
   if (error instanceof ExtractorFailure) return EXTRACT_SCOPES.includes(error.scope) && ['missing_entry', 'read_error'].includes(error.kind) ? `extractor_${error.scope}_${error.kind}` : 'extractor_failure';
   if (error instanceof assert.AssertionError) {
     const message = String(error.message).split('\n')[0];
@@ -64,7 +84,7 @@ function failureCode(error) {
   return 'unknown';
 }
 function emitFailure(error, output) {
-  output.write(JSON.stringify({ passed: false, code: failureCode(error) }) + '\n');
+  output.write(JSON.stringify(failurePayload(error)) + '\n');
 }
 const digest = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 
@@ -75,7 +95,7 @@ function productionDestinations(nodes, parent = '', entries = [], destinations =
     assert.ok(destination.startsWith('node_modules/'), 'invalid production destination');
     assert.ok(!destinations.has(destination), 'duplicate production destination');
     destinations.add(destination);
-    entries.push({ source: fs.realpathSync(node.dir), destination, version: node.version });
+    entries.push({ name: node.name, source: fs.realpathSync(node.dir), destination, version: node.version });
     productionDestinations(node.dependencies || [], destination, entries, destinations);
   }
   return entries;
@@ -117,7 +137,7 @@ async function productionMappings(root, sourceMetadata, requireFromRepo, overrid
     const entries = productionDestinations(result.nodeModules);
     const axiosRoot = fs.realpathSync(path.join(root, 'node_modules/axios'));
     const top = entries.filter((entry) => entry.source === axiosRoot);
-    assert.ok(top.length === 1 && top[0].destination === 'node_modules/axios', 'top Axios production destination changed');
+    if (!(top.length === 1 && top[0].destination === 'node_modules/axios')) throw new TopAxiosFailure(entries, axiosRoot);
     return entries;
   } finally { await temporary.cleanup(); }
 }
@@ -186,9 +206,9 @@ if (require.main === module) {
     clearInterval(keepAlive);
   }).catch((error) => {
     clearInterval(keepAlive);
-    fs.writeSync(process.stdout.fd, JSON.stringify({ passed: false, code: failureCode(error) }) + '\n');
+    fs.writeSync(process.stdout.fd, JSON.stringify(failurePayload(error)) + '\n');
     process.exit(1);
   });
 }
 
-module.exports = { verifyAsar, RUNTIME_FIELDS, TRANSFORMER_SHA256, failureCode, emitFailure, FAILURE_CODES, ExtractorFailure, productionDestinations, archiveDestination };
+module.exports = { verifyAsar, RUNTIME_FIELDS, TRANSFORMER_SHA256, failureCode, emitFailure, FAILURE_CODES, ExtractorFailure, productionDestinations, archiveDestination, TopAxiosFailure, failurePayload };
