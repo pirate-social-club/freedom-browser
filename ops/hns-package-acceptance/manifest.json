@@ -23,7 +23,7 @@
   "harness/validate-prepared.py": "b4ddb5e8ba1cf2fc4fe831e774b3a815955b330965074a2457eb2f32e35666cc",
   "harness/warm-checkpoint-main.dat": "c23b485e961e406d9d302932feeb2aaea8f39c47001a04435c426c03414ceea1",
   "harness/wrong-tls.py": "942b20b81ca68277cbc731194f302658e76052cc723f3ec093aec8c72a9150ac",
-  "hns-current-package-acceptance.yml": "335d73c02c51ff62aa57c4f42c60992bd2c415aceec4df28efae4af8533a5c17",
+  "hns-current-package-acceptance.yml": "a5f31572c8ce31bbaba9cfba2fecf4d854ac6c2acef20ae264290e01842f71d2",
   "launch.py": "db0420da02fc4d7f98688b2ff5239237a12bf8801c5f865c1f5abda694ba0a2c",
   "python-wheel-pins.json": "12bec3d3d647ad38a403502f4df8ba9a8bda13c0d3fa3c5fe9f6025982be5e1a",
   "requirements.txt": "05bbd77cf30d45eb47f1ed042f5208ba7afb5fa00be12afb8d4b5c716876cefc",

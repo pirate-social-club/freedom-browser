@@ -28,30 +28,38 @@ jobs:
       - name: Cold dependencies and pinned diagnostic tools
         timeout-minutes: 20
         env:
-          FREEDOM_REPOSITORY: ${{ github.workspace }}/freedom-browser
+          FREEDOM_REPOSITORY: /var/tmp/freedom-package-${{ github.run_id }}-${{ github.run_attempt }}/freedom-browser
           FREEDOM_SOURCE_SHA: ${{ github.sha }}
-          FREEDOM_COLD_ROOT: ${{ runner.temp }}/freedom-package-cold
+          FREEDOM_JOB_ROOT: /var/tmp/freedom-package-${{ github.run_id }}-${{ github.run_attempt }}
+          FREEDOM_COLD_ROOT: /var/tmp/freedom-package-${{ github.run_id }}-${{ github.run_attempt }}/cold
         run: |
           set -euo pipefail
-          cp -R blue-ai-connect ../blue-ai-connect
+          test ! -e "$FREEDOM_JOB_ROOT" && test ! -L "$FREEDOM_JOB_ROOT"
+          mkdir -m 755 -- "$FREEDOM_JOB_ROOT"
+          cp -a freedom-browser "$FREEDOM_REPOSITORY"
+          cp -a blue-ai-connect "$FREEDOM_JOB_ROOT/blue-ai-connect"
+          test "$(git -C freedom-browser rev-parse HEAD)" = "$FREEDOM_SOURCE_SHA"
+          test "$(git -C "$FREEDOM_REPOSITORY" rev-parse HEAD)" = "$FREEDOM_SOURCE_SHA"
+          test "$(git -C "$FREEDOM_JOB_ROOT/blue-ai-connect" rev-parse HEAD)" = "924d472cb8be47b11f2432515f23bd5ea20d297c"
+          python3 -c 'import os,stat; from pathlib import Path; paths=[Path(os.environ["FREEDOM_JOB_ROOT"]),Path(os.environ["FREEDOM_REPOSITORY"])]; assert all(p.is_dir() and p.stat().st_mode & stat.S_IXOTH for p in paths), "fresh copied source parent must be traversable"'
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends xvfb slirp4netns nftables python3-venv binutils
-          timeout --signal=TERM --kill-after=5s 1155s python3 freedom-browser/ops/hns-package-acceptance/cold-setup.py
+          timeout --signal=TERM --kill-after=5s 1155s python3 "$FREEDOM_REPOSITORY/ops/hns-package-acceptance/cold-setup.py"
       - name: One contained current-package acceptance
         timeout-minutes: 11
         env:
-          FREEDOM_REPOSITORY: ${{ github.workspace }}/freedom-browser
+          FREEDOM_REPOSITORY: /var/tmp/freedom-package-${{ github.run_id }}-${{ github.run_attempt }}/freedom-browser
           FREEDOM_SOURCE_SHA: ${{ github.sha }}
-          FREEDOM_PYTHON_PREFIX: ${{ runner.temp }}/freedom-package-cold/python
-          FREEDOM_BROWSER_PREFIX: ${{ runner.temp }}/freedom-package-cold/browser
-          FREEDOM_HOSTED_PRIVATE: ${{ runner.temp }}/freedom-package-private
+          FREEDOM_PYTHON_PREFIX: /var/tmp/freedom-package-${{ github.run_id }}-${{ github.run_attempt }}/cold/python
+          FREEDOM_BROWSER_PREFIX: /var/tmp/freedom-package-${{ github.run_id }}-${{ github.run_attempt }}/cold/browser
+          FREEDOM_HOSTED_PRIVATE: /var/tmp/freedom-package-${{ github.run_id }}-${{ github.run_attempt }}/private
           FREEDOM_HOSTED_PUBLIC: ${{ runner.temp }}/freedom-package-public
         run: |
           set -euo pipefail
           mkdir -m 700 "$FREEDOM_HOSTED_PRIVATE"
           mkdir -m 755 "$FREEDOM_HOSTED_PUBLIC"
-          cp "${RUNNER_TEMP}/freedom-package-cold/cold-setup.json" "$FREEDOM_HOSTED_PUBLIC/cold-setup.json"
-          sudo --preserve-env=PATH,FREEDOM_REPOSITORY,FREEDOM_SOURCE_SHA,FREEDOM_PYTHON_PREFIX,FREEDOM_BROWSER_PREFIX,FREEDOM_HOSTED_PRIVATE,FREEDOM_HOSTED_PUBLIC python3 freedom-browser/ops/hns-package-acceptance/launch.py
+          cp "${FREEDOM_PYTHON_PREFIX%/python}/cold-setup.json" "$FREEDOM_HOSTED_PUBLIC/cold-setup.json"
+          sudo --preserve-env=PATH,FREEDOM_REPOSITORY,FREEDOM_SOURCE_SHA,FREEDOM_PYTHON_PREFIX,FREEDOM_BROWSER_PREFIX,FREEDOM_HOSTED_PRIVATE,FREEDOM_HOSTED_PUBLIC python3 "$FREEDOM_REPOSITORY/ops/hns-package-acceptance/launch.py"
       - name: Upload only explicitly sanitized receipts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
