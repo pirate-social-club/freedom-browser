@@ -15,7 +15,7 @@
   "harness/observe-welcome.py": "54e3f1899d71a40b926ae00db9fcc8ba999d14363a3c8c76d2a4ad7a37cce9a6",
   "harness/os-dns.py": "33a44f0fc54f4715b7db81d2c15dd5c0fca27fe727bbd1e990bf6dd6ca4ee950",
   "harness/prepare-candidate.py": "909166ac4e887158f9bc5fc791b540341bbc69ec8c95e52526f8d1900504b444",
-  "harness/prepare-runtime.py": "047fcb17e3e83d301eea0e45648c0fa5881f78ebdad19478060b69119fc10a63",
+  "harness/prepare-runtime.py": "66d9187805d9ea44b8a4fb92e9fcec0eed3fc7f955bb5164327eae6a42d57f75",
   "harness/profile-settings-fixture.json": "0770764bc3a7d1ccf3f76bb4162c99bf9310d3e3e4fef816f638338b04dd58f5",
   "harness/public-fixture-base.json": "d246639143a1bd7857ad93cbcd23437bce08bf735e5b5bb35f23eabc77cd5fbb",
   "harness/readback.py": "c5b39805d789f621a560c1c8b4cdeb69cb2a6dcb36556bce49a318aa26312123",

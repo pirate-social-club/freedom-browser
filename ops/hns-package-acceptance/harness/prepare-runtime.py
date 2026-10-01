@@ -2,12 +2,13 @@ import hashlib,json,shutil,subprocess,time,os,sys,re
 from pathlib import Path
 p=Path(__file__).parent
 # Public preparation diagnostics contain only fixed phases/categories and numeric exit codes.
-preparation_phase='source_pins'
+preparation_phase='source_pins';namespace_access=None
 def preparation_progress(status='running',category=None,returncode=None,builder_markers=None):
  record={'phase':preparation_phase,'status':status}
  if category is not None:record['category']=category
  if returncode is not None:record['returncode']=returncode
  if builder_markers is not None:record['builder_markers']=builder_markers
+ if namespace_access is not None:record['namespace_access']=namespace_access
  (p/'preparation-progress.json').write_text(json.dumps(record,indent=2)+'\n')
 def offline_builder_markers():
  # Inspect at most16KiB of private output and emit only fixed codes, never matched bytes.
@@ -29,8 +30,30 @@ def offline_builder_markers():
  ]
  for code,needles in patterns:
   if any(needle in tail for needle in needles):markers.append(code)
+ missing=re.search(br"Cannot find module ['\"]([^'\"]+)['\"]",tail)
+ if missing:
+  target=missing.group(1)
+  known={b'./out/cli/cli':'builder_out_cli_missing_marker',
+   b'app-builder-lib':'known_builder_import_missing_marker',
+   b'app-builder-lib/out/toolsets/windows':'known_builder_import_missing_marker',
+   b'app-builder-lib/out/util/electronGet':'known_builder_import_missing_marker',
+   b'builder-util':'known_builder_import_missing_marker',
+   b'builder-util/out/filename':'known_builder_import_missing_marker',
+   b'simple-update-notifier':'known_builder_import_missing_marker',
+   b'yargs':'known_builder_import_missing_marker',b'chalk':'known_builder_import_missing_marker',
+   b'fs-extra':'known_builder_import_missing_marker'}
+  if target.endswith(b'/node_modules/electron-builder/cli.js'):markers.append('builder_cli_entry_missing_marker')
+  elif target in known:markers.append(known[target])
  if b'app-builder' in tail and b'spawn' in tail:markers.append('app_builder_spawn_marker')
  return markers or ['unclassified']
+def namespace_access_response(returncode,output):
+ keys={'cli_entry_readable','out_cli_readable','repo_traversable'}
+ unknown={key:False for key in keys};unknown['probe_valid']=False
+ if returncode or len(output)>256:return unknown
+ try:record=json.loads(output)
+ except (ValueError,UnicodeDecodeError):return unknown
+ if not isinstance(record,dict) or set(record)!=keys or not all(type(value) is bool for value in record.values()):return unknown
+ return {**record,'probe_valid':True}
 class NamespacePermissionDenied(Exception):pass
 def preparation_exception(_kind,error,_traceback):
  category='internal_error';returncode=None
@@ -65,6 +88,10 @@ probe=run(['/usr/bin/unshare','--user','--map-root-user','--net','/usr/bin/true'
 if probe.returncode:
  if probe.stderr.strip()==b'unshare: unshare failed: Operation not permitted':raise NamespacePermissionDenied()
  raise subprocess.CalledProcessError(probe.returncode,'namespace_probe')
+# Absolute inline Python runs even when repository/private ancestors are inaccessible.
+access_script="import os,sys,json;root=sys.argv[1];record={'cli_entry_readable':False,'out_cli_readable':False,'repo_traversable':os.access(root,os.X_OK)}\nfor key,suffix in [('cli_entry_readable','node_modules/electron-builder/cli.js'),('out_cli_readable','node_modules/electron-builder/out/cli/cli.js')]:\n try:\n  with open(os.path.join(root,suffix),'rb') as f:f.read(1)\n  record[key]=True\n except OSError:pass\nprint(json.dumps(record))"
+access_probe=run(['/usr/bin/unshare','--user','--map-root-user','--net','/usr/bin/python3','-c',access_script,str(freedom)],check=False,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+namespace_access=namespace_access_response(access_probe.returncode,access_probe.stdout)
 preparation_phase='offline_build';preparation_progress()
 command=['unshare','--user','--map-root-user','--net','node','node_modules/electron-builder/cli.js','--linux','--x64','--dir','--publish','never','-c.electronDist='+str(freedom/'node_modules/electron/dist'),'-c.npmRebuild=false','-c.nodeGypRebuild=false','-c.directories.output='+str(p/'build')]
 with (p/'offline-build.log').open('wb') as build_log:
