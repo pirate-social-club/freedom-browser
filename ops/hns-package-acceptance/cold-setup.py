@@ -23,6 +23,26 @@ assert (electron_dir/'dist/version').read_text().strip().lstrip('v')=='42.10.0' 
 electron_ldd=subprocess.check_output(['ldd',str(electron)],text=True,timeout=5);assert 'not found' not in electron_ldd,'Electron runtime library missing'
 native_probe="const DB=require('better-sqlite3');const db=new DB(':memory:');if(db.prepare('SELECT 42 AS value').get().value!==42)throw Error('cold SQLite ABI');db.close();const axios=require('axios');if(axios.VERSION!=='1.20.0'||typeof axios.request!=='function')throw Error('cold Axios version');"
 run([str(electron),'-e',native_probe],env={**os.environ,'ELECTRON_RUN_AS_NODE':'1'})
+# Prepare only the locked builder FPM distribution in a fresh cold cache.
+fpm_module=repo/'node_modules/app-builder-lib/out/toolsets/linux.js'
+fpm_module_sha=hashlib.sha256(fpm_module.read_bytes()).hexdigest()
+assert json.loads((repo/'node_modules/app-builder-lib/package.json').read_text())['version']=='26.15.3'
+fpm_archive='fpm-1.17.0-ruby-3.4.3-linux-amd64.7z';fpm_archive_sha='44b0ec6025c14ec137f56180e62675c0eae36233cdce53d0953d9c73ced8989f'
+assert fpm_archive_sha in fpm_module.read_text(),'locked FPM checksum changed'
+fpm_cache=root/'builder-cache';assert not fpm_cache.exists()
+fpm_environment={**os.environ,'ELECTRON_BUILDER_CACHE':str(fpm_cache),'USE_SYSTEM_FPM':'false'}
+fpm_environment.pop('CUSTOM_FPM_PATH',None)
+fpm_prepare=run(['node','-e',"require('app-builder-lib/out/toolsets/linux').getFpmPath().then(p=>console.log('FPM_PATH '+p)).catch(()=>process.exit(1))"],env=fpm_environment,stdout=subprocess.PIPE)
+fpm_lines=[line[9:] for line in fpm_prepare.stdout.decode().splitlines() if line.startswith('FPM_PATH ')]
+assert len(fpm_lines)==1
+fpm=Path(fpm_lines[0]).resolve();assert fpm.is_file() and fpm.is_relative_to(fpm_cache.resolve())
+def file_sha(path):
+ h=hashlib.sha256()
+ with path.open('rb') as stream:
+  for chunk in iter(lambda:stream.read(1048576),b''):h.update(chunk)
+ return h.hexdigest()
+fpm_files={str(path.relative_to(fpm.parent)):file_sha(path) for path in sorted(fpm.parent.rglob('*')) if path.is_file()}
+(root/'fpm-cache.json').write_text(json.dumps({'archive':fpm_archive,'archive_sha256':fpm_archive_sha,'builder_version':'26.15.3','toolset_module_sha256':fpm_module_sha,'executable':str(fpm),'directory':str(fpm.parent),'files':fpm_files},indent=2)+'\n')
 for script in ['bee:download','ipfs:download','radicle:download']:run(['npm','run',script,'--','--target','linux-x64'])
 venv=root/'python';run(['/usr/bin/python3','-m','venv',str(venv)])
 run([str(venv/'bin/pip'),'install','--require-hashes','--only-binary=:all:','--disable-pip-version-check','-r',str(base/'requirements.txt')])

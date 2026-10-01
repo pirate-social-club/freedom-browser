@@ -14,7 +14,7 @@
   "hns-bin/linux-x64/fingertipd": "065e4f0d5c118213f09319998c94633033cae7f96dc6d714083208468225f766",
   "hns-bin/linux-x64/hnsd": "881ba4728f3e36a2015185f8cfa478d718260eaf7f406404af386b0ed4d863af",
   "package-lock.json": "aa207af2fd95c6fbccfcbabdcb8cc19c41f27e0aa3d672e941fc3ee3b5103044",
-  "package.json": "e230ce951c8e00f246508a1fc7214618a32569004b66f86b31f46934faaef4ed",
+  "package.json": "03f1fc938d26812151a5053320486b9db771bb74925452176bc4414d4e6944b4",
   "src/main/bee-manager.js": "d213335a8b2c8c36c215b07afe5c1d95c495142bf9df94c81e640841abe43222",
   "src/main/bookmarks-store.js": "bb69e08a070e4ae912264d0833ecb1e0073534b5e1e033ca346c519dbb87b11b",
   "src/main/browser-state-sanitizer.js": "5eddd32ecc8e5a14c67bb16015a18b6cac1b86b28c2844ea2177217661a540d2",

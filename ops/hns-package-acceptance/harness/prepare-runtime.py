@@ -115,12 +115,61 @@ if probe.returncode:
 access_script="import os,sys,json;root=sys.argv[1];record={'cli_entry_readable':False,'out_cli_readable':False,'repo_traversable':os.access(root,os.X_OK)}\nfor key,suffix in [('cli_entry_readable','node_modules/electron-builder/cli.js'),('out_cli_readable','node_modules/electron-builder/out/cli/cli.js')]:\n try:\n  with open(os.path.join(root,suffix),'rb') as f:f.read(1)\n  record[key]=True\n except OSError:pass\nprint(json.dumps(record))"
 access_probe=run(['/usr/bin/unshare','--user','--map-root-user','--net','/usr/bin/python3','-c',access_script,str(freedom)],check=False,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
 namespace_access=namespace_access_response(access_probe.returncode,access_probe.stdout)
+cold=Path(os.environ['FREEDOM_COLD_ROOT']);fpm_receipt=json.loads((cold/'fpm-cache.json').read_text())
+assert fpm_receipt['builder_version']=='26.15.3' and fpm_receipt['archive_sha256']=='44b0ec6025c14ec137f56180e62675c0eae36233cdce53d0953d9c73ced8989f'
+assert hashlib.sha256((freedom/'node_modules/app-builder-lib/out/toolsets/linux.js').read_bytes()).hexdigest()==fpm_receipt['toolset_module_sha256']
+fpm=Path(fpm_receipt['executable']);fpm_dir=Path(fpm_receipt['directory']);assert fpm.is_file() and fpm.is_relative_to(cold/'builder-cache') and fpm.parent==fpm_dir
+def streamed_sha(path):
+ h=hashlib.sha256()
+ with path.open('rb') as stream:
+  for chunk in iter(lambda:stream.read(1048576),b''):h.update(chunk)
+ return h.hexdigest()
+assert {str(path.relative_to(fpm_dir)):streamed_sha(path) for path in fpm_dir.rglob('*') if path.is_file()}==fpm_receipt['files'],'cached FPM changed'
+assert Path('/proc/sys/kernel/apparmor_restrict_unprivileged_userns').read_text().strip()=='1','runner restriction changed'
+assert not Path('/etc/apparmor.d/local/freedom').exists(),'unreviewed site profile override'
+assert not Path('/opt/Freedom').exists() and not Path('/etc/apparmor.d/freedom').exists(),'installed test target not fresh'
 preparation_phase='offline_build';preparation_progress()
-command=['unshare','--user','--map-root-user','--net','node','node_modules/electron-builder/cli.js','--linux','--x64','--dir','--publish','never','-c.electronDist='+str(freedom/'node_modules/electron/dist'),'-c.npmRebuild=false','-c.nodeGypRebuild=false','-c.directories.output='+str(p/'build')]
+command=['unshare','--user','--map-root-user','--net','node','node_modules/electron-builder/cli.js','--linux','deb','--x64','--publish','never','-c.electronDist='+str(freedom/'node_modules/electron/dist'),'-c.npmRebuild=false','-c.nodeGypRebuild=false','-c.directories.output='+str(p/'build')]
 with (p/'offline-build.log').open('wb') as build_log:
- run(command,cwd=freedom,env={**os.environ,'ELECTRON_SKIP_BINARY_DOWNLOAD':'1','npm_config_offline':'true','CSC_IDENTITY_AUTO_DISCOVERY':'false'},stdout=build_log,stderr=subprocess.STDOUT)
+ run(command,cwd=freedom,env={**os.environ,'ELECTRON_SKIP_BINARY_DOWNLOAD':'1','npm_config_offline':'true','CSC_IDENTITY_AUTO_DISCOVERY':'false','CUSTOM_FPM_PATH':str(fpm),'USE_SYSTEM_FPM':'false'},stdout=build_log,stderr=subprocess.STDOUT)
+preparation_phase='deb_install';preparation_progress()
+debs=list((p/'build').glob('*.deb'));assert len(debs)==1,'exactly one deb required'
+deb=debs[0];control=p/'deb-control';control.mkdir(mode=0o700)
+run(['dpkg-deb','--control',str(deb),str(control)])
+postinst=control/'postinst';postrm=control/'postrm';assert postinst.is_file() and postrm.is_file(),'generated maintainer scripts absent'
+script_provenance={}
+for installed_script,template_name in [(postinst,'after-install.tpl'),(postrm,'after-remove.tpl')]:
+ template_path=freedom/'node_modules/app-builder-lib/templates/linux'/template_name
+ rendered=template_path.read_text().replace('${executable}','freedom').replace('${sanitizedProductName}','Freedom')
+ assert rendered.split('\n',1)[1].strip() in installed_script.read_text(),'maintainer script does not contain locked generated template'
+ script_provenance[installed_script.name]={'sha256':streamed_sha(installed_script),'template_sha256':streamed_sha(template_path),'rendered_template_present':True}
+fields=run(['dpkg-deb','--field',str(deb),'Package','Version','Architecture'],stdout=subprocess.PIPE).stdout.decode().splitlines()
+expected_version=json.loads((freedom/'package.json').read_text())['version']
+assert fields==['Package: freedom-browser','Version: '+expected_version,'Architecture: amd64'],'deb identity mismatch'
+# dpkg runs on this disposable runner without apt repair/downloads or policy changes.
+# Write the cleanup identity before installation, including partial-install failures.
+(p/'installed-deb.json').write_text(json.dumps({'package':'freedom-browser','version':expected_version,'deb_sha256':streamed_sha(deb),'installation_proved':False})+'\n')
+run(['dpkg','--install',str(deb)],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+installed=Path('/opt/Freedom');assert (installed/'freedom').is_file()
+profile=Path('/etc/apparmor.d/freedom');packaged_profile=installed/'resources/apparmor-profile'
+template=(freedom/'node_modules/app-builder-lib/templates/linux/apparmor-profile.tpl').read_text()
+expected_profile=template.replace('${executable}','freedom').replace('${sanitizedProductName}','Freedom').encode()
+assert packaged_profile.read_bytes()==expected_profile and profile.read_bytes()==expected_profile,'generated packaged profile mismatch'
+run(['aa-status','--enabled'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+aa=json.loads(run(['aa-status','--json'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL).stdout)
+assert aa['profiles']['freedom']=='unconfined','packaged named userns profile not loaded'
+assert Path('/proc/sys/kernel/apparmor_restrict_unprivileged_userns').read_text().strip()=='1'
+(p/'installed-deb.json').write_text(json.dumps({'package':'freedom-browser','version':expected_version,'deb_sha256':streamed_sha(deb),'installation_proved':True,'executable':'/opt/Freedom/freedom','profile_sha256':streamed_sha(profile),'packaged_profile_matches_locked_template':True,'named_profile_loaded':True,'profile_mode':'unconfined','userns_permission_packaged':True,'restriction':1,'maintainer_script_provenance':script_provenance,'chrome_sandbox_owner_uid':(installed/'chrome-sandbox').stat().st_uid,'chrome_sandbox_mode':oct((installed/'chrome-sandbox').stat().st_mode&0o7777)},indent=2)+'\n')
 preparation_phase='source_resources_native';preparation_progress()
 base=p/'build/linux-unpacked';assert (base/'freedom').is_file();shutil.copytree(base,p/'package',symlinks=True)
+# Bind the complete installed path set and each actual byte to the build output.
+def payload_paths(directory):
+ return {str(path.relative_to(directory)):('symlink' if path.is_symlink() else 'file' if path.is_file() else 'directory') for path in directory.rglob('*')}
+assert payload_paths(installed)==payload_paths(base),'installed payload path set differs'
+for path in installed.rglob('*'):
+ if path.is_symlink():assert path.readlink()==(base/path.relative_to(installed)).readlink(),'installed symlink differs'
+ elif path.is_file():assert streamed_sha(path)==streamed_sha(base/path.relative_to(installed)),'installed payload differs'
+assert (installed/'chrome-sandbox').stat().st_uid==0 and (installed/'chrome-sandbox').stat().st_mode&0o7777==0o755,'packaged chrome-sandbox unexpected owner/mode'
 assert (p/'package/freedom').read_bytes()==(freedom/'node_modules/electron/dist/electron').read_bytes(),'Electron executable mismatch'
 for name,digest in assets.items():assert hashlib.sha256((p/'package/resources/hns-bin'/name).read_bytes()).hexdigest()==digest,'packaged helper differs'
 checks={name:hashlib.sha256((freedom/name).read_bytes()).hexdigest() for name in git('ls-files','src').splitlines() if (freedom/name).is_file() and not name.endswith('.test.js')}
@@ -129,7 +178,7 @@ axios_files=[f for f in (freedom/'node_modules/axios').rglob('*') if f.is_file()
 for f in axios_files:checks[str(f.relative_to(freedom))]=hashlib.sha256(f.read_bytes()).hexdigest()
 (p/'source-files.json').write_text(json.dumps(checks,indent=2))
 preparation_phase='asar_integrity';preparation_progress()
-asar_check=run(['/usr/bin/unshare','--user','--map-root-user','--net','node',str(p/'verify-asar.js'),str(freedom),str(p/'source-files.json'),str(p/'package/resources/app.asar'),str(p/'asar-integrity.json')],cwd=freedom,check=False,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+asar_check=run(['/usr/bin/unshare','--user','--map-root-user','--net','node',str(p/'verify-asar.js'),str(freedom),str(p/'source-files.json'),str(installed/'resources/app.asar'),str(p/'asar-integrity.json')],cwd=freedom,check=False,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
 if asar_check.returncode:
  asar_top=asar_top_response(asar_check.stdout)
  asar_failure=asar_failure_response(asar_check.stdout)
@@ -157,8 +206,8 @@ addon=Path('node_modules/better-sqlite3/build/Release/better_sqlite3.node');asse
 manifest=[{'path':str(f.relative_to(p/'package')),'sha256':hashlib.sha256(f.read_bytes()).hexdigest()} for f in sorted((p/'package').rglob('*')) if f.is_file()]
 (p/'package-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 native="const path=require('path');const app=process.argv[1];const DB=require(path.join(app,'node_modules/better-sqlite3'));const db=new DB(':memory:');if(db.prepare('SELECT 42 AS value').get().value!==42)throw Error('sqlite ABI');db.close();const axios=require(path.join(app,'node_modules/axios'));if(axios.VERSION!=='1.20.0'||typeof axios.request!=='function')throw Error('runtime Axios');"
-run(['unshare','--user','--map-root-user','--net',str(p/'package/freedom'),'-e',native,str(p/'package/resources/app.asar')],cwd=p/'package',env={**os.environ,'ELECTRON_RUN_AS_NODE':'1'})
-(p/'candidate-integrity.json').write_text(json.dumps({'Freedom_source':app_sha,'asar_integrity':json.loads((p/'asar-integrity.json').read_text()),'tested_helper_build_source':artifact_source,'tested_helper_build_compiler':'Go 1.26.2','helper_sha256':assets['fingertipd'],'hnsd_sha256':assets['hnsd'],'package_build_command':command,'packaged_source_files_compared':len(checks),'packaged_Axios_version':'1.20.0','packaged_Axios_files_compared':len(axios_files),'native_ABI_check_passed':True,'native_sqlite_SELECT42':True,'helper_rebuilt':False,'Electron_version':'42.10.0','Electron_executable_sha256':hashlib.sha256((p/'package/freedom').read_bytes()).hexdigest()},indent=2)+'\n')
+run(['unshare','--user','--map-root-user','--net',str(installed/'freedom'),'-e',native,str(installed/'resources/app.asar')],cwd=p/'package',env={**os.environ,'ELECTRON_RUN_AS_NODE':'1'})
+(p/'candidate-integrity.json').write_text(json.dumps({'Freedom_source':app_sha,'asar_integrity':json.loads((p/'asar-integrity.json').read_text()),'tested_helper_build_source':artifact_source,'tested_helper_build_compiler':'Go 1.26.2','helper_sha256':assets['fingertipd'],'hnsd_sha256':assets['hnsd'],'package_build_command':command,'packaged_source_files_compared':len(checks),'packaged_Axios_version':'1.20.0','packaged_Axios_files_compared':len(axios_files),'native_ABI_check_passed':True,'native_sqlite_SELECT42':True,'helper_rebuilt':False,'installed_deb_payload_matched':True,'verified_asar_path':'/opt/Freedom/resources/app.asar','Electron_version':'42.10.0','Electron_executable_sha256':hashlib.sha256((p/'package/freedom').read_bytes()).hexdigest()},indent=2)+'\n')
 preparation_phase='fixtures';preparation_progress()
 checkpoint=p/'warm-checkpoint-main.dat';metadata=json.loads((p/'checkpoint-integrity.json').read_text());assert hashlib.sha256(checkpoint.read_bytes()).hexdigest()==metadata['sha256']
 assert checkpoint.read_bytes()==(freedom/'assets/hns/checkpoint_main.dat').read_bytes(),'seed differs from shipped checkpoint'

@@ -54,6 +54,8 @@ def route_proof(label,host):
 try:
  subprocess.run(['python3',str(p/'observe-welcome.py')],check=True,timeout=max(1,deadline-time.time()))
  assert json.loads((p/'welcome-summary.json').read_text())['passed']
+ subprocess.run(['python3',str(p/'prove-installed-sandbox.py'),'pre-security'],check=True,timeout=min(15,max(1,deadline-time.time())))
+ assert json.loads((p/'renderer-sandbox-pre-security-proof.json').read_text())['passed']
  end=min(time.time()+150,deadline)
  while time.time()<end:
   try:
@@ -117,7 +119,9 @@ try:
  subprocess.run(['nft','delete','table','ip','freedom_fixture'],check=True);subprocess.run(['nft','-f',str(p/'namespace-dns.nft')],check=True)
  stage('valid-final-community','app.8s28',200,'E2E HNS 8s28');capture('valid-final-community','app.8s28');route_proof('valid-final-community','app.8s28')
  reset_counter();final=stage('valid-final-fresh','PLACEHOLDER_FINAL',421);assert counter('valid-final-fresh')>0,'final fresh control opened no gateway connection';capture('valid-final-fresh','PLACEHOLDER_FINAL');route_proof('valid-final-fresh','PLACEHOLDER_FINAL')
- (p/'acceptance-summary.json').write_text(json.dumps({'passed':dnssec_attribution_complete and dane_attribution_complete,'dnssec_wire_attribution_complete':dnssec_attribution_complete,'dane_wire_attribution_complete':dane_attribution_complete,'valid_initial':True,'corrupt_dnssec_refused_with_attribution':True,'wrong_dane_refused_with_attribution':True,'valid_final_community':True,'valid_final_uncached_host':True,'one_warm_resolver':True,'source':json.loads((p/'candidate-integrity.json').read_text())['Freedom_source'],'candidate_helper':'21f044ebc830eed87e6851ed7216f9590f6f3df3','helper_matches_tracked_integrated_asset':True,'welcome_actual_first_tab_passed':True,'warm_renderer_reload_tested':True,'full_app_restart_tested':False,'completed_epoch':time.time()},indent=2)+'\n');progress('All controls completed; required wire attribution '+str(dnssec_attribution_complete and dane_attribution_complete))
+ subprocess.run(['python3',str(p/'prove-installed-sandbox.py'),'final'],check=True,timeout=min(15,max(1,deadline-time.time())))
+ assert json.loads((p/'renderer-sandbox-final-proof.json').read_text())['passed']
+ (p/'acceptance-summary.json').write_text(json.dumps({'passed':dnssec_attribution_complete and dane_attribution_complete and json.loads((p/'renderer-sandbox-pre-security-proof.json').read_text())['passed'] and json.loads((p/'renderer-sandbox-final-proof.json').read_text())['passed'],'dnssec_wire_attribution_complete':dnssec_attribution_complete,'dane_wire_attribution_complete':dane_attribution_complete,'valid_initial':True,'corrupt_dnssec_refused_with_attribution':True,'wrong_dane_refused_with_attribution':True,'valid_final_community':True,'valid_final_uncached_host':True,'one_warm_resolver':True,'source':json.loads((p/'candidate-integrity.json').read_text())['Freedom_source'],'candidate_helper':'21f044ebc830eed87e6851ed7216f9590f6f3df3','helper_matches_tracked_integrated_asset':True,'installed_deb_tested':True,'combined_renderer_os_and_electron_sandbox_proved':True,'pre_security_renderer_sandbox_proved':True,'final_hns_renderer_sandbox_proved':True,'welcome_actual_first_tab_passed':True,'warm_renderer_reload_tested':True,'full_app_restart_tested':False,'completed_epoch':time.time()},indent=2)+'\n');progress('All controls completed; required wire attribution '+str(dnssec_attribution_complete and dane_attribution_complete))
  assert dnssec_attribution_complete and dane_attribution_complete,'required wire attribution incomplete despite completed core guards and final controls'
 except BaseException as e:
  (p/'acceptance-failure.txt').write_text(str(e));progress('FAILED: '+str(e));raise

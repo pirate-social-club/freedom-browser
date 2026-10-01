@@ -1,10 +1,11 @@
-import os,json,subprocess,time,signal
+import os,json,subprocess,time,signal,pwd
 from pathlib import Path
 p=Path(__file__).parent;end=json.loads((p/'timing.json').read_text())['deadline_epoch']-30
 assert Path('/proc/self/ns/net').readlink().as_posix()!=json.loads((p/'timing.json').read_text())['host_netns']
 assert Path('/proc/self/ns/mnt').readlink().as_posix()!=json.loads((p/'timing.json').read_text())['host_mountns']
 subprocess.run(['mount','--make-rprivate','/'],check=True)
-(p/'namespace-tmp').mkdir(mode=0o700)
+(p/'namespace-tmp').mkdir(mode=0o1777)
+os.chmod(p/'namespace-tmp',0o1777)
 subprocess.run(['mount','--bind',str(p/'namespace-tmp'),'/tmp'],check=True)
 assert Path('/tmp').stat().st_ino==(p/'namespace-tmp').stat().st_ino,'private display temporary directory not mounted'
 subprocess.run(['ip','link','set','lo','up'],check=True)
@@ -47,35 +48,6 @@ def browser_diagnostic(stage):
  record={'stage':stage,'epoch':time.time(),'browser_started':browser is not None,'browser_alive':browser is not None and code is None,'browser_returncode':code,'driver_returncode':driver.poll() if 'driver' in globals() else None,'private_log_markers':browser_markers()}
  lifecycle[stage]=record
  (p/'browser-lifecycle-diagnostic.json').write_text(json.dumps({'snapshots':lifecycle},indent=2)+'\n')
-def eligibility_diagnostic():
- # This executable can have a different AppArmor policy from Electron.
- budget=min(10,end-time.time()-2)
- assert budget>0,'no time for sandbox diagnostic'
- proc=subprocess.Popen(['unshare','--user','--map-user=1000','--map-group=1000','/usr/bin/python3',str(p/'probe-sandbox-eligibility.py')],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True)
- value={'schema':1,'probe_receipt_valid':False,'failure':'unknown'}
- try:
-  raw,_=proc.communicate(timeout=budget)
-  if proc.returncode==0 and len(raw)<=2048:
-   try:
-    candidate=json.loads(raw)
-    facts=candidate['kernel_facts'];result=candidate['eligibility']
-    fact_keys={'unprivileged_userns_clone','apparmor_restrict_unprivileged_userns','max_user_namespaces','apparmor_label_class'}
-    categories={'permission_denied','access_denied','unsupported','namespace_limit','nesting_limit','other_errno','none'}
-    stages={'identity','clone_user','deny_setgroups_open','deny_setgroups_write','deny_setgroups_short_write','gid_map_open','gid_map_write','gid_map_short_write','uid_map_open','uid_map_write','uid_map_short_write','drop_capabilities','verify_capabilities','second_user','done','timeout','unknown'}
-    access_keys={'cap_sys_admin_bit','dumpable_user','effective_fsuid_visible_match','setgroups_owner_visible_match','gid_map_owner_visible_match','uid_map_owner_visible_match'}
-    access=result.get('proc_access') if isinstance(result,dict) else None
-    valid_access=access is None or (type(access) is dict and set(access)==access_keys and all(item is None or type(item) is bool for item in access.values()))
-    valid=valid_access and type(candidate) is dict and set(candidate)=={'schema','kernel_facts','eligibility'} and type(candidate['schema']) is int and candidate['schema']==1 and type(facts) is dict and set(facts)==fact_keys and all(facts[k] is None or (type(facts[k]) is int and 0<=facts[k]<=9999999999) for k in fact_keys-{'apparmor_label_class'}) and facts['apparmor_label_class'] in {'unconfined','confined_or_other','unavailable'} and type(result) is dict and set(result)=={'passed','stage','errno_category','proc_access'} and type(result['passed']) is bool and result['stage'] in stages and result['errno_category'] in categories and (not result['passed'] or (result['stage']=='done' and result['errno_category']=='none'))
-    if valid:value={**candidate,'probe_receipt_valid':True}
-   except (ValueError,TypeError,KeyError):pass
- except subprocess.TimeoutExpired:
-  value['failure']='timeout'
- finally:
-  if proc.poll() is None:
-   try:os.killpg(proc.pid,signal.SIGKILL)
-   except ProcessLookupError:pass
-  proc.wait(timeout=2)
- (p/'sandbox-eligibility-diagnostic.json').write_text(json.dumps(value,indent=2)+'\n')
 def kill_browser():
  procs=scan()
  for sig in [signal.SIGTERM,signal.SIGKILL]:
@@ -96,10 +68,20 @@ try:
  while not Path('/tmp/.X11-unix/X77').exists() and time.time()<display_end and display.poll() is None:time.sleep(.1)
  assert display.poll() is None and Path('/tmp/.X11-unix/X77').exists(),'owned Xvfb not ready'
  time.sleep(.3)
- eligibility_diagnostic()
+ uid=int(os.environ['FREEDOM_BROWSER_UID']);gid=int(os.environ['FREEDOM_BROWSER_GID']);assert uid>0 and gid>0
+ assert Path('/proc/self/ns/user').readlink().as_posix()==json.loads((p/'timing.json').read_text())['host_userns'],'runtime outer user namespace forbidden'
+ # Only browser-owned state is writable/readable to the ordinary host user.
+ for directory in ['profile-candidate','browser-config','browser-cache','browser-data','browser-tmp']:
+  target=p/directory;target.mkdir(mode=0o700,exist_ok=True)
+  for path in [target,*target.rglob('*')]:
+   if path.is_symlink():raise AssertionError('browser state symlink refused')
+   os.chown(path,uid,gid)
+   path.chmod(0o700 if path.is_dir() else 0o600)
+ browser_env={**env,'HOME':pwd.getpwuid(uid).pw_dir,'USER':pwd.getpwuid(uid).pw_name,'LOGNAME':pwd.getpwuid(uid).pw_name,'XDG_CONFIG_HOME':str(p/'browser-config'),'XDG_CACHE_HOME':str(p/'browser-cache'),'XDG_DATA_HOME':str(p/'browser-data'),'TMPDIR':str(p/'browser-tmp')}
+ assert (p/'private-test-material').stat().st_uid==0 and (p/'private-test-material').stat().st_mode&0o777==0o700
  log=(p/'warm-browser.log').open('wb')
- browser=subprocess.Popen(['unshare','--user','--map-user=1000','--map-group=1000',str(p/'package/freedom'),'--disable-setuid-sandbox','--remote-debugging-port=9244','--user-data-dir='+str(p/'profile-candidate')],env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
- (p/'browser-launch.json').write_text(json.dumps({'pid':browser.pid,'epoch':time.time(),'network_namespace':Path('/proc/self/ns/net').readlink().as_posix()}))
+ browser=subprocess.Popen(['setpriv','--reuid='+str(uid),'--regid='+str(gid),'--clear-groups','--inh-caps=-all','--ambient-caps=-all','--bounding-set=-all','/opt/Freedom/freedom','--remote-debugging-port=9244','--user-data-dir='+str(p/'profile-candidate')],env=browser_env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+ (p/'browser-launch.json').write_text(json.dumps({'pid':browser.pid,'start_ticks':(Path('/proc')/str(browser.pid)/'stat').read_text().rsplit(')',1)[1].split()[19],'epoch':time.time(),'network_namespace':Path('/proc/self/ns/net').readlink().as_posix(),'host_uid':uid,'host_gid':gid,'executable':'/opt/Freedom/freedom'}))
  browser_diagnostic('browser_launched')
  driver=subprocess.Popen(['python3',str(p/'drive-acceptance.py')],env=env,stdout=log,stderr=subprocess.STDOUT)
  next_diagnostic=0
@@ -108,6 +90,9 @@ try:
   scan();time.sleep(.1)
  if driver.poll() is None:driver.terminate();driver.wait(timeout=3)
  browser_diagnostic('driver_finished')
+ assert Path('/proc/sys/kernel/apparmor_restrict_unprivileged_userns').read_text().strip()=='1'
+ assert 'freedom (unconfined)' in Path('/sys/kernel/security/apparmor/profiles').read_text().splitlines()
+ assert (Path('/proc')/str(browser.pid)/'attr/current').read_text().strip()=='freedom (unconfined)'
  if driver.returncode:raise RuntimeError('acceptance driver exit '+str(driver.returncode))
 except BaseException as e:
  (p/'namespace-failure.txt').write_text(str(e));raise

@@ -43,7 +43,7 @@ jobs:
           test "$(git -C "$FREEDOM_JOB_ROOT/blue-ai-connect" rev-parse HEAD)" = "924d472cb8be47b11f2432515f23bd5ea20d297c"
           python3 -c 'import os,stat; from pathlib import Path; paths=[Path(os.environ["FREEDOM_JOB_ROOT"]),Path(os.environ["FREEDOM_REPOSITORY"])]; assert all(p.is_dir() and p.stat().st_mode & stat.S_IXOTH for p in paths), "fresh copied source parent must be traversable"'
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb slirp4netns nftables python3-venv binutils
+          sudo apt-get install -y --no-install-recommends xvfb slirp4netns nftables python3-venv binutils apparmor libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xdg-utils libatspi2.0-0 libuuid1 libsecret-1-0
           timeout --signal=TERM --kill-after=5s 1155s python3 "$FREEDOM_REPOSITORY/ops/hns-package-acceptance/cold-setup.py"
       - name: One contained current-package acceptance
         timeout-minutes: 11
@@ -56,10 +56,12 @@ jobs:
           FREEDOM_HOSTED_PUBLIC: ${{ runner.temp }}/freedom-package-public
         run: |
           set -euo pipefail
+          export FREEDOM_BROWSER_UID="$(id -u)" FREEDOM_BROWSER_GID="$(id -g)"
+          test "$FREEDOM_BROWSER_UID" -gt 0
           mkdir -m 700 "$FREEDOM_HOSTED_PRIVATE"
           mkdir -m 755 "$FREEDOM_HOSTED_PUBLIC"
           cp "${FREEDOM_PYTHON_PREFIX%/python}/cold-setup.json" "$FREEDOM_HOSTED_PUBLIC/cold-setup.json"
-          sudo --preserve-env=PATH,FREEDOM_REPOSITORY,FREEDOM_SOURCE_SHA,FREEDOM_PYTHON_PREFIX,FREEDOM_BROWSER_PREFIX,FREEDOM_HOSTED_PRIVATE,FREEDOM_HOSTED_PUBLIC python3 "$FREEDOM_REPOSITORY/ops/hns-package-acceptance/launch.py"
+          sudo --preserve-env=FREEDOM_BROWSER_UID,FREEDOM_BROWSER_GID,PATH,FREEDOM_REPOSITORY,FREEDOM_SOURCE_SHA,FREEDOM_PYTHON_PREFIX,FREEDOM_BROWSER_PREFIX,FREEDOM_HOSTED_PRIVATE,FREEDOM_HOSTED_PUBLIC python3 "$FREEDOM_REPOSITORY/ops/hns-package-acceptance/launch.py"
       - name: Upload only explicitly sanitized receipts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
