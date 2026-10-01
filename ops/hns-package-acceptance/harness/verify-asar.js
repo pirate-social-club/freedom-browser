@@ -16,6 +16,9 @@ const COLLECTOR_PINS = Object.freeze({
   'util/appFileCopier.js': 'fffe1c6f9e8dd95b47799a88202714dbe0aa55fb1e57255d17090036f6094512'
 });
 const FAILURE_MESSAGES = Object.freeze({
+  'selected Axios source missing': 'selected_axios_source_missing',
+  'selected Axios source escapes module': 'selected_axios_source_escape',
+  'selected Axios source byte mismatch': 'selected_axios_source_mismatch',
   'production collector implementation changed': 'collector_changed',
   'production collector returned no modules': 'collector_empty',
   'invalid production destination': 'mapping_invalid_destination',
@@ -136,9 +139,9 @@ async function productionMappings(root, sourceMetadata, requireFromRepo, overrid
     assert.ok(result.nodeModules.length > 0, 'production collector returned no modules');
     const entries = productionDestinations(result.nodeModules);
     const axiosRoot = fs.realpathSync(path.join(root, 'node_modules/axios'));
-    const top = entries.filter((entry) => entry.source === axiosRoot);
-    if (!(top.length === 1 && top[0].destination === 'node_modules/axios')) throw new TopAxiosFailure(entries, axiosRoot);
-    return entries;
+    const top = entries.filter((entry) => entry.name === 'axios');
+    if (!(top.length === 1 && top[0].version === '1.20.0' && top[0].destination === 'node_modules/axios')) throw new TopAxiosFailure(entries, axiosRoot);
+    return { entries, axiosSource: top[0].source };
   } finally { await temporary.cleanup(); }
 }
 async function verifyAsar({ repository, archive, sourceManifest }, overrides = {}) {
@@ -156,17 +159,28 @@ async function verifyAsar({ repository, archive, sourceManifest }, overrides = {
   const { createTransformer } = requireFromRepo('app-builder-lib/out/fileTransformer');
   const transformer = createTransformer(root, config, undefined);
   const extractFile = overrides.extractFile || requireFromRepo('@electron/asar').extractFile;
-  const entries = await productionMappings(root, sourceMetadata, requireFromRepo, overrides);
+  const { entries, axiosSource } = await productionMappings(root, sourceMetadata, requireFromRepo, overrides);
   const privateMapping = [];
   const checks = JSON.parse(fs.readFileSync(sourceManifest));
   const metadataProofs = [];
   let strictCodeFiles = 0;
+  let equivalentAxiosFiles = 0;
   for (const [name, expectedRaw] of Object.entries(checks)) {
     assert.match(expectedRaw, /^[0-9a-f]{64}$/, 'invalid source digest');
     const sourceFile = path.resolve(root, name);
     assert.ok(sourceFile.startsWith(root + path.sep), 'source entry escapes repository');
     const raw = fs.readFileSync(sourceFile);
     assert.equal(digest(raw), expectedRaw, 'raw source changed');
+    if (name.startsWith('node_modules/axios/') && !name.startsWith('node_modules/axios/node_modules/')) {
+      const selectedFile = path.resolve(axiosSource, name.slice('node_modules/axios/'.length));
+      let realSelected;
+      try { realSelected = fs.realpathSync(selectedFile); } catch { assert.fail('selected Axios source missing'); }
+      assert.ok(realSelected.startsWith(axiosSource + path.sep), 'selected Axios source escapes module');
+      let selectedRaw;
+      try { selectedRaw = fs.readFileSync(realSelected); } catch { assert.fail('selected Axios source missing'); }
+      assert.equal(digest(selectedRaw), expectedRaw, 'selected Axios source byte mismatch');
+      equivalentAxiosFiles += 1;
+    }
     const mapping = archiveDestination(root, name, entries);
     if (name.startsWith('node_modules/axios/node_modules/')) privateMapping.push({ source: name, ...mapping });
     let actual;
@@ -193,7 +207,8 @@ async function verifyAsar({ repository, archive, sourceManifest }, overrides = {
   }
   assert.ok(metadataProofs.some((entry) => entry.path === 'package.json'), 'app metadata proof missing');
   assert.ok(metadataProofs.some((entry) => entry.path === 'node_modules/axios/package.json'), 'Axios metadata proof missing');
-  return { passed: true, private_production_mapping: privateMapping, production_mapping_sha256: digest(Buffer.from(JSON.stringify(privateMapping, null, 2) + '\n')), collector_implementation_pins: COLLECTOR_PINS, builder_version: BUILDER_VERSION, metadata_transformer_sha256: TRANSFORMER_SHA256, strict_code_files_compared: strictCodeFiles, metadata_proofs: metadataProofs };
+  privateMapping.unshift({ source: 'node_modules/axios', selected_source_module: axiosSource, destination: 'node_modules/axios', raw_equivalence_files: equivalentAxiosFiles });
+  return { passed: true, collector_Axios_source_equivalence_files: equivalentAxiosFiles, private_production_mapping: privateMapping, production_mapping_sha256: digest(Buffer.from(JSON.stringify(privateMapping, null, 2) + '\n')), collector_implementation_pins: COLLECTOR_PINS, builder_version: BUILDER_VERSION, metadata_transformer_sha256: TRANSFORMER_SHA256, strict_code_files_compared: strictCodeFiles, metadata_proofs: metadataProofs };
 }
 
 if (require.main === module) {
