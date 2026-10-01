@@ -105,8 +105,9 @@ checks['package.json']=hashlib.sha256((freedom/'package.json').read_bytes()).hex
 axios_files=[f for f in (freedom/'node_modules/axios').rglob('*') if f.is_file() and (f.suffix in ['.js','.cjs','.mjs'] or f.name=='package.json')]
 for f in axios_files:checks[str(f.relative_to(freedom))]=hashlib.sha256(f.read_bytes()).hexdigest()
 (p/'source-files.json').write_text(json.dumps(checks,indent=2))
-script="const fs=require('fs'),crypto=require('crypto'),asar=require('@electron/asar');const inputs=JSON.parse(fs.readFileSync(process.argv[1]));for(const [name,expected] of Object.entries(inputs)){const got=crypto.createHash('sha256').update(asar.extractFile(process.argv[2],name)).digest('hex');if(got!==expected)throw Error('packaged file mismatch '+name)}if(JSON.parse(asar.extractFile(process.argv[2],'node_modules/axios/package.json')).version!=='1.20.0')throw Error('Axios version');"
-run(['node','-e',script,str(p/'source-files.json'),str(p/'package/resources/app.asar')],cwd=freedom)
+preparation_phase='asar_integrity';preparation_progress()
+run(['node',str(p/'verify-asar.js'),str(freedom),str(p/'source-files.json'),str(p/'package/resources/app.asar'),str(p/'asar-integrity.json')],cwd=freedom)
+preparation_phase='source_resources_native';preparation_progress()
 # Every configured extraResources file present at cold setup must be byte-identical.
 for directory,out in [('assets','assets'),('hns-bin/linux-x64','hns-bin'),('bee-bin/linux-x64','bee-bin'),('ipfs-bin/linux-x64','ipfs-bin'),('radicle-bin/linux-x64','radicle-bin'),('dvpn-bin/linux-x64','dvpn-bin'),('scripts/jacktrip','jacktrip-scripts')]:
  src=freedom/directory;assert src.is_dir(),'release resources absent '+directory
@@ -118,7 +119,7 @@ manifest=[{'path':str(f.relative_to(p/'package')),'sha256':hashlib.sha256(f.read
 (p/'package-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 native="const path=require('path');const app=process.argv[1];const DB=require(path.join(app,'node_modules/better-sqlite3'));const db=new DB(':memory:');if(db.prepare('SELECT 42 AS value').get().value!==42)throw Error('sqlite ABI');db.close();const axios=require(path.join(app,'node_modules/axios'));if(axios.VERSION!=='1.20.0'||typeof axios.request!=='function')throw Error('runtime Axios');"
 run(['unshare','--user','--map-root-user','--net',str(p/'package/freedom'),'-e',native,str(p/'package/resources/app.asar')],cwd=p/'package',env={**os.environ,'ELECTRON_RUN_AS_NODE':'1'})
-(p/'candidate-integrity.json').write_text(json.dumps({'Freedom_source':app_sha,'tested_helper_build_source':artifact_source,'tested_helper_build_compiler':'Go 1.26.2','helper_sha256':assets['fingertipd'],'hnsd_sha256':assets['hnsd'],'package_build_command':command,'packaged_source_files_compared':len(checks),'packaged_Axios_version':'1.20.0','packaged_Axios_files_compared':len(axios_files),'native_ABI_check_passed':True,'native_sqlite_SELECT42':True,'helper_rebuilt':False,'Electron_version':'42.10.0','Electron_executable_sha256':hashlib.sha256((p/'package/freedom').read_bytes()).hexdigest()},indent=2)+'\n')
+(p/'candidate-integrity.json').write_text(json.dumps({'Freedom_source':app_sha,'asar_integrity':json.loads((p/'asar-integrity.json').read_text()),'tested_helper_build_source':artifact_source,'tested_helper_build_compiler':'Go 1.26.2','helper_sha256':assets['fingertipd'],'hnsd_sha256':assets['hnsd'],'package_build_command':command,'packaged_source_files_compared':len(checks),'packaged_Axios_version':'1.20.0','packaged_Axios_files_compared':len(axios_files),'native_ABI_check_passed':True,'native_sqlite_SELECT42':True,'helper_rebuilt':False,'Electron_version':'42.10.0','Electron_executable_sha256':hashlib.sha256((p/'package/freedom').read_bytes()).hexdigest()},indent=2)+'\n')
 preparation_phase='fixtures';preparation_progress()
 checkpoint=p/'warm-checkpoint-main.dat';metadata=json.loads((p/'checkpoint-integrity.json').read_text());assert hashlib.sha256(checkpoint.read_bytes()).hexdigest()==metadata['sha256']
 assert checkpoint.read_bytes()==(freedom/'assets/hns/checkpoint_main.dat').read_bytes(),'seed differs from shipped checkpoint'
