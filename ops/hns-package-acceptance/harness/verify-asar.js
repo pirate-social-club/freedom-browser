@@ -16,6 +16,11 @@ const COLLECTOR_PINS = Object.freeze({
   'util/appFileCopier.js': 'fffe1c6f9e8dd95b47799a88202714dbe0aa55fb1e57255d17090036f6094512'
 });
 const FAILURE_MESSAGES = Object.freeze({
+  'selected nested source missing': 'selected_nested_source_missing',
+  'selected nested source escapes module': 'selected_nested_source_escape',
+  'selected nested source byte mismatch': 'selected_nested_source_mismatch',
+  'nested owner metadata escapes module': 'nested_owner_metadata_escape',
+  'nested owner metadata invalid': 'nested_owner_metadata_invalid',
   'selected Axios source missing': 'selected_axios_source_missing',
   'selected Axios source escapes module': 'selected_axios_source_escape',
   'selected Axios source byte mismatch': 'selected_axios_source_mismatch',
@@ -103,25 +108,39 @@ function productionDestinations(nodes, parent = '', entries = [], destinations =
   }
   return entries;
 }
-function archiveDestination(root, name, entries) {
+function archiveDestination(root, name, entries, checks) {
   const axiosRoot = fs.realpathSync(path.join(root, 'node_modules/axios'));
   if (!name.startsWith('node_modules/axios/node_modules/')) return { destination: name };
   const sourceFile = path.resolve(root, name);
   let owner = path.dirname(sourceFile);
   while (owner.startsWith(path.join(root, 'node_modules/axios') + path.sep) && !fs.existsSync(path.join(owner, 'package.json'))) owner = path.dirname(owner);
   assert.ok(owner.startsWith(path.join(root, 'node_modules/axios/node_modules') + path.sep) && fs.existsSync(path.join(owner, 'package.json')), 'nested source owner missing');
+  const metadataPath = path.join(owner, 'package.json');
+  const metadataName = path.relative(root, metadataPath).split(path.sep).join('/');
   owner = fs.realpathSync(owner);
-  assert.ok(owner !== axiosRoot, 'nested source owner missing');
-  const candidates = entries.filter((entry) => entry.source === owner);
+  assert.ok(owner.startsWith(path.join(axiosRoot, 'node_modules') + path.sep), 'nested source owner missing');
+  const realMetadata = fs.realpathSync(metadataPath);
+  assert.ok(realMetadata.startsWith(owner + path.sep), 'nested owner metadata escapes module');
+  const metadataRaw = fs.readFileSync(realMetadata);
+  assert.match(checks[metadataName] || '', /^[0-9a-f]{64}$/, 'invalid source digest');
+  assert.equal(digest(metadataRaw), checks[metadataName], 'raw source changed');
+  const metadata = JSON.parse(metadataRaw);
+  assert.ok(typeof metadata.name === 'string' && typeof metadata.version === 'string', 'nested owner metadata invalid');
+  const candidates = entries.filter((entry) => entry.name === metadata.name && entry.version === metadata.version);
   assert.ok(candidates.length > 0, 'nested source owner missing');
   assert.equal(candidates.length, 1, 'nested source owner ambiguous');
   const selected = candidates[0];
-  const metadata = JSON.parse(fs.readFileSync(path.join(owner, 'package.json')));
-  assert.equal(metadata.version, selected.version, 'source module version changed');
+  assert.equal(entries.filter((entry) => entry.source === selected.source).length, 1, 'nested source owner ambiguous');
   const realFile = fs.realpathSync(sourceFile);
   assert.ok(realFile.startsWith(owner + path.sep), 'nested source owner missing');
   const relative = path.relative(owner, realFile).split(path.sep).join('/');
-  return { destination: path.posix.join(selected.destination, relative), source_module: path.relative(root, owner), module_destination: selected.destination, version: selected.version };
+  let selectedFile;
+  try { selectedFile = fs.realpathSync(path.resolve(selected.source, relative)); } catch { assert.fail('selected nested source missing'); }
+  assert.ok(selectedFile.startsWith(selected.source + path.sep), 'selected nested source escapes module');
+  let selectedRaw;
+  try { selectedRaw = fs.readFileSync(selectedFile); } catch { assert.fail('selected nested source missing'); }
+  assert.equal(digest(selectedRaw), checks[name], 'selected nested source byte mismatch');
+  return { destination: path.posix.join(selected.destination, relative), source_module: path.relative(root, owner), selected_source_module: selected.source, module_destination: selected.destination, version: selected.version, raw_equivalence_sha256: checks[name] };
 }
 async function productionMappings(root, sourceMetadata, requireFromRepo, overrides) {
   for (const [moduleFile, expected] of Object.entries(COLLECTOR_PINS)) {
@@ -181,7 +200,7 @@ async function verifyAsar({ repository, archive, sourceManifest }, overrides = {
       assert.equal(digest(selectedRaw), expectedRaw, 'selected Axios source byte mismatch');
       equivalentAxiosFiles += 1;
     }
-    const mapping = archiveDestination(root, name, entries);
+    const mapping = archiveDestination(root, name, entries, checks);
     if (name.startsWith('node_modules/axios/node_modules/')) privateMapping.push({ source: name, ...mapping });
     let actual;
     try { actual = extractFile(archive, mapping.destination); } catch (error) {
@@ -226,4 +245,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { verifyAsar, RUNTIME_FIELDS, TRANSFORMER_SHA256, failureCode, emitFailure, FAILURE_CODES, ExtractorFailure, productionDestinations, archiveDestination, TopAxiosFailure, failurePayload };
+module.exports = { verifyAsar, RUNTIME_FIELDS, TRANSFORMER_SHA256, failureCode, emitFailure, FAILURE_CODES, ExtractorFailure, productionDestinations, archiveDestination, TopAxiosFailure, failurePayload, productionMappings };
