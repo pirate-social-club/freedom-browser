@@ -56,7 +56,7 @@ def namespace_access_response(returncode,output):
  if not isinstance(record,dict) or set(record)!=keys or not all(type(value) is bool for value in record.values()):return unknown
  return {**record,'probe_valid':True}
 def asar_failure_response(output):
- allowed={'raw_source_changed', 'transformer_changed', 'axios_version_changed', 'app_metadata_proof_missing', 'success_proof_missing', 'app_metadata_mismatch', 'packaged_code_mismatch', 'builder_version_changed', 'unexpected_metadata_config', 'axios_metadata_mismatch','axios_nested_metadata_mismatch', 'unknown', 'app_code_mismatch', 'runtime_field_changed', 'axios_metadata_proof_missing', 'runtime_field_presence_changed', 'extractor_failure', 'axios_code_mismatch', 'invalid_source_digest', 'invalid_source_path'}
+ allowed={'mapping_ambiguous', 'extractor_axios_nested_code_missing_entry', 'extractor_axios_metadata_missing_entry', 'extractor_app_metadata_read_error', 'extractor_axios_metadata_read_error', 'mapping_owner_missing', 'collector_empty', 'extractor_axios_code_missing_entry', 'extractor_axios_nested_code_read_error', 'extractor_axios_nested_metadata_missing_entry', 'extractor_app_code_read_error', 'collector_changed', 'extractor_app_code_missing_entry', 'mapping_top_axios_changed', 'extractor_app_metadata_missing_entry', 'mapping_version_changed', 'mapping_invalid_destination', 'extractor_axios_nested_metadata_read_error', 'extractor_axios_code_read_error'} | {'raw_source_changed', 'transformer_changed', 'axios_version_changed', 'app_metadata_proof_missing', 'success_proof_missing', 'app_metadata_mismatch', 'packaged_code_mismatch', 'builder_version_changed', 'unexpected_metadata_config', 'axios_metadata_mismatch','axios_nested_metadata_mismatch', 'unknown', 'app_code_mismatch', 'runtime_field_changed', 'axios_metadata_proof_missing', 'runtime_field_presence_changed', 'extractor_failure', 'axios_code_mismatch', 'invalid_source_digest', 'invalid_source_path'}
  if len(output)>256:return 'unknown'
  try:record=json.loads(output)
  except (ValueError,UnicodeDecodeError):return 'unknown'
@@ -114,7 +114,7 @@ axios_files=[f for f in (freedom/'node_modules/axios').rglob('*') if f.is_file()
 for f in axios_files:checks[str(f.relative_to(freedom))]=hashlib.sha256(f.read_bytes()).hexdigest()
 (p/'source-files.json').write_text(json.dumps(checks,indent=2))
 preparation_phase='asar_integrity';preparation_progress()
-asar_check=run(['node',str(p/'verify-asar.js'),str(freedom),str(p/'source-files.json'),str(p/'package/resources/app.asar'),str(p/'asar-integrity.json')],cwd=freedom,check=False,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+asar_check=run(['/usr/bin/unshare','--user','--map-root-user','--net','node',str(p/'verify-asar.js'),str(freedom),str(p/'source-files.json'),str(p/'package/resources/app.asar'),str(p/'asar-integrity.json')],cwd=freedom,check=False,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
 if asar_check.returncode:
  asar_failure=asar_failure_response(asar_check.stdout)
  raise subprocess.CalledProcessError(asar_check.returncode,'asar_integrity')
