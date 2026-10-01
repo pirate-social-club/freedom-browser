@@ -12,13 +12,17 @@ def preparation_progress(status='running',category=None,returncode=None,builder_
  if asar_failure is not None:record['asar_failure_code']=asar_failure
  if asar_top is not None:record['asar_top_diagnostic']=asar_top
  (p/'preparation-progress.json').write_text(json.dumps(record,indent=2)+'\n')
-def offline_builder_markers():
- # Inspect at most16KiB of private output and emit only fixed codes, never matched bytes.
+def private_tool_markers(filename):
+ # The filename is selected by the fixed phase, never from tool output.
  try:
-  with (p/'offline-build.log').open('rb') as private_log:
+  with (p/filename).open('rb') as private_log:
    private_log.seek(0,os.SEEK_END);size=private_log.tell()
    private_log.seek(max(0,size-16384));tail=private_log.read(16384)
  except OSError:return ['log_unavailable']
+ return classify_tool_markers(tail)
+def classify_tool_markers(tail):
+ # Bounded raw bytes only; matched text, paths and secrets never leave this function.
+ tail=tail[-16384:]
  markers=[]
  patterns=[
   ('module_missing_marker',[b'MODULE_NOT_FOUND']),
@@ -29,6 +33,16 @@ def offline_builder_markers():
   ('file_missing_marker',[b'ENOENT']),
   ('native_load_marker',[b'ERR_DLOPEN_FAILED']),
   ('network_error_marker',[b'ENOTFOUND',b'ENETUNREACH',b'ECONNREFUSED']),
+  ('shared_library_marker',[b'error while loading shared libraries:',b'cannot open shared object file']),
+  ('libcrypt_missing_marker',[b'libcrypt.so.1: cannot open shared object file']),
+  ('executable_missing_marker',[b'failed to execute',b'No such file or directory']),
+  ('interpreter_missing_marker',[b'bad interpreter:',b'cannot execute: required file not found']),
+  ('compression_missing_marker',[b'xz: not found',b"Need executable 'xz'"]),
+  ('fpm_files_missing_marker',[b'error: File not found',b'FPM failed to find the specified files']),
+  ('fpm_runtime_marker',[b'LoadError',b'Gem::LoadError',b'cannot load such file']),
+  ('command_option_marker',[b'Unknown argument:',b'Unknown arguments:',b'Unrecognised option',b'unrecognized option',b'invalid option:']),
+  ('package_metadata_marker',[b'depends must be Array or String',b'Macro ',b'Invalid package configuration']),
+  ('allocation_marker',[b'Cannot allocate memory',b'ENOMEM',b'JavaScript heap out of memory',b'failed to allocate']),
  ]
  for code,needles in patterns:
   if any(needle in tail for needle in needles):markers.append(code)
@@ -47,6 +61,7 @@ def offline_builder_markers():
   if target.endswith(b'/node_modules/electron-builder/cli.js'):markers.append('builder_cli_entry_missing_marker')
   elif target in known:markers.append(known[target])
  if b'app-builder' in tail and b'spawn' in tail:markers.append('app_builder_spawn_marker')
+ if b'fpm' in tail and b'spawn' in tail:markers.append('fpm_spawn_marker')
  return markers or ['unclassified']
 def namespace_access_response(returncode,output):
  keys={'cli_entry_readable','out_cli_readable','repo_traversable'}
@@ -78,13 +93,18 @@ def asar_receipt_failure(output,subtype):
  allowed={'success_receipt_missing','success_receipt_read_error','success_receipt_invalid_json','success_receipt_invalid_shape'}
  return subtype if subtype in allowed else 'unknown'
 class NamespacePermissionDenied(Exception):pass
+class FpmVersionMismatch(AssertionError):pass
 def preparation_exception(_kind,error,_traceback):
  category='internal_error';returncode=None
  if isinstance(error,NamespacePermissionDenied):category='namespace_permission_denied'
  elif isinstance(error,AssertionError):category='assertion'
  elif isinstance(error,subprocess.TimeoutExpired):category='timeout'
  elif isinstance(error,subprocess.CalledProcessError):category='child_failed';returncode=error.returncode
- markers=offline_builder_markers() if preparation_phase=='offline_build' and category=='child_failed' else None
+ markers=None
+ if preparation_phase in ('offline_build','fpm_runtime_preflight'):
+  markers=private_tool_markers('offline-build.log' if preparation_phase=='offline_build' else 'fpm-preflight.log')
+  if preparation_phase=='fpm_runtime_preflight' and isinstance(error,OSError):markers.append('fpm_preflight_io_error_marker')
+  if isinstance(error,FpmVersionMismatch):markers.append('fpm_version_mismatch_marker')
  preparation_progress('failed',category,returncode,markers)
 sys.excepthook=preparation_exception
 preparation_progress()
@@ -128,6 +148,11 @@ assert {str(path.relative_to(fpm_dir)):streamed_sha(path) for path in fpm_dir.rg
 assert Path('/proc/sys/kernel/apparmor_restrict_unprivileged_userns').read_text().strip()=='1','runner restriction changed'
 assert not Path('/etc/apparmor.d/local/freedom').exists(),'unreviewed site profile override'
 assert not Path('/opt/Freedom').exists() and not Path('/etc/apparmor.d/freedom').exists(),'installed test target not fresh'
+preparation_phase='fpm_runtime_preflight';preparation_progress()
+with (p/'fpm-preflight.log').open('wb') as fpm_log:
+ run(['unshare','--user','--map-root-user','--net',str(fpm),'--version'],cwd=freedom,stdout=fpm_log,stderr=subprocess.STDOUT)
+with (p/'fpm-preflight.log').open('rb') as fpm_log:
+ if fpm_log.read(16385).strip()!=b'1.17.0':raise FpmVersionMismatch()
 preparation_phase='offline_build';preparation_progress()
 command=['unshare','--user','--map-root-user','--net','node','node_modules/electron-builder/cli.js','--linux','deb','--x64','--publish','never','-c.electronDist='+str(freedom/'node_modules/electron/dist'),'-c.npmRebuild=false','-c.nodeGypRebuild=false','-c.directories.output='+str(p/'build')]
 with (p/'offline-build.log').open('wb') as build_log:
