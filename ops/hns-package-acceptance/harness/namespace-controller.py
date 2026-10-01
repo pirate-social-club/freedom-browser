@@ -34,15 +34,45 @@ def browser_markers():
    private_log.seek(0,os.SEEK_END);size=private_log.tell();private_log.seek(max(0,size-16384));tail=private_log.read(16384)
  except OSError:return ['log_unavailable']
  markers=[]
- for code,needles in [('root_refusal_marker',[b'Running as root without --no-sandbox is not supported']),('sandbox_marker',[b'No usable sandbox!',b'Failed to move to new namespace:']),('gpu_fatal_marker',[b'GPU process isn',b'FATAL:gpu_data_manager']),('display_marker',[b'Missing X server or $DISPLAY',b'cannot open display']),('module_missing_marker',[b'MODULE_NOT_FOUND',b'ERR_MODULE_NOT_FOUND']),('library_marker',[b'error while loading shared libraries:']),('permission_marker',[b'Permission denied',b'Operation not permitted']),('devtools_listening_marker',[b'DevTools listening on ws://'])]:
+ for code,needles in [('root_refusal_marker',[b'Running as root without --no-sandbox is not supported']),('no_usable_sandbox_marker',[b'No usable sandbox!']),('failed_move_namespace_marker',[b'Failed to move to new namespace:']),('gpu_fatal_marker',[b'GPU process isn',b'FATAL:gpu_data_manager']),('display_marker',[b'Missing X server or $DISPLAY',b'cannot open display']),('module_missing_marker',[b'MODULE_NOT_FOUND',b'ERR_MODULE_NOT_FOUND']),('library_marker',[b'error while loading shared libraries:']),('permission_marker',[b'Permission denied',b'Operation not permitted']),('devtools_listening_marker',[b'DevTools listening on ws://'])]:
   if any(needle in tail for needle in needles):markers.append(code)
- return markers or ['unclassified']
+ for line in tail.splitlines():
+  if b'Failed to move to new namespace:' in line and len(line)<=512:
+   for needle,code in [(b'errno = Operation not permitted', 'sandbox_errno_permission_denied'),(b'errno = Permission denied', 'sandbox_errno_access_denied'),(b'errno = Invalid argument', 'sandbox_errno_unsupported'),(b'errno = No space left on device', 'sandbox_errno_namespace_limit'),(b'errno = Too many users', 'sandbox_errno_nesting_limit')]:
+    if needle in line:markers.append(code)
+ return sorted(set(markers)) or ['unclassified']
 def browser_diagnostic(stage):
  assert stage in ['browser_launched','driver_running','driver_finished','before_browser_cleanup','after_browser_cleanup'],'invalid browser diagnostic stage'
  code=browser.poll() if browser is not None else None
  record={'stage':stage,'epoch':time.time(),'browser_started':browser is not None,'browser_alive':browser is not None and code is None,'browser_returncode':code,'driver_returncode':driver.poll() if 'driver' in globals() else None,'private_log_markers':browser_markers()}
  lifecycle[stage]=record
  (p/'browser-lifecycle-diagnostic.json').write_text(json.dumps({'snapshots':lifecycle},indent=2)+'\n')
+def eligibility_diagnostic():
+ # This executable can have a different AppArmor policy from Electron.
+ budget=min(10,end-time.time()-2)
+ assert budget>0,'no time for sandbox diagnostic'
+ proc=subprocess.Popen(['unshare','--user','--map-user=1000','--map-group=1000','/usr/bin/python3',str(p/'probe-sandbox-eligibility.py')],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True)
+ value={'schema':1,'probe_receipt_valid':False,'failure':'unknown'}
+ try:
+  raw,_=proc.communicate(timeout=budget)
+  if proc.returncode==0 and len(raw)<=2048:
+   try:
+    candidate=json.loads(raw)
+    facts=candidate['kernel_facts'];result=candidate['eligibility']
+    fact_keys={'unprivileged_userns_clone','apparmor_restrict_unprivileged_userns','max_user_namespaces','apparmor_label_class'}
+    categories={'permission_denied','access_denied','unsupported','namespace_limit','nesting_limit','other_errno','none'}
+    stages={'identity','clone_user','deny_setgroups','gid_map','uid_map','drop_capabilities','verify_capabilities','second_user','done','timeout','unknown'}
+    valid=type(candidate) is dict and set(candidate)=={'schema','kernel_facts','eligibility'} and type(candidate['schema']) is int and candidate['schema']==1 and type(facts) is dict and set(facts)==fact_keys and all(facts[k] is None or (type(facts[k]) is int and 0<=facts[k]<=9999999999) for k in fact_keys-{'apparmor_label_class'}) and facts['apparmor_label_class'] in {'unconfined','confined_or_other','unavailable'} and type(result) is dict and set(result)=={'passed','stage','errno_category'} and type(result['passed']) is bool and result['stage'] in stages and result['errno_category'] in categories and (not result['passed'] or (result['stage']=='done' and result['errno_category']=='none'))
+    if valid:value={**candidate,'probe_receipt_valid':True}
+   except (ValueError,TypeError,KeyError):pass
+ except subprocess.TimeoutExpired:
+  value['failure']='timeout'
+ finally:
+  if proc.poll() is None:
+   try:os.killpg(proc.pid,signal.SIGKILL)
+   except ProcessLookupError:pass
+  proc.wait(timeout=2)
+ (p/'sandbox-eligibility-diagnostic.json').write_text(json.dumps(value,indent=2)+'\n')
 def kill_browser():
  procs=scan()
  for sig in [signal.SIGTERM,signal.SIGKILL]:
@@ -63,6 +93,7 @@ try:
  while not Path('/tmp/.X11-unix/X77').exists() and time.time()<display_end and display.poll() is None:time.sleep(.1)
  assert display.poll() is None and Path('/tmp/.X11-unix/X77').exists(),'owned Xvfb not ready'
  time.sleep(.3)
+ eligibility_diagnostic()
  log=(p/'warm-browser.log').open('wb')
  browser=subprocess.Popen(['unshare','--user','--map-user=1000','--map-group=1000',str(p/'package/freedom'),'--disable-setuid-sandbox','--remote-debugging-port=9244','--user-data-dir='+str(p/'profile-candidate')],env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
  (p/'browser-launch.json').write_text(json.dumps({'pid':browser.pid,'epoch':time.time(),'network_namespace':Path('/proc/self/ns/net').readlink().as_posix()}))
