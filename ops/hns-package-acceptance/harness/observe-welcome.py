@@ -1,17 +1,47 @@
 import asyncio,json,time,subprocess,urllib.request
 from pathlib import Path
 import websockets
+diagnostic_stage='cdp_targets'
+class CdpTargetMissing(Exception):pass
+class CdpProtocolError(Exception):pass
+class CdpEvaluationError(Exception):pass
+def fixed_error(error):
+ if isinstance(error,CdpTargetMissing):return 'target_missing'
+ if isinstance(error,CdpProtocolError):return 'protocol_error'
+ if isinstance(error,CdpEvaluationError):return 'evaluation_error'
+ if isinstance(error,(TimeoutError,asyncio.TimeoutError)):return 'timeout'
+ if isinstance(error,AssertionError):return 'assertion'
+ if isinstance(error,(KeyError,TypeError,StopIteration)):return 'schema_error'
+ if isinstance(error,(ValueError,UnicodeError)):return 'invalid_json'
+ if isinstance(error,OSError):return 'io_error'
+ return 'other_error'
+def safe_initial(record):
+ value={'snapshot_valid':isinstance(record,dict),'view_count':None,'auto_update_disabled':None,'local_resolver_ready':None,'renderer_ready':None,'local_urls':None}
+ if not isinstance(record,dict):return value
+ settings=record.get('settings');hns=record.get('hns');renderer=record.get('rendererHns');views=record.get('views');expected=record.get('expected')
+ if isinstance(settings,dict):value['auto_update_disabled']=settings.get('autoUpdate') is False
+ if isinstance(hns,dict):value['local_resolver_ready']=hns.get('localResolverReady') is True
+ if isinstance(renderer,dict):value['renderer_ready']=renderer.get('localResolverReady') is True
+ if isinstance(views,list):
+  value['view_count']=len(views)
+  if len(views)==1 and isinstance(views[0],dict) and isinstance(expected,str):value['local_urls']={key:views[0].get(key)==expected for key in ['src','url','tabUrl','current']}
+ return value
 p=Path(__file__).parent;deadline=json.loads((p/'timing.json').read_text())['deadline_epoch']-45
 async def cdp(method,params):
+ global diagnostic_stage
+ diagnostic_stage='cdp_targets'
  targets=json.load(urllib.request.urlopen('http://127.0.0.1:9244/json/list',timeout=2))
- target=next(t for t in targets if 'src/renderer/index.html' in t.get('url',''))
+ target=next((t for t in targets if 'src/renderer/index.html' in t.get('url','')),None)
+ if target is None:raise CdpTargetMissing()
+ diagnostic_stage='cdp_connect'
  async with websockets.connect(target['webSocketDebuggerUrl'],open_timeout=3) as ws:
+  diagnostic_stage='cdp_evaluate'
   await ws.send(json.dumps({'id':1,'method':method,'params':params}))
   while True:
    result=json.loads(await asyncio.wait_for(ws.recv(),timeout=8))
    if result.get('id')==1:
-    assert 'error' not in result,result
-    assert 'exceptionDetails' not in result.get('result',{}),result
+    if 'error' in result:raise CdpProtocolError()
+    if 'exceptionDetails' in result.get('result',{}):raise CdpEvaluationError()
     return result['result']
 def evaluate(expression):return asyncio.run(cdp('Runtime.evaluate',{'expression':expression,'awaitPromise':True,'returnByValue':True}))['result'].get('value')
 SNAPSHOT="""(async()=>{const tabs=await import('./lib/tabs.js');return {epoch:Date.now()/1000,expected:new URL('pages/home.html',location.href).href,settings:(await window.electronAPI.getSettings()),hns:(await window.serviceRegistry.getRegistry()).hns,rendererHns:window.__rendererState?.registry?.hns,views:tabs.getTabs().map(t=>({id:t.id,src:t.webview.getAttribute('src'),url:(()=>{try{return t.webview.getURL()}catch{return null}})(),tabUrl:t.url,current:t.navigationState.currentPageUrl,pending:t.navigationState.pendingNavigationUrl}))};})()"""
@@ -23,11 +53,23 @@ def local(record):
  assert all(view[key]==record['expected'] for key in ['src','url','tabUrl','current']),record
  return view
 end=min(time.time()+40,deadline);initial=None
+initial_diagnostic={'phase':'initial_local_observation','started_epoch':time.time(),'attempts':0,'snapshots_read':0,'local_verdict_passed':False,'cdp_target_seen':False,'cdp_connected_seen':False,'error_counts':{},'last':None}
+def write_initial():
+ if diagnostic_stage in ['cdp_connect','cdp_evaluate','local_verdict']:initial_diagnostic['cdp_target_seen']=True
+ if diagnostic_stage in ['cdp_evaluate','local_verdict']:initial_diagnostic['cdp_connected_seen']=True
+ (p/'initial-observer-diagnostic.json').write_text(json.dumps(initial_diagnostic,indent=2)+'\n')
+write_initial()
 while time.time()<end:
+ initial_diagnostic['attempts']+=1
  try:
-  initial=snapshot();local(initial);break
- except Exception:time.sleep(.2)
-else:raise RuntimeError('real initial local tab not observable')
+  initial=snapshot();initial_diagnostic['snapshots_read']+=1;diagnostic_stage='local_verdict'
+  initial_diagnostic.update({'stage':diagnostic_stage,'observed_epoch':time.time(),'last':safe_initial(initial)});write_initial()
+  local(initial);initial_diagnostic['local_verdict_passed']=True;write_initial();break
+ except Exception as error:
+  kind=fixed_error(error);counts=initial_diagnostic['error_counts'];counts[kind]=counts.get(kind,0)+1
+  initial_diagnostic.update({'stage':diagnostic_stage,'observed_epoch':time.time(),'last_error':kind});write_initial();time.sleep(.2)
+else:
+ initial_diagnostic['phase']='initial_local_timeout';write_initial();raise RuntimeError('real initial local tab not observable')
 (p/'fresh-first-tab.json').write_text(json.dumps(initial,indent=2)+'\n')
 assert initial['hns'].get('localResolverReady') is not True,'initial readiness transition already missed; no inferred cold result'
 # Observe real IPC registry events without modifying readiness or navigating.
@@ -69,7 +111,7 @@ async def warm_reload():
     try:
      record=(await rpc('Runtime.evaluate',{'expression':SNAPSHOT,'awaitPromise':True,'returnByValue':True}))['result'].get('value')
      creation=(await rpc('Runtime.evaluate',{'expression':'window.__welcomeCreationEvidence','returnByValue':True}))['result'].get('value')
-    except Exception as error:read_error=str(error)
+    except Exception as error:read_error=fixed_error(error)
     # Persist every diagnostic before evaluating readiness or navigation assertions.
     observations.append({'epoch':time.time(),'snapshot':record,'creation':creation,'read_error':read_error})
     (p/'warm-renderer-observations.json').write_text(json.dumps(observations,indent=2)+'\n')
