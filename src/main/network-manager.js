@@ -15,6 +15,8 @@ const PUBLIC_NAMESPACES_URL = process.env.PIRATE_PUBLIC_NAMESPACES_URL || 'https
 
 let hnsProxyAddr = null;
 let hnsUpstreamProxyAddr = null;
+let hnsTrustIdentity = null;
+let hnsTrustRevision = 0;
 let hnsRootResolverAddr = null;
 let hnsGuardServer = null;
 let hnsGuardPort = null;
@@ -681,10 +683,16 @@ async function prepareProxyPolicy() {
   const pacUrl = `http://127.0.0.1:${port}/proxy.pac`;
   const configuration = { mode: 'pac_script', pacScript: pacUrl };
   // The URL stays stable, so the served content is part of policy identity.
-  return { configuration, key: JSON.stringify([configuration, pac, hnsUpstreamProxyAddr, hnsRootResolverAddr]) };
+  return {
+    configuration,
+    key: JSON.stringify([configuration, pac, hnsUpstreamProxyAddr, hnsRootResolverAddr,
+      hnsUpstreamProxyAddr ? hnsTrustIdentity : null]),
+  };
 }
 
 async function applyProxy() {
+  // Failed preparation must not authorize enrollment on an older direct route.
+  currentProxyPolicy = null;
   currentProxyPolicy = await prepareProxyPolicy();
   await proxySessions.apply(currentProxyPolicy.configuration, currentProxyPolicy.key);
   log.info(`[Network] Proxy configured via PAC at ${currentProxyPolicy.configuration.pacScript}`);
@@ -703,8 +711,14 @@ function clearProxy() {
   return proxySessions.enqueue(clearProxyNow);
 }
 
-function setHnsProxy(proxyAddr) {
+function setHnsProxy(proxyAddr, trustIdentity = null) {
   hnsUpstreamProxyAddr = proxyAddr;
+  // A new CA or helper can invalidate live TLS even when addresses are reused.
+  // Legacy callers without identity require a fresh application on every set.
+  hnsTrustIdentity = Number.isSafeInteger(trustIdentity?.generation) && trustIdentity.generation >= 0 &&
+    typeof trustIdentity?.caFingerprint === 'string' && trustIdentity.caFingerprint.length > 0
+    ? { generation: trustIdentity.generation, caFingerprint: trustIdentity.caFingerprint }
+    : { revision: ++hnsTrustRevision };
   hnsProxyAddr = null;
   log.info(`[Network] HNS proxy upstream set to ${proxyAddr}`);
 }
@@ -715,6 +729,7 @@ function setHnsResolverAddrs({ rootAddr } = {}) {
 
 function clearHnsProxy() {
   hnsUpstreamProxyAddr = null;
+  hnsTrustIdentity = null;
   hnsRootResolverAddr = null;
   hnsProxyAddr = null;
   hnsProxyHosts.clear();

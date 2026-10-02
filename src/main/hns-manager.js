@@ -673,7 +673,7 @@ async function handleReady(event) {
 
   try {
     updateSessionCertificates(true);
-    networkManager.setHnsProxy(proxyAddr);
+    networkManager.setHnsProxy(proxyAddr, { generation, caFingerprint: caCertFingerprint });
     networkManager.setHnsResolverAddrs?.({ rootAddr, recursiveAddr });
     await networkManager.rebuild();
     if (generation !== helperGeneration) return;

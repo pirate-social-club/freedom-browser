@@ -698,7 +698,9 @@ describe('hns-manager', () => {
     }));
     await Promise.resolve();
 
-    expect(ctx.setHnsProxy).toHaveBeenCalledWith('127.0.0.1:44041');
+    expect(ctx.setHnsProxy).toHaveBeenCalledWith('127.0.0.1:44041', {
+      generation: expect.any(Number), caFingerprint: expect.any(String),
+    });
     expect(ctx.rebuild).toHaveBeenCalled();
     expect(ctx.getHnsProxyAddr).toHaveBeenCalled();
     expect(ctx.updateService).toHaveBeenCalledWith('hns', expect.objectContaining({
@@ -1109,6 +1111,43 @@ describe('hns-manager', () => {
     oldLineHandler(JSON.stringify({ type: 'ready', proxyAddr: '127.0.0.1:45001', caPath: '/tmp/old-ca.pem' }));
     expect(ctx.setHnsProxy).toHaveBeenCalledTimes(1);
     expect(ctx.mod.getHnsStatus().status).toBe('starting');
+  });
+
+  test('ready binds routing to the current helper generation and certificate fingerprint', async () => {
+    let certificate = 'first certificate';
+    const ctx = loadHnsManagerModule({
+      cryptoMock: { X509Certificate: class {
+        constructor(pem) { this.raw = Buffer.from(pem); }
+      } },
+      readFileSync: () => certificate,
+    });
+    await emitHelperReady(ctx);
+    const firstIdentity = ctx.setHnsProxy.mock.calls[0][1];
+    expect(firstIdentity.caFingerprint).toBe(ctx.mod.chromiumCertificateFingerprint(Buffer.from(certificate)));
+    certificate = 'second certificate';
+    ctx.readlineHandlers.get('line')(JSON.stringify({
+      type: 'ready', proxyAddr: '127.0.0.1:44041', caPath: '/tmp/hns-ca.pem',
+    }));
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    expect(ctx.setHnsProxy).toHaveBeenLastCalledWith('127.0.0.1:44041', {
+      generation: firstIdentity.generation,
+      caFingerprint: ctx.mod.chromiumCertificateFingerprint(Buffer.from(certificate)),
+    });
+    expect(ctx.setHnsProxy.mock.calls[1][1].caFingerprint).not.toBe(firstIdentity.caFingerprint);
+  });
+
+  test('a restarted helper has a new routing identity even with the same CA and address', async () => {
+    jest.useFakeTimers();
+    const ctx = loadCertificateSessionFixture();
+    await emitHelperReady(ctx);
+    const firstIdentity = ctx.setHnsProxy.mock.calls[0][1];
+    ctx.spawnedProcesses[0].emit('close', 0);
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    await emitHelperReady(ctx);
+    const secondIdentity = ctx.setHnsProxy.mock.calls[1][1];
+    expect(secondIdentity.caFingerprint).toBe(firstIdentity.caFingerprint);
+    expect(secondIdentity.generation).toBeGreaterThan(firstIdentity.generation);
+    expect(ctx.setHnsProxy.mock.calls[1][0]).toBe(ctx.setHnsProxy.mock.calls[0][0]);
   });
 
   test('registers all HNS IPC handlers', () => {

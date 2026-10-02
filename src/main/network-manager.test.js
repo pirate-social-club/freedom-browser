@@ -521,6 +521,78 @@ describe('network-manager', () => {
     expect(ctx.session.defaultSession.closeAllConnections).toHaveBeenCalledTimes(1);
   });
 
+  test('same-address CA rotation closes existing sockets while duplicate ready and enrollment preserve them', async () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setHnsProxy('127.0.0.1:5380', { generation: 1, caFingerprint: 'first-ca' });
+    await ctx.mod.rebuild();
+    const existing = makeProxySession();
+    await ctx.mod.registerProxySession(existing);
+    const pac = ctx.mod.buildPacScript();
+    ctx.mod.setHnsProxy('127.0.0.1:5380', { generation: 1, caFingerprint: 'second-ca' });
+    await ctx.mod.rebuild();
+    expect(ctx.mod.buildPacScript()).toBe(pac);
+    ctx.mod.setHnsProxy('127.0.0.1:5380', { generation: 1, caFingerprint: 'second-ca' });
+    await ctx.mod.rebuild();
+    const added = makeProxySession();
+    await ctx.mod.registerProxySession(added);
+    expect(ctx.session.defaultSession.closeAllConnections).toHaveBeenCalledTimes(2);
+    expect(existing.closeAllConnections).toHaveBeenCalledTimes(2);
+    expect(added.closeAllConnections).toHaveBeenCalledTimes(1);
+  });
+
+  test('overlapping withdrawal and same-address reactivation apply the new helper identity once', async () => {
+    const ctx = loadNetworkManagerModule();
+    const identity = { generation: 1, caFingerprint: 'same-ca' };
+    ctx.mod.setHnsProxy('127.0.0.1:5380', identity);
+    await ctx.mod.rebuild();
+    const existing = makeProxySession();
+    await ctx.mod.registerProxySession(existing);
+    const originalConfiguration = ctx.setProxy.mock.calls[0][0];
+    ctx.mod.clearHnsProxy();
+    const withdrawal = ctx.mod.rebuild();
+    ctx.mod.setHnsProxy('127.0.0.1:5380', { ...identity, generation: 2 });
+    const activation = ctx.mod.rebuild();
+    const added = makeProxySession();
+    const enrollment = ctx.mod.registerProxySession(added);
+    await Promise.all([withdrawal, activation, enrollment]);
+    expect(ctx.setProxy).toHaveBeenLastCalledWith(originalConfiguration);
+    expect(ctx.session.defaultSession.closeAllConnections).toHaveBeenCalledTimes(2);
+    expect(existing.closeAllConnections).toHaveBeenCalledTimes(2);
+    expect(added.closeAllConnections).toHaveBeenCalledTimes(1);
+    expect(ctx.mod.getHnsProxyAddr()).toBe('127.0.0.1:9999');
+  });
+
+  test('HNS callers without trust identity conservatively reset reused routes', async () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+    await ctx.mod.rebuild();
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+    await ctx.mod.rebuild();
+    expect(ctx.session.defaultSession.closeAllConnections).toHaveBeenCalledTimes(2);
+  });
+
+  test.each(['guard', 'PAC'])('failed %s preparation cannot enroll a session on cached direct policy', async (phase) => {
+    const ctx = loadNetworkManagerModule();
+    await ctx.mod.rebuild();
+    const createServer = ctx.httpMock.createServer.getMockImplementation();
+    ctx.httpMock.createServer.mockImplementation((handler) => {
+      if (phase === 'guard' || ctx.mod.getHnsProxyAddr()) throw new Error('preparation failed');
+      return createServer(handler);
+    });
+    ctx.mod.setHnsProxy('127.0.0.1:5380', { generation: 1, caFingerprint: 'current-ca' });
+    await expect(ctx.mod.rebuild()).rejects.toThrow('preparation failed');
+    const added = makeProxySession();
+    await expect(ctx.mod.registerProxySession(added)).rejects.toThrow('preparation failed');
+    expect(added.setProxy).not.toHaveBeenCalled();
+    ctx.httpMock.createServer.mockImplementation(createServer);
+    await ctx.mod.registerProxySession(added);
+    expect(added.setProxy).toHaveBeenCalledWith(expect.objectContaining({ mode: 'pac_script' }));
+    expect(added.closeAllConnections).toHaveBeenCalledTimes(1);
+    await ctx.mod.rebuild();
+    expect(ctx.setProxy).toHaveBeenLastCalledWith(added.setProxy.mock.calls[0][0]);
+    expect(added.closeAllConnections).toHaveBeenCalledTimes(1);
+  });
+
   test('stopping one service preserves the other for every session', async () => {
     const ctx = loadNetworkManagerModule();
     const privateSession = makeProxySession();
