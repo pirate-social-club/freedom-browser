@@ -2,8 +2,9 @@
 name = "freedom-header-conformance"
 version = "0.1.0"
 edition = "2024"
-license = "AGPL-3.0-only"
+license = "MIT OR Apache-2.0"
 publish = false
+include = ["Cargo.toml", "src/**", "fixtures/**", "README.md", "LICENSE-MIT", "LICENSE-APACHE"]
 
 [dependencies]
 bitcoin = { version = "=0.32.8", default-features = false, features = ["std"] }

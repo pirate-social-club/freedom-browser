@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Pirate Social Club contributors
+
 use super::*;
 use bitcoin::{block::Version, consensus::deserialize};
 use std::str::FromStr;

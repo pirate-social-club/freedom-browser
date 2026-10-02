@@ -55,3 +55,16 @@ validate persisted state, and implement rollback and continuing freshness gates.
 Full block/state validity, synchronization, restart, Mullvad routing and secure
 installed-browser navigation remain unproven. This component grants no anchor
 authority and changes no application behavior or release policy.
+
+## License
+
+The standalone Rust validator, its tests and this component documentation are
+available under either the MIT license or the Apache License, Version 2.0, at
+the recipient's option. See LICENSE-MIT and LICENSE-APACHE. The Cargo package
+includes those files, its Rust source and the conformance fixtures.
+
+The Python acceptance harness and GitHub workflow retain Freedom's repository
+license. Freedom's application license remains AGPL-3.0-or-later. Dependencies
+and third-party material retain their own terms and attribution. Consensus
+references, numeric expectations and public ledger data remain identified
+above and in the fixture provenance; this grant does not replace their terms.
