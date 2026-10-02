@@ -37,4 +37,26 @@ class RendererProofTests(unittest.TestCase):
   for mapping in [[],[[1001,1001,0]],[[True,1001,1]],[[1001,1001,-1]]]:
    candidate=copy.deepcopy(self.record);candidate['uid_map']=mapping;self.assertFalse(guard.valid_renderer(candidate,self.main,self.host,1001))
 
+class RendererDiscoveryTests(unittest.TestCase):
+ def setUp(self):self.rows=[{'type':'browser','id':10733},{'type':'renderer','id':10922},{'type':'renderer','id':10911},{'type':'GPU','id':10753}]
+ def test_browser_inventory_uses_OS_pids_without_cmdline_tokens(self):
+  self.rows[1]['cpuTime']=4.5;self.rows[1]['ignored']='not published'
+  self.assertEqual(guard.select_renderer_pids(self.rows,10733),{'browser_pid':10733,'renderer_pids':[10911,10922]})
+ def test_unrelated_browser_refused(self):
+  with self.assertRaises(AssertionError):guard.select_renderer_pids(self.rows,99)
+ def test_missing_renderers_or_browser_refused(self):
+  for rows in [[],[self.rows[0]],self.rows[1:]]:
+   with self.assertRaises(AssertionError):guard.select_renderer_pids(rows,10733)
+ def test_duplicate_id_or_browser_refused(self):
+  for row in [self.rows[1],{'type':'browser','id':100}]:
+   with self.assertRaises(AssertionError):guard.select_renderer_pids(self.rows+[row],10733)
+ def test_forged_or_malformed_inventory_refused(self):
+  for value in [True,0,-1,'10922',10922.5,None]:
+   rows=copy.deepcopy(self.rows);rows[1]['id']=value
+   with self.assertRaises(AssertionError):guard.select_renderer_pids(rows,10733)
+ def test_foreign_child_or_missing_cgroup_refused(self):
+  expected='0::/system.slice/freedom-package-1-test.service'
+  self.assertTrue(guard.same_cgroup(expected+'\n',expected))
+  for actual in ['',expected+'/child',expected+'-other',expected+'\n'+expected]:self.assertFalse(guard.same_cgroup(actual,expected))
+
 if __name__=='__main__':unittest.main()
