@@ -1,0 +1,9 @@
+[package]
+name = "freedom-header-conformance"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+
+[dependencies]
+bitcoin = { version = "=0.32.8", default-features = false, features = ["std"] }
