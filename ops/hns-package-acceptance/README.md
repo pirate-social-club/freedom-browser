@@ -13,3 +13,5 @@ Runtime uses root-owned network/mount namespaces and an ordinary host UID throug
 This revision is prepared and statically reviewed only until bounded verification and actual hosted installed-deb acceptance finish. Local full lint/unit/binary gates and hostile proof-validator fixtures are required before publication.
 
 Combined renderer OS and Electron isolated-context proof is mandatory both after welcome and after the final HNS controls, with distinct pre-security and final receipts. Package/profile removal is allowed only after every tracked owned process has stopped.
+
+A failed offline build now retains the last 50 lines, bounded to a 64 KiB read, of offline-build.log as offline-build-error.log. This explicit publication exception applies only to credential-free package preparation before fixture generation. The system service receives a fixed environment without GitHub tokens or repository secrets, and checkout credentials are not persisted. FPM preflight, environment, browser, profile and fixture logs remain private. This records the actual unknown build error instead of relying solely on classifier markers.

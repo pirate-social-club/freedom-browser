@@ -20,6 +20,16 @@ def private_tool_markers(filename):
    private_log.seek(max(0,size-16384));tail=private_log.read(16384)
  except OSError:return ['log_unavailable']
  return classify_tool_markers(tail)
+def retain_build_error_tail():
+ # This credential-free packaging phase runs before private fixtures exist.
+ # Only this exact file is eligible; no browser/FPM/environment logs are copied.
+ with (p/'offline-build.log').open('rb') as build_log:
+  build_log.seek(0,os.SEEK_END);size=build_log.tell()
+  build_log.seek(max(0,size-65536));tail=build_log.read(65536)
+ # Drop a partial first line when the file exceeds the bounded read.
+ if size>65536:tail=tail.partition(b'\n')[2]
+ tail=b'\n'.join(tail.splitlines()[-50:])+b'\n'
+ (p/'offline-build-error.log').write_bytes(tail)
 def classify_tool_markers(tail):
  # Bounded raw bytes only; matched text, paths and secrets never leave this function.
  tail=tail[-16384:]
@@ -101,6 +111,9 @@ def preparation_exception(_kind,error,_traceback):
  elif isinstance(error,subprocess.TimeoutExpired):category='timeout'
  elif isinstance(error,subprocess.CalledProcessError):category='child_failed';returncode=error.returncode
  markers=None
+ if preparation_phase=='offline_build':
+  try:retain_build_error_tail()
+  except OSError:pass
  if preparation_phase in ('offline_build','fpm_runtime_preflight'):
   markers=private_tool_markers('offline-build.log' if preparation_phase=='offline_build' else 'fpm-preflight.log')
   if preparation_phase=='fpm_runtime_preflight' and isinstance(error,OSError):markers.append('fpm_preflight_io_error_marker')

@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import Mock
 SOURCE=Path(__file__).with_name('prepare-runtime.py').read_text()
 TREE=ast.parse(SOURCE)
-NAMES={'classify_tool_markers','private_tool_markers','preparation_exception','NamespacePermissionDenied','FpmVersionMismatch'}
+NAMES={'classify_tool_markers','private_tool_markers','preparation_exception','NamespacePermissionDenied','FpmVersionMismatch','retain_build_error_tail'}
 SELECTED=[node for node in TREE.body if isinstance(node,(ast.FunctionDef,ast.ClassDef)) and node.name in NAMES]
 class ToolDiagnosticsTests(unittest.TestCase):
  def setUp(self):
@@ -36,6 +36,27 @@ class ToolDiagnosticsTests(unittest.TestCase):
   for error,code in [(FileNotFoundError('PRIVATE'),'fpm_preflight_io_error_marker'),(self.scope['FpmVersionMismatch'](),'fpm_version_mismatch_marker')]:
    self.scope['preparation_exception'](None,error,None)
    self.assertIn(code,self.scope['preparation_progress'].call_args.args[3])
+ def test_error_tail_keeps_actual_unknown_error_and_only_last_fifty_lines(self):
+  raw=b'\n'.join(('line '+str(i)).encode() for i in range(80))+b'\nUNKNOWN BUILDER FAILURE\n'
+  (self.scope['p']/'offline-build.log').write_bytes(raw)
+  self.scope['retain_build_error_tail']()
+  tail=(self.scope['p']/'offline-build-error.log').read_bytes()
+  self.assertEqual(len(tail.splitlines()),50);self.assertTrue(tail.endswith(b'UNKNOWN BUILDER FAILURE\n'))
+  self.assertNotIn(b'line 0\n',tail)
+ def test_error_tail_bounded_read_discards_partial_first_line(self):
+  (self.scope['p']/'offline-build.log').write_bytes(b'x'*100000+b'\nACTUAL ERROR\n')
+  self.scope['retain_build_error_tail']()
+  self.assertEqual((self.scope['p']/'offline-build-error.log').read_bytes(),b'ACTUAL ERROR\n')
+ def test_other_phase_does_not_publish_raw_private_logs(self):
+  (self.scope['p']/'fpm-preflight.log').write_bytes(b'PRIVATE FPM LOG')
+  self.scope['preparation_phase']='fpm_runtime_preflight'
+  self.scope['preparation_exception'](None,subprocess.CalledProcessError(1,'PRIVATE'),None)
+  self.assertFalse((self.scope['p']/'offline-build-error.log').exists())
+ def test_failed_offline_build_hook_retains_real_error(self):
+  (self.scope['p']/'offline-build.log').write_bytes(b'ACTUAL UNKNOWN ERROR\n')
+  self.scope['preparation_phase']='offline_build'
+  self.scope['preparation_exception'](None,subprocess.CalledProcessError(1,'fixed-command'),None)
+  self.assertEqual((self.scope['p']/'offline-build-error.log').read_bytes(),b'ACTUAL UNKNOWN ERROR\n')
  def test_actual_preflight_exact_namespace_version_and_checked_run(self):
   start=next(i for i,node in enumerate(TREE.body) if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='preparation_phase' for t in node.targets) and isinstance(node.value,ast.Constant) and node.value.value=='fpm_runtime_preflight')
   nodes=TREE.body[start:start+4];calls=[];fpm=self.scope['p']/'cached-fpm'
