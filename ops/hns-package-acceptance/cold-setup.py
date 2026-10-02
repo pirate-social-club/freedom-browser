@@ -1,5 +1,5 @@
 # Invoked only by the proposed hosted cold-setup step, never on the gaming machine.
-import os,sys,json,subprocess,hashlib,time,re
+import os,sys,json,subprocess,hashlib,time,re,runpy
 from pathlib import Path
 base=Path(__file__).parent;repo=Path(os.environ['FREEDOM_REPOSITORY']).resolve();root=Path(os.environ['FREEDOM_COLD_ROOT']).resolve();root.mkdir(mode=0o755);root.chmod(0o755)
 start=time.monotonic();deadline=start+1150
@@ -12,6 +12,39 @@ assert sys.version_info[:2]==(3,12),'pinned wheels require Ubuntu24 Python3.12'
 assert subprocess.check_output(['node','--version'],text=True,timeout=5).strip()=='v24.14.0'
 lock=json.loads((repo/'package-lock.json').read_text());assert lock['packages']['node_modules/axios']['version']=='1.20.0';assert lock['packages']['node_modules/electron']['version']=='42.10.0'
 run(['npm','ci']);run(['npm','audit','--audit-level=high'])
+# Electron42 has no npm postinstall downloader. Explicitly prepare its locked binary during cold setup.
+electron_dir=repo/'node_modules/electron';electron=electron_dir/'dist/electron';addon=repo/'node_modules/better-sqlite3/build/Release/better_sqlite3.node'
+assert json.loads((electron_dir/'package.json').read_text())['version']=='42.10.0'
+electron_archive='electron-v42.10.0-linux-x64.zip';electron_checksum=json.loads((electron_dir/'checksums.json').read_text())[electron_archive]
+assert re.fullmatch('[0-9a-f]{64}',electron_checksum),'bundled Electron checksum missing'
+electron_cache=root/'electron-cache';assert not electron_cache.exists(),'fresh Electron archive cache required'
+run(['node',str(electron_dir/'install.js')],env={**os.environ,'electron_config_cache':str(electron_cache),'ELECTRON_INSTALL_PLATFORM':'linux','ELECTRON_INSTALL_ARCH':'x64','electron_use_remote_checksums':'','npm_config_electron_use_remote_checksums':''})
+assert electron.is_file() and addon.is_file(),'cold Electron/native ABI artifact missing'
+assert (electron_dir/'dist/version').read_text().strip().lstrip('v')=='42.10.0' and (electron_dir/'path.txt').read_text().strip()=='electron','installed Electron version/path mismatch'
+version_proof=runpy.run_path(str(base/'harness/electron-provenance.py'))['distribution_proof'](repo,electron_cache,os.environ['FREEDOM_SOURCE_SHA'])
+electron_ldd=subprocess.check_output(['ldd',str(electron)],text=True,timeout=5);assert 'not found' not in electron_ldd,'Electron runtime library missing'
+native_probe="const DB=require('better-sqlite3');const db=new DB(':memory:');if(db.prepare('SELECT 42 AS value').get().value!==42)throw Error('cold SQLite ABI');db.close();const axios=require('axios');if(axios.VERSION!=='1.20.0'||typeof axios.request!=='function')throw Error('cold Axios version');"
+run([str(electron),'-e',native_probe],env={**os.environ,'ELECTRON_RUN_AS_NODE':'1'})
+# Prepare only the locked builder FPM distribution in a fresh cold cache.
+fpm_module=repo/'node_modules/app-builder-lib/out/toolsets/linux.js'
+fpm_module_sha=hashlib.sha256(fpm_module.read_bytes()).hexdigest()
+assert json.loads((repo/'node_modules/app-builder-lib/package.json').read_text())['version']=='26.15.3'
+fpm_archive='fpm-1.17.0-ruby-3.4.3-linux-amd64.7z';fpm_archive_sha='44b0ec6025c14ec137f56180e62675c0eae36233cdce53d0953d9c73ced8989f'
+assert fpm_archive_sha in fpm_module.read_text(),'locked FPM checksum changed'
+fpm_cache=root/'builder-cache';assert not fpm_cache.exists()
+fpm_environment={**os.environ,'ELECTRON_BUILDER_CACHE':str(fpm_cache),'USE_SYSTEM_FPM':'false'}
+fpm_environment.pop('CUSTOM_FPM_PATH',None)
+fpm_prepare=run(['node','-e',"require('app-builder-lib/out/toolsets/linux').getFpmPath().then(p=>console.log('FPM_PATH '+p)).catch(()=>process.exit(1))"],env=fpm_environment,stdout=subprocess.PIPE)
+fpm_lines=[line[9:] for line in fpm_prepare.stdout.decode().splitlines() if line.startswith('FPM_PATH ')]
+assert len(fpm_lines)==1
+fpm=Path(fpm_lines[0]).resolve();assert fpm.is_file() and fpm.is_relative_to(fpm_cache.resolve())
+def file_sha(path):
+ h=hashlib.sha256()
+ with path.open('rb') as stream:
+  for chunk in iter(lambda:stream.read(1048576),b''):h.update(chunk)
+ return h.hexdigest()
+fpm_files={str(path.relative_to(fpm.parent)):file_sha(path) for path in sorted(fpm.parent.rglob('*')) if path.is_file()}
+(root/'fpm-cache.json').write_text(json.dumps({'archive':fpm_archive,'archive_sha256':fpm_archive_sha,'builder_version':'26.15.3','toolset_module_sha256':fpm_module_sha,'executable':str(fpm),'directory':str(fpm.parent),'files':fpm_files},indent=2)+'\n')
 for script in ['bee:download','ipfs:download','radicle:download']:run(['npm','run',script,'--','--target','linux-x64'])
 venv=root/'python';run(['/usr/bin/python3','-m','venv',str(venv)])
 run([str(venv/'bin/pip'),'install','--require-hashes','--only-binary=:all:','--disable-pip-version-check','-r',str(base/'requirements.txt')])
@@ -21,11 +54,11 @@ installed=json.loads((browser/'package-lock.json').read_text())['packages']['nod
 binary=browser/'node_modules/agent-browser/bin/agent-browser-linux-x64';assert binary.is_file(),'native CLI missing from pinned npm archive; no unverified GitHub fallback'
 assert hashlib.sha256(binary.read_bytes()).hexdigest()==pin['native_sha256'],'CLI native executable differs from previously tested artifact';binary.chmod(0o755)
 # No agent-browser install/open command. Attachment is explicit --cdp in the later phase.
-assert not Path('/root/.agent-browser/config.json').exists() and not (repo/'agent-browser.json').exists(),'unexpected browser automation configuration'
-electron_ldd=subprocess.check_output(['ldd',str(repo/'node_modules/electron/dist/electron')],text=True,timeout=5);assert 'not found' not in electron_ldd,'Electron runtime library missing'
+run(['sudo','-n','test','!','-e','/root/.agent-browser/config.json'])
+assert not (repo/'agent-browser.json').exists(),'unexpected browser automation configuration'
 for path in [repo/'node_modules/electron/dist/electron',repo/'node_modules/better-sqlite3/build/Release/better_sqlite3.node',repo/'hns-bin/linux-x64/hnsd',repo/'hns-bin/linux-x64/fingertipd']:assert path.is_file()
 for flags in [['-l'],['-d']]:
  output=subprocess.check_output(['readelf',*flags,str(repo/'hns-bin/linux-x64/hnsd')],text=True,timeout=5)
  assert ('INTERP' not in output) if flags==['-l'] else ('There is no dynamic section' in output),'hnsd unexpectedly dynamically linked'
-receipt={'source':os.environ['FREEDOM_SOURCE_SHA'],'cold_setup_seconds':time.monotonic()-start,'Node':'24.14.0','Electron':'42.10.0','Axios':'1.20.0','agent_browser':pin,'libunbound_runtime_package_required':False,'native_module_sha256':hashlib.sha256((repo/'node_modules/better-sqlite3/build/Release/better_sqlite3.node').read_bytes()).hexdigest(),'ImageOS':os.environ.get('ImageOS'),'ImageVersion':os.environ.get('ImageVersion'),'apt_packages':subprocess.check_output(['dpkg-query','-W','-f=${Package} ${Version}\n','xvfb','slirp4netns','nftables','python3','python3-venv','util-linux','binutils'],text=True,timeout=5).splitlines()}
+receipt={'electron_version_provenance':version_proof,'source':os.environ['FREEDOM_SOURCE_SHA'],'cold_setup_seconds':time.monotonic()-start,'Node':'24.14.0','Electron':'42.10.0','Axios':'1.20.0','agent_browser':pin,'libunbound_runtime_package_required':False,'Electron_download_archive':electron_archive,'Electron_download_sha256':electron_checksum,'Electron_installer_sha256':hashlib.sha256((electron_dir/'install.js').read_bytes()).hexdigest(),'Electron_executable_sha256':hashlib.sha256(electron.read_bytes()).hexdigest(),'cold_native_sqlite_SELECT42':True,'cold_Axios_version':'1.20.0','native_module_sha256':hashlib.sha256((repo/'node_modules/better-sqlite3/build/Release/better_sqlite3.node').read_bytes()).hexdigest(),'ImageOS':os.environ.get('ImageOS'),'ImageVersion':os.environ.get('ImageVersion'),'apt_packages':subprocess.check_output(['dpkg-query','-W','-f=${Package} ${Version}\n','xvfb','slirp4netns','nftables','python3','python3-venv','util-linux','binutils'],text=True,timeout=5).splitlines()}
 (root/'cold-setup.json').write_text(json.dumps(receipt,indent=2)+'\n')

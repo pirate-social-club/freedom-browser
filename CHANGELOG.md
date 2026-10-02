@@ -13,6 +13,7 @@ All notable changes to Freedom will be documented in this file.
 
 ### Changed
 
+- Distribute Linux builds as deb packages so the installer can configure Chromium sandbox support.
 - Keep startup, new tabs and the Home button on the local welcome page, including after the Handshake resolver becomes ready. Remote sites remain manual destinations.
 
 ### Fixed

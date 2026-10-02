@@ -2,7 +2,7 @@ import os,subprocess,time,json,signal,threading,shutil,sys
 from pathlib import Path
 source=Path(__file__).parent;start=float(os.environ['FREEDOM_START_MONOTONIC']);epoch=float(os.environ['FREEDOM_START_EPOCH']);deadline=epoch+600
 p=Path(os.environ['FREEDOM_PRIVATE_ROOT'])/'work'
-p.mkdir(parents=True,mode=0o700);os.chmod(p,0o700)
+p.mkdir(parents=True,mode=0o700);os.chmod(p,0o711)
 for f in source.iterdir():
  if f.is_file():shutil.copy2(f,p/f.name)
 token=os.environ['FREEDOM_RUN_TOKEN'];assert __import__('re').fullmatch('[a-z0-9-]{1,40}',token)
@@ -16,7 +16,7 @@ os.sched_setaffinity(0,{min(os.sched_getaffinity(0))})
 expected='0::/system.slice/'+os.environ['FREEDOM_SYSTEMD_UNIT']
 assert next(s for s in Path('/proc/self/cgroup').read_text().splitlines() if s.startswith('0::'))==expected,'wrong dedicated system cgroup'
 hostns=Path('/proc/self/ns/net').readlink().as_posix()
-(p/'timing.json').write_text(json.dumps({'start_epoch':prior['start_epoch'],'resume_epoch':time.time(),'deadline_epoch':deadline,'host_netns':hostns,'host_mountns':Path('/proc/self/ns/mnt').readlink().as_posix(),'affinity':list(os.sched_getaffinity(0))},indent=2))
+(p/'timing.json').write_text(json.dumps({'start_epoch':prior['start_epoch'],'resume_epoch':time.time(),'deadline_epoch':deadline,'host_netns':hostns,'host_mountns':Path('/proc/self/ns/mnt').readlink().as_posix(),'host_userns':Path('/proc/self/ns/user').readlink().as_posix(),'host_pidns':Path('/proc/self/ns/pid').readlink().as_posix(),'affinity':list(os.sched_getaffinity(0))},indent=2))
 cgroup=Path('/sys/fs/cgroup')/expected.split('::',1)[1].lstrip('/')
 preflight={name:(cgroup/name).read_text().strip() for name in ['cpu.max','memory.max','memory.swap.max']}
 cpuset_owner=next(parent for parent in [cgroup,*cgroup.parents] if (parent/'cpuset.cpus.effective').exists())
@@ -63,11 +63,11 @@ try:
  prep_log=(p/'preparation.log').open('wb');prep=subprocess.Popen(['python3',str(p/'prepare-runtime.py')],stdout=prep_log,stderr=subprocess.STDOUT)
  while prep.poll() is None and not stop.is_set():time.sleep(.1)
  assert prep.poll()==0,'candidate preparation failed or deadline reached'
- log=(p/'namespace-controller.log').open('wb');ns=subprocess.Popen(['unshare','--user','--map-root-user','--net','--mount','python3',str(p/'namespace-controller.py')],stdout=log,stderr=subprocess.STDOUT)
+ log=(p/'namespace-controller.log').open('wb');ns=subprocess.Popen(['unshare','--net','--mount','python3',str(p/'namespace-controller.py')],stdout=log,stderr=subprocess.STDOUT)
  while not (p/'namespace-pid').exists() and ns.poll() is None and not stop.is_set():time.sleep(.1)
  assert ns.poll() is None,'namespace startup failed'
  pid=int((p/'namespace-pid').read_text());r,w=os.pipe()
- slog=(p/'slirp.log').open('wb');slirp=subprocess.Popen(['slirp4netns','--configure','--disable-host-loopback','--ready-fd='+str(w),'--userns-path=/proc/'+str(pid)+'/ns/user',str(pid),'tap0'],pass_fds=[w],stdout=slog,stderr=subprocess.STDOUT);os.close(w)
+ slog=(p/'slirp.log').open('wb');slirp=subprocess.Popen(['slirp4netns','--configure','--disable-host-loopback','--ready-fd='+str(w),str(pid),'tap0'],pass_fds=[w],stdout=slog,stderr=subprocess.STDOUT);os.close(w)
  import select
  assert select.select([r],[],[],10)[0],'slirp readiness timeout';assert os.read(r,1), 'slirp failed';os.close(r);(p/'network.ready').write_text('ready')
  while ns.poll() is None and not stop.is_set():time.sleep(.1)
@@ -83,6 +83,17 @@ finally:
     try:os.kill(pid,sig)
     except ProcessLookupError:pass
   time.sleep(1);procs=processes()
+ # Remove only this newly installed package/profile, after all browser descendants stop.
+ if (p/'installed-deb.json').exists():
+  removed=False
+  try:
+   assert not [pid for pid,born in owned.items() if pid in procs and procs[pid][1]==born and procs[pid][2]!='Z'],'owned processes remain before profile removal'
+   remaining=start+600-time.monotonic()-2;assert remaining>0
+   subprocess.run(['dpkg','--remove','freedom-browser'],check=True,timeout=min(8,remaining),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+   removed=not Path('/opt/Freedom/freedom').exists() and not Path('/etc/apparmor.d/freedom').exists() and 'freedom (unconfined)' not in Path('/sys/kernel/security/apparmor/profiles').read_text().splitlines()
+   assert removed,'installed package/profile retained'
+  except BaseException:errors.append('installed deb cleanup failed')
+  (p/'installed-deb-cleanup.json').write_text(json.dumps({'removed':removed})+'\n')
  stop.set();thread.join(timeout=1)
  alive=[pid for pid,born in owned.items() if pid in procs and procs[pid][1]==born and procs[pid][2]!='Z']
  (p/'containment.json').write_text(json.dumps({'expected_cgroup':expected,'tracked_pids':sorted(owned),'remaining_pids':alive,'all_tracked_stopped':not alive,'errors':errors,'elapsed_seconds':time.monotonic()-start},indent=2))

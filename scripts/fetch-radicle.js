@@ -41,12 +41,12 @@ async function installTarget(targetKey) {
   const downloads = [
     {
       name: mainName,
-      url: `https://files.radicle.xyz/releases/latest/${mainName}`,
+      url: `https://files.radicle.dev/releases/${artifacts.version}/${mainName}`,
       digest: artifact.mainSha256,
     },
     {
       name: httpdName,
-      url: `https://files.radicle.xyz/releases/radicle-httpd/latest/${httpdName}`,
+      url: `https://files.radicle.dev/releases/radicle-httpd/${artifacts.httpdVersion}/${httpdName}`,
       digest: artifact.httpdSha256,
     },
   ];
@@ -81,7 +81,11 @@ async function main() {
   for (const target of selectedTargets()) await installTarget(target);
 }
 
-main().catch((error) => {
-  console.error('Radicle download failed:', error.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error('Radicle download failed:', error.message);
+    process.exit(1);
+  });
+}
+
+module.exports = { installTarget };
