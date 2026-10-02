@@ -28,6 +28,11 @@ class RendererProofTests(unittest.TestCase):
    candidate=copy.deepcopy(self.record);candidate['namespaces'][kind]=self.host[kind];self.assertFalse(guard.valid_renderer(candidate,self.main,self.host,1001))
  def test_unattached_profile_refused(self):
   candidate=copy.deepcopy(self.record);candidate['named_packaged_profile_attached']=False;self.assertFalse(guard.valid_renderer(candidate,self.main,self.host,1001))
+ def test_diagnostics_identify_rejected_guard_without_weakening_it(self):
+  checks=guard.renderer_checks(self.record,self.main,self.host,1001);self.assertTrue(all(checks.values()))
+  for field,value,code in [('cap_eff',1,'capabilities_zero'),('no_new_privs',0,'no_new_privs_enabled'),('seccomp_filters',0,'extra_seccomp_filter')]:
+   candidate=copy.deepcopy(self.record);candidate[field]=value;checks=guard.renderer_checks(candidate,self.main,self.host,1001)
+   self.assertFalse(checks[code]);self.assertFalse(guard.valid_renderer(candidate,self.main,self.host,1001))
  def test_empty_or_forged_uid_map_refused(self):
   for mapping in [[],[[1001,1001,0]],[[True,1001,1]],[[1001,1001,-1]]]:
    candidate=copy.deepcopy(self.record);candidate['uid_map']=mapping;self.assertFalse(guard.valid_renderer(candidate,self.main,self.host,1001))
