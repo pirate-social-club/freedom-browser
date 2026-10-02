@@ -57,6 +57,14 @@ class ToolDiagnosticsTests(unittest.TestCase):
   self.scope['preparation_phase']='offline_build'
   self.scope['preparation_exception'](None,subprocess.CalledProcessError(1,'fixed-command'),None)
   self.assertEqual((self.scope['p']/'offline-build-error.log').read_bytes(),b'ACTUAL UNKNOWN ERROR\n')
+ def test_build_preserves_host_ownership_and_keeps_network_isolation(self):
+  assignment=next(node for node in TREE.body if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='command' for t in node.targets))
+  scope={'freedom':self.scope['p']/'source','p':self.scope['p']}
+  exec(compile(ast.Module(body=[assignment],type_ignores=[]),'<build-command-fixture>','exec'),scope)
+  command=scope['command']
+  self.assertEqual(command[:5],['unshare','--net','node','node_modules/electron-builder/cli.js','--linux'])
+  self.assertNotIn('--user',command);self.assertNotIn('--map-root-user',command)
+  self.assertIn('deb',command);self.assertEqual(command[command.index('--publish')+1],'never')
  def test_actual_preflight_exact_namespace_version_and_checked_run(self):
   start=next(i for i,node in enumerate(TREE.body) if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='preparation_phase' for t in node.targets) and isinstance(node.value,ast.Constant) and node.value.value=='fpm_runtime_preflight')
   nodes=TREE.body[start:start+4];calls=[];fpm=self.scope['p']/'cached-fpm'

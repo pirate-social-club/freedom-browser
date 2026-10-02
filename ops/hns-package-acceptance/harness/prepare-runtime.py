@@ -167,7 +167,9 @@ with (p/'fpm-preflight.log').open('wb') as fpm_log:
 with (p/'fpm-preflight.log').open('rb') as fpm_log:
  if fpm_log.read(16385).strip()!=b'1.17.0':raise FpmVersionMismatch()
 preparation_phase='offline_build';preparation_progress()
-command=['unshare','--user','--map-root-user','--net','node','node_modules/electron-builder/cli.js','--linux','deb','--x64','--publish','never','-c.electronDist='+str(freedom/'node_modules/electron/dist'),'-c.npmRebuild=false','-c.nodeGypRebuild=false','-c.directories.output='+str(p/'build')]
+# FPM preserves source ownership; keep host UID/GID mappings while isolating networking.
+# A single-ID user namespace makes runner-owned input metadata unmappable to lchown.
+command=['unshare','--net','node','node_modules/electron-builder/cli.js','--linux','deb','--x64','--publish','never','-c.electronDist='+str(freedom/'node_modules/electron/dist'),'-c.npmRebuild=false','-c.nodeGypRebuild=false','-c.directories.output='+str(p/'build')]
 with (p/'offline-build.log').open('wb') as build_log:
  run(command,cwd=freedom,env={**os.environ,'ELECTRON_SKIP_BINARY_DOWNLOAD':'1','npm_config_offline':'true','CSC_IDENTITY_AUTO_DISCOVERY':'false','CUSTOM_FPM_PATH':str(fpm),'USE_SYSTEM_FPM':'false'},stdout=build_log,stderr=subprocess.STDOUT)
 preparation_phase='deb_install';preparation_progress()
