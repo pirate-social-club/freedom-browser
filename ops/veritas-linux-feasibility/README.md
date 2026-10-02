@@ -15,6 +15,20 @@ its cgroup empty before the next. The inspection copy is owned by the runner and
 mounted read-only to the build identity. The final copied artifact must retain
 the original executable digest. Cleanup failures remain failures in the receipt.
 
+The controller launches each unit without blocking, then polls its execution
+timestamp, exit status and terminal state. It records resource and isolation
+properties before stopping the unit. This avoids the indefinite wait caused by
+combining systemd-run --wait or --pipe with RemainAfterExit=yes. Systemd may clear
+ControlGroup after the last process exits; an empty value is accepted only when
+the explicitly named unit cgroup is absent.
+
+The lifecycle fixtures exercise successful exit, nonzero exit, a runtime deadline,
+and cleanup of a surviving descendant through the same controller. They also
+reject success metadata with no execution timestamp. On a Linux development host
+with a user systemd manager, invoke `python3 ops/veritas-linux-feasibility/test-systemd-lifecycle.py`
+with a new evidence-directory path. The fixtures run only true, false, shell and
+sleep commands, each under ten percent CPU, 32 MiB memory and no swap.
+
 The sixty-minute job limit leaves time for toolchain installation, dependency
 acquisition, bounded inspection, cleanup and artifact upload. A forced runner
 termination can still prevent a final receipt; absence of the receipt is not a
