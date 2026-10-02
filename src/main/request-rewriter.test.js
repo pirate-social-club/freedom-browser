@@ -3,10 +3,11 @@ const {
   buildRewriteTarget,
   convertProtocolUrl,
   shouldBlockInvalidBzzRequest,
-  registerRequestRewriter,
+  installRequestRewriter,
 } = require('./request-rewriter');
 const log = require('./logger');
-const { activeRadBases } = require('./state');
+const { activeBzzBases, activeIpfsBases, activeRadBases } = require('./state');
+const { attachWebRequestDispatcher, _resetWebRequestHandlers } = require('./webrequest-dispatcher');
 const { formatRadicleUrl, deriveRadBaseFromUrl, deriveDisplayValue } = require('../renderer/lib/url-utils.js');
 
 // Mock service-registry so convertProtocolUrl can resolve gateway URLs
@@ -27,7 +28,10 @@ const VALID_ENCRYPTED_HASH = 'a'.repeat(128);
 const originalHnsDiagnostics = process.env.FREEDOM_HNS_DIAGNOSTICS;
 
 describe('request-rewriter', () => {
+  beforeEach(() => _resetWebRequestHandlers());
   afterEach(() => {
+    activeBzzBases.clear();
+    activeIpfsBases.clear();
     activeRadBases.clear();
     loadSettings.mockReturnValue({ enableRadicleIntegration: true });
     if (originalHnsDiagnostics === undefined) {
@@ -493,7 +497,7 @@ describe('request-rewriter', () => {
       }
     });
 
-    test('rewrites same-origin Radicle requests via registered session handler', () => {
+    test('rewrites same-origin Radicle requests via registered session handler', async () => {
       const webContentsId = 42;
       const sessionMock = {
         webRequest: {
@@ -502,13 +506,14 @@ describe('request-rewriter', () => {
       };
 
       activeRadBases.set(webContentsId, `${RADICLE_API_PREFIX}${SAMPLE_RID}/`);
-      registerRequestRewriter(sessionMock);
+      installRequestRewriter();
+      attachWebRequestDispatcher(sessionMock);
 
       expect(sessionMock.webRequest.onBeforeRequest).toHaveBeenCalledTimes(1);
       const [handler] = sessionMock.webRequest.onBeforeRequest.mock.calls[0];
       const callback = jest.fn();
 
-      handler(
+      await handler(
         {
           webContentsId,
           url: `${RADICLE_BASE}/blob/main/src/index.js`,
@@ -521,7 +526,7 @@ describe('request-rewriter', () => {
       });
     });
 
-    test('does not rewrite Radicle requests when integration is disabled', () => {
+    test('does not rewrite Radicle requests when integration is disabled', async () => {
       loadSettings.mockReturnValue({ enableRadicleIntegration: false });
       const webContentsId = 42;
       const sessionMock = {
@@ -531,12 +536,13 @@ describe('request-rewriter', () => {
       };
 
       activeRadBases.set(webContentsId, `${RADICLE_API_PREFIX}${SAMPLE_RID}/`);
-      registerRequestRewriter(sessionMock);
+      installRequestRewriter();
+      attachWebRequestDispatcher(sessionMock);
 
       const [handler] = sessionMock.webRequest.onBeforeRequest.mock.calls[0];
       const callback = jest.fn();
 
-      handler(
+      await handler(
         {
           webContentsId,
           url: `${RADICLE_BASE}/blob/main/src/index.js`,
@@ -547,7 +553,7 @@ describe('request-rewriter', () => {
       expect(callback).toHaveBeenCalledWith({});
     });
 
-    test('does not log single-label HNS requests as bypassed', () => {
+    test('does not log single-label HNS requests as bypassed', async () => {
       process.env.FREEDOM_HNS_DIAGNOSTICS = '1';
       const warnSpy = jest.spyOn(log, 'warn').mockImplementation(() => {});
       const sessionMock = {
@@ -556,11 +562,12 @@ describe('request-rewriter', () => {
         },
       };
 
-      registerRequestRewriter(sessionMock);
+      installRequestRewriter();
+      attachWebRequestDispatcher(sessionMock);
 
       const [handler] = sessionMock.webRequest.onBeforeRequest.mock.calls[0];
       const callback = jest.fn();
-      handler(
+      await handler(
         {
           frameId: 0,
           initiator: 'https://app.pirate',
@@ -576,4 +583,42 @@ describe('request-rewriter', () => {
       expect(warnSpy).not.toHaveBeenCalled();
     });
   });
+
+  describe('shared request dispatch', () => {
+    async function drive(url, webContentsId = 7) {
+      const targetSession = { webRequest: { onBeforeRequest: jest.fn() } };
+      installRequestRewriter();
+      attachWebRequestDispatcher(targetSession);
+      const callback = jest.fn();
+      await targetSession.webRequest.onBeforeRequest.mock.calls[0][0]({ url, webContentsId }, callback);
+      expect(callback).toHaveBeenCalledTimes(1);
+      return callback.mock.calls[0][0];
+    }
+
+    test.each([
+      ['bzz://' + VALID_HASH + '/index.html', 'http://127.0.0.1:1633/bzz/' + VALID_HASH + '/index.html'],
+      ['ipfs://Qm' + 'a'.repeat(44) + '/index.html', 'http://127.0.0.1:8080/ipfs/Qm' + 'a'.repeat(44) + '/index.html'],
+      ['ipns://example.com/index.html', 'http://127.0.0.1:8080/ipns/example.com/index.html'],
+    ])('preserves custom protocol redirect for %s', async (url, redirectURL) => {
+      expect(await drive(url)).toEqual({ redirectURL });
+    });
+
+    test.each([
+      [activeBzzBases, 'http://127.0.0.1:1633/bzz/' + VALID_HASH + '/', 'http://127.0.0.1:1633/asset.css'],
+      [activeIpfsBases, 'http://127.0.0.1:8080/ipfs/Qm' + 'a'.repeat(44) + '/', 'http://127.0.0.1:8080/asset.css'],
+    ])('preserves same-origin gateway assets', async (bases, base, url) => {
+      bases.set(7, base);
+      expect(await drive(url)).toEqual({ redirectURL: base + 'asset.css' });
+    });
+
+    test('does not redirect a cross-origin asset into a gateway', async () => {
+      activeBzzBases.set(7, 'http://127.0.0.1:1633/bzz/' + VALID_HASH + '/');
+      expect(await drive('https://example.com/asset.css')).toEqual({});
+    });
+
+    test('keeps the invalid Bee hash refusal', async () => {
+      expect(await drive('http://127.0.0.1:1633/bzz/invalid/asset.css')).toEqual({ cancel: true });
+    });
+  });
+
 });

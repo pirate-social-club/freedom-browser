@@ -1,4 +1,5 @@
 const log = require('./logger');
+const { registerWebRequestHandler } = require('./webrequest-dispatcher');
 const { activeBzzBases, activeIpfsBases, activeRadBases } = require('./state');
 const { getBeeApiUrl, getIpfsGatewayUrl, getRadicleApiUrl } = require('./service-registry');
 const { loadSettings } = require('./settings-store');
@@ -306,87 +307,80 @@ function shouldBlockInvalidBzzRequest(url) {
   return false;
 }
 
-function registerRequestRewriter(targetSession) {
-  if (!targetSession) {
-    return;
+function rewriteRequest(details) {
+  const webContentsId = details.webContentsId;
+  logUnknownSingleLabelRequest(details);
+
+  // First, check for custom protocol URLs (bzz://, ipfs://, ipns://)
+  const { converted, url: convertedUrl } = convertProtocolUrl(details.url);
+  if (converted) {
+    log.info(
+      `[rewrite:protocol] ${sanitizeUrlForLog(details.url)} -> ${sanitizeUrlForLog(convertedUrl)}`
+    );
+    return { redirectURL: convertedUrl };
   }
 
-  targetSession.webRequest.onBeforeRequest((details, callback) => {
-    const webContentsId = details.webContentsId;
-    logUnknownSingleLabelRequest(details);
-
-    // First, check for custom protocol URLs (bzz://, ipfs://, ipns://)
-    const { converted, url: convertedUrl } = convertProtocolUrl(details.url);
-    if (converted) {
-      log.info(
-        `[rewrite:protocol] ${sanitizeUrlForLog(details.url)} -> ${sanitizeUrlForLog(convertedUrl)}`
-      );
-      callback({ redirectURL: convertedUrl });
-      return;
-    }
-
-    // Check for Swarm (bzz) base first
-    const bzzBaseUrl = activeBzzBases.get(webContentsId);
-    if (bzzBaseUrl) {
-      const { shouldRewrite } = shouldRewriteRequest(details.url, bzzBaseUrl);
-      if (shouldRewrite) {
-        const redirectTarget = buildRewriteTarget(details.url, bzzBaseUrl);
-        if (redirectTarget) {
-          log.info(
-            `[rewrite:bzz] ${sanitizeUrlForLog(details.url)} -> ${sanitizeUrlForLog(redirectTarget)}`
-          );
-          callback({ redirectURL: redirectTarget });
-          return;
-        }
+  // Check for Swarm (bzz) base first
+  const bzzBaseUrl = activeBzzBases.get(webContentsId);
+  if (bzzBaseUrl) {
+    const { shouldRewrite } = shouldRewriteRequest(details.url, bzzBaseUrl);
+    if (shouldRewrite) {
+      const redirectTarget = buildRewriteTarget(details.url, bzzBaseUrl);
+      if (redirectTarget) {
+        log.info(
+          `[rewrite:bzz] ${sanitizeUrlForLog(details.url)} -> ${sanitizeUrlForLog(redirectTarget)}`
+        );
+        return { redirectURL: redirectTarget };
       }
     }
+  }
 
-    // Check for IPFS base
-    const ipfsBaseUrl = activeIpfsBases.get(webContentsId);
-    if (ipfsBaseUrl) {
-      const { shouldRewrite } = shouldRewriteRequest(details.url, ipfsBaseUrl);
-      if (shouldRewrite) {
-        const redirectTarget = buildRewriteTarget(details.url, ipfsBaseUrl);
-        if (redirectTarget) {
-          log.info(
-            `[rewrite:ipfs] ${sanitizeUrlForLog(details.url)} -> ${sanitizeUrlForLog(redirectTarget)}`
-          );
-          callback({ redirectURL: redirectTarget });
-          return;
-        }
+  // Check for IPFS base
+  const ipfsBaseUrl = activeIpfsBases.get(webContentsId);
+  if (ipfsBaseUrl) {
+    const { shouldRewrite } = shouldRewriteRequest(details.url, ipfsBaseUrl);
+    if (shouldRewrite) {
+      const redirectTarget = buildRewriteTarget(details.url, ipfsBaseUrl);
+      if (redirectTarget) {
+        log.info(
+          `[rewrite:ipfs] ${sanitizeUrlForLog(details.url)} -> ${sanitizeUrlForLog(redirectTarget)}`
+        );
+        return { redirectURL: redirectTarget };
       }
     }
+  }
 
-    // Check for Radicle base
-    const radBaseUrl = activeRadBases.get(webContentsId);
-    if (radBaseUrl && loadSettings().enableRadicleIntegration === true) {
-      const { shouldRewrite } = shouldRewriteRequest(details.url, radBaseUrl);
-      if (shouldRewrite) {
-        const redirectTarget = buildRewriteTarget(details.url, radBaseUrl);
-        if (redirectTarget) {
-          log.info(
-            `[rewrite:rad] ${sanitizeUrlForLog(details.url)} -> ${sanitizeUrlForLog(redirectTarget)}`
-          );
-          callback({ redirectURL: redirectTarget });
-          return;
-        }
+  // Check for Radicle base
+  const radBaseUrl = activeRadBases.get(webContentsId);
+  if (radBaseUrl && loadSettings().enableRadicleIntegration === true) {
+    const { shouldRewrite } = shouldRewriteRequest(details.url, radBaseUrl);
+    if (shouldRewrite) {
+      const redirectTarget = buildRewriteTarget(details.url, radBaseUrl);
+      if (redirectTarget) {
+        log.info(
+          `[rewrite:rad] ${sanitizeUrlForLog(details.url)} -> ${sanitizeUrlForLog(redirectTarget)}`
+        );
+        return { redirectURL: redirectTarget };
       }
     }
+  }
 
-    // Final guard: block requests to /bzz/ with missing or invalid hash
-    // to prevent "bzz download: invalid path" errors on the Bee node
-    if (shouldBlockInvalidBzzRequest(details.url)) {
-      callback({ cancel: true });
-      return;
-    }
+  // Final guard: block requests to /bzz/ with missing or invalid hash
+  // to prevent "bzz download: invalid path" errors on the Bee node
+  if (shouldBlockInvalidBzzRequest(details.url)) {
+    return { cancel: true };
+  }
 
-    // No rewrite needed
-    callback({});
-  });
+  // No rewrite needed
+  return null;
+}
+
+function installRequestRewriter() {
+  registerWebRequestHandler('onBeforeRequest', 'request-rewriter', rewriteRequest);
 }
 
 module.exports = {
-  registerRequestRewriter,
+  installRequestRewriter,
   shouldRewriteRequest,
   buildRewriteTarget,
   convertProtocolUrl,

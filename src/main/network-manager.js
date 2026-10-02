@@ -3,6 +3,7 @@ const { app, session } = require('electron');
 const http = require('http');
 const net = require('net');
 const { createSessionProxyController } = require('./session-proxy-controller');
+const { registerWebRequestHandler } = require('./webrequest-dispatcher');
 const { resolveHnsDohAddresses } = require('./hns-doh-resolver');
 const { resolveHnsLocalAddresses } = require('./hns-local-resolver');
 const {
@@ -33,10 +34,7 @@ const apiRequestLogState = new Map();
 const hnsProxyHosts = new Set();
 
 const API_DIAGNOSTICS_REPEAT_WINDOW_MS = 30 * 1000;
-const API_DIAGNOSTICS_URLS = [
-  'https://api.pirate.sc/*',
-  'https://api-staging.pirate.sc/*',
-];
+const API_DIAGNOSTICS_HOSTS = new Set(['api.pirate.sc', 'api-staging.pirate.sc']);
 const HNS_PROXY_CONNECT_TIMEOUT_MS = 5000;
 
 function isApiDiagnosticsEnabled() {
@@ -78,28 +76,35 @@ function logRateLimitedApiFailure(message) {
   });
 }
 
+function isApiDiagnosticsUrl(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.protocol === 'https:' && API_DIAGNOSTICS_HOSTS.has(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 function registerApiRequestDiagnostics(targetSession = session.defaultSession) {
   if (apiRequestDiagnosticsRegistered || !isApiDiagnosticsEnabled()) return;
   const webRequest = targetSession?.webRequest;
-  if (!webRequest?.onCompleted || !webRequest?.onErrorOccurred) return;
+  if (typeof webRequest?.onCompleted !== 'function' || typeof webRequest?.onErrorOccurred !== 'function') return;
 
-  apiRequestDiagnosticsRegistered = true;
-  const filter = { urls: API_DIAGNOSTICS_URLS };
-
-  webRequest.onCompleted(filter, (details) => {
-    if (!details || details.statusCode < 400) return;
+  registerWebRequestHandler('onCompleted', 'api-diagnostics-completed', (details) => {
+    if (!details || !isApiDiagnosticsUrl(details.url) || details.statusCode < 400) return;
     const url = sanitizeApiRequestUrl(details.url);
     const method = details.method || 'GET';
     logRateLimitedApiFailure(`[Network] API request failed: ${method} ${url} status=${details.statusCode}`);
-  });
+  }, { session: targetSession });
 
-  webRequest.onErrorOccurred(filter, (details) => {
-    if (!details) return;
+  registerWebRequestHandler('onErrorOccurred', 'api-diagnostics-error', (details) => {
+    if (!details || !isApiDiagnosticsUrl(details.url)) return;
     const url = sanitizeApiRequestUrl(details.url);
     const method = details.method || 'GET';
     const error = details.error || 'unknown';
     logRateLimitedApiFailure(`[Network] API request error: ${method} ${url} ${error}`);
-  });
+  }, { session: targetSession });
+  apiRequestDiagnosticsRegistered = true;
 }
 
 function formatImportedHnsSuffixesLog(suffixes = []) {

@@ -115,8 +115,10 @@ function loadNetworkManagerModule(options = {}) {
     },
   });
 
+  const dispatcher = require('./webrequest-dispatcher');
   return {
     mod,
+    dispatcher,
     log,
     setProxy,
     session,
@@ -841,17 +843,12 @@ describe('network-manager', () => {
     const ctx = loadNetworkManagerModule();
 
     ctx.mod.registerApiRequestDiagnostics(ctx.session.defaultSession);
+    ctx.dispatcher.attachWebRequestDispatcher(ctx.session.defaultSession);
 
-    expect(ctx.webRequest.onCompleted).toHaveBeenCalledWith(
-      { urls: ['https://api.pirate.sc/*', 'https://api-staging.pirate.sc/*'] },
-      expect.any(Function)
-    );
-    expect(ctx.webRequest.onErrorOccurred).toHaveBeenCalledWith(
-      { urls: ['https://api.pirate.sc/*', 'https://api-staging.pirate.sc/*'] },
-      expect.any(Function)
-    );
+    expect(ctx.webRequest.onCompleted).toHaveBeenCalledWith(expect.any(Function));
+    expect(ctx.webRequest.onErrorOccurred).toHaveBeenCalledWith(expect.any(Function));
 
-    const onCompleted = ctx.webRequest.onCompleted.mock.calls[0][1];
+    const onCompleted = ctx.webRequest.onCompleted.mock.calls[0][0];
     onCompleted({
       method: 'GET',
       statusCode: 200,
@@ -878,6 +875,43 @@ describe('network-manager', () => {
 
     expect(ctx.webRequest.onCompleted).not.toHaveBeenCalled();
     expect(ctx.webRequest.onErrorOccurred).not.toHaveBeenCalled();
+  });
+
+
+  test('API diagnostics preserve explicit session scope', () => {
+    const ctx = loadNetworkManagerModule();
+    const privateSession = { webRequest: { onCompleted: jest.fn(), onErrorOccurred: jest.fn() } };
+    ctx.mod.registerApiRequestDiagnostics(ctx.session.defaultSession);
+    ctx.dispatcher.attachWebRequestDispatcher(privateSession);
+    ctx.dispatcher.attachWebRequestDispatcher(ctx.session.defaultSession);
+    expect(privateSession.webRequest.onCompleted).not.toHaveBeenCalled();
+    expect(privateSession.webRequest.onErrorOccurred).not.toHaveBeenCalled();
+    expect(ctx.webRequest.onCompleted).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    'https://other.example/fail', 'http://api.pirate.sc/fail',
+    'https://api.pirate.sc.other.example/fail', 'not-a-url',
+  ])('API diagnostics ignore unrelated URL %s', (url) => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.registerApiRequestDiagnostics();
+    ctx.dispatcher.attachWebRequestDispatcher(ctx.session.defaultSession);
+    ctx.webRequest.onCompleted.mock.calls[0][0]({ url, statusCode: 500 });
+    ctx.webRequest.onErrorOccurred.mock.calls[0][0]({ url, error: 'failed' });
+    expect(ctx.log.warn).not.toHaveBeenCalled();
+  });
+
+  test('API error diagnostics keep query redaction and repeat suppression', () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.registerApiRequestDiagnostics();
+    ctx.dispatcher.attachWebRequestDispatcher(ctx.session.defaultSession);
+    const listener = ctx.webRequest.onErrorOccurred.mock.calls[0][0];
+    const details = { url: 'https://api-staging.pirate.sc/feed?token=secret&code=private', error: 'net::ERR_FAILED' };
+    listener(details);
+    listener(details);
+    expect(ctx.log.warn).toHaveBeenCalledTimes(1);
+    expect(ctx.log.warn.mock.calls[0][0]).toContain('net::ERR_FAILED');
+    expect(ctx.log.warn.mock.calls[0][0]).not.toMatch(/secret|private/);
   });
 
 });
