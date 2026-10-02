@@ -40,6 +40,8 @@ const STATUS = {
 let currentState = STATUS.STOPPED;
 let lastError = null;
 let helperProcess = null;
+let helperGeneration = 0;
+let helperTeardown = Promise.resolve();
 let pendingStart = false;
 let forceKillTimeout = null;
 let restartCount = 0;
@@ -58,6 +60,7 @@ const HNS_HELPER_TUNNEL_DNS_FAILURE_RE = /\[WARN\]\s+tunnel:\s+502\s+CONNECT\s+\
 let proxyAddr = null;
 let caPemPath = null;
 let caCertFingerprint = null;
+const certificateSessions = new Map();
 let synced = false;
 let canaryReady = false;
 let localResolverReady = false;
@@ -576,14 +579,68 @@ function configureCertVerification(targetSession) {
   }
 
   const trustedFingerprint = caCertFingerprint;
-
-  targetSession.setCertificateVerifyProc(createCertificateVerifier(trustedFingerprint));
+  const token = certificateSessions.get(targetSession);
+  const verify = createCertificateVerifier(trustedFingerprint);
+  targetSession.setCertificateVerifyProc((request, callback) => {
+    // Retired callbacks cannot retain authority after release or CA rotation,
+    // even if clearing a session's native procedure fails during disposal.
+    if (caCertFingerprint !== trustedFingerprint ||
+        (targetSession !== session.defaultSession && certificateSessions.get(targetSession) !== token)) {
+      callback(-3);
+      return;
+    }
+    verify(request, callback);
+  });
   log.info('[HNS] Certificate verification configured');
 }
 
 function clearCertVerification(targetSession) {
   targetSession.setCertificateVerifyProc(null);
   log.info('[HNS] Certificate verification cleared');
+}
+
+function updateSessionCertificates(configure) {
+  const failures = [];
+  for (const targetSession of new Set([session.defaultSession, ...certificateSessions.keys()])) {
+    try {
+      if (configure) configureCertVerification(targetSession);
+      else clearCertVerification(targetSession);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) {
+    throw new AggregateError(failures, 'HNS session certificate update failed');
+  }
+}
+
+async function registerHnsSession(targetSession) {
+  if (typeof targetSession?.setCertificateVerifyProc !== 'function') {
+    throw new TypeError('Session certificate verification is unavailable');
+  }
+  const token = certificateSessions.get(targetSession) || {};
+  certificateSessions.set(targetSession, token);
+  try {
+    if (caCertFingerprint) configureCertVerification(targetSession);
+    // The caller must await routing and certificate setup before navigation.
+    await networkManager.registerProxySession(targetSession);
+    if (certificateSessions.get(targetSession) !== token) throw new Error('HNS session enrollment cancelled');
+  } catch (error) {
+    if (certificateSessions.get(targetSession) === token) {
+      try {
+        unregisterHnsSession(targetSession);
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'HNS session enrollment cleanup failed', { cause: cleanupError });
+      }
+    }
+    throw error;
+  }
+}
+
+function unregisterHnsSession(targetSession) {
+  const enrolled = certificateSessions.delete(targetSession);
+  networkManager.unregisterProxySession(targetSession);
+  if (enrolled) clearCertVerification(targetSession);
 }
 
 function loadCaFingerprint(pemPath) {
@@ -600,6 +657,8 @@ function loadCaFingerprint(pemPath) {
 }
 
 async function handleReady(event) {
+  if (currentState !== STATUS.STARTING && currentState !== STATUS.RUNNING) return;
+  const generation = helperGeneration;
   proxyAddr = event.proxyAddr || null;
   caPemPath = event.caPath || null;
   lastProcessError = null;
@@ -610,16 +669,18 @@ async function handleReady(event) {
     return;
   }
 
-  const defaultSession = session.defaultSession;
   let publishedProxyAddr;
 
   try {
+    updateSessionCertificates(true);
     networkManager.setHnsProxy(proxyAddr);
     networkManager.setHnsResolverAddrs?.({ rootAddr, recursiveAddr });
     await networkManager.rebuild();
+    if (generation !== helperGeneration) return;
     publishedProxyAddr = networkManager.getHnsProxyAddr() || null;
     networkManager.refreshImportedHnsSuffixes()
       .then((suffixes) => {
+        if (generation !== helperGeneration) return;
         updateService('hns', { publicSuffixes: suffixes });
         if (suffixes.length > 1) {
           pruneUnknownSingleLabelHistory();
@@ -630,12 +691,11 @@ async function handleReady(event) {
         log.warn(`[HNS] Imported namespace suffix refresh failed: ${err.message}`);
       });
   } catch (err) {
+    if (generation !== helperGeneration) return;
     updateState(STATUS.ERROR, `Proxy configuration failed: ${err.message}`);
     setErrorState('hns', 'Proxy configuration failed');
     return;
   }
-
-  configureCertVerification(defaultSession);
 
   updateService('hns', {
     api: publishedProxyAddr ? `http://${publishedProxyAddr}` : null,
@@ -705,6 +765,7 @@ async function startHns() {
   }
 
   pendingStart = false;
+  helperGeneration += 1;
   updateState(STATUS.STARTING);
 
   const binPath = getHelperBinaryPath();
@@ -772,12 +833,16 @@ async function startHns() {
   try {
     helperProcess = spawn(binPath, args);
 
+    const generation = helperGeneration;
     const rl = readline.createInterface({ input: helperProcess.stdout });
-    rl.on('line', parseStdoutLine);
+    rl.on('line', (line) => {
+      if (generation === helperGeneration) parseStdoutLine(line);
+    });
 
     helperProcess.stderr.on('data', logHnsStderr);
 
     helperProcess.on('close', (code) => {
+      const teardownGeneration = ++helperGeneration;
       log.info(`[HNS] Process exited with code ${code}`);
       helperProcess = null;
 
@@ -796,11 +861,14 @@ async function startHns() {
       }
 
       networkManager.clearHnsProxy();
-      networkManager.rebuild().catch((err) => {
-        log.error(`[HNS] Failed to rebuild proxy on process exit: ${err.message}`);
-      });
       clearHnsHealthState();
-      clearCertVerification(session.defaultSession);
+      caCertFingerprint = null;
+      helperTeardown = networkManager.rebuild().then(() => {
+        if (teardownGeneration === helperGeneration) updateSessionCertificates(false);
+      });
+      helperTeardown.catch((error) => {
+        log.error('[HNS] Session network cleanup failed:', error.message);
+      });
       clearService('hns');
       proxyAddr = null;
       caPemPath = null;
@@ -862,8 +930,9 @@ function maybeRestart() {
 }
 
 function stopHns() {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     pendingStart = false;
+    helperGeneration += 1;
     restartCount = 0;
 
     if (!helperProcess) {
@@ -875,8 +944,19 @@ function stopHns() {
       recursiveAddr = null;
       lastHeightChangeAt = 0;
       lastProcessError = null;
-      networkManager.rebuild().then(() => resolve());
-      clearCertVerification(session.defaultSession);
+      caCertFingerprint = null;
+      caPemPath = null;
+      proxyAddr = null;
+      let certificateError = null;
+      try {
+        updateSessionCertificates(false);
+      } catch (error) {
+        certificateError = error;
+      }
+      networkManager.rebuild().then(() => {
+        if (certificateError) reject(certificateError);
+        else resolve();
+      }, reject);
       return;
     }
 
@@ -885,7 +965,7 @@ function stopHns() {
         clearTimeout(forceKillTimeout);
         forceKillTimeout = null;
       }
-      resolve();
+      helperTeardown.then(resolve, reject);
     };
 
     helperProcess.once('close', onExit);
@@ -953,6 +1033,8 @@ module.exports = {
   certificateChainContainsFingerprint,
   chromiumCertificateFingerprint,
   createCertificateVerifier,
+  registerHnsSession,
+  unregisterHnsSession,
   registerHnsIpc,
   startHns,
   stopHns,

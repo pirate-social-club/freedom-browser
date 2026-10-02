@@ -2,6 +2,7 @@ const log = require('./logger');
 const { app, session } = require('electron');
 const http = require('http');
 const net = require('net');
+const { createSessionProxyController } = require('./session-proxy-controller');
 const { resolveHnsDohAddresses } = require('./hns-doh-resolver');
 const { resolveHnsLocalAddresses } = require('./hns-local-resolver');
 const {
@@ -22,6 +23,8 @@ let dvpnProxyPort = null;
 
 let pacServer = null;
 let pacPort = null;
+let currentPacContent = null;
+const proxySessions = createSessionProxyController(() => session.defaultSession);
 let apiRequestDiagnosticsRegistered = false;
 const apiRequestLogState = new Map();
 const hnsProxyHosts = new Set();
@@ -584,16 +587,14 @@ ${dvpnLine}
 }
 
 async function startPacServer(pacContent) {
-  if (pacServer) {
-    pacServer.close();
-    pacServer = null;
-    pacPort = null;
-  }
+  currentPacContent = pacContent;
+  // Keep the URL valid for every enrolled session throughout a policy update.
+  if (pacServer) return pacPort;
 
   return new Promise((resolve, reject) => {
     const srv = http.createServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/x-ns-proxy-autoconfig' });
-      res.end(pacContent);
+      res.end(currentPacContent);
     });
 
     srv.listen(0, '127.0.0.1', () => {
@@ -674,14 +675,20 @@ async function applyProxy() {
   const pac = buildPacScript();
   const port = await startPacServer(pac);
   const pacUrl = `http://127.0.0.1:${port}/proxy.pac`;
-  await session.defaultSession.setProxy({ pacScript: pacUrl });
+  await proxySessions.apply({ mode: 'pac_script', pacScript: pacUrl });
   log.info(`[Network] Proxy configured via PAC at ${pacUrl}`);
 }
 
-async function clearProxy() {
+async function clearProxyNow() {
+  await proxySessions.apply({ mode: 'direct' });
+  // Do not invalidate the old URL until all session configurations succeed.
   await stopPacServer();
-  await session.defaultSession.setProxy({ proxyRules: '' });
+  currentPacContent = null;
   log.info('[Network] Proxy configuration cleared');
+}
+
+function clearProxy() {
+  return proxySessions.enqueue(clearProxyNow);
 }
 
 function setHnsProxy(proxyAddr) {
@@ -714,13 +721,36 @@ function clearDvpnProxy() {
   log.info('[Network] dVPN proxy cleared');
 }
 
-async function rebuild() {
+async function rebuildNow() {
   if (!hnsUpstreamProxyAddr && !dvpnProxyHost) {
     await stopHnsGuardProxy();
-    await clearProxy();
+    await clearProxyNow();
     return;
   }
   await applyProxy();
+}
+
+function rebuild() {
+  return proxySessions.enqueue(rebuildNow);
+}
+
+async function registerProxySession(targetSession) {
+  const token = proxySessions.register(targetSession);
+  try {
+    await proxySessions.enqueue(async () => {
+      if (!proxySessions.isRegistered(targetSession, token)) throw new Error('Session proxy enrollment cancelled');
+      // Reject enrollment on failure. The window owner must await this promise.
+      await rebuildNow();
+      if (!proxySessions.isRegistered(targetSession, token)) throw new Error('Session proxy enrollment cancelled');
+    });
+  } catch (error) {
+    proxySessions.unregister(targetSession, token);
+    throw error;
+  }
+}
+
+function unregisterProxySession(targetSession) {
+  proxySessions.unregister(targetSession);
 }
 
 async function refreshImportedHnsSuffixes(fetchImpl = fetch, url = PUBLIC_NAMESPACES_URL) {
@@ -769,6 +799,8 @@ module.exports = {
   clearDvpnProxy,
   rebuild,
   clearProxy,
+  registerProxySession,
+  unregisterProxySession,
   getHnsProxyAddr,
   getDvpnProxy,
   buildPacScript,
