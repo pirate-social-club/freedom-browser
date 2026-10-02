@@ -14,8 +14,14 @@ while not (p/'network.ready').exists() and time.time()<end:time.sleep(.1)
 assert (p/'network.ready').exists(),'slirp never ready'
 subprocess.run(['nft','-f',str(p/'namespace-dns.nft')],check=True)
 servers=[subprocess.Popen(['python3',str(p/n)]) for n in ['dns-copy.py','wrong-tls.py','os-dns.py']]
-env={**os.environ,'DBUS_SESSION_BUS_ADDRESS':'unix:path='+str(p/'no-session-bus'),'DISPLAY':':77','AGENT_BROWSER_IDLE_TIMEOUT_MS':'30000','AGENT_BROWSER_CONFIG':str(p/'agent-browser-empty-config.json'),'AGENT_BROWSER_SOCKET_DIR':str(p/'agent-browser-sockets'),'XDG_CONFIG_HOME':str(p/'xdg-config'),'XDG_CACHE_HOME':str(p/'xdg-cache'),'XDG_DATA_HOME':str(p/'xdg-data')}
-(p/'agent-browser-sockets').mkdir(mode=0o700)
+def browser_socket_preflight(directory):
+ assert directory.is_absolute() and directory==p/'ab','socket directory outside private work'
+ size=len(os.fsencode(str(directory/'freedom-hosted-package-acceptance.sock')))
+ assert size<=103,'automation socket path exceeds pinned CLI limit'
+ return {'socket_path_bytes':size,'pinned_cli_limit_bytes':103,'private_directory':True}
+env={**os.environ,'DBUS_SESSION_BUS_ADDRESS':'unix:path='+str(p/'no-session-bus'),'DISPLAY':':77','AGENT_BROWSER_IDLE_TIMEOUT_MS':'30000','AGENT_BROWSER_CONFIG':str(p/'agent-browser-empty-config.json'),'AGENT_BROWSER_SOCKET_DIR':str(p/'ab'),'XDG_CONFIG_HOME':str(p/'xdg-config'),'XDG_CACHE_HOME':str(p/'xdg-cache'),'XDG_DATA_HOME':str(p/'xdg-data')}
+(p/'ab').mkdir(mode=0o700)
+(p/'automation-socket-preflight.json').write_text(json.dumps(browser_socket_preflight(p/'ab'),indent=2)+'\n')
 owned={};browser=None;log=None;lifecycle={}
 def scan():
  procs={}

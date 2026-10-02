@@ -1,5 +1,5 @@
 {
-  "README.md": "25cc8622a82eebd150a607b0ec36cf3d8b12a8f54540bb9f77442efa23c26ee8",
+  "README.md": "433543b56b68606680161c717cb83cbd77a252a9d0a4716d08f7901e2856ba45",
   "agent-browser-pin.json": "b056d3ac845656934e2eecaa978c62d16b53623bf75734a6c1b529832e0325f2",
   "cold-setup.py": "5c05e7ddd1691d4b47270a84a797136e69f28dee0e5cb34fa9b850c8e6f7b3fe",
   "harness/authenticated-route.py": "4ee9eb8883b1c3a23c8492c9d0ef02b9435e21dbb7b7cc9ead5b4e93c9826dd0",
@@ -8,12 +8,12 @@
   "harness/dns-copy.py": "179793ee3de6382afe42d2d817986b290a97f13dd6847b3cd05e1b0ee889ad64",
   "harness/drive-acceptance.py": "45ffde5c59941bd780cd74577807dca15abc1ce9c0587e97dd12766612b96402",
   "harness/installed-sandbox.test.py": "230919636e3cc50f85260d2064dc118350bb84aa2ce6e0722b99de4a3491db4d",
-  "harness/namespace-controller.py": "a6afb746ce1ae7de811861e0c9f5172fc7af238726e9933b4ae32d332d485a94",
+  "harness/namespace-controller.py": "97bc7a5580584456085b22055f8f6bcb0db3262787e713f0e8df8c4af3950028",
   "harness/namespace-counter.nft": "90988aacfa5dbc141b22b0b8002048d3a2e1319c823f133677f8643f5dcd9066",
   "harness/namespace-dns.nft": "115c514700a2217c547df5a63e44b37e01c45ba736897ae9453bdd02d32b426d",
   "harness/namespace-wrong-dane.nft": "81e8ec99facc6a186b224dbc8dde29ee5a6ebaeb9e26cb01c7111ab80394bbe6",
   "harness/native-enter.py": "9cf13cb9d5ca4d4dd7d75f91e0d3928fa5da6ac3b4937329c6619e956ab68ff5",
-  "harness/observe-welcome.py": "045da770e23516cc6806ac47a9f9500c34b80898185a658c3481238ad0855ceb",
+  "harness/observe-welcome.py": "0edc97c5e958707809b5f0893fe1cf2a1fb8fe6d68be8a81845cf9600db61774",
   "harness/os-dns.py": "33a44f0fc54f4715b7db81d2c15dd5c0fca27fe727bbd1e990bf6dd6ca4ee950",
   "harness/prepare-candidate.py": "909166ac4e887158f9bc5fc791b540341bbc69ec8c95e52526f8d1900504b444",
   "harness/prepare-runtime.py": "70908866b6115bce7f85ad452b93af5deea9643eb003ff238d7194a6df3813a6",
@@ -29,8 +29,9 @@
   "harness/warm-checkpoint-main.dat": "c23b485e961e406d9d302932feeb2aaea8f39c47001a04435c426c03414ceea1",
   "harness/wrong-tls.py": "942b20b81ca68277cbc731194f302658e76052cc723f3ec093aec8c72a9150ac",
   "hns-current-package-acceptance.yml": "668e928035693e5ec0b643bf66eae78818beb534f0878c791331bcd5ba825726",
-  "launch.py": "8d34a78aca5719fa5a71d4e74d3785813d536235ee17111051f2b6d807d7899d",
+  "launch.py": "39be00981eaa5ce6f25a577ebab71386be18cf89fcfb3b36c3e278f32351c443",
   "python-wheel-pins.json": "12bec3d3d647ad38a403502f4df8ba9a8bda13c0d3fa3c5fe9f6025982be5e1a",
   "requirements.txt": "05bbd77cf30d45eb47f1ed042f5208ba7afb5fa00be12afb8d4b5c716876cefc",
-  "runtime-source-pins.json": "223b7ea41f3db2b95b4c7ac02d9a91a9a1030dcee91914b40bce9c2b266c7ac0"
+  "runtime-source-pins.json": "223b7ea41f3db2b95b4c7ac02d9a91a9a1030dcee91914b40bce9c2b266c7ac0",
+  "harness/socket-layout.test.py": "8591b4039ae4f732571f2221e9257ee35381c2fa2e610e74907bc01af72fa73a"
 }
