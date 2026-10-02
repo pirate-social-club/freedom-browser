@@ -1,9 +1,9 @@
 # Bitcoin mainnet header conformance
 
-The pinned Yuki acceptance paths lack complete contextual difficulty checks.
-This disconnected Rust component prepares a defensive replacement: every header
-must extend its actual parent with the exact height-dependent bits, valid target
-and proof of work, median and future timestamps, and activated minimum version.
+This disconnected Rust component adds a defensive MAINNET header validator.
+Every header must extend its actual parent with the exact height-dependent bits,
+valid target and proof of work, median and future timestamps, and activated
+minimum version.
 Missing context is refused. Retarget elapsed time uses signed subtraction before
 clamping, avoiding the unsigned subtraction in rust-bitcoin's higher-level helper.
 
