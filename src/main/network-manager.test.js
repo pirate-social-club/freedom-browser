@@ -3,6 +3,14 @@ const {
 } = require('../../test/helpers/main-process-test-utils');
 const { setDynamicHnsPublicSuffixes } = require('../shared/hns-hosts');
 
+function makeProxySession() {
+  return {
+    setProxy: jest.fn(async () => {}),
+    forceReloadProxyConfig: jest.fn(async () => {}),
+    closeAllConnections: jest.fn(async () => {}),
+  };
+}
+
 function loadNetworkManagerModule(options = {}) {
   const log = {
     info: jest.fn(),
@@ -15,7 +23,7 @@ function loadNetworkManagerModule(options = {}) {
     onCompleted: jest.fn(),
     onErrorOccurred: jest.fn(),
   };
-  const defaultSession = { setProxy, webRequest };
+  const defaultSession = { ...makeProxySession(), setProxy, webRequest };
   const session = { defaultSession };
 
   let pacServerPort = options.pacServerPort || 9999;
@@ -402,11 +410,13 @@ describe('network-manager', () => {
     ctx.mod.setHnsProxy('127.0.0.1:5380');
     ctx.mod.setDvpnProxy('127.0.0.1', 10808);
     await ctx.mod.rebuild();
-    const privateSession = { setProxy: jest.fn(async () => {}) };
+    const privateSession = makeProxySession();
     await ctx.mod.registerProxySession(privateSession);
     expect(privateSession.setProxy).toHaveBeenCalledWith(ctx.setProxy.mock.calls[0][0]);
     expect(evaluatePac(ctx.mod.buildPacScript(), 'app.pirate')).toBe('PROXY 127.0.0.1:9999');
     expect(evaluatePac(ctx.mod.buildPacScript(), 'example.com')).toContain('SOCKS5 127.0.0.1:10808');
+    expect(ctx.setProxy).toHaveBeenCalledTimes(1);
+    expect(ctx.session.defaultSession.closeAllConnections).toHaveBeenCalledTimes(1);
   });
 
   test('PAC updates keep the existing URL valid and serve the new policy', async () => {
@@ -421,11 +431,99 @@ describe('network-manager', () => {
     const response = { writeHead: jest.fn(), end: jest.fn() };
     pacServer.handler({}, response);
     expect(response.end.mock.calls[0][0]).toContain('SOCKS5 127.0.0.1:10809');
+    expect(ctx.session.defaultSession.forceReloadProxyConfig).toHaveBeenCalledTimes(2);
+  });
+
+  test('opening another session and rebuilding unchanged policy preserve existing connections', async () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setDvpnProxy('127.0.0.1', 10808);
+    await ctx.mod.rebuild();
+    const first = makeProxySession();
+    const second = makeProxySession();
+    await ctx.mod.registerProxySession(first);
+    await ctx.mod.registerProxySession(second);
+    await ctx.mod.rebuild();
+    await ctx.mod.registerProxySession(second);
+    for (const target of [ctx.session.defaultSession, first, second]) {
+      expect(target.setProxy).toHaveBeenCalledTimes(1);
+      expect(target.forceReloadProxyConfig).toHaveBeenCalledTimes(1);
+      expect(target.closeAllConnections).toHaveBeenCalledTimes(1);
+    }
+    ctx.mod.setDvpnProxy('127.0.0.1', 10809);
+    await ctx.mod.rebuild();
+    for (const target of [ctx.session.defaultSession, first, second]) {
+      expect(target.forceReloadProxyConfig).toHaveBeenCalledTimes(2);
+      expect(target.closeAllConnections).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  test('initial enrollment configures only the new session', async () => {
+    const ctx = loadNetworkManagerModule();
+    const added = makeProxySession();
+    await ctx.mod.registerProxySession(added);
+    expect(added.setProxy).toHaveBeenCalledWith({ mode: 'direct' });
+    expect(added.closeAllConnections).toHaveBeenCalledTimes(1);
+    expect(ctx.setProxy).not.toHaveBeenCalled();
+    expect(ctx.session.defaultSession.closeAllConnections).not.toHaveBeenCalled();
+  });
+
+  test('enrollment queued behind a policy change adopts that policy once', async () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setDvpnProxy('127.0.0.1', 10808);
+    await ctx.mod.rebuild();
+    let observeClose;
+    let finishClose;
+    const closing = new Promise((resolve) => { observeClose = resolve; });
+    ctx.session.defaultSession.closeAllConnections.mockImplementationOnce(() => new Promise((resolve) => {
+      finishClose = resolve;
+      observeClose();
+    }));
+    ctx.mod.setDvpnProxy('127.0.0.1', 10809);
+    const update = ctx.mod.rebuild();
+    await closing;
+    const added = makeProxySession();
+    const enrollment = ctx.mod.registerProxySession(added);
+    expect(added.setProxy).not.toHaveBeenCalled();
+    finishClose();
+    await Promise.all([update, enrollment]);
+    expect(added.setProxy).toHaveBeenCalledWith(ctx.setProxy.mock.calls[1][0]);
+    expect(added.closeAllConnections).toHaveBeenCalledTimes(1);
+    const response = { writeHead: jest.fn(), end: jest.fn() };
+    ctx.createServerCalls[0].handler({}, response);
+    expect(response.end.mock.calls[0][0]).toContain('SOCKS5 127.0.0.1:10809');
+  });
+
+  test('helper and resolver changes close sockets even with identical PAC bytes', async () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+    await ctx.mod.rebuild();
+    const pac = ctx.mod.buildPacScript();
+    ctx.mod.setHnsProxy('127.0.0.1:5381');
+    await ctx.mod.rebuild();
+    expect(ctx.mod.buildPacScript()).toBe(pac);
+    ctx.mod.setHnsResolverAddrs({ rootAddr: '127.0.0.1:5354' });
+    await ctx.mod.rebuild();
+    expect(ctx.mod.buildPacScript()).toBe(pac);
+    expect(ctx.session.defaultSession.closeAllConnections).toHaveBeenCalledTimes(3);
+  });
+
+  test('failed enrollment leaves existing sessions untouched', async () => {
+    const ctx = loadNetworkManagerModule();
+    await ctx.mod.rebuild();
+    const existing = makeProxySession();
+    await ctx.mod.registerProxySession(existing);
+    const added = makeProxySession();
+    added.forceReloadProxyConfig.mockRejectedValueOnce(new Error('reload failed'));
+    await expect(ctx.mod.registerProxySession(added)).rejects.toThrow('Session proxy update failed');
+    await ctx.mod.registerProxySession(added);
+    expect(added.setProxy).toHaveBeenCalledTimes(2);
+    expect(existing.closeAllConnections).toHaveBeenCalledTimes(1);
+    expect(ctx.session.defaultSession.closeAllConnections).toHaveBeenCalledTimes(1);
   });
 
   test('stopping one service preserves the other for every session', async () => {
     const ctx = loadNetworkManagerModule();
-    const privateSession = { setProxy: jest.fn(async () => {}) };
+    const privateSession = makeProxySession();
     await ctx.mod.registerProxySession(privateSession);
     ctx.mod.setHnsProxy('127.0.0.1:5380');
     ctx.mod.setDvpnProxy('127.0.0.1', 10808);
@@ -441,7 +539,8 @@ describe('network-manager', () => {
 
   test('failed enrollment rejects and does not prevent a retry', async () => {
     const ctx = loadNetworkManagerModule();
-    const privateSession = { setProxy: jest.fn().mockRejectedValueOnce(new Error('unavailable')).mockResolvedValue(undefined) };
+    const privateSession = makeProxySession();
+    privateSession.setProxy.mockRejectedValueOnce(new Error('unavailable'));
     await expect(ctx.mod.registerProxySession(privateSession)).rejects.toThrow('Session proxy update failed');
     await ctx.mod.registerProxySession(privateSession);
     expect(privateSession.setProxy).toHaveBeenCalledTimes(2);
@@ -465,7 +564,7 @@ describe('network-manager', () => {
 
   test('closing a session cancels queued enrollment without reviving its membership', async () => {
     const ctx = loadNetworkManagerModule();
-    const privateSession = { setProxy: jest.fn(async () => {}) };
+    const privateSession = makeProxySession();
     const enrollment = ctx.mod.registerProxySession(privateSession);
     const refused = expect(enrollment).rejects.toThrow('Session proxy enrollment cancelled');
     ctx.mod.unregisterProxySession(privateSession);
@@ -476,7 +575,7 @@ describe('network-manager', () => {
 
   test('an older cancelled enrollment cannot remove a new registration', async () => {
     const ctx = loadNetworkManagerModule();
-    const privateSession = { setProxy: jest.fn(async () => {}) };
+    const privateSession = makeProxySession();
     const oldEnrollment = ctx.mod.registerProxySession(privateSession);
     const refused = expect(oldEnrollment).rejects.toThrow('Session proxy enrollment cancelled');
     ctx.mod.unregisterProxySession(privateSession);
@@ -484,6 +583,7 @@ describe('network-manager', () => {
     await refused;
     await newEnrollment;
     privateSession.setProxy.mockClear();
+    ctx.mod.setDvpnProxy('127.0.0.1', 10808);
     await ctx.mod.rebuild();
     expect(privateSession.setProxy).toHaveBeenCalledTimes(1);
   });

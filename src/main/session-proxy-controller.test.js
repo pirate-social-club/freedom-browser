@@ -62,6 +62,85 @@ describe('session proxy controller', () => {
     expect(failing.closeAllConnections).not.toHaveBeenCalled();
     await controller.enqueue(() => controller.apply({ mode: 'direct' }));
     expect(failing.closeAllConnections).toHaveBeenCalledTimes(1);
+    expect(main.closeAllConnections).toHaveBeenCalledTimes(1);
+    expect(other.closeAllConnections).toHaveBeenCalledTimes(1);
+  });
+
+  test('single-session setup leaves existing sessions untouched and skips an unchanged policy', async () => {
+    const main = makeSession();
+    const existing = makeSession();
+    const added = makeSession();
+    const controller = createSessionProxyController(() => main);
+    controller.register(existing);
+    await controller.apply({ mode: 'direct' });
+    controller.register(added);
+    await controller.applyTo(added, { mode: 'direct' });
+    await controller.apply({ mode: 'direct' });
+    for (const target of [main, existing, added]) {
+      expect(target.closeAllConnections).toHaveBeenCalledTimes(1);
+    }
+    await controller.apply({ mode: 'pac_script', pacScript: 'changed' });
+    for (const target of [main, existing, added]) {
+      expect(target.closeAllConnections).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  test('changed PAC content reloads even when its URL stays the same', async () => {
+    const main = makeSession();
+    const controller = createSessionProxyController(() => main);
+    const config = { mode: 'pac_script', pacScript: 'same-url' };
+    await controller.apply(config, 'first-content');
+    await controller.apply(config, 'second-content');
+    expect(main.forceReloadProxyConfig).toHaveBeenCalledTimes(2);
+  });
+
+  test('a failed changed policy invalidates the previous successful receipt', async () => {
+    const main = makeSession();
+    const controller = createSessionProxyController(() => main);
+    await controller.apply({ mode: 'direct' });
+    main.forceReloadProxyConfig.mockRejectedValueOnce(new Error('reload failed'));
+    await expect(controller.apply({ mode: 'pac_script', pacScript: 'changed' })).rejects.toThrow('Session proxy update failed');
+    await controller.apply({ mode: 'direct' });
+    expect(main.setProxy).toHaveBeenCalledTimes(3);
+    expect(main.closeAllConnections).toHaveBeenCalledTimes(2);
+  });
+
+  test('a retired in-flight update cannot mark a new registration configured', async () => {
+    const main = makeSession();
+    const added = makeSession();
+    const controller = createSessionProxyController(() => main);
+    controller.register(added);
+    let finishClose;
+    let observeClose;
+    const closing = new Promise((resolve) => { observeClose = resolve; });
+    added.closeAllConnections.mockImplementationOnce(() => new Promise((resolve) => {
+      finishClose = resolve;
+      observeClose();
+    }));
+    const oldSetup = controller.enqueue(() => controller.applyTo(added, { mode: 'direct' }));
+    await closing;
+    controller.unregister(added);
+    controller.register(added);
+    const newSetup = controller.enqueue(() => controller.applyTo(added, { mode: 'direct' }));
+    finishClose();
+    await Promise.all([oldSetup, newSetup]);
+    expect(added.closeAllConnections).toHaveBeenCalledTimes(2);
+  });
+
+  test.each(['setProxy', 'forceReloadProxyConfig', 'closeAllConnections'])('requires %s before enrollment or changing any session', async (method) => {
+    const main = makeSession();
+    const incomplete = makeSession();
+    incomplete[method] = undefined;
+    const controller = createSessionProxyController(() => main);
+    expect(() => controller.register(incomplete)).toThrow(method);
+    await expect(controller.applyTo(incomplete, { mode: 'direct' })).rejects.toThrow(method);
+    expect(main.setProxy).not.toHaveBeenCalled();
+    const added = makeSession();
+    controller.register(added);
+    added[method] = 'unavailable';
+    await expect(controller.apply({ mode: 'direct' })).rejects.toThrow(method);
+    expect(main.setProxy).not.toHaveBeenCalled();
+    if (method !== 'setProxy') expect(added.setProxy).not.toHaveBeenCalled();
   });
 
   test.each(['forceReloadProxyConfig', 'closeAllConnections'])('%s failures reject setup', async (method) => {

@@ -24,6 +24,7 @@ let dvpnProxyPort = null;
 let pacServer = null;
 let pacPort = null;
 let currentPacContent = null;
+let currentProxyPolicy = null;
 const proxySessions = createSessionProxyController(() => session.defaultSession);
 let apiRequestDiagnosticsRegistered = false;
 const apiRequestLogState = new Map();
@@ -666,7 +667,10 @@ async function stopPacServer() {
   });
 }
 
-async function applyProxy() {
+async function prepareProxyPolicy() {
+  if (!hnsUpstreamProxyAddr && !dvpnProxyHost) {
+    return { configuration: { mode: 'direct' }, key: 'direct' };
+  }
   if (hnsUpstreamProxyAddr) {
     await startHnsGuardProxy();
   } else {
@@ -675,12 +679,20 @@ async function applyProxy() {
   const pac = buildPacScript();
   const port = await startPacServer(pac);
   const pacUrl = `http://127.0.0.1:${port}/proxy.pac`;
-  await proxySessions.apply({ mode: 'pac_script', pacScript: pacUrl });
-  log.info(`[Network] Proxy configured via PAC at ${pacUrl}`);
+  const configuration = { mode: 'pac_script', pacScript: pacUrl };
+  // The URL stays stable, so the served content is part of policy identity.
+  return { configuration, key: JSON.stringify([configuration, pac, hnsUpstreamProxyAddr, hnsRootResolverAddr]) };
+}
+
+async function applyProxy() {
+  currentProxyPolicy = await prepareProxyPolicy();
+  await proxySessions.apply(currentProxyPolicy.configuration, currentProxyPolicy.key);
+  log.info(`[Network] Proxy configured via PAC at ${currentProxyPolicy.configuration.pacScript}`);
 }
 
 async function clearProxyNow() {
-  await proxySessions.apply({ mode: 'direct' });
+  currentProxyPolicy = { configuration: { mode: 'direct' }, key: 'direct' };
+  await proxySessions.apply(currentProxyPolicy.configuration, currentProxyPolicy.key);
   // Do not invalidate the old URL until all session configurations succeed.
   await stopPacServer();
   currentPacContent = null;
@@ -740,7 +752,9 @@ async function registerProxySession(targetSession) {
     await proxySessions.enqueue(async () => {
       if (!proxySessions.isRegistered(targetSession, token)) throw new Error('Session proxy enrollment cancelled');
       // Reject enrollment on failure. The window owner must await this promise.
-      await rebuildNow();
+      // Enrollment uses the latest queued policy without interrupting other sessions.
+      if (!currentProxyPolicy) currentProxyPolicy = await prepareProxyPolicy();
+      await proxySessions.applyTo(targetSession, currentProxyPolicy.configuration, currentProxyPolicy.key);
       if (!proxySessions.isRegistered(targetSession, token)) throw new Error('Session proxy enrollment cancelled');
     });
   } catch (error) {
