@@ -1,5 +1,5 @@
 """Hermetic validator fixtures; importing the guard never reads proc or starts CDP."""
-import copy,importlib.util,unittest,sys,types
+import copy,importlib.util,unittest,sys,types,json,tempfile,os
 from unittest.mock import patch
 from pathlib import Path
 spec=importlib.util.spec_from_file_location('guard',Path(__file__).with_name('prove-installed-sandbox.py'))
@@ -58,5 +58,46 @@ class RendererDiscoveryTests(unittest.TestCase):
   expected='0::/system.slice/freedom-package-1-test.service'
   self.assertTrue(guard.same_cgroup(expected+'\n',expected))
   for actual in ['',expected+'/child',expected+'-other',expected+'\n'+expected]:self.assertFalse(guard.same_cgroup(actual,expected))
+
+class FailureReceiptTests(unittest.TestCase):
+ def test_context_failure_survives_final_receipt_with_prior_OS_observations(self):
+  with tempfile.TemporaryDirectory() as directory:
+   root=Path(directory);harness=root/'harness';harness.mkdir()
+   (harness/'browser-launch.json').write_text(json.dumps({'pid':100,'start_ticks':'1','host_uid':1001}))
+   (harness/'timing.json').write_text(json.dumps({'host_userns':'user:[1]','host_pidns':'pid:[1]'}))
+   (root/'proc/self').mkdir(parents=True);(root/'proc/101').mkdir()
+   (root/'proc/self/cgroup').write_text('0::/system.slice/fixture.service\n')
+   (root/'proc/101/stat').write_text('101 (fixture) '+' '.join(['0']*19+['2']))
+   main={'pid':100,'start_ticks':'1','uids':[1001]*4,'cap_eff':0,'named_packaged_profile_attached':True,
+         'seccomp_filters':0,'namespaces':{'user':'user:[1]','pid':'pid:[1]'}}
+   renderer={**main,'pid':101,'start_ticks':'2','no_new_privs':1,'seccomp':2,'seccomp_filters':1,
+             'namespaces':{'user':'user:[2]','pid':'pid:[2]'},'uid_map':[[1001,1001,1]]}
+   def process(pid,snapshot=None,expected_cgroup=None):
+    if snapshot is not None:snapshot.update({'fixture_process':pid})
+    return main if pid==100 else renderer
+   async def inventory(_pid):return {'browser_pid':100,'renderer_pids':[101]}
+   async def context(_pid,_renderers,receipt,persist):
+    receipt.update({'passed':False,'operation':'page_node_globals','targets':[{'target_id':'GUEST','frame_id':'FRAME'}]})
+    persist()
+    raise guard.context_module['ProofFailure']('page_node_globals','evaluation_exception')
+   def mapped(value):return harness/'guard.py' if str(value)==guard.__file__ else root/str(value).lstrip('/')
+   runtime={'version':'42.10.0','installed_executable_sha256':'a'*64,'provenance_sha256':'b'*64,'passed':False}
+   with patch.object(guard,'Path',mapped),patch.object(guard,'process_record',process),patch.object(guard,'browser_process_inventory',inventory),patch.dict(guard.context_module,{'context_proof':context}),patch.dict(guard.provenance_module,{'runtime_receipt':lambda *_:copy.deepcopy(runtime),'file_digest':lambda *_:'a'*64}),patch.dict(os.environ,{'FREEDOM_SOURCE_SHA':'a'*40,'FREEDOM_SYSTEMD_UNIT':'fixture.service'}),patch.object(sys,'argv',['guard.py','pre-security']):
+    with self.assertRaises(guard.context_module['ProofFailure']):guard.main()
+   receipt=json.loads((harness/'renderer-sandbox-pre-security-proof.json').read_text())
+   self.assertFalse(receipt['passed'])
+   self.assertEqual(receipt['stage'],'Electron_context')
+   self.assertEqual(receipt['error'],{'class':'evaluation_exception','assertion_id':'page_node_globals'})
+   self.assertTrue(receipt['renderer_candidates'][0]['accepted'])
+   self.assertEqual(receipt['electron_context']['targets'][0]['frame_id'],'FRAME')
+
+ def test_unknown_assertion_text_cannot_enter_public_receipt(self):
+  with tempfile.TemporaryDirectory() as directory:
+   root=Path(directory)
+   with patch.object(guard,'Path',lambda *_:root/'guard.py'),patch.dict(guard.provenance_module,{'runtime_receipt':lambda *_:(_ for _ in ()).throw(AssertionError('PRIVATE'))}),patch.dict(os.environ,{'FREEDOM_SOURCE_SHA':'a'*40}),patch.object(sys,'argv',['guard.py','final']):
+    with self.assertRaises(AssertionError):guard.main()
+   receipt=json.loads((root/'renderer-sandbox-final-proof.json').read_text())
+   self.assertEqual(receipt['error']['assertion_id'],'unclassified_assertion')
+   self.assertNotIn('PRIVATE',json.dumps(receipt))
 
 if __name__=='__main__':unittest.main()

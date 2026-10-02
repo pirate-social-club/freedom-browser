@@ -1,8 +1,11 @@
 """Read-only combined OS/isolated-context proof for the actual installed application."""
-import asyncio,json,os,sys,time,urllib.request
+import asyncio,json,os,sys,time,urllib.request,runpy
 from pathlib import Path
 from urllib.parse import urlsplit
 import websockets
+
+context_module=runpy.run_path(str(Path(__file__).with_name('electron-context.py')))
+provenance_module=runpy.run_path(str(Path(__file__).with_name('electron-provenance.py')))
 
 
 def valid_renderer(record,main,host,uid):
@@ -76,53 +79,86 @@ def process_record(pid,snapshot=None,expected_cgroup=None):
  snapshot['read_stage']='executable'
  snapshot['executable_matches']=root.joinpath('exe').readlink()==Path('/opt/Freedom/freedom')
  assert snapshot['executable_matches'],'unexpected executable'
+ snapshot['read_stage']='executable_inode'
+ loaded=root.joinpath('exe').stat();installed=Path('/opt/Freedom/freedom').stat()
+ snapshot['installed_inode_matches']=(loaded.st_dev,loaded.st_ino)==(installed.st_dev,installed.st_ino)
+ assert snapshot['installed_inode_matches'],'runtime_executable_inode'
  snapshot['read_stage']='identity_recheck';snapshot['identity_stable']=root.joinpath('stat').read_text().rsplit(')',1)[1].split()[19]==born
  assert snapshot['identity_stable'],'PID changed during proof'
  snapshot['read_stage']='done'
  return record
 
 
-async def context_proof():
- with urllib.request.urlopen('http://127.0.0.1:9244/json/list',timeout=2) as response:targets=json.load(response)
- target=next(target for target in targets if 'src/renderer/index.html' in target.get('url',''))
- async with websockets.connect(target['webSocketDebuggerUrl'],open_timeout=3) as ws:
-  await ws.send(json.dumps({'id':1,'method':'Runtime.enable'}));contexts=[];enabled=False;limit=time.monotonic()+4
-  isolated=[]
-  while time.monotonic()<limit:
-   value=json.loads(await asyncio.wait_for(ws.recv(),timeout=max(.01,limit-time.monotonic())))
-   if value.get('method')=='Runtime.executionContextCreated':contexts.append(value['params']['context'])
-   if value.get('id')==1:
-    assert 'error' not in value;enabled=True
-   isolated=[c for c in contexts if c.get('name')=='Electron Isolated Context' and c.get('auxData',{}).get('isDefault') is False]
-   if enabled and isolated:break
-  assert enabled and len(isolated)==1,'exact preload isolated context required'
-  await ws.send(json.dumps({'id':2,'method':'Runtime.evaluate','params':{'contextId':isolated[0]['id'],'returnByValue':True,'expression':"({sandboxed:process.sandboxed===true,contextIsolated:process.contextIsolated===true,electron:process.versions.electron})"}}))
-  while True:
-   value=json.loads(await asyncio.wait_for(ws.recv(),timeout=3))
-   if value.get('id')==2:
-    assert 'error' not in value and 'exceptionDetails' not in value.get('result',{})
-    result=value['result']['result']['value'];break
-  assert result=={'sandboxed':True,'contextIsolated':True,'electron':'42.10.0'},'Electron isolated context proof refused'
-  await ws.send(json.dumps({'id':3,'method':'Runtime.evaluate','params':{'returnByValue':True,'expression':"({nodeGlobalAbsent:typeof process==='undefined' && typeof require==='undefined'})"}}))
-  while True:
-   value=json.loads(await asyncio.wait_for(ws.recv(),timeout=3))
-   if value.get('id')==3:
-    assert 'error' not in value and 'exceptionDetails' not in value.get('result',{})
-    assert value['result']['result']['value']=={'nodeGlobalAbsent':True};break
- return {**result,'default_world_node_globals_absent':True}
+
+ASSERTION_IDS = {'PID changed during proof': 'pid_changed_during_proof',
+ 'browser process inventory deadline': 'browser_process_inventory_deadline',
+ 'browser process inventory refused': 'browser_process_inventory_refused',
+ 'different browser inventory': 'different_browser_inventory',
+ 'duplicate process inventory': 'duplicate_process_inventory',
+ 'electron_archive_digest': 'electron_archive_digest',
+ 'electron_archive_digest_format': 'electron_archive_digest_format',
+ 'electron_archive_identity': 'electron_archive_identity',
+ 'electron_archive_members': 'electron_archive_members',
+ 'electron_archive_version': 'electron_archive_version',
+ 'electron_archive_version_size': 'electron_archive_version_size',
+ 'electron_candidate_executable_binding': 'electron_candidate_executable_binding',
+ 'electron_candidate_proof_binding': 'electron_candidate_proof_binding',
+ 'electron_checksums_changed': 'electron_checksums_changed',
+ 'electron_cold_lock': 'electron_cold_lock',
+ 'electron_cold_source': 'electron_cold_source',
+ 'electron_distribution_executable': 'electron_distribution_executable',
+ 'electron_distribution_version': 'electron_distribution_version',
+ 'electron_installed_byte_chain': 'electron_installed_byte_chain',
+ 'electron_installed_npm_version': 'electron_installed_npm_version',
+ 'electron_lock_version': 'electron_lock_version',
+ 'electron_npm_integrity': 'electron_npm_integrity',
+ 'electron_npm_origin': 'electron_npm_origin',
+ 'electron_runtime_chain_link': 'electron_runtime_chain_link',
+ 'electron_runtime_digest': 'electron_runtime_digest',
+ 'electron_runtime_provenance': 'electron_runtime_provenance',
+ 'electron_runtime_version': 'electron_runtime_version',
+ 'electron_version_file_changed': 'electron_version_file_changed',
+ 'fixed proof phase required': 'fixed_proof_phase_required',
+ 'installed_runtime_digest': 'installed_runtime_digest',
+ 'installed_runtime_digest_changed': 'installed_runtime_digest_changed',
+ 'invalid process identity': 'invalid_process_identity',
+ 'invalid process inventory': 'invalid_process_inventory',
+ 'main PID reused': 'main_pid_reused',
+ 'main identity changed': 'main_identity_changed',
+ 'main must use actual host user/PID namespaces': 'main_must_use_actual_host_user_pid_namespaces',
+ 'main_uid_capability_profile': 'main_uid_capability_profile',
+ 'namespace_restriction_changed': 'namespace_restriction_changed',
+ 'no owned renderer proof': 'no_owned_renderer_proof',
+ 'no renderer inventory': 'no_renderer_inventory',
+ 'packaged_profile_missing': 'packaged_profile_missing',
+ 'process outside owned service': 'process_outside_owned_service',
+ 'proof outside owned service': 'proof_outside_owned_service',
+ 'renderer OS sandbox proof refused': 'renderer_os_sandbox_proof_refused',
+ 'renderer identity changed': 'renderer_identity_changed',
+ 'renderer identity changed after proof': 'renderer_identity_changed_after_proof',
+ 'renderer inventory changed during proof': 'renderer_inventory_changed_during_proof',
+ 'runtime_executable_inode': 'runtime_executable_inode',
+ 'unexpected browser endpoint': 'unexpected_browser_endpoint',
+ 'unexpected executable': 'unexpected_executable'}
 
 
 def main():
  assert len(sys.argv)==2 and sys.argv[1] in ['pre-security','final'],'fixed proof phase required'
  phase=sys.argv[1]
- p=Path(__file__).parent;receipt={'passed':False,'scope':'combined_owned_renderer_OS_and_Electron_context','stage':'process_identity','phase':phase}
+ p=Path(__file__).parent;receipt={'passed':False,'scope':'combined_owned_renderer_OS_and_Electron_context','stage':'runtime_version','phase':phase}
+ def persist():
+  (p/('renderer-sandbox-'+phase+'-proof.json')).write_text(json.dumps(receipt,indent=2)+'\n')
  try:
+  receipt['runtime_version']=provenance_module['runtime_receipt'](p/'electron-version-proof.json',p/'candidate-integrity.json',os.environ['FREEDOM_SOURCE_SHA'])
+  expected_digest=receipt['runtime_version']['installed_executable_sha256']
+  assert provenance_module['file_digest']('/opt/Freedom/freedom')==expected_digest,'installed_runtime_digest'
+  receipt['runtime_version']['passed']=True;receipt['stage']='process_identity';persist()
   launch=json.loads((p/'browser-launch.json').read_text());timing=json.loads((p/'timing.json').read_text());uid=launch['host_uid']
   expected_cgroup='0::/system.slice/'+os.environ['FREEDOM_SYSTEMD_UNIT']
   assert same_cgroup(Path('/proc/self/cgroup').read_text(),expected_cgroup),'proof outside owned service'
   receipt['main_observation']={}
   main_record=process_record(launch['pid'],receipt['main_observation'],expected_cgroup);assert main_record['start_ticks']==launch['start_ticks'],'main PID reused'
-  assert uid>0 and main_record['uids']==[uid]*4 and main_record['cap_eff']==0 and main_record['named_packaged_profile_attached']
+  assert uid>0 and main_record['uids']==[uid]*4 and main_record['cap_eff']==0 and main_record['named_packaged_profile_attached'],'main_uid_capability_profile'
   host={'user':timing['host_userns'],'pid':timing['host_pidns']}
   assert main_record['namespaces']==host,'main must use actual host user/PID namespaces'
   receipt['stage']='renderer_discovery';receipt['discovery_method']='browser_SystemInfo_getProcessInfo'
@@ -141,10 +177,14 @@ def main():
    renderers.append(record)
   assert renderers,'no owned renderer proof'
   receipt['stage']='Electron_context'
-  electron=asyncio.run(context_proof())
+  receipt['electron_context']={}
+  asyncio.run(context_module['context_proof'](launch['pid'],inventory['renderer_pids'],receipt['electron_context'],persist))
+  electron=receipt['electron_context']
   receipt['stage']='profile_recheck'
-  assert Path('/proc/sys/kernel/apparmor_restrict_unprivileged_userns').read_text().strip()=='1'
-  assert 'freedom (unconfined)' in Path('/sys/kernel/security/apparmor/profiles').read_text().splitlines()
+  assert Path('/proc/sys/kernel/apparmor_restrict_unprivileged_userns').read_text().strip()=='1','namespace_restriction_changed'
+  assert 'freedom (unconfined)' in Path('/sys/kernel/security/apparmor/profiles').read_text().splitlines(),'packaged_profile_missing'
+  receipt['stage']='runtime_version_recheck'
+  assert provenance_module['file_digest']('/opt/Freedom/freedom')==expected_digest,'installed_runtime_digest_changed'
   receipt['stage']='process_inventory_recheck'
   receipt['inventory_after']=asyncio.run(browser_process_inventory(launch['pid']))
   assert receipt['inventory_after']==inventory,'renderer inventory changed during proof'
@@ -155,9 +195,14 @@ def main():
  except BaseException as error:
   kind='assertion' if isinstance(error,AssertionError) else 'proc_read_error' if isinstance(error,OSError) else 'schema_error' if isinstance(error,(KeyError,ValueError,TypeError,StopIteration)) else 'other_error'
   receipt['error']={'class':kind}
+  if isinstance(error,context_module['ProofFailure']):
+   receipt['error']={'class':error.kind,'assertion_id':error.code}
+  elif isinstance(error,AssertionError):
+   # Only fixed source-authored messages are eligible, never exception text from CDP.
+   receipt['error']['assertion_id']=ASSERTION_IDS.get(str(error),'unclassified_assertion')
   if isinstance(error,OSError):receipt['error']['errno']=error.errno
   raise
- finally:(p/('renderer-sandbox-'+phase+'-proof.json')).write_text(json.dumps(receipt,indent=2)+'\n')
+ finally:persist()
 
 
 if __name__=='__main__':main()

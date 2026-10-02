@@ -1,4 +1,4 @@
-import hashlib,json,shutil,subprocess,time,os,sys,re
+import hashlib,json,shutil,subprocess,time,os,sys,re,runpy
 from pathlib import Path
 p=Path(__file__).parent
 # Public preparation diagnostics contain only fixed phases/categories and numeric exit codes.
@@ -211,6 +211,8 @@ for path in installed.rglob('*'):
  elif path.is_file():assert streamed_sha(path)==streamed_sha(base/path.relative_to(installed)),'installed payload differs'
 assert (installed/'chrome-sandbox').stat().st_uid==0 and (installed/'chrome-sandbox').stat().st_mode&0o7777==0o755,'packaged chrome-sandbox unexpected owner/mode'
 assert (p/'package/freedom').read_bytes()==(freedom/'node_modules/electron/dist/electron').read_bytes(),'Electron executable mismatch'
+version_proof=runpy.run_path(str(p/'electron-provenance.py'))['installed_proof'](freedom,Path(os.environ['FREEDOM_COLD_ROOT']),installed/'freedom',p/'package/freedom',app_sha)
+(p/'electron-version-proof.json').write_text(json.dumps(version_proof,indent=2)+'\n')
 for name,digest in assets.items():assert hashlib.sha256((p/'package/resources/hns-bin'/name).read_bytes()).hexdigest()==digest,'packaged helper differs'
 checks={name:hashlib.sha256((freedom/name).read_bytes()).hexdigest() for name in git('ls-files','src').splitlines() if (freedom/name).is_file() and not name.endswith('.test.js')}
 checks['package.json']=hashlib.sha256((freedom/'package.json').read_bytes()).hexdigest()
@@ -247,7 +249,7 @@ manifest=[{'path':str(f.relative_to(p/'package')),'sha256':hashlib.sha256(f.read
 (p/'package-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 native="const path=require('path');const app=process.argv[1];const DB=require(path.join(app,'node_modules/better-sqlite3'));const db=new DB(':memory:');if(db.prepare('SELECT 42 AS value').get().value!==42)throw Error('sqlite ABI');db.close();const axios=require(path.join(app,'node_modules/axios'));if(axios.VERSION!=='1.20.0'||typeof axios.request!=='function')throw Error('runtime Axios');"
 run(['unshare','--user','--map-root-user','--net',str(installed/'freedom'),'-e',native,str(installed/'resources/app.asar')],cwd=p/'package',env={**os.environ,'ELECTRON_RUN_AS_NODE':'1'})
-(p/'candidate-integrity.json').write_text(json.dumps({'Freedom_source':app_sha,'asar_integrity':json.loads((p/'asar-integrity.json').read_text()),'tested_helper_build_source':artifact_source,'tested_helper_build_compiler':'Go 1.26.2','helper_sha256':assets['fingertipd'],'hnsd_sha256':assets['hnsd'],'package_build_command':command,'packaged_source_files_compared':len(checks),'packaged_Axios_version':'1.20.0','packaged_Axios_files_compared':len(axios_files),'native_ABI_check_passed':True,'native_sqlite_SELECT42':True,'helper_rebuilt':False,'installed_deb_payload_matched':True,'verified_asar_path':'/opt/Freedom/resources/app.asar','Electron_version':'42.10.0','Electron_executable_sha256':hashlib.sha256((p/'package/freedom').read_bytes()).hexdigest()},indent=2)+'\n')
+(p/'candidate-integrity.json').write_text(json.dumps({'Freedom_source':app_sha,'asar_integrity':json.loads((p/'asar-integrity.json').read_text()),'tested_helper_build_source':artifact_source,'tested_helper_build_compiler':'Go 1.26.2','helper_sha256':assets['fingertipd'],'hnsd_sha256':assets['hnsd'],'package_build_command':command,'packaged_source_files_compared':len(checks),'packaged_Axios_version':'1.20.0','packaged_Axios_files_compared':len(axios_files),'native_ABI_check_passed':True,'native_sqlite_SELECT42':True,'helper_rebuilt':False,'installed_deb_payload_matched':True,'verified_asar_path':'/opt/Freedom/resources/app.asar','Electron_version_proof_sha256':streamed_sha(p/'electron-version-proof.json'),'Electron_version':'42.10.0','Electron_executable_sha256':hashlib.sha256((p/'package/freedom').read_bytes()).hexdigest()},indent=2)+'\n')
 preparation_phase='fixtures';preparation_progress()
 checkpoint=p/'warm-checkpoint-main.dat';metadata=json.loads((p/'checkpoint-integrity.json').read_text());assert hashlib.sha256(checkpoint.read_bytes()).hexdigest()==metadata['sha256']
 assert checkpoint.read_bytes()==(freedom/'assets/hns/checkpoint_main.dat').read_bytes(),'seed differs from shipped checkpoint'
