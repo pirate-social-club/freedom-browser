@@ -1,3 +1,4 @@
+const { EventEmitter } = require('events');
 const {
   loadMainModule,
 } = require('../../test/helpers/main-process-test-utils');
@@ -8,6 +9,7 @@ function makeProxySession() {
     setProxy: jest.fn(async () => {}),
     forceReloadProxyConfig: jest.fn(async () => {}),
     closeAllConnections: jest.fn(async () => {}),
+    webRequest: Object.fromEntries(['onBeforeRequest', 'onBeforeSendHeaders', 'onHeadersReceived', 'onCompleted', 'onErrorOccurred'].map((event) => [event, jest.fn()])),
   };
 }
 
@@ -19,10 +21,7 @@ function loadNetworkManagerModule(options = {}) {
   };
 
   const setProxy = jest.fn(() => Promise.resolve());
-  const webRequest = {
-    onCompleted: jest.fn(),
-    onErrorOccurred: jest.fn(),
-  };
+  const webRequest = makeProxySession().webRequest;
   const defaultSession = { ...makeProxySession(), setProxy, webRequest };
   const session = { defaultSession };
 
@@ -35,19 +34,25 @@ function loadNetworkManagerModule(options = {}) {
       port,
       host,
       connectHandler,
-      destroy: jest.fn(),
+      destroyed: false,
+      destroy: jest.fn(() => {
+        if (socket.destroyed) return;
+        socket.destroyed = true;
+        socket.emit('close');
+      }),
       on: jest.fn((event, handler) => {
-        handlers.set(event, handler);
+        if (!handlers.has(event)) handlers.set(event, []);
+        handlers.get(event).push(handler);
         return socket;
       }),
       pipe: jest.fn(),
       setTimeout: jest.fn((timeout, handler) => {
-        if (handler) handlers.set('timeout', handler);
+        if (handler) handlers.set('timeout', [handler]);
         return socket;
       }),
       write: jest.fn(),
       emit(event, ...args) {
-        handlers.get(event)?.(...args);
+        for (const handler of handlers.get(event) || []) handler(...args);
       },
     };
     netSockets.push(socket);
@@ -116,9 +121,12 @@ function loadNetworkManagerModule(options = {}) {
   });
 
   const dispatcher = require('./webrequest-dispatcher');
+  const onFatal = jest.fn();
+  if (!options.deferRouting) mod.initializeSessionRouting(onFatal);
   return {
     mod,
     dispatcher,
+    onFatal,
     log,
     setProxy,
     session,
@@ -322,9 +330,9 @@ describe('network-manager', () => {
 
     const pac = ctx.mod.buildPacScript();
     expect(pac).toContain('"xn--pokmon-dva":1');
-    expect(evaluatePac(pac, 'xn--pokmon-dva')).toBe('PROXY 127.0.0.1:5380');
-    expect(evaluatePac(pac, 'v.xn--pokmon-dva')).toBe('PROXY 127.0.0.1:5380');
-    expect(evaluatePac(pac, 'not-imported')).toBe('PROXY 127.0.0.1:5380');
+    expect(evaluatePac(pac, 'xn--pokmon-dva')).toBe('PROXY 127.0.0.1:9999');
+    expect(evaluatePac(pac, 'v.xn--pokmon-dva')).toBe('PROXY 127.0.0.1:9999');
+    expect(evaluatePac(pac, 'not-imported')).toBe('PROXY 127.0.0.1:9999');
   });
 
   test('imported namespace suffix log is summarized for large lists', async () => {
@@ -436,6 +444,35 @@ describe('network-manager', () => {
     expect(ctx.session.defaultSession.forceReloadProxyConfig).toHaveBeenCalledTimes(2);
   });
 
+  test('shared route preparation waits for an old guard socket close while retaining the old PAC body and denied permission', async () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+    await ctx.mod.rebuild();
+    const client = new EventEmitter();
+    let entered;
+    const draining = new Promise((resolve) => { entered = resolve; });
+    client.destroyed = false;
+    client.destroy = jest.fn(() => { client.destroyed = true; entered(); });
+    client.write = jest.fn(); client.pipe = jest.fn();
+    ctx.createServerCalls[0].handlers.get('connect')({ url: 'app.pirate:443', httpVersion: '1.1', headers: {} }, client);
+    ctx.netSockets[0].emit('data', Buffer.from('HTTP/1.1 200 OK\r\n\r\n'));
+    ctx.mod.setDvpnProxy('127.0.0.1', 10808);
+    const update = ctx.mod.rebuild();
+    await draining;
+    expect(ctx.setProxy).toHaveBeenCalledTimes(1);
+    expect(ctx.mod.getProxySessionPolicy(ctx.session.defaultSession).allowed).toBe(false);
+    const before = { writeHead: jest.fn(), end: jest.fn() };
+    ctx.createServerCalls[1].handler({}, before);
+    expect(before.end.mock.calls[0][0]).not.toContain('SOCKS5');
+    client.emit('close');
+    await update;
+    const after = { writeHead: jest.fn(), end: jest.fn() };
+    ctx.createServerCalls[1].handler({}, after);
+    expect(after.end.mock.calls[0][0]).toContain('SOCKS5 127.0.0.1:10808');
+    expect(ctx.setProxy).toHaveBeenCalledTimes(2);
+    expect(ctx.mod.getProxySessionPolicy(ctx.session.defaultSession).allowed).toBe(true);
+  });
+
   test('opening another session and rebuilding unchanged policy preserve existing connections', async () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setDvpnProxy('127.0.0.1', 10808);
@@ -467,6 +504,27 @@ describe('network-manager', () => {
     expect(added.closeAllConnections).toHaveBeenCalledTimes(1);
     expect(ctx.setProxy).not.toHaveBeenCalled();
     expect(ctx.session.defaultSession.closeAllConnections).not.toHaveBeenCalled();
+  });
+
+  test('routing withdrawal cancels every intercepted phase for default and enrolled sessions without a contents ID exemption', async () => {
+    const ctx = loadNetworkManagerModule();
+    const added = makeProxySession();
+    await ctx.mod.registerProxySession(added);
+    ctx.mod.setDvpnProxy('127.0.0.1', 10808);
+    for (const target of [ctx.session.defaultSession, added]) {
+      expect(ctx.mod.getProxySessionPolicy(target).allowed).toBe(false);
+      for (const event of ['onBeforeRequest', 'onBeforeSendHeaders', 'onHeadersReceived']) {
+        const listener = target.webRequest[event].mock.calls[0][0];
+        for (const url of ['https://example.com/', 'http://127.0.0.1:8080/', 'wss://example.com/']) {
+          const result = await new Promise((resolve) => listener({ url, webContentsId: 0 }, resolve));
+          expect(result).toEqual({ cancel: true });
+        }
+      }
+    }
+    await ctx.mod.rebuild();
+    for (const target of [ctx.session.defaultSession, added]) {
+      expect(ctx.mod.getProxySessionPolicy(target).allowed).toBe(true);
+    }
   });
 
   test('enrollment queued behind a policy change adopts that policy once', async () => {
@@ -582,11 +640,12 @@ describe('network-manager', () => {
       return createServer(handler);
     });
     ctx.mod.setHnsProxy('127.0.0.1:5380', { generation: 1, caFingerprint: 'current-ca' });
-    await expect(ctx.mod.rebuild()).rejects.toThrow('preparation failed');
+    await expect(ctx.mod.rebuild()).rejects.toThrow('prepare_failed');
     const added = makeProxySession();
-    await expect(ctx.mod.registerProxySession(added)).rejects.toThrow('preparation failed');
+    await expect(ctx.mod.registerProxySession(added)).rejects.toThrow('policy_unprepared');
     expect(added.setProxy).not.toHaveBeenCalled();
     ctx.httpMock.createServer.mockImplementation(createServer);
+    await ctx.mod.rebuild();
     await ctx.mod.registerProxySession(added);
     expect(added.setProxy).toHaveBeenCalledWith(expect.objectContaining({ mode: 'pac_script' }));
     expect(added.closeAllConnections).toHaveBeenCalledTimes(1);
@@ -640,26 +699,26 @@ describe('network-manager', () => {
     const ctx = loadNetworkManagerModule();
     const privateSession = makeProxySession();
     const enrollment = ctx.mod.registerProxySession(privateSession);
-    const refused = expect(enrollment).rejects.toThrow('Session proxy enrollment cancelled');
+    const refused = expect(enrollment).rejects.toThrow('enrollment_cancelled');
     ctx.mod.unregisterProxySession(privateSession);
     await refused;
     await ctx.mod.rebuild();
     expect(privateSession.setProxy).not.toHaveBeenCalled();
   });
 
-  test('an older cancelled enrollment cannot remove a new registration', async () => {
+  test('a retired Electron session cannot enroll again or revive a retained guard', async () => {
     const ctx = loadNetworkManagerModule();
-    const privateSession = makeProxySession();
-    const oldEnrollment = ctx.mod.registerProxySession(privateSession);
-    const refused = expect(oldEnrollment).rejects.toThrow('Session proxy enrollment cancelled');
-    ctx.mod.unregisterProxySession(privateSession);
-    const newEnrollment = ctx.mod.registerProxySession(privateSession);
+    const retired = makeProxySession();
+    const enrollment = ctx.mod.registerProxySession(retired);
+    const refused = expect(enrollment).rejects.toThrow('enrollment_cancelled');
+    ctx.mod.unregisterProxySession(retired);
+    await expect(ctx.mod.registerProxySession(retired)).rejects.toThrow('session_retired');
     await refused;
-    await newEnrollment;
-    privateSession.setProxy.mockClear();
-    ctx.mod.setDvpnProxy('127.0.0.1', 10808);
-    await ctx.mod.rebuild();
-    expect(privateSession.setProxy).toHaveBeenCalledTimes(1);
+    expect(ctx.mod.getProxySessionPolicy(retired)).toMatchObject({ allowed: false, state: 'retired' });
+    const fresh = makeProxySession();
+    await ctx.mod.registerProxySession(fresh);
+    expect(fresh.setProxy).toHaveBeenCalledTimes(1);
+    expect(retired.setProxy).not.toHaveBeenCalled();
   });
 
   test('HNS guard blocks loopback CONNECT requests before the helper proxy', async () => {
@@ -825,7 +884,7 @@ describe('network-manager', () => {
 
     expect(ctx.httpRequest).not.toHaveBeenCalled();
     expect(ctx.resolveHnsDohAddresses).not.toHaveBeenCalled();
-    expect(res.writeHead).toHaveBeenCalledWith(502);
+    expect(res.writeHead).toHaveBeenCalledWith(503);
     expect(req.pipe).not.toHaveBeenCalled();
   });
 
@@ -840,7 +899,7 @@ describe('network-manager', () => {
   });
 
   test('API diagnostics logs failed API requests without sensitive query values', () => {
-    const ctx = loadNetworkManagerModule();
+    const ctx = loadNetworkManagerModule({ deferRouting: true });
 
     ctx.mod.registerApiRequestDiagnostics(ctx.session.defaultSession);
     ctx.dispatcher.attachWebRequestDispatcher(ctx.session.defaultSession);
@@ -869,7 +928,7 @@ describe('network-manager', () => {
   });
 
   test('API diagnostics stay disabled in packaged builds unless explicitly enabled', () => {
-    const ctx = loadNetworkManagerModule({ isPackaged: true });
+    const ctx = loadNetworkManagerModule({ isPackaged: true, deferRouting: true });
 
     ctx.mod.registerApiRequestDiagnostics(ctx.session.defaultSession);
 
@@ -879,7 +938,7 @@ describe('network-manager', () => {
 
 
   test('API diagnostics preserve explicit session scope', () => {
-    const ctx = loadNetworkManagerModule();
+    const ctx = loadNetworkManagerModule({ deferRouting: true });
     const privateSession = { webRequest: { onCompleted: jest.fn(), onErrorOccurred: jest.fn() } };
     ctx.mod.registerApiRequestDiagnostics(ctx.session.defaultSession);
     ctx.dispatcher.attachWebRequestDispatcher(privateSession);
@@ -893,7 +952,7 @@ describe('network-manager', () => {
     'https://other.example/fail', 'http://api.pirate.sc/fail',
     'https://api.pirate.sc.other.example/fail', 'not-a-url',
   ])('API diagnostics ignore unrelated URL %s', (url) => {
-    const ctx = loadNetworkManagerModule();
+    const ctx = loadNetworkManagerModule({ deferRouting: true });
     ctx.mod.registerApiRequestDiagnostics();
     ctx.dispatcher.attachWebRequestDispatcher(ctx.session.defaultSession);
     ctx.webRequest.onCompleted.mock.calls[0][0]({ url, statusCode: 500 });
@@ -902,7 +961,7 @@ describe('network-manager', () => {
   });
 
   test('API error diagnostics keep query redaction and repeat suppression', () => {
-    const ctx = loadNetworkManagerModule();
+    const ctx = loadNetworkManagerModule({ deferRouting: true });
     ctx.mod.registerApiRequestDiagnostics();
     ctx.dispatcher.attachWebRequestDispatcher(ctx.session.defaultSession);
     const listener = ctx.webRequest.onErrorOccurred.mock.calls[0][0];

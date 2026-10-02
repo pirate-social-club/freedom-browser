@@ -27,6 +27,7 @@ app.setAboutPanelOptions({
 });
 
 const log = require('./logger');
+let isQuitting = false;
 
 // Global error handlers - must be set up early
 process.on('uncaughtException', (error) => {
@@ -41,8 +42,9 @@ const { BrowserWindow, session, ipcMain } = require('electron');
 const path = require('path');
 const { registerBaseIpcHandlers } = require('./ipc-handlers');
 const { installRequestRewriter } = require('./request-rewriter');
-const { attachWebRequestDispatcher } = require('./webrequest-dispatcher');
-const { registerApiRequestDiagnostics } = require('./network-manager');
+const { createSessionRoutingTermination } = require('./session-routing-termination');
+const { registerApiRequestDiagnostics, initializeSessionRouting } = require('./network-manager');
+const terminateRouting = createSessionRoutingTermination({ app, log, markQuitting: () => { isQuitting = true; } });
 const { registerSettingsIpc, loadSettings } = require('./settings-store');
 const { registerBookmarksIpc } = require('./bookmarks-store');
 const { registerHistoryIpc, closeDb: closeHistoryDb } = require('./history');
@@ -162,7 +164,7 @@ registerLiveRoomApiIpc(ipcMain);
   registerDappPermissionsIpc();
   installRequestRewriter();
   registerApiRequestDiagnostics(defaultSession);
-  attachWebRequestDispatcher(defaultSession);
+  initializeSessionRouting(terminateRouting);
   allowInteractivePermissions(defaultSession);
   registerWebContentsHandlers();
   setupApplicationMenu();
@@ -245,8 +247,6 @@ app.on('window-all-closed', () => {
   // Note: Bee is stopped in 'before-quit' handler, not here,
   // so it keeps running on macOS when all windows are closed
 });
-
-let isQuitting = false;
 
 app.on('before-quit', async (event) => {
   if (isQuitting) return;

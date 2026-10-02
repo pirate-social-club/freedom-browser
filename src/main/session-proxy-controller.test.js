@@ -1,4 +1,5 @@
 const { createSessionProxyController } = require('./session-proxy-controller');
+const createController = (getDefaultSession) => createSessionProxyController(getDefaultSession, { onFatal: jest.fn() });
 
 function makeSession() {
   return {
@@ -12,7 +13,7 @@ describe('session proxy controller', () => {
   test('updates every enrolled session once, including the default', async () => {
     const main = makeSession();
     const privateSession = makeSession();
-    const controller = createSessionProxyController(() => main);
+    const controller = createController(() => main);
     controller.register(main);
     controller.register(privateSession);
     controller.register(privateSession);
@@ -37,7 +38,7 @@ describe('session proxy controller', () => {
       finishClose = resolve;
       observeClose();
     }));
-    const controller = createSessionProxyController(() => main);
+    const controller = createController(() => main);
     const first = controller.enqueue(() => controller.apply({ pacScript: 'first' }));
     const second = controller.enqueue(() => controller.apply({ pacScript: 'second' }));
     await closing;
@@ -53,15 +54,15 @@ describe('session proxy controller', () => {
     const failing = makeSession();
     const other = makeSession();
     failing.setProxy.mockRejectedValueOnce(new Error('configuration failed'));
-    const controller = createSessionProxyController(() => main);
+    const controller = createController(() => main);
     controller.register(failing);
     controller.register(other);
     await expect(controller.enqueue(() => controller.apply({ mode: 'direct' })))
       .rejects.toThrow('Session proxy update failed');
     expect(other.closeAllConnections).toHaveBeenCalledTimes(1);
-    expect(failing.closeAllConnections).not.toHaveBeenCalled();
-    await controller.enqueue(() => controller.apply({ mode: 'direct' }));
     expect(failing.closeAllConnections).toHaveBeenCalledTimes(1);
+    await controller.enqueue(() => controller.apply({ mode: 'direct' }));
+    expect(failing.closeAllConnections).toHaveBeenCalledTimes(2);
     expect(main.closeAllConnections).toHaveBeenCalledTimes(1);
     expect(other.closeAllConnections).toHaveBeenCalledTimes(1);
   });
@@ -70,7 +71,7 @@ describe('session proxy controller', () => {
     const main = makeSession();
     const existing = makeSession();
     const added = makeSession();
-    const controller = createSessionProxyController(() => main);
+    const controller = createController(() => main);
     controller.register(existing);
     await controller.apply({ mode: 'direct' });
     controller.register(added);
@@ -87,7 +88,7 @@ describe('session proxy controller', () => {
 
   test('changed PAC content reloads even when its URL stays the same', async () => {
     const main = makeSession();
-    const controller = createSessionProxyController(() => main);
+    const controller = createController(() => main);
     const config = { mode: 'pac_script', pacScript: 'same-url' };
     await controller.apply(config, 'first-content');
     await controller.apply(config, 'second-content');
@@ -96,20 +97,21 @@ describe('session proxy controller', () => {
 
   test('a failed changed policy invalidates the previous successful receipt', async () => {
     const main = makeSession();
-    const controller = createSessionProxyController(() => main);
+    const controller = createController(() => main);
     await controller.apply({ mode: 'direct' });
     main.forceReloadProxyConfig.mockRejectedValueOnce(new Error('reload failed'));
     await expect(controller.apply({ mode: 'pac_script', pacScript: 'changed' })).rejects.toThrow('Session proxy update failed');
     await controller.apply({ mode: 'direct' });
     expect(main.setProxy).toHaveBeenCalledTimes(3);
-    expect(main.closeAllConnections).toHaveBeenCalledTimes(2);
+    expect(main.closeAllConnections).toHaveBeenCalledTimes(3);
   });
 
-  test('a retired in-flight update cannot mark a new registration configured', async () => {
+  test('retirement refuses reuse and a late update cannot reopen the retained guard', async () => {
     const main = makeSession();
     const added = makeSession();
-    const controller = createSessionProxyController(() => main);
+    const controller = createController(() => main);
     controller.register(added);
+    const getter = controller.getPolicyGetter(added);
     let finishClose;
     let observeClose;
     const closing = new Promise((resolve) => { observeClose = resolve; });
@@ -118,27 +120,28 @@ describe('session proxy controller', () => {
       observeClose();
     }));
     const oldSetup = controller.enqueue(() => controller.applyTo(added, { mode: 'direct' }));
+    const refused = expect(oldSetup).rejects.toThrow('Session proxy update failed');
     await closing;
     controller.unregister(added);
-    controller.register(added);
-    const newSetup = controller.enqueue(() => controller.applyTo(added, { mode: 'direct' }));
+    expect(() => controller.register(added)).toThrow('session_retired');
     finishClose();
-    await Promise.all([oldSetup, newSetup]);
-    expect(added.closeAllConnections).toHaveBeenCalledTimes(2);
+    await refused;
+    expect(getter()).toMatchObject({ allowed: false, state: 'retired' });
   });
 
   test.each(['setProxy', 'forceReloadProxyConfig', 'closeAllConnections'])('requires %s before enrollment or changing any session', async (method) => {
     const main = makeSession();
     const incomplete = makeSession();
     incomplete[method] = undefined;
-    const controller = createSessionProxyController(() => main);
+    const controller = createController(() => main);
     expect(() => controller.register(incomplete)).toThrow(method);
-    await expect(controller.applyTo(incomplete, { mode: 'direct' })).rejects.toThrow(method);
+    await expect(controller.applyTo(incomplete, { mode: 'direct' })).rejects.toThrow('Session proxy update failed');
     expect(main.setProxy).not.toHaveBeenCalled();
+    const globalController = createController(() => main);
     const added = makeSession();
-    controller.register(added);
+    globalController.register(added);
     added[method] = 'unavailable';
-    await expect(controller.apply({ mode: 'direct' })).rejects.toThrow(method);
+    await expect(globalController.apply({ mode: 'direct' })).rejects.toThrow('Session proxy update failed');
     expect(main.setProxy).not.toHaveBeenCalled();
     if (method !== 'setProxy') expect(added.setProxy).not.toHaveBeenCalled();
   });
@@ -146,14 +149,14 @@ describe('session proxy controller', () => {
   test.each(['forceReloadProxyConfig', 'closeAllConnections'])('%s failures reject setup', async (method) => {
     const main = makeSession();
     main[method].mockRejectedValue(new Error('session unavailable'));
-    const controller = createSessionProxyController(() => main);
+    const controller = createController(() => main);
     await expect(controller.apply({ mode: 'direct' })).rejects.toThrow('Session proxy update failed');
   });
 
   test('released sessions are absent from later updates', async () => {
     const main = makeSession();
     const closed = makeSession();
-    const controller = createSessionProxyController(() => main);
+    const controller = createController(() => main);
     controller.register(closed);
     controller.unregister(closed);
     await controller.apply({ mode: 'direct' });
@@ -162,8 +165,8 @@ describe('session proxy controller', () => {
   });
 
   test('rejects unavailable sessions instead of reporting setup complete', async () => {
-    const controller = createSessionProxyController(() => null);
-    expect(() => controller.register({})).toThrow('Session proxy configuration is unavailable');
-    await expect(controller.apply({ mode: 'direct' })).rejects.toThrow('Session proxy configuration is unavailable');
+    const controller = createController(() => null);
+    expect(() => controller.register({})).toThrow('capability_setProxy');
+    await expect(controller.apply({ mode: 'direct' })).rejects.toThrow('session_unavailable');
   });
 });
