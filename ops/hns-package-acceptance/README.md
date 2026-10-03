@@ -68,3 +68,11 @@ unpacked path for braces and http-cache-semantics, including nested copies.
 Receipts explicitly deny merge or release acceptance. This mode does not
 clear the full audit; ordinary CI and the default fixtures journey retain
 their strict full-audit gates.
+
+The public diagnostic uses the official ipfs/kubo GitHub release archive
+after the original distribution endpoint failed in run37105756502. Its
+version, archive and original SHA512 are fixed and verified before
+extraction. Cold receipts bind the original failure, both source URLs,
+archive digest and extracted executable identity. Default fixtures keep
+the original downloader. Product downloaders, dependency pins and native
+expectations are unchanged.
