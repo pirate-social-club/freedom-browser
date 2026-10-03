@@ -113,6 +113,8 @@ module.exports = {
   // Internal
   GET_WEBVIEW_PRELOAD_PATH: 'internal:get-webview-preload-path',
   GET_INTERNAL_PAGES: 'internal:get-pages',
+  ROUTING_STATUS_GET: 'routing:get-status',
+  ROUTING_STATUS_UPDATE: 'routing:status-update',
   OPEN_URL_IN_NEW_TAB: 'internal:open-url-in-new-tab',
 
   // Favicons

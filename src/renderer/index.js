@@ -53,6 +53,7 @@ import { pushDebug } from './lib/debug.js';
 import { initOnboarding, checkAndShowOnboarding } from './lib/onboarding.js';
 import { initSidebar } from './lib/sidebar.js';
 import { initWalletUi } from './lib/wallet-ui.js';
+import { initSessionRoutingUi } from './lib/session-routing-ui.js';
 
 const electronAPI = window.electronAPI;
 
@@ -184,6 +185,7 @@ document.addEventListener('open-url-new-tab', (e) => {
 
 // Initialize all modules
 window.addEventListener('DOMContentLoaded', async () => {
+  initSessionRoutingUi();
   try {
     const settings = await electronAPI.getSettings();
     setRadicleIntegrationEnabled(settings?.enableRadicleIntegration === true);

@@ -153,6 +153,7 @@ describe('preload', () => {
       [exposures.electronAPI, 'removeHistory', [7], IPC.HISTORY_REMOVE, [7]],
       [exposures.electronAPI, 'clearHistory', [], IPC.HISTORY_CLEAR, []],
       [exposures.electronAPI, 'getWebviewPreloadPath', [], IPC.GET_WEBVIEW_PRELOAD_PATH, []],
+      [exposures.electronAPI, 'getRoutingStatus', [], IPC.ROUTING_STATUS_GET, []],
       [exposures.electronAPI, 'saveImage', ['https://example.com/image.png'], IPC.CONTEXT_MENU_SAVE_IMAGE, ['https://example.com/image.png']],
       [exposures.electronAPI, 'copyText', ['hello'], 'clipboard:copy-text', ['hello']],
       [exposures.electronAPI, 'copyImageFromUrl', ['https://example.com/image.png'], 'clipboard:copy-image', ['https://example.com/image.png']],
@@ -274,6 +275,8 @@ describe('preload', () => {
     await expect(exposures.electronAPI.closeWindow())
       .rejects
       .toThrow('freedomAPI is only available on Freedom internal pages');
+    await expect(exposures.electronAPI.getRoutingStatus()).rejects.toThrow('only available');
+    await expect(exposures.electronAPI.onRoutingStatusUpdate(jest.fn())).rejects.toThrow('only available');
 
     expect(ipcRenderer.invoke).not.toHaveBeenCalled();
     expect(ipcRenderer.send).not.toHaveBeenCalled();
@@ -286,6 +289,7 @@ describe('preload', () => {
     const { exposures, ipcRenderer } = loadPreloadModule();
 
     const listenerCases = [
+      [exposures.electronAPI, 'onRoutingStatusUpdate', IPC.ROUTING_STATUS_UPDATE, [{ revision: 1 }], [{ revision: 1 }]],
       [exposures.electronAPI, 'onNewTab', 'tab:new', [], []],
       [exposures.electronAPI, 'onCloseTab', 'tab:close', [], []],
       [exposures.electronAPI, 'onNewTabWithUrl', 'tab:new-with-url', ['https://example.com', 'named-target'], ['https://example.com', 'named-target']],

@@ -293,6 +293,8 @@ const loadNavigationModule = async (options = {}) => {
   activeRef.tab = options.activeTab || firstTab;
 
   jest.doMock('./state.js', () => ({ state }));
+  const routingUi = { isSessionRoutingBlocked: () => options.routingBlocked === true, refreshSessionRoutingNotice: jest.fn() };
+  jest.doMock('./session-routing-ui.js', () => routingUi);
   jest.doMock('./debug.js', () => debugMocks);
   jest.doMock('./bookmarks-ui.js', () => bookmarksUiMocks);
   jest.doMock('./github-bridge-ui.js', () => githubBridgeUiMocks);
@@ -305,6 +307,7 @@ const loadNavigationModule = async (options = {}) => {
 
   return {
     mod,
+    routingUi,
     state,
     debugMocks,
     bookmarksUiMocks,
@@ -332,6 +335,18 @@ const loadNavigationModule = async (options = {}) => {
 };
 
 describe('navigation', () => {
+  test.each([true, false])('a guard cancellation preserves the page when cached quarantine is %s', async (routingBlocked) => {
+    const ctx = await loadNavigationModule({ routingBlocked });
+    await ctx.mod.initNavigation();
+    ctx.activeRef.tab.webview.loadURL.mockClear();
+    ctx.tabsMocks.webviewEventHandler('did-fail-load', {
+      event: { errorCode: -20, errorDescription: 'ERR_BLOCKED_BY_CLIENT', validatedURL: 'https://active.example' },
+    });
+    expect(ctx.activeRef.tab.webview.loadURL).not.toHaveBeenCalled();
+    expect(ctx.activeRef.tab.webview.getURL()).toBe('https://active.example');
+    expect(ctx.routingUi.refreshSessionRoutingNotice).toHaveBeenCalledWith(ctx.activeRef.tab.webview);
+    expect(ctx.elements.reloadBtn.dataset.state).toBe('reload');
+  });
   afterEach(() => {
     global.window = originalWindow;
     global.document = originalDocument;

@@ -7,6 +7,7 @@ import { setupWebviewContextMenu } from './page-context-menu.js';
 import { homeUrl, isHomeUrl } from './page-urls.js';
 import { setupWebviewProvider, setActiveWebview, unregisterWebviewProvider } from './dapp-provider.js';
 import { normalizeLocalhostInput } from './url-utils.js';
+import { refreshSessionRoutingNotice } from './session-routing-ui.js';
 
 const electronAPI = window.electronAPI;
 
@@ -323,6 +324,7 @@ const createWebview = (tabId, initialUrl) => {
       }
     },
     'dom-ready': () => {
+      if (tabId === tabState.activeTabId) refreshSessionRoutingNotice(webview);
       if (tabId === tabState.activeTabId && onWebviewEvent) {
         onWebviewEvent('dom-ready', { tabId });
       }
@@ -920,6 +922,7 @@ export const switchTab = (tabId, options = {}) => {
   if (!tab) return;
 
   tabState.activeTabId = tabId;
+  refreshSessionRoutingNotice(tab.webview);
 
   // Hide all webviews, show active one
   for (const t of tabState.tabs) {

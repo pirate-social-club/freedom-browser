@@ -1,5 +1,6 @@
 // Navigation, webview, and address bar handling
 import { state } from './state.js';
+import { isSessionRoutingBlocked, refreshSessionRoutingNotice } from './session-routing-ui.js';
 import { pushDebug } from './debug.js';
 import { updateBookmarkButtonVisibility } from './bookmarks-ui.js';
 import { updateGithubBridgeIcon } from './github-bridge-ui.js';
@@ -1540,7 +1541,8 @@ export const initNavigation = () => {
         reloadBtn.dataset.state = 'reload';
         updateNavigationState();
 
-        if (data.event && data.event.errorCode !== -3 && webview && data.event.isMainFrame !== false) {
+        if (data.event?.errorCode === -20) refreshSessionRoutingNotice(webview);
+        if (data.event && ![-3, -20].includes(data.event.errorCode) && webview && data.event.isMainFrame !== false && !isSessionRoutingBlocked(webview)) {
           const errorUrl = new URL('pages/error.html', window.location.href);
           const failedUrl = data.event.validatedURL || data.event.url || '';
           const failedError = data.event.errorDescription || data.event.errorCode;

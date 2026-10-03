@@ -723,6 +723,7 @@ function getDvpnProxy() {
 module.exports = {
   initializeSessionRouting,
   getProxySessionPolicy: proxySessions.policyFor,
+  setProxySessionPolicyObserver: proxySessions.setPolicyObserver,
   setHnsProxy,
   setHnsResolverAddrs,
   clearHnsProxy,

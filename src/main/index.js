@@ -28,6 +28,7 @@ app.setAboutPanelOptions({
 
 const log = require('./logger');
 let isQuitting = false;
+let browserReady = false;
 
 // Global error handlers - must be set up early
 process.on('uncaughtException', (error) => {
@@ -38,13 +39,20 @@ process.on('unhandledRejection', (reason, _promise) => {
   log.error('Unhandled rejection:', reason);
 });
 
-const { BrowserWindow, session, ipcMain } = require('electron');
+const { BrowserWindow, session, ipcMain, webContents, dialog } = require('electron');
 const path = require('path');
 const { registerBaseIpcHandlers } = require('./ipc-handlers');
 const { installRequestRewriter } = require('./request-rewriter');
 const { createSessionRoutingTermination } = require('./session-routing-termination');
-const { registerApiRequestDiagnostics, initializeSessionRouting } = require('./network-manager');
-const terminateRouting = createSessionRoutingTermination({ app, log, markQuitting: () => { isQuitting = true; } });
+const { registerApiRequestDiagnostics, initializeSessionRouting,
+  getProxySessionPolicy, setProxySessionPolicyObserver } = require('./network-manager');
+const { createSessionRoutingNoticeStore, showPreviousRoutingNotice } = require('./session-routing-notice');
+const { registerSessionRoutingFeedback } = require('./session-routing-feedback');
+let routingNoticeStore;
+const terminateRouting = createSessionRoutingTermination({ app, log,
+  markQuitting: () => { isQuitting = true; },
+  recordNotice: (code) => routingNoticeStore?.record(code),
+});
 const { registerSettingsIpc, loadSettings } = require('./settings-store');
 const { registerBookmarksIpc } = require('./bookmarks-store');
 const { registerHistoryIpc, closeDb: closeHistoryDb } = require('./history');
@@ -92,6 +100,7 @@ if (hasSingleInstanceLock) {
   registerFreedomProtocolClient({ app, log });
   freedomProtocolHandler = createFreedomProtocolHandler({
     app,
+    isBrowserReady: () => browserReady && !isQuitting,
     createMainWindow,
     getMainWindows,
     log,
@@ -133,6 +142,8 @@ async function bootstrap() {
   // Migrate user data from old "Freedom Browser" directory if needed
   // This must run before any modules access userData
   migrateUserData();
+  routingNoticeStore = createSessionRoutingNoticeStore(app.getPath('userData'));
+  await showPreviousRoutingNotice(routingNoticeStore, dialog);
   clearPersistedBrowserRequestState();
 
   const defaultSession = session.defaultSession;
@@ -165,6 +176,9 @@ registerLiveRoomApiIpc(ipcMain);
   installRequestRewriter();
   registerApiRequestDiagnostics(defaultSession);
   initializeSessionRouting(terminateRouting);
+  registerSessionRoutingFeedback({ app, ipcMain, webContents, dialog, getMainWindows,
+    getPolicy: getProxySessionPolicy, getDefaultSession: () => session.defaultSession,
+    setPolicyObserver: setProxySessionPolicyObserver });
   allowInteractivePermissions(defaultSession);
   registerWebContentsHandlers();
   setupApplicationMenu();
@@ -223,6 +237,7 @@ registerLiveRoomApiIpc(ipcMain);
   await initDvpn();
 
   const mainWindow = createMainWindow(freedomProtocolHandler.consumePendingUrl());
+  browserReady = true;
   freedomProtocolHandler.flushPendingUrls();
 
   // Initialize auto-updater (pass menu update callback)

@@ -10,6 +10,16 @@ function createSessionProxyController(getDefaultSession, options = {}) {
   let pending = Promise.resolve();
   let terminal = false;
   let onFatal = options.onFatal;
+  let onPolicyChange;
+
+  function notify() {
+    try { Promise.resolve(onPolicyChange?.()).catch(() => {}); } catch { /* Feedback has no routing authority. */ }
+  }
+
+  function setPolicyObserver(observer) {
+    if (typeof observer !== 'function' || onPolicyChange) throw new TypeError('Invalid routing observer');
+    onPolicyChange = observer;
+  }
 
   function requireSession(targetSession) {
     for (const method of ['setProxy', 'forceReloadProxyConfig', 'closeAllConnections']) {
@@ -44,6 +54,7 @@ function createSessionProxyController(getDefaultSession, options = {}) {
     record.generation += 1;
     record.state = state;
     if (state !== 'ready') record.key = undefined;
+    notify();
   }
 
   function assertLive() {
@@ -74,6 +85,7 @@ function createSessionProxyController(getDefaultSession, options = {}) {
       }
     }
     sessions.clear();
+    notify();
   }
 
   function terminate(code) {
@@ -97,6 +109,7 @@ function createSessionProxyController(getDefaultSession, options = {}) {
     if (record.state === 'enrolling' && record.generation === 0) {
       // Preserve the native startup state without claiming a proxy receipt.
       record.state = 'initial';
+      notify();
     } else if (record.state !== 'initial') {
       throw routingError('default_already_managed');
     }
@@ -256,7 +269,8 @@ function createSessionProxyController(getDefaultSession, options = {}) {
   }
 
   return { enqueue, register, isRegistered, unregister, cancelEnrollment, apply, applyTo,
-    adoptDefault, getPolicyGetter, policyFor, setFatalHandler, withdrawAll, quarantineAll, retireAll, terminate, commit };
+    adoptDefault, getPolicyGetter, policyFor, setFatalHandler, setPolicyObserver,
+    withdrawAll, quarantineAll, retireAll, terminate, commit };
 }
 
 module.exports = { createSessionProxyController };

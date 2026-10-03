@@ -116,6 +116,13 @@ contextBridge.exposeInMainWorld('electronAPI', guardInternalBridge('electronAPI'
   clearHistory: () => ipcRenderer.invoke('history:clear'),
   // Internal
   getWebviewPreloadPath: () => ipcRenderer.invoke('internal:get-webview-preload-path'),
+  getRoutingStatus: () => ipcRenderer.invoke('routing:get-status'),
+  onRoutingStatusUpdate: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, value) => callback(value);
+    ipcRenderer.on('routing:status-update', handler);
+    return () => ipcRenderer.removeListener('routing:status-update', handler);
+  },
   // Context menu
   saveImage: (imageUrl) => ipcRenderer.invoke('context-menu:save-image', imageUrl),
   // Clipboard
