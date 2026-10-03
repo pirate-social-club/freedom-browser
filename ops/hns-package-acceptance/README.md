@@ -31,3 +31,30 @@ Runtime version evidence is now explicit: npm ci verifies the lockfile-pinned El
 Context failures retain fixed assertion/operation identifiers, selected target/frame/context IDs, finite counts and predicate booleans. CDP protocol errors retain only their numeric code; evaluation exceptions retain an allowlisted exception class. Raw exception messages, stacks, origins, URLs and user-agent strings are not published. URL digests permit identity comparisons without revealing page text. Hermetic protocol fixtures cover both targets, legitimate extra frames, missing/wrong/duplicate worlds, exposed Node globals, document/target changes, guest mismatches and diagnostic privacy. Archive fixtures cover corrupted or mismatched version and executable links. Actual hosted behavior remains unproved until a complete new installed-deb pass.
 
 The world-selection rule follows the pinned [Electron 42.10.0 frame observer](https://github.com/electron/electron/blob/v42.10.0/shell/renderer/electron_render_frame_observer.cc#L114-L168): context isolation creates the named isolated world for a main frame. The probe observes that existing world and its distinct context identity. This is evidence of the effective isolation preference, not a general audit of every bridge API. Context destruction, clearing or replacement during observation also refuses the proof.
+
+
+## Live a18n browser acceptance
+
+Dispatch the existing package workflow with journey set to a18n to open the
+working public staging hosts through the installed browser address control.
+The default fixtures journey retains its existing security controls. The a18n
+journey uses the same pinned application files, package installation, native
+sandbox checks and owned-process cleanup, with no product or dependency change.
+It is a fresh build of the accepted application inputs, not a reuse of a saved
+installable package. The runtime source pins remain unchanged.
+
+The public journey starts no fixture DNS or TLS server and installs no nftables
+redirection. Normal OS resolution in the disposable namespace uses slirp's DNS
+forwarder; the browser's real public HNS answers are not replaced. No host
+mapping, certificate waiver, authenticated session or wallet call is used.
+Both successful pages must render their expected community or member content
+and return 200 in their actual webview. The unclaimed host must return 421.
+Only finite identity predicates and navigation status are retained, alongside
+the existing provenance, sandbox, resource and cleanup receipts.
+
+The five pure driver regressions reject wrong status or destination, absent
+rendered content, claimed content on an unclaimed host, an unready resolver,
+and missing or duplicate webviews. These are driver checks. A complete hosted
+run is still required to establish actual browser acceptance. This task does
+not establish a browser upgrade, a new security release, local VPN behavior,
+full application restart, Bob Extension acceptance or production readiness.

@@ -250,11 +250,14 @@ manifest=[{'path':str(f.relative_to(p/'package')),'sha256':hashlib.sha256(f.read
 native="const path=require('path');const app=process.argv[1];const DB=require(path.join(app,'node_modules/better-sqlite3'));const db=new DB(':memory:');if(db.prepare('SELECT 42 AS value').get().value!==42)throw Error('sqlite ABI');db.close();const axios=require(path.join(app,'node_modules/axios'));if(axios.VERSION!=='1.20.0'||typeof axios.request!=='function')throw Error('runtime Axios');"
 run(['unshare','--user','--map-root-user','--net',str(installed/'freedom'),'-e',native,str(installed/'resources/app.asar')],cwd=p/'package',env={**os.environ,'ELECTRON_RUN_AS_NODE':'1'})
 (p/'candidate-integrity.json').write_text(json.dumps({'Freedom_source':app_sha,'asar_integrity':json.loads((p/'asar-integrity.json').read_text()),'tested_helper_build_source':artifact_source,'tested_helper_build_compiler':'Go 1.26.2','helper_sha256':assets['fingertipd'],'hnsd_sha256':assets['hnsd'],'package_build_command':command,'packaged_source_files_compared':len(checks),'packaged_Axios_version':'1.20.0','packaged_Axios_files_compared':len(axios_files),'native_ABI_check_passed':True,'native_sqlite_SELECT42':True,'helper_rebuilt':False,'installed_deb_payload_matched':True,'verified_asar_path':'/opt/Freedom/resources/app.asar','Electron_version_proof_sha256':streamed_sha(p/'electron-version-proof.json'),'Electron_version':'42.10.0','Electron_executable_sha256':hashlib.sha256((p/'package/freedom').read_bytes()).hexdigest()},indent=2)+'\n')
-preparation_phase='fixtures';preparation_progress()
+preparation_phase='profile_seed';preparation_progress()
 checkpoint=p/'warm-checkpoint-main.dat';metadata=json.loads((p/'checkpoint-integrity.json').read_text());assert hashlib.sha256(checkpoint.read_bytes()).hexdigest()==metadata['sha256']
 assert checkpoint.read_bytes()==(freedom/'assets/hns/checkpoint_main.dat').read_bytes(),'seed differs from shipped checkpoint'
 dest=p/'profile-candidate/hns-data/hnsd';dest.mkdir(parents=True,mode=0o700);shutil.copy2(checkpoint,dest/'checkpoint_main.dat')
 settings=p/'profile-settings-fixture.json';assert json.loads(settings.read_text())=={'autoUpdate':False};shutil.copy2(settings,p/'profile-candidate/settings.json');(p/'profile-candidate/settings.json').chmod(0o600)
 (p/'profile-seed.json').write_text(json.dumps({'fresh_browser_profile':True,'public_hnsd_checkpoint_sha256':metadata['sha256'],'only_settings_override':{'autoUpdate':False},'settings_sha256':hashlib.sha256(settings.read_bytes()).hexdigest()},indent=2)+'\n')
-run([sys.executable,str(p/'prepare-candidate.py')]);run([sys.executable,str(p/'validate-prepared.py')]);pin()
+journey=os.environ.get('FREEDOM_ACCEPTANCE_JOURNEY','fixtures');assert journey in ['fixtures','a18n']
+if journey=='fixtures':
+ run([sys.executable,str(p/'prepare-candidate.py')]);run([sys.executable,str(p/'validate-prepared.py')])
+pin()
 preparation_phase='done';preparation_progress('passed')
