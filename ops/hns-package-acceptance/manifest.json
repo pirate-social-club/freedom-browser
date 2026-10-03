@@ -40,6 +40,6 @@
   "python-wheel-pins.json": "12bec3d3d647ad38a403502f4df8ba9a8bda13c0d3fa3c5fe9f6025982be5e1a",
   "requirements.txt": "05bbd77cf30d45eb47f1ed042f5208ba7afb5fa00be12afb8d4b5c716876cefc",
   "runtime-source-pins.json": "223b7ea41f3db2b95b4c7ac02d9a91a9a1030dcee91914b40bce9c2b266c7ac0",
-  "public-diagnostic-audit.py": "1a6af4dff6204d7b2770230605d8ee59cc4faeb85b4b21615370ee0f2a92d9ed",
-  "public-diagnostic-audit.test.py": "0e4682de4ff4f151ea80b6a9f6788d3676831df23d1d6fe6873d97a707b6da56"
+  "public-diagnostic-audit.py": "ab94076408683db8b59f7821bd85ee16c7dab409e1352647e28759bfc1c1dd5f",
+  "public-diagnostic-audit.test.py": "be206f40428a28e42061c9111752dad60e484840d0c3f6f28ecaa887d28d0991"
 }
