@@ -66,6 +66,7 @@
         padding: 7px 12px;
         text-align: center;
         font-weight: 600;
+        /* theme-literal: translucent ink is the card drop shadow, not its fill. */
         box-shadow: 0 1px 3px rgba(16, 24, 40, 0.08);
       }
 
@@ -93,6 +94,7 @@
         background: var(--shell-panel);
         border: 1px solid var(--shell-border);
         border-radius: 8px;
+        /* theme-literal: translucent ink is the card drop shadow, not its fill. */
         box-shadow: 0 1px 3px rgba(16, 24, 40, 0.08);
         padding: 16px;
       }
@@ -172,6 +174,7 @@
       button.primary {
         border-color: var(--shell-link);
         background: var(--shell-link);
+        /* theme-literal: fixed contrast ink on the filled primary action. */
         color: #ffffff;
       }
 
@@ -220,8 +223,8 @@
         margin: 0;
         border: 1px solid var(--shell-border);
         border-radius: 8px;
-        background: #0f1115;
-        color: #e5e7eb;
+        background: var(--shell-code-alt);
+        color: var(--shell-text);
         padding: 12px;
         white-space: pre-wrap;
         overflow-wrap: anywhere;
@@ -250,6 +253,7 @@
         overflow: hidden;
         border: 1px solid var(--shell-border);
         border-radius: 8px;
+        /* theme-literal: video previews retain a fixed dark media matte in both themes. */
         background: #050608;
       }
 
@@ -270,6 +274,7 @@
         display: grid;
         place-items: center;
         padding: 16px;
+        /* theme-literal: placeholder ink contrasts with the fixed dark video matte. */
         color: rgba(255, 255, 255, 0.72);
         text-align: center;
       }

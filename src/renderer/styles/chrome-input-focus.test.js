@@ -19,6 +19,9 @@ const path = require('path');
 
 const STYLES_DIR = __dirname;
 const SHARED_SHEET = 'inputs.css';
+// Preserved fork source for the former settings modal. Current settings live
+// in pages/settings.html; importing this sheet would overwrite shared toggles.
+const UNBUNDLED_SHEETS = new Set(['settings.css']);
 
 const sheets = fs
   .readdirSync(STYLES_DIR)
@@ -70,7 +73,8 @@ describe('chrome text-field focus', () => {
   test('every stylesheet in the chrome bundle is imported, so this sweep is complete', () => {
     const bundle = fs.readFileSync(path.join(STYLES_DIR, '..', 'styles.css'), 'utf8');
     const imported = [...bundle.matchAll(/@import\s+'\.\/styles\/([^']+)'/g)].map(([, n]) => n);
-    expect(new Set(imported)).toEqual(new Set(sheets));
+    expect(new Set(imported)).toEqual(new Set(sheets.filter((name) => !UNBUNDLED_SHEETS.has(name))));
+    for (const name of UNBUNDLED_SHEETS) expect(imported).not.toContain(name);
     expect(imported).toContain(SHARED_SHEET);
   });
 
