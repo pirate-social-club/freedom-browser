@@ -133,30 +133,31 @@ def audit_observation(audit, returncode):
             "audit_protocol_failed")
     findings = audit.get("vulnerabilities")
     require(isinstance(findings, dict), "audit_schema")
-    resolved = {}
-
-    def resolve(name, ancestry):
-        require(isinstance(name, str) and name in findings, "audit_reference_missing")
-        require(name not in ancestry, "audit_reference_cycle")
-        if name in resolved:
-            return resolved[name]
-        entry = findings[name]
-        require(isinstance(entry, dict) and isinstance(entry.get("via"), list),
-                "audit_finding_schema")
+    def resolve(name):
+        pending = [name]
+        seen = set()
         roots = set()
-        for via in entry["via"]:
-            if isinstance(via, dict):
-                require(isinstance(via.get("url"), str), "audit_advisory_schema")
-                roots.add(via["url"])
-            else:
-                roots.update(resolve(via, ancestry | {name}))
+        while pending:
+            current = pending.pop()
+            require(isinstance(current, str) and current in findings, "audit_reference_missing")
+            if current in seen:
+                continue
+            seen.add(current)
+            entry = findings[current]
+            require(isinstance(entry, dict) and isinstance(entry.get("via"), list),
+                    "audit_finding_schema")
+            for via in entry["via"]:
+                if isinstance(via, dict):
+                    require(isinstance(via.get("url"), str), "audit_advisory_schema")
+                    roots.add(via["url"])
+                else:
+                    pending.append(via)
         require(bool(roots), "audit_reference_without_advisory")
-        resolved[name] = roots
         return roots
 
     roots = set()
     for name in findings:
-        roots.update(resolve(name, set()))
+        roots.update(resolve(name))
     require(roots <= {REMAINING_ADVISORY}, "new_or_retained_advisory")
     require((returncode == 0) == (not findings), "audit_verdict_inconsistent")
     return {"exit_code": returncode, "full_audit_passed": returncode == 0,

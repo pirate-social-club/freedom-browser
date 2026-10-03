@@ -163,6 +163,15 @@ class ContractTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 C["audit_observation"]({"vulnerabilities": findings}, 1)
 
+    def test_rooted_audit_cycles_are_reported_as_failures(self):
+        value = {"vulnerabilities": {"root": {"via": [{"url": C["REMAINING_ADVISORY"]}]},
+                                     "builder": {"via": ["platform", "root"]},
+                                     "platform": {"via": ["builder"]}}}
+        self.assertFalse(C["audit_observation"](value, 1)["full_audit_passed"])
+        value["vulnerabilities"]["platform"]["via"].append({"url": "unknown"})
+        with self.assertRaisesRegex(ValueError, "new_or_retained_advisory"):
+            C["audit_observation"](value, 1)
+
     def test_cleanup_query_failure_retains_receipt(self):
         for error in (subprocess.TimeoutExpired("systemctl", 5), subprocess.CalledProcessError(1, "systemctl")):
             with tempfile.TemporaryDirectory(prefix="freedom-refresh-cleanup-") as directory:

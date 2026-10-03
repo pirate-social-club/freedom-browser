@@ -21,6 +21,9 @@ the Jest repair validated; its full_audit_passed field records whether the
 remaining downloader advisory still fails. The ordinary CI gate is unchanged.
 There is no advisory exception. Source publication of a generated lock still
 requires independent graph and receipt review before applying it.
+Advisory dependency cycles are followed with a visited set; every finding
+must still reach the known advisory. Unrooted cycles and missing references
+are refused. A rooted cycle does not turn the failed full audit into a pass.
 
 Generation and installation are allowed only on a disposable hosted runner.
 Local fixtures validate refusal logic without npm or a browser. The hosted
