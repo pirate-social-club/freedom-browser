@@ -296,20 +296,20 @@ jobs:
       - name: Prepare bounded runtime and protected cleanup verifier
         run: |
           set -euo pipefail
-          echo "FREEDOM_PINNED_NODE_PATH=$PATH" >> "$GITHUB_ENV"
           node --version
           test "$(node --version)" = v24.14.0
+          sudo install -m 0755 ops/dependency-repair/bounded-ci-shell.sh /usr/local/bin/freedom-ci-bounded-shell
           mkdir -m 700 "${{ runner.temp }}/ipfs-gateway-proxy"
           verifier="/run/freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service.verifier.py"
           sudo install -m 0644 ops/dependency-repair/verify-refresh-cleanup.py "$verifier"
           sha256sum "$verifier" > "${{ runner.temp }}/ipfs-gateway-proxy/verifier.sha256"
       - name: Verify pinned Node inside runtime limits
-        shell: sudo systemd-run --unit=freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service --wait --pipe --collect --uid=runner --gid=runner --working-directory=${{ github.workspace }} --property=CPUQuota=100% --property=AllowedCPUs=0 --property=CPUAffinity=0 --property=Nice=19 --property=MemoryMax=3221225472 --property=MemorySwapMax=0 --property=RuntimeMaxSec=600 --property=TimeoutStopSec=5 --property=KillMode=control-group --setenv="PATH=${{ env.FREEDOM_PINNED_NODE_PATH }}" --setenv=CI=1 --setenv=FREEDOM_ELECTRON_NET_TEST=1 /bin/bash --noprofile --norc -eo pipefail {0}
+        shell: /usr/local/bin/freedom-ci-bounded-shell {0}
         run: |
           node --version | tee "${{ runner.temp }}/ipfs-gateway-proxy/runtime-node-version.log"
           test "$(node --version)" = v24.14.0
       - name: Run ipfs-gateway-proxy
-        shell: sudo systemd-run --unit=freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service --wait --pipe --collect --uid=runner --gid=runner --working-directory=${{ github.workspace }} --property=CPUQuota=100% --property=AllowedCPUs=0 --property=CPUAffinity=0 --property=Nice=19 --property=MemoryMax=3221225472 --property=MemorySwapMax=0 --property=RuntimeMaxSec=600 --property=TimeoutStopSec=5 --property=KillMode=control-group --setenv="PATH=${{ env.FREEDOM_PINNED_NODE_PATH }}" --setenv=CI=1 --setenv=FREEDOM_ELECTRON_NET_TEST=1 /bin/bash --noprofile --norc -eo pipefail {0}
+        shell: /usr/local/bin/freedom-ci-bounded-shell {0}
         run: npx jest --runInBand src/main/__tests__/integration/ipfs-gateway-proxy.test.js
       - name: Confirm runtime cleanup
         if: always()
@@ -362,20 +362,20 @@ jobs:
       - name: Prepare bounded runtime and protected cleanup verifier
         run: |
           set -euo pipefail
-          echo "FREEDOM_PINNED_NODE_PATH=$PATH" >> "$GITHUB_ENV"
           node --version
           test "$(node --version)" = v24.14.0
+          sudo install -m 0755 ops/dependency-repair/bounded-ci-shell.sh /usr/local/bin/freedom-ci-bounded-shell
           mkdir -m 700 "${{ runner.temp }}/e2e-theme-parity"
           verifier="/run/freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service.verifier.py"
           sudo install -m 0644 ops/dependency-repair/verify-refresh-cleanup.py "$verifier"
           sha256sum "$verifier" > "${{ runner.temp }}/e2e-theme-parity/verifier.sha256"
       - name: Verify pinned Node inside runtime limits
-        shell: sudo systemd-run --unit=freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service --wait --pipe --collect --uid=runner --gid=runner --working-directory=${{ github.workspace }} --property=CPUQuota=100% --property=AllowedCPUs=0 --property=CPUAffinity=0 --property=Nice=19 --property=MemoryMax=3221225472 --property=MemorySwapMax=0 --property=RuntimeMaxSec=600 --property=TimeoutStopSec=5 --property=KillMode=control-group --setenv="PATH=${{ env.FREEDOM_PINNED_NODE_PATH }}" --setenv=CI=1 --setenv=FREEDOM_ELECTRON_NET_TEST=1 /bin/bash --noprofile --norc -eo pipefail {0}
+        shell: /usr/local/bin/freedom-ci-bounded-shell {0}
         run: |
           node --version | tee "${{ runner.temp }}/e2e-theme-parity/runtime-node-version.log"
           test "$(node --version)" = v24.14.0
       - name: Run e2e-theme-parity
-        shell: sudo systemd-run --unit=freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service --wait --pipe --collect --uid=runner --gid=runner --working-directory=${{ github.workspace }} --property=CPUQuota=100% --property=AllowedCPUs=0 --property=CPUAffinity=0 --property=Nice=19 --property=MemoryMax=3221225472 --property=MemorySwapMax=0 --property=RuntimeMaxSec=600 --property=TimeoutStopSec=5 --property=KillMode=control-group --setenv="PATH=${{ env.FREEDOM_PINNED_NODE_PATH }}" --setenv=CI=1 --setenv=FREEDOM_ELECTRON_NET_TEST=1 /bin/bash --noprofile --norc -eo pipefail {0}
+        shell: /usr/local/bin/freedom-ci-bounded-shell {0}
         run: xvfb-run -a npm run test:e2e:theme-parity
       - name: Confirm runtime cleanup
         if: always()
@@ -428,20 +428,20 @@ jobs:
       - name: Prepare bounded runtime and protected cleanup verifier
         run: |
           set -euo pipefail
-          echo "FREEDOM_PINNED_NODE_PATH=$PATH" >> "$GITHUB_ENV"
           node --version
           test "$(node --version)" = v24.14.0
+          sudo install -m 0755 ops/dependency-repair/bounded-ci-shell.sh /usr/local/bin/freedom-ci-bounded-shell
           mkdir -m 700 "${{ runner.temp }}/e2e-renderer-screenshots"
           verifier="/run/freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service.verifier.py"
           sudo install -m 0644 ops/dependency-repair/verify-refresh-cleanup.py "$verifier"
           sha256sum "$verifier" > "${{ runner.temp }}/e2e-renderer-screenshots/verifier.sha256"
       - name: Verify pinned Node inside runtime limits
-        shell: sudo systemd-run --unit=freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service --wait --pipe --collect --uid=runner --gid=runner --working-directory=${{ github.workspace }} --property=CPUQuota=100% --property=AllowedCPUs=0 --property=CPUAffinity=0 --property=Nice=19 --property=MemoryMax=3221225472 --property=MemorySwapMax=0 --property=RuntimeMaxSec=600 --property=TimeoutStopSec=5 --property=KillMode=control-group --setenv="PATH=${{ env.FREEDOM_PINNED_NODE_PATH }}" --setenv=CI=1 --setenv=FREEDOM_ELECTRON_NET_TEST=1 /bin/bash --noprofile --norc -eo pipefail {0}
+        shell: /usr/local/bin/freedom-ci-bounded-shell {0}
         run: |
           node --version | tee "${{ runner.temp }}/e2e-renderer-screenshots/runtime-node-version.log"
           test "$(node --version)" = v24.14.0
       - name: Run e2e-renderer-screenshots
-        shell: sudo systemd-run --unit=freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service --wait --pipe --collect --uid=runner --gid=runner --working-directory=${{ github.workspace }} --property=CPUQuota=100% --property=AllowedCPUs=0 --property=CPUAffinity=0 --property=Nice=19 --property=MemoryMax=3221225472 --property=MemorySwapMax=0 --property=RuntimeMaxSec=600 --property=TimeoutStopSec=5 --property=KillMode=control-group --setenv="PATH=${{ env.FREEDOM_PINNED_NODE_PATH }}" --setenv=CI=1 --setenv=FREEDOM_ELECTRON_NET_TEST=1 /bin/bash --noprofile --norc -eo pipefail {0}
+        shell: /usr/local/bin/freedom-ci-bounded-shell {0}
         run: xvfb-run -a npm run test:e2e:screenshots
       - name: Confirm runtime cleanup
         if: always()
