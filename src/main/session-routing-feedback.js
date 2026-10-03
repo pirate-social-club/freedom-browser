@@ -107,4 +107,4 @@ function registerSessionRoutingFeedback({ app, ipcMain, webContents, dialog,
   return { schedule };
 }
 
-module.exports = { registerSessionRoutingFeedback };
+module.exports = { registerSessionRoutingFeedback, isBrowserDocument };

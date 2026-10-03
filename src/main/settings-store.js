@@ -2,6 +2,7 @@ const log = require('./logger');
 const { app, ipcMain, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { pathToFileURL } = require('url');
 const IPC = require('../shared/ipc-channels');
 const { broadcastToAllWebContents } = require('./lib/broadcast-to-all-webcontents');
 const { sanitizeOverrides } = require('../shared/shortcuts');
@@ -376,12 +377,37 @@ function saveSettings(newSettings) {
   }
 }
 
+function canSaveSettings(event) {
+  try {
+    const sender = event?.sender;
+    if (!sender || sender.isDestroyed() || event.senderFrame !== sender.mainFrame) return false;
+    // Resolve lazily: the window factory itself depends on settings-store.
+    const { getMainWindows } = require('./windows/mainWindow');
+    const { getPartitionForWebContents } = require('./private/private-windows');
+    const { isBrowserDocument } = require('./session-routing-feedback');
+    const host = sender.getType() === 'webview' ? sender.hostWebContents : sender;
+    if (!host || host.isDestroyed() || !getMainWindows().some((win) =>
+      !win.isDestroyed() && win.webContents === host)) return false;
+    const partition = getPartitionForWebContents(host);
+    if (!isBrowserDocument(host.mainFrame?.url, partition)) return false;
+    if (sender === host) return true;
+    const { session } = require('electron');
+    const expectedSession = partition ? session.fromPartition(partition) : host.session;
+    if (sender.session !== expectedSession) return false;
+    const url = new URL(event.senderFrame.url);
+    url.search = '';
+    url.hash = '';
+    return url.href === pathToFileURL(path.join(__dirname, '../renderer/pages/settings.html')).href;
+  } catch { return false; }
+}
+
 function registerSettingsIpc() {
   ipcMain.handle(IPC.SETTINGS_GET, () => {
     return loadSettings();
   });
 
-  ipcMain.handle(IPC.SETTINGS_SAVE, (_event, newSettings) => {
+  ipcMain.handle(IPC.SETTINGS_SAVE, (event, newSettings) => {
+    if (!canSaveSettings(event)) throw new Error('Settings changes require Freedom settings UI');
     return saveSettings(newSettings);
   });
 

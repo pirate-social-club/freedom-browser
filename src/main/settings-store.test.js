@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const IPC = require('../shared/ipc-channels');
 const {
   createIpcMainMock,
@@ -474,7 +475,17 @@ describe('settings-store', () => {
 
   test('registers IPC handlers for loading and saving settings', async () => {
     const ipcMain = createIpcMainMock();
-    const { mod, nativeTheme } = loadSettingsStore({ userDataDir, ipcMain });
+    const host = {
+      mainFrame: { url: pathToFileURL(path.join(__dirname, '../renderer/index.html')).href },
+      isDestroyed: () => false,
+      getType: () => 'window',
+    };
+    const { mod, nativeTheme } = loadSettingsStore({ userDataDir, ipcMain, extraMocks: {
+      [require.resolve('./windows/mainWindow')]: () => ({
+        getMainWindows: () => [{ isDestroyed: () => false, webContents: host }],
+      }),
+      [require.resolve('./private/private-windows')]: () => ({ getPartitionForWebContents: () => null }),
+    } });
 
     mod.registerSettingsIpc();
 
@@ -485,10 +496,83 @@ describe('settings-store', () => {
       })
     );
     await expect(
-      ipcMain.invoke(IPC.SETTINGS_SAVE, { theme: 'dark', antNodeMode: 'light' })
-    ).resolves.toBe(true);
+      ipcMain.handlers.get(IPC.SETTINGS_SAVE)(
+        { sender: host, senderFrame: host.mainFrame }, { theme: 'dark', antNodeMode: 'light' }
+      )
+    ).toBe(true);
 
     expect(nativeTheme.themeSource).toBe('dark');
+  });
+
+  describe('settings mutation authorization', () => {
+    function setup(partition = null) {
+      const uiUrl = pathToFileURL(path.join(__dirname, '../renderer/index.html')).href;
+      const pageUrl = pathToFileURL(path.join(__dirname, '../renderer/pages/settings.html')).href;
+      const normalSession = {};
+      const privateSession = {};
+      const host = { mainFrame: { url: uiUrl }, session: normalSession,
+        getType: () => 'window', isDestroyed: () => false };
+      if (partition) host.mainFrame.url += `?privatePartition=${partition}`;
+      const win = { webContents: host, isDestroyed: () => false };
+      const windows = [win];
+      const guest = { hostWebContents: host, mainFrame: { url: pageUrl },
+        session: partition ? privateSession : normalSession,
+        getType: () => 'webview', isDestroyed: () => false };
+      const ctx = loadSettingsStore({ userDataDir,
+        electronOverrides: { session: { fromPartition: (value) => {
+          if (value !== partition) throw new Error('Unexpected partition');
+          return privateSession;
+        } } },
+        extraMocks: {
+          [require.resolve('./windows/mainWindow')]: () => ({ getMainWindows: () => windows }),
+          [require.resolve('./private/private-windows')]: () => ({ getPartitionForWebContents: () => partition }),
+        },
+      });
+      ctx.mod.registerSettingsIpc();
+      const save = (sender = guest, senderFrame = sender.mainFrame) =>
+        ctx.ipcMain.handlers.get(IPC.SETTINGS_SAVE)({ sender, senderFrame }, { theme: 'dark' });
+      return { ...ctx, host, guest, win, windows, save, pageUrl };
+    }
+
+    test.each([null, 'private-settings-test'])('allows the owned settings main frame in partition %s', (partition) => {
+      const ctx = setup(partition);
+      ctx.guest.mainFrame.url += '?section=appearance#theme';
+      expect(ctx.save()).toBe(true);
+      expect(ctx.nativeTheme.themeSource).toBe('dark');
+    });
+
+    test.each([
+      ['an unregistered host', (ctx) => ctx.windows.splice(0)],
+      ['a closed window', (ctx) => { ctx.win.isDestroyed = () => true; }],
+      ['a destroyed guest', (ctx) => { ctx.guest.isDestroyed = () => true; }],
+      ['a destroyed host', (ctx) => { ctx.host.isDestroyed = () => true; }],
+      ['a foreign session', (ctx) => { ctx.guest.session = {}; }],
+      ['a remote settings lookalike', (ctx) => { ctx.guest.mainFrame.url = 'https://example.test/src/renderer/pages/settings.html'; }],
+      ['a file settings lookalike', (ctx) => { ctx.guest.mainFrame.url = 'file:///tmp/src/renderer/pages/settings.html'; }],
+      ['a different internal page', (ctx) => { ctx.guest.mainFrame.url = ctx.pageUrl.replace('settings.html', 'profiles.html'); }],
+      ['a navigated host', (ctx) => { ctx.host.mainFrame.url = 'https://example.test'; }],
+      ['an unknown UI parameter', (ctx) => { ctx.host.mainFrame.url += '?unknown=1'; }],
+      ['a forged private partition', (ctx) => { ctx.host.mainFrame.url += '?privatePartition=other'; }],
+      ['a failed sender inspection', (ctx) => { ctx.guest.getType = () => { throw new Error('Unavailable'); }; }],
+    ])('rejects %s before touching settings', (_name, mutate) => {
+      const ctx = setup();
+      mutate(ctx);
+      expect(() => ctx.save()).toThrow('Settings changes require Freedom settings UI');
+      expect(fs.existsSync(path.join(userDataDir, 'settings.json'))).toBe(false);
+      expect(ctx.nativeTheme.themeSource).toBe('system');
+    });
+
+    test('rejects a subframe even at the real settings URL', () => {
+      const ctx = setup();
+      expect(() => ctx.save(ctx.guest, { url: ctx.pageUrl })).toThrow('Settings changes require Freedom settings UI');
+      expect(fs.existsSync(path.join(userDataDir, 'settings.json'))).toBe(false);
+    });
+
+    test('rejects an event with no sender', () => {
+      const ctx = setup();
+      expect(() => ctx.ipcMain.handlers.get(IPC.SETTINGS_SAVE)({}, { theme: 'dark' }))
+        .toThrow('Settings changes require Freedom settings UI');
+    });
   });
 
   // #233: the sandboxed webview preload reads the Appearance theme
