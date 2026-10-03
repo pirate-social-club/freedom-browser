@@ -58,3 +58,13 @@ missing or duplicate webviews, a wrong or ambiguous installed UI target, and a U
 run is still required to establish actual browser acceptance. This task does
 not establish a browser upgrade, a new security release, local VPN behavior,
 full application restart, Bob Extension acceptance or production readiness.
+
+The a18n mode is a credential-free public diagnostic. It records the full
+build dependency audit, admits only the two known advisories at original
+pinned development-only paths, and requires a completely clean production
+audit. Unknown findings and audit command or protocol failures refuse the
+run. Before browser launch it inspects every actual installed ASAR entry and
+unpacked path for braces and http-cache-semantics, including nested copies.
+Receipts explicitly deny merge or release acceptance. This mode does not
+clear the full audit; ordinary CI and the default fixtures journey retain
+their strict full-audit gates.

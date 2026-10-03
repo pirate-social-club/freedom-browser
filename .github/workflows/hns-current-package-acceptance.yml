@@ -40,6 +40,7 @@ jobs:
           FREEDOM_SOURCE_SHA: ${{ github.sha }}
           FREEDOM_JOB_ROOT: /var/tmp/freedom-package-${{ github.run_id }}-${{ github.run_attempt }}
           FREEDOM_COLD_ROOT: /var/tmp/freedom-package-${{ github.run_id }}-${{ github.run_attempt }}/cold
+          FREEDOM_ACCEPTANCE_JOURNEY: ${{ inputs.journey }}
         run: |
           set -euo pipefail
           test ! -e "$FREEDOM_JOB_ROOT" && test ! -L "$FREEDOM_JOB_ROOT"

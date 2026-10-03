@@ -1,7 +1,7 @@
 {
-  "README.md": "da48818dba814bc4cdb820846cb53c4e17f6c4a6da386c01911c885cc3f78941",
+  "README.md": "18070930b23a2cac79a692b5c02b165c6c565db317e8d8e0c627fb70c25c7aa3",
   "agent-browser-pin.json": "b056d3ac845656934e2eecaa978c62d16b53623bf75734a6c1b529832e0325f2",
-  "cold-setup.py": "ba664db01abf0d1b31a31dcd952b689346152d10cef34277ae1d3ec02280a0ed",
+  "cold-setup.py": "ca9616b443a3b226fd5882993bfd5b8ba558b4bc5c1b7fe4726a82a28e06f2db",
   "harness/authenticated-route.py": "4ee9eb8883b1c3a23c8492c9d0ef02b9435e21dbb7b7cc9ead5b4e93c9826dd0",
   "harness/capture-wire.py": "b7a601f25caf938a78045b4ec6179c0af6a2e602391d13f953386d299bb0a73f",
   "harness/checkpoint-integrity.json": "4edab3ec782db36dac70a50a7e6390b2d6b6c98d95e3574d15970e46952c126d",
@@ -22,7 +22,7 @@
   "harness/observe-welcome.py": "0edc97c5e958707809b5f0893fe1cf2a1fb8fe6d68be8a81845cf9600db61774",
   "harness/os-dns.py": "33a44f0fc54f4715b7db81d2c15dd5c0fca27fe727bbd1e990bf6dd6ca4ee950",
   "harness/prepare-candidate.py": "909166ac4e887158f9bc5fc791b540341bbc69ec8c95e52526f8d1900504b444",
-  "harness/prepare-runtime.py": "9785336034e316999b7fedd61510230dea7ad5006360b39440c9b2790369f43b",
+  "harness/prepare-runtime.py": "9e5c9fc0e12aeb45570ab82d06153743ffaa9fa89ea845e7808b0a604149f0f2",
   "harness/probe-sandbox-eligibility.py": "4dd47c60fb02ddeec5748dd44b18a3a81f19d0900c20f28a6068bea4d0267f9d",
   "harness/profile-settings-fixture.json": "0770764bc3a7d1ccf3f76bb4162c99bf9310d3e3e4fef816f638338b04dd58f5",
   "harness/prove-installed-sandbox.py": "da15d674571f1b1558d09cf746fd3bf389b7526ad3696e4ed05ab19530780c10",
@@ -35,9 +35,11 @@
   "harness/verify-asar.js": "2b3a1db07ff3a4b915ad79e41c447f2ca020986f0814ddf8fbe62b57674e4fe6",
   "harness/warm-checkpoint-main.dat": "c23b485e961e406d9d302932feeb2aaea8f39c47001a04435c426c03414ceea1",
   "harness/wrong-tls.py": "942b20b81ca68277cbc731194f302658e76052cc723f3ec093aec8c72a9150ac",
-  "hns-current-package-acceptance.yml": "789afc8fb71309f047e9c88190fe3fa0e5e4aba9c0df2f02b89c32107f632a5c",
-  "launch.py": "f02cc6aa711b7e4e92500e3cf5416eb0f24b10b9888b2eec43064990f01d5b8f",
+  "hns-current-package-acceptance.yml": "2fd95837c5bef083d88e514bc6d42998b8c8bd81e2452c8aca43a2d4e662828e",
+  "launch.py": "fa3201453c6b411df99654716bbb7ef2c98c2ca574ae0e99ffa1fa0dc3cbaa40",
   "python-wheel-pins.json": "12bec3d3d647ad38a403502f4df8ba9a8bda13c0d3fa3c5fe9f6025982be5e1a",
   "requirements.txt": "05bbd77cf30d45eb47f1ed042f5208ba7afb5fa00be12afb8d4b5c716876cefc",
-  "runtime-source-pins.json": "223b7ea41f3db2b95b4c7ac02d9a91a9a1030dcee91914b40bce9c2b266c7ac0"
+  "runtime-source-pins.json": "223b7ea41f3db2b95b4c7ac02d9a91a9a1030dcee91914b40bce9c2b266c7ac0",
+  "public-diagnostic-audit.py": "1a6af4dff6204d7b2770230605d8ee59cc4faeb85b4b21615370ee0f2a92d9ed",
+  "public-diagnostic-audit.test.py": "0e4682de4ff4f151ea80b6a9f6788d3676831df23d1d6fe6873d97a707b6da56"
 }

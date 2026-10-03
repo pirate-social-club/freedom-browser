@@ -237,6 +237,12 @@ except ValueError:
  asar_failure=asar_receipt_failure(asar_check.stdout,'success_receipt_invalid_json');raise AssertionError('ASAR success proof missing')
 if not isinstance(asar_success,dict) or asar_success.get('passed') is not True:
  asar_failure=asar_receipt_failure(asar_check.stdout,'success_receipt_invalid_shape');raise AssertionError('ASAR success proof missing')
+if os.environ.get('FREEDOM_ACCEPTANCE_JOURNEY')=='a18n':
+ # Inspect every actual archive entry, including nested modules, before launch.
+ exclusion_script="const fs=require('fs');const asar=require('@electron/asar');const entries=asar.listPackage(process.argv[1]);if(!Array.isArray(entries)||!entries.length||entries.some(p=>/(?:^|\\/)node_modules\\/(?:braces|http-cache-semantics)(?:\\/|$)/.test(p)))throw Error('diagnostic ASAR exclusion failed');fs.writeFileSync(process.argv[2],JSON.stringify({scope:'credential_free_public_diagnostic',archive_entries_checked:entries.length,excluded_modules:['braces','http-cache-semantics'],actual_asar_exclusion_passed:true,merge_or_release_acceptance:false}));"
+ for entry in (installed/'resources/app.asar.unpacked').rglob('*'):
+  assert not re.search(r'(?:^|/)node_modules/(?:braces|http-cache-semantics)(?:/|$)',entry.as_posix()),'diagnostic unpacked exclusion failed'
+ run(['/usr/bin/unshare','--user','--map-root-user','--net','node','-e',exclusion_script,str(installed/'resources/app.asar'),str(p/'public-diagnostic-asar.json')],cwd=freedom)
 preparation_phase='source_resources_native';preparation_progress()
 # Every configured extraResources file present at cold setup must be byte-identical.
 for directory,out in [('assets','assets'),('hns-bin/linux-x64','hns-bin'),('bee-bin/linux-x64','bee-bin'),('ipfs-bin/linux-x64','ipfs-bin'),('radicle-bin/linux-x64','radicle-bin'),('dvpn-bin/linux-x64','dvpn-bin'),('scripts/jacktrip','jacktrip-scripts')]:
