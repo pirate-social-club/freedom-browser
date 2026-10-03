@@ -118,8 +118,29 @@ function parseChecksums(text) {
   return map;
 }
 
+const TARGETS = [
+  { os: 'mac', arch: 'arm64', keywords: ['darwin', 'arm64'] },
+  { os: 'mac', arch: 'x64', keywords: ['darwin', 'amd64'] },
+  { os: 'linux', arch: 'x64', keywords: ['linux', 'amd64'] },
+  { os: 'linux', arch: 'arm64', keywords: ['linux', 'arm64'] },
+  { os: 'win', arch: 'x64', keywords: ['windows', 'amd64'], exe: true },
+];
+
+function selectedTargets(args = process.argv.slice(2)) {
+  if (args.length === 0) return { targets: TARGETS, copyWindowsArm64: true };
+  if (args.length !== 2 || args[0] !== '--target') {
+    throw new Error('usage: fetch-ant.js [--target <mac|linux|win>-<x64|arm64>]');
+  }
+  const requested = args[1];
+  const source = requested === 'win-arm64' ? 'win-x64' : requested;
+  const target = TARGETS.find((entry) => `${entry.os}-${entry.arch}` === source);
+  if (!target) throw new Error(`Unsupported Ant target: ${requested}`);
+  return { targets: [target], copyWindowsArm64: requested === 'win-arm64' };
+}
+
 async function main() {
   try {
+    const { targets, copyWindowsArm64 } = selectedTargets();
     console.log(`Fetching Ant release info from ${ANT_REPO} @ ${ANT_RELEASE_TAG}...`);
     const release = await fetchRelease();
     console.log(`Ant version: ${release.tag_name}`);
@@ -161,15 +182,6 @@ async function main() {
       );
     }
     const checksums = parseChecksums(fs.readFileSync(sumsPath, 'utf-8'));
-
-    const targets = [
-      { os: 'mac', arch: 'arm64', keywords: ['darwin', 'arm64'] },
-      { os: 'mac', arch: 'x64', keywords: ['darwin', 'amd64'] },
-      { os: 'linux', arch: 'x64', keywords: ['linux', 'amd64'] },
-      { os: 'linux', arch: 'arm64', keywords: ['linux', 'arm64'] },
-      { os: 'win', arch: 'x64', keywords: ['windows', 'amd64'], exe: true },
-      // Ant (like bee) ships no Windows ARM64 build — copied from x64 below.
-    ];
 
     for (const target of targets) {
       const asset = assets.find(
@@ -268,7 +280,7 @@ async function main() {
     const winX64Bin = path.join(winX64Dir, 'antd.exe');
     const winArm64Bin = path.join(winArm64Dir, 'antd.exe');
 
-    if (fs.existsSync(winX64Bin)) {
+    if (copyWindowsArm64 && fs.existsSync(winX64Bin)) {
       if (!fs.existsSync(winArm64Dir)) {
         fs.mkdirSync(winArm64Dir, { recursive: true });
       }
@@ -290,6 +302,7 @@ if (require.main === module) {
 
 // Exported for unit tests; `npm run ant:download` still runs main() above.
 module.exports = {
+  selectedTargets,
   fetchRelease,
   releaseRequestHeaders,
   releaseUrl,

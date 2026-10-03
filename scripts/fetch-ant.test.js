@@ -26,6 +26,7 @@ const { PassThrough } = require('stream');
 jest.mock('https');
 
 const {
+  selectedTargets,
   fetchRelease,
   releaseRequestHeaders,
   downloadFile,
@@ -241,4 +242,35 @@ describe('fetch-ant asset download', () => {
     expect(TIMEOUTS.binary).toBeGreaterThanOrEqual(5 * 60_000);
     expect(TIMEOUTS.metadata).toBe(30_000);
   });
+});
+
+
+describe('Ant release target selection', () => {
+  test('Linux release selects only the requested archive and never copies Windows files', () => {
+    expect(selectedTargets(['--target', 'linux-x64'])).toEqual({
+      targets: [{ os: 'linux', arch: 'x64', keywords: ['linux', 'amd64'] }],
+      copyWindowsArm64: false,
+    });
+  });
+
+  test('Windows ARM64 explicitly selects the verified x64 emulation source', () => {
+    expect(selectedTargets(['--target', 'win-arm64'])).toEqual({
+      targets: [{ os: 'win', arch: 'x64', keywords: ['windows', 'amd64'], exe: true }],
+      copyWindowsArm64: true,
+    });
+    expect(selectedTargets(['--target', 'win-x64']).copyWindowsArm64).toBe(false);
+  });
+
+  test('the ordinary refresh still selects all upstream archives', () => {
+    const selection = selectedTargets([]);
+    expect(selection.targets.map(({ os, arch }) => `${os}-${arch}`)).toEqual([
+      'mac-arm64', 'mac-x64', 'linux-x64', 'linux-arm64', 'win-x64',
+    ]);
+    expect(selection.copyWindowsArm64).toBe(true);
+  });
+
+  test.each([['--target'], ['--target', 'linux-riscv64'], ['--target', 'linux-x64', '--all'], ['--all']])(
+    'rejects malformed arguments before fetching release data: %j',
+    (...args) => expect(() => selectedTargets(args)).toThrow()
+  );
 });

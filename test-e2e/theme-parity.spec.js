@@ -448,7 +448,10 @@ const INTERNAL_PAGES = [
 
 for (const theme of ['dark', 'light']) {
   test.describe(`theme parity: ${theme}`, () => {
-    test.use({ seedSettings: { theme, showBookmarkBar: true } });
+    // These walks explicitly opt into wallet UI. Freedom's default remains off.
+    // Live resolver behavior belongs to installed acceptance, not this UI fixture.
+    test.use({ seedSettings: { theme, showBookmarkBar: true,
+      enableIdentityWallet: true, enableHnsIntegration: false, startHnsAtLaunch: false } });
 
     test(declare(`chrome surfaces render legibly in ${theme}`), async ({ electronApp, window }) => {
       // One app launch walked through a dozen surfaces; the per-test budget is

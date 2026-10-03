@@ -274,7 +274,10 @@ test.describe('renderer screenshots', () => {
 
   for (const theme of THEMES) {
     test.describe(`theme: ${theme}`, () => {
-      test.use({ seedSettings: { theme, showBookmarkBar: true } });
+      // These walks explicitly opt into wallet UI. Freedom's default remains off.
+      // Live resolver behavior belongs to installed acceptance, not this UI fixture.
+      test.use({ seedSettings: { theme, showBookmarkBar: true,
+        enableIdentityWallet: true, enableHnsIntegration: false, startHnsAtLaunch: false } });
 
       test(`chrome surfaces (${theme})`, async ({ electronApp, window }) => {
         test.setTimeout(300_000);
