@@ -628,7 +628,10 @@ describe('docs/features.md "Search settings"', () => {
 // that the condensed text makes no unconditional "every/all" promise.
 describe('CHANGELOG "Settings search" entry', () => {
   const CHANGELOG_PATH = path.join(__dirname, '..', '..', '..', 'CHANGELOG.md');
-  const lines = fs.readFileSync(CHANGELOG_PATH, 'utf8').split('\n');
+  const fragmentPath = path.join(__dirname, '..', '..', '..', 'changelog.d',
+    'added--upstream-settings-search.md');
+  const lines = [fs.readFileSync(CHANGELOG_PATH, 'utf8'),
+    fs.existsSync(fragmentPath) ? fs.readFileSync(fragmentPath, 'utf8') : ''].join('\n').split('\n');
   const start = lines.findIndex((line) =>
     /^- (Settings search|A "Search settings" field)/.test(line)
   );

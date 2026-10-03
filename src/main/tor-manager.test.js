@@ -40,15 +40,26 @@ function createArtiProcessMock() {
   return proc;
 }
 
+function createProxySessionMock() {
+  return {
+    setProxy: jest.fn().mockResolvedValue(undefined),
+    forceReloadProxyConfig: jest.fn().mockResolvedValue(undefined),
+    closeAllConnections: jest.fn().mockResolvedValue(undefined),
+    webRequest: Object.fromEntries(['onBeforeRequest', 'onBeforeSendHeaders',
+      'onHeadersReceived', 'onCompleted', 'onErrorOccurred'].map((event) => [event, jest.fn()])),
+  };
+}
+
 function loadTorManager(options = {}) {
   const ipcMain = options.ipcMain || createIpcMainMock();
   const enableTorIntegration = options.enableTorIntegration === true;
+  const applyOnionProxy = jest.fn().mockResolvedValue(undefined);
+  const clearOnionProxy = jest.fn().mockResolvedValue(undefined);
   const updateActiveProfileNodeConfig = options.updateActiveProfileNodeConfig || jest.fn();
   const promptForDefaultExternalCandidateProtocol =
     options.promptForDefaultExternalCandidateProtocol || jest.fn().mockResolvedValue([]);
-  const defaultSession = options.defaultSession || {
-    setProxy: jest.fn().mockResolvedValue(undefined),
-  };
+  const defaultSession = options.defaultSession || createProxySessionMock();
+  if (options.realRouting) jest.dontMock('./tor-proxy');
   const result = loadMainModule(require.resolve('./tor-manager'), {
     ipcMain,
     userDataDir: options.userDataDir,
@@ -56,6 +67,18 @@ function loadTorManager(options = {}) {
       session: { defaultSession },
     },
     extraMocks: {
+      ...(options.realRouting ? {
+        http: () => ({
+          createServer: jest.fn(() => ({
+            listen: jest.fn((port, host, callback) => callback()),
+            address: jest.fn(() => ({ port: 19999 })),
+            on: jest.fn(),
+            close: jest.fn((callback) => callback()),
+          })),
+        }),
+      } : {
+        [require.resolve('./tor-proxy')]: () => ({ applyOnionProxy, clearOnionProxy }),
+      }),
       [require.resolve('./logger')]: () => ({
         info: jest.fn(),
         warn: jest.fn(),
@@ -79,9 +102,17 @@ function loadTorManager(options = {}) {
       ...(options.extraMocks || {}),
     },
   });
+  let networkManager;
+  if (options.realRouting) {
+    networkManager = require('./network-manager');
+    networkManager.initializeSessionRouting(jest.fn());
+  }
   return {
     ...result,
+    networkManager,
     defaultSession,
+    applyOnionProxy,
+    clearOnionProxy,
   };
 }
 
@@ -243,7 +274,7 @@ describe('tor-manager IPC', () => {
         },
       ];
     });
-    const { mod, defaultSession } = loadTorManager({
+    const { mod, defaultSession, applyOnionProxy } = loadTorManager({
       ipcMain,
       enableTorIntegration: true,
       activeProfile,
@@ -261,7 +292,7 @@ describe('tor-manager IPC', () => {
       'tor',
       expect.objectContaining({ window: null })
     );
-    expect(defaultSession.setProxy).toHaveBeenCalled();
+    expect(applyOnionProxy).toHaveBeenCalledWith(defaultSession, '127.0.0.1:9150');
     expect(mod.getActivePort()).toBe(9150);
     await mod.stopTor();
     await flushMicrotasks();
@@ -287,6 +318,7 @@ describe('tor-manager IPC', () => {
 
     try {
       const { mod } = loadTorManager({
+        realRouting: true,
         userDataDir,
         enableTorIntegration: true,
         updateActiveProfileNodeConfig,
@@ -332,6 +364,7 @@ describe('tor-manager IPC', () => {
 
     try {
       const { mod } = loadTorManager({
+        realRouting: true,
         userDataDir,
         enableTorIntegration: true,
         activeProfile: {
@@ -408,7 +441,7 @@ describe('tor-manager IPC', () => {
 
   test('starts external Tor profile through a SOCKS endpoint without requiring arti', async () => {
     const targetSession = { setProxy: jest.fn().mockResolvedValue(undefined) };
-    const { mod } = loadTorManager({
+    const { mod, applyOnionProxy, defaultSession } = loadTorManager({
       enableTorIntegration: true,
       socksProbeResult: true,
       activeProfile: {
@@ -425,18 +458,17 @@ describe('tor-manager IPC', () => {
 
     await mod.startTor({ targetSession });
 
-    expect(targetSession.setProxy).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: 'pac_script' })
-    );
+    expect(applyOnionProxy).toHaveBeenCalledWith(defaultSession, '127.0.0.1:9150');
     expect(mod.getActivePort()).toBe(9150);
     await mod.stopTor();
   });
 });
 
 describe('tor-manager .onion routing across sessions', () => {
-  const createSessionMock = () => ({ setProxy: jest.fn().mockResolvedValue(undefined) });
+  const createSessionMock = createProxySessionMock;
 
   const loadExternalTorManager = () => loadTorManager({
+    realRouting: true,
     enableTorIntegration: true,
     socksProbeResult: true,
     activeProfile: {
@@ -461,8 +493,12 @@ describe('tor-manager .onion routing across sessions', () => {
   test('a private-window session registered before start is proxied too', async () => {
     const targetSession = createSessionMock();
     const privateSession = createSessionMock();
-    const { mod } = loadExternalTorManager();
+    const { mod, networkManager } = loadExternalTorManager();
 
+    await networkManager.registerProxySession(targetSession);
+    await networkManager.registerProxySession(privateSession);
+    targetSession.setProxy.mockClear();
+    privateSession.setProxy.mockClear();
     mod.registerOnionRoutingSession('private-abc', privateSession);
     await mod.startTor({ targetSession });
 
@@ -478,11 +514,14 @@ describe('tor-manager .onion routing across sessions', () => {
   test('a private window opened while Tor runs adopts the .onion PAC immediately', async () => {
     const targetSession = createSessionMock();
     const privateSession = createSessionMock();
-    const { mod } = loadExternalTorManager();
+    const { mod, networkManager } = loadExternalTorManager();
 
+    await networkManager.registerProxySession(targetSession);
+    targetSession.setProxy.mockClear();
     await mod.startTor({ targetSession });
     expect(pacCalls(privateSession)).toHaveLength(0);
 
+    await networkManager.registerProxySession(privateSession);
     mod.registerOnionRoutingSession('private-late', privateSession);
     await flushMicrotasks();
 
@@ -493,10 +532,15 @@ describe('tor-manager .onion routing across sessions', () => {
   test('a closed private window stops receiving proxy updates', async () => {
     const targetSession = createSessionMock();
     const privateSession = createSessionMock();
-    const { mod } = loadExternalTorManager();
+    const { mod, networkManager } = loadExternalTorManager();
 
+    await networkManager.registerProxySession(targetSession);
+    await networkManager.registerProxySession(privateSession);
+    targetSession.setProxy.mockClear();
+    privateSession.setProxy.mockClear();
     mod.registerOnionRoutingSession('private-gone', privateSession);
     await mod.startTor({ targetSession });
+    networkManager.unregisterProxySession(privateSession);
     mod.unregisterOnionRoutingSession('private-gone');
 
     await mod.stopTor();
@@ -516,7 +560,8 @@ describe('tor-manager .onion routing across sessions', () => {
     const privateSession = createSessionMock();
 
     try {
-      const { mod } = loadTorManager({
+      const { mod, networkManager } = loadTorManager({
+        realRouting: true,
         userDataDir,
         enableTorIntegration: true,
         activeProfile: {
@@ -528,6 +573,10 @@ describe('tor-manager .onion routing across sessions', () => {
         },
       });
 
+      await networkManager.registerProxySession(targetSession);
+      await networkManager.registerProxySession(privateSession);
+      targetSession.setProxy.mockClear();
+      privateSession.setProxy.mockClear();
       await mod.startTor({ targetSession });
       mod.registerOnionRoutingSession('private-crash', privateSession);
 

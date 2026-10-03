@@ -266,8 +266,7 @@ describe('webcontents-setup', () => {
     expect(liveRoomEvent.preventDefault).toHaveBeenCalled();
     expect(parentWindow.webContents.send).toHaveBeenLastCalledWith(
       'tab:new-with-url',
-      'freedom://live-room?roomId=lr_test',
-      null
+      'freedom://live-room?roomId=lr_test'
     );
 
     contents.emit(

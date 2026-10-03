@@ -37,7 +37,9 @@ describe('settings-store', () => {
     expect(mod.loadSettings()).toEqual(
       expect.objectContaining({
         theme: 'system',
-        enableIdentityWallet: true,
+        enableIdentityWallet: false,
+        enableHnsIntegration: true,
+        startHnsAtLaunch: true,
         antNodeMode: 'ultraLight',
         startAntAtLaunch: true,
         startIpfsAtLaunch: true,

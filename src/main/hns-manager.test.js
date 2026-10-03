@@ -882,7 +882,7 @@ describe('hns-manager', () => {
       .map(([message]) => message)
       .filter((message) => message.startsWith('[HNS helper]'));
     expect(helperInfoCalls).toEqual([
-      '[HNS helper] Local DNS miss; guard resolver will retry: 2026/05/02 12:00:00 [WARN] tunnel: 502 CONNECT missing.pirate:443 dns lookup failed (rcode: servfail)',
+      '[HNS helper] Local DNS miss; guard resolver will retry',
     ]);
 
     jest.setSystemTime(new Date('2026-05-02T12:00:31.000Z'));
@@ -896,10 +896,11 @@ describe('hns-manager', () => {
       .map(([message]) => message)
       .filter((message) => message.startsWith('[HNS helper]'));
     expect(helperInfoCalls).toEqual([
-      '[HNS helper] Local DNS miss; guard resolver will retry: 2026/05/02 12:00:00 [WARN] tunnel: 502 CONNECT missing.pirate:443 dns lookup failed (rcode: servfail)',
-      '[HNS helper] suppressed 1 repeat local DNS miss(es): 2026/05/02 12:00:05 [WARN] tunnel: 502 CONNECT missing.pirate:443 dns lookup failed (rcode: servfail)',
-      '[HNS helper] Local DNS miss; guard resolver will retry: 2026/05/02 12:00:31 [WARN] tunnel: 502 CONNECT missing.pirate:443 dns lookup failed (rcode: servfail)',
+      '[HNS helper] Local DNS miss; guard resolver will retry',
+      '[HNS helper] Suppressed 1 repeat local DNS misses',
+      '[HNS helper] Local DNS miss; guard resolver will retry',
     ]);
+    expect(helperInfoCalls.join(' ')).not.toContain('missing.pirate');
   });
 
   test('stopHns clears proxy and service when no process', async () => {

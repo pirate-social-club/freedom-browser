@@ -46,6 +46,9 @@ const PREFETCH_PATH = `/ipfs/${PREFETCH_CID}`;
 // so the probe runs against a throwaway one and scans it afterwards.
 const PROBE_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-gateway-probe-'));
 app.setPath('userData', PROBE_USER_DATA);
+// This probe isolates the Tor/IPFS transport; HNS has its own installed acceptance.
+fs.writeFileSync(path.join(PROBE_USER_DATA, 'settings.json'),
+  JSON.stringify({ enableHnsIntegration: false }));
 
 const socksSeen = [];
 const httpProxySeen = [];
@@ -249,6 +252,7 @@ async function waitFor(predicate, timeoutMs = 5000) {
 }
 
 async function main() {
+  require('../../network-manager').initializeSessionRouting(() => app.exit(70));
   const originPort = await startOrigin();
   const socksPort = await startSocks(originPort);
   const httpProxyPort = await startHttpProxy();
