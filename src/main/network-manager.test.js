@@ -167,6 +167,26 @@ describe('network-manager', () => {
     jest.restoreAllMocks();
   });
 
+  test.each([
+    [false, false, false], [false, true, false], [true, false, false], [true, true, false],
+    [false, false, true], [false, true, true], [true, false, true], [true, true, true],
+  ])('onion classification with Tor=%s HNS=%s dVPN=%s', async (tor, hns, dvpn) => {
+    const ctx = loadNetworkManagerModule();
+    if (hns) ctx.mod.setHnsProxy('127.0.0.1:5380');
+    if (dvpn) ctx.mod.setDvpnProxy('127.0.0.1', 10808);
+    await ctx.mod.setTorProxy('192.0.2.20:9150');
+    if (!tor) await ctx.mod.clearTorProxy();
+    const route = evaluatePac(ctx.mod.buildPacScript(), 'missing.example.onion');
+    expect(route).toBe(tor ? 'SOCKS5 192.0.2.20:9150' : dvpn
+      ? 'SOCKS5 127.0.0.1:10808; SOCKS 127.0.0.1:10808; DIRECT' : 'DIRECT');
+    expect(route).not.toContain('PROXY');
+  });
+
+  test('a malformed Tor endpoint cannot enter the PAC script', () => {
+    const ctx = loadNetworkManagerModule();
+    expect(() => ctx.mod.setTorProxy('127.0.0.1:9150; DIRECT')).toThrow('Invalid Tor SOCKS endpoint');
+  });
+
   test('HNS-only PAC: HNS candidates go PROXY, ordinary resolved hosts go DIRECT', () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
@@ -749,7 +769,7 @@ describe('network-manager', () => {
       'HTTP/1.1 502 HNS host not allowed\r\nConnection: close\r\n\r\n'
     );
     expect(ctx.log.warn).toHaveBeenCalledWith(
-      '[Network] Blocked non-HNS proxy CONNECT: 127.0.0.1:443'
+      '[Network] Blocked non-HNS proxy CONNECT'
     );
   });
 

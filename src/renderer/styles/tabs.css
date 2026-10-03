@@ -18,7 +18,19 @@
 .title-bar-drag {
   flex: 1 1 80px;
   align-self: stretch;
+  min-width: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  overflow: visible;
+  padding-bottom: 6px;
+  position: relative;
+  z-index: 10002;
 }
+
+/* The profile switcher flyout now reuses the shared .menu-dropdown / .menu-item
+   styles (see menus.css .menu-flyout) — its old standalone .profile-menu*
+   styles were removed so there is a single source of truth for menus. */
 
 .tab-bar {
   display: flex;
@@ -29,17 +41,54 @@
   user-select: none;
 }
 
+/* Tabs shrink to `.tab { min-width }` first; past that the strip scrolls
+   horizontally instead of clipping the tabs it cannot fit — which used to hide
+   tabs (including the active one) past the right edge with no way to reach
+   them. The scrollbar itself is hidden: the strip is driven by
+   `scrollActiveTabIntoView()` in tabs.js plus the edge fades below, the same
+   way Chrome's strip has no visible scrollbar. See #311. */
 .tabs-container {
   display: flex;
   align-items: flex-end;
   gap: 0;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
   flex: 0 1 auto;
   min-width: 0;
   padding-left: 10px; /* Room for corner flare on left */
   padding-right: 10px; /* Room for corner flare on right */
   margin-left: -10px; /* Compensate for padding */
   margin-right: -10px;
+}
+
+.tabs-container::-webkit-scrollbar {
+  display: none;
+}
+
+/* Edge fades: the only cue that there are more tabs in that direction, since
+   the scrollbar is hidden. Classes are toggled from the live scroll offsets by
+   `updateTabStripOverflow()` in tabs.js, so a strip that fits carries neither
+   and renders exactly as before. */
+.tabs-container.overflow-start {
+  /* theme-literal: mask stop, not a surface: a mask reads only the alpha channel, so the opaque end of the ramp is the same colour on either palette */
+  mask-image: linear-gradient(to right, transparent 0, #000 24px);
+}
+
+.tabs-container.overflow-end {
+  /* theme-literal: mask stop, not a surface: a mask reads only the alpha channel, so the opaque end of the ramp is the same colour on either palette */
+  mask-image: linear-gradient(to left, transparent 0, #000 24px);
+}
+
+.tabs-container.overflow-start.overflow-end {
+  /* theme-literal: mask stop, not a surface: a mask reads only the alpha channel, so the opaque end of the ramp is the same colour on either palette */
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 24px,
+    #000 calc(100% - 24px),
+    transparent 100%
+  );
 }
 
 /* Base tab styles */
@@ -59,6 +108,12 @@
   height: 30px;
   margin-bottom: 4px;
   container-type: inline-size;
+  /* Slack for `scrollActiveTabIntoView()` (#311): the strip's 10px side
+     padding is room for the active tab's corner flare and is part of the
+     scrollable area, so aligning a tab flush with the content edge would
+     scroll its own flare out of view (and, at the left end, light up the
+     edge fade with nothing actually hidden behind it). */
+  scroll-margin-inline: 16px;
 }
 
 /* Inactive tab - pill/button shape */
@@ -219,12 +274,87 @@
   opacity: 1;
 }
 
+/* Audio indicator / mute toggle — hidden unless the tab is audible or muted
+   (data-audio-state set by tabs.js). Clicking toggles mute. */
+.tab-audio {
+  display: none;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  cursor: default;
+}
+
+.tab[data-audio-state] .tab-audio {
+  display: flex;
+}
+
+.tab-audio:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.tab-audio svg {
+  width: 12px;
+  height: 12px;
+  display: none;
+}
+
+.tab[data-audio-state='audible'] .tab-audio .tab-audio-on {
+  display: block;
+}
+
+.tab[data-audio-state='muted'] .tab-audio .tab-audio-muted {
+  display: block;
+}
+
+.tab[data-audio-state='muted'] .tab-audio {
+  color: var(--muted);
+}
+
+/* Hide the audio button (like the close button) when tabs get very narrow —
+   except pinned tabs, which fall through to the badge overlay below */
+@container (max-width: 80px) {
+  .tab:not(.pinned) .tab-audio {
+    display: none !important;
+  }
+}
+
+/* Pinned tabs have no room in the row for the inline button — overlay it on
+   the icon's corner as a small badge instead, so an audible or muted pinned
+   tab still shows (and can toggle) its state. */
+.tab.pinned[data-audio-state] .tab-audio {
+  position: absolute;
+  right: 5px;
+  bottom: 2px;
+  width: 13px;
+  height: 13px;
+  background: var(--bg);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.tab.pinned .tab-audio svg {
+  width: 9px;
+  height: 9px;
+}
+
+.tab.pinned[data-audio-state] .tab-audio:hover {
+  background: var(--border);
+}
+
 .tab-title {
   flex: 1;
   overflow: hidden;
   white-space: nowrap;
   text-align: left;
+  /* theme-literal: mask stop, not a surface: a mask reads only the alpha channel, so the opaque end of the ramp is the same colour on either palette */
   mask-image: linear-gradient(to right, black calc(100% - 10px), transparent 100%);
+  /* theme-literal: mask stop, not a surface: a mask reads only the alpha channel, so the opaque end of the ramp is the same colour on either palette */
   -webkit-mask-image: linear-gradient(to right, black calc(100% - 10px), transparent 100%);
 }
 

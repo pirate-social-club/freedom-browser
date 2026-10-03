@@ -14,19 +14,31 @@
  *   --dist                  Create distributable (default: unpacked build via --dir)
  *   --unsigned              Skip code signing (macOS only)
  *   --no-notarize           Disable built-in notarization (macOS dist only)
- *   --verify-tools          Verify release CLIs resolve without building
  *   --verbose               Enable electron-builder debug output
+ *
+ * Environment (see scripts/publish-channel.js):
+ *   FREEDOM_UPDATE_CHANNEL  Update channel for a dist build (default: latest)
+ *   FREEDOM_UPDATE_URL      Update feed URL (default: package.json build.publish.url)
  *
  * Examples:
  *   npm run build -- --mac --arm64
  *   npm run build -- --mac --arm64 --unsigned --verbose
  *   npm run dist -- --mac --no-notarize
  *   npm run dist -- --linux --x64
+ *   npm run dist -- --win --x64
  *   npm run dist -- --win --arm64
  */
 
 const { execSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
+const { buildForTargets } = require('./build-myotis-supervisor');
+const { publishOverrideArgs } = require('./publish-channel');
+const {
+  SOURCE_BUILD_ENV,
+  pruneSourceBuildFallback,
+  assertTargetPrebuild,
+} = require('./better-sqlite3-prebuilds');
 
 const args = process.argv.slice(2);
 
@@ -36,7 +48,6 @@ const archs = ['arm64', 'x64'].filter((a) => args.includes(`--${a}`));
 const dist = args.includes('--dist');
 const unsigned = args.includes('--unsigned');
 const noNotarize = args.includes('--no-notarize');
-const verifyTools = args.includes('--verify-tools');
 const verbose = args.includes('--verbose');
 
 if (platforms.length === 0) {
@@ -58,12 +69,70 @@ if (archs.length === 0) {
   else archs.push('arm64', 'x64'); // Linux defaults to both
 }
 
+// Distributables must not ship the interim remote-signing bridge origin
+// (personal test deployment — see the pre-merge checklist on PR #159).
+// Override for local experiments only: FREEDOM_ALLOW_INTERIM_BRIDGE=1.
+if (dist && process.env.FREEDOM_ALLOW_INTERIM_BRIDGE !== '1') {
+  const remoteSession = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'lib', 'wallet', 'remote-session.js'),
+    'utf8'
+  );
+  if (remoteSession.includes('florianglatz.eth.limo')) {
+    console.error(
+      'Error: BRIDGE_ORIGIN in src/renderer/lib/wallet/remote-session.js still points at the ' +
+        'interim test deployment. Deploy freedom-bridge to the production origin and update the ' +
+        'constant before building a distributable (FREEDOM_ALLOW_INTERIM_BRIDGE=1 to override locally).'
+    );
+    process.exit(1);
+  }
+}
+
+// Chromium's third-party notices have to be present before packaging starts.
+// Electron's dist carries LICENSES.chromium.html next to the executable, which
+// is the copy Linux and Windows packages ship. electron-builder deletes it on
+// the macOS path (`unlinkIfExists(path.join(appOutDir, "LICENSES.chromium.html"))`
+// in app-builder-lib/out/electron/electronMac.js) and the .dmg/.zip only ever
+// carry Freedom.app, so `build.mac.extraResources` copies it out of the same
+// dist into Contents/Resources instead. NOTICES points users at that file; a
+// missing one would ship Chromium with a dangling attribution reference.
+//
+// The dist is populated by electron's postinstall (`node install.js`), which
+// npm on the CI runners no longer runs for dependencies unless approved, and
+// which ELECTRON_SKIP_BINARY_DOWNLOAD skips locally. electron-builder never
+// needs that dist (it fetches its own zip), so a missing one only surfaces
+// here: run electron's own installer once, then insist on the file.
+const CHROMIUM_NOTICES = 'node_modules/electron/dist/LICENSES.chromium.html';
+const chromiumNoticesPath = path.join(__dirname, '..', CHROMIUM_NOTICES);
+if (!fs.existsSync(chromiumNoticesPath)) {
+  console.log(`\n→ ${CHROMIUM_NOTICES} is missing; running electron's installer to fetch the dist\n`);
+  try {
+    execSync('node node_modules/electron/install.js', {
+      stdio: 'inherit',
+      cwd: path.join(__dirname, '..'),
+      env: { ...process.env, ELECTRON_SKIP_BINARY_DOWNLOAD: '' },
+    });
+  } catch (err) {
+    console.error(`electron's installer failed: ${err.message}`);
+  }
+}
+if (!fs.existsSync(chromiumNoticesPath)) {
+  console.error(
+    `Error: ${CHROMIUM_NOTICES} is still missing, so this build would ship Chromium with no ` +
+      `third-party license notices. It comes from electron's postinstall download — run ` +
+      `\`node node_modules/electron/install.js\` (or \`npm rebuild electron\`) and build again.`
+  );
+  process.exit(1);
+}
+
+// Build the owned Myotis helper from local source before binary preflight.
+// Native macOS builds cover every requested architecture; foreign targets
+// require a helper built with an already installed compiler on that target.
+buildForTargets(platform, archs);
+
 // 1. Check binaries for the target platform/arch
 const checkArgs = [`--${platform}`, ...archs.map((a) => `--${a}`)].join(' ');
-if (!verifyTools) {
-  console.log(`\n→ Checking binaries: npm run check-binaries -- ${checkArgs}\n`);
-  execSync(`npm run check-binaries -- ${checkArgs}`, { stdio: 'inherit' });
-}
+console.log(`\n→ Checking binaries: npm run check-binaries -- ${checkArgs}\n`);
+execSync(`npm run check-binaries -- ${checkArgs}`, { stdio: 'inherit' });
 
 // 2. Build electron-builder command
 const builderArgs = [`--${platform}`, ...archs.map((a) => `--${a}`)];
@@ -80,22 +149,17 @@ if (noNotarize && platform === 'mac' && dist) {
   builderArgs.push('-c.mac.notarize=false');
 }
 
-// Windows publish channels (signed dist only)
-if (dist && platform === 'win') {
-  const winArch = archs[0] || 'x64';
-  builderArgs.push(`-c.publish.channel=latest-win-${winArch}`);
+// Update feed overrides (dist only — an unpacked build publishes nothing).
+// Unset, this is the stable feed from package.json plus the Windows
+// `latest-win-<arch>` channel pin this line has always applied. The release
+// workflow's nightly runs set FREEDOM_UPDATE_CHANNEL/FREEDOM_UPDATE_URL so a
+// nightly updates from the nightly feed and never writes to `latest`.
+if (dist) {
+  builderArgs.push(...publishOverrideArgs({ platform, archs }));
 }
 
 // 3. Environment
 const env = { ...process.env };
-const localBin = path.resolve(__dirname, '..', 'node_modules', '.bin');
-const pathKey =
-  Object.keys(env).find((key) => key.toLowerCase() === 'path') || 'PATH';
-const originalPath = env[pathKey];
-for (const key of Object.keys(env)) {
-  if (key.toLowerCase() === 'path') delete env[key];
-}
-env[pathKey] = [localBin, originalPath].filter(Boolean).join(path.delimiter);
 
 if (verbose) {
   env.DEBUG =
@@ -110,15 +174,52 @@ const cmd = useDotenv
   ? `dotenv -- electron-builder ${builderArgs.join(' ')}`
   : `electron-builder ${builderArgs.join(' ')}`;
 
-if (verifyTools) {
-  console.log('\n→ Verifying release toolchain\n');
-  if (useDotenv) {
-    execSync('dotenv --version', { stdio: 'inherit', env });
-  }
-  execSync('electron-builder --version', { stdio: 'inherit', env });
-  console.log(`\n→ Release command: ${cmd}\n`);
-  process.exit(0);
+// 5. Keep better-sqlite3 out of the @electron/rebuild pass.
+// Since v13 it ships a prebuilt addon for every supported platform/arch in
+// node_modules/better-sqlite3/prebuilds/ (darwin/linux/linuxmusl/win32 x
+// x64/arm64) and the loader picks the one matching the *running* process, so
+// no rebuild is wanted — but its leftover binding.gyp makes @electron/rebuild
+// treat it as a node-gyp module, which cannot cross-compile. `postinstall`
+// already prunes that file, so this is normally a silent no-op; repeat it here
+// so a build still works after an install that skipped `postinstall`
+// (`npm ci --ignore-scripts`) or a manual restore of the file. Note `npm
+// rebuild better-sqlite3` does *not* restore it — it re-runs lifecycle scripts
+// and never re-extracts the tarball. See scripts/better-sqlite3-prebuilds.js.
+// No host-binary protection is needed either: a cross-build never overwrites a
+// host-specific build/Release/better_sqlite3.node — that file is not produced
+// at all — so local dev keeps working after `--win`/`--linux` builds.
+//
+// The prune's own guard is package-wide (it runs at install time, before any
+// target is known), so check the *target's* prebuild here: with binding.gyp
+// gone @electron/rebuild skips the module entirely, and a missing prebuild
+// would ship an app with no addon that throws at startup.
+// `FREEDOM_BS3_SOURCE_BUILD=1` opts out of both halves (guard and prune) so
+// @electron/rebuild source-builds the addon for a target with no prebuild.
+const { missing, overridden: sourceBuild } = assertTargetPrebuild({ platform, archs });
+if (sourceBuild) {
+  console.log(
+    `\n→ ${SOURCE_BUILD_ENV} is set: skipping better-sqlite3's prebuild check and binding.gyp ` +
+      `prune; @electron/rebuild will build it from source (needs Python + a C++ compiler).\n`
+  );
+} else if (missing.length > 0) {
+  console.error(
+    `Error: better-sqlite3 ships no prebuilt addon for this target (missing ${missing.join(', ')} ` +
+      `in node_modules/better-sqlite3/prebuilds/). Packaging would produce an app that throws at ` +
+      `startup. Add the target upstream, or build better-sqlite3 from source on the target ` +
+      `platform. \`npm rebuild better-sqlite3\` does NOT restore the pruned binding.gyp (it only ` +
+      `re-runs lifecycle scripts, it never re-extracts the package); the supported source-build ` +
+      `path is:\n` +
+      `  ${SOURCE_BUILD_ENV}=1 npm ci            # re-extracts better-sqlite3 with the prune skipped\n` +
+      `  ${SOURCE_BUILD_ENV}=1 npm run build -- ${args.join(' ') || '<target>'}\n` +
+      `which requires the node-gyp toolchain (Python + a C++ compiler; MSVC on Windows).`
+  );
+  process.exit(1);
 }
 
+const { removed } = pruneSourceBuildFallback();
+if (removed)
+  console.log("\n→ Pruned better-sqlite3's unused binding.gyp (prebuilt addons in use)\n");
+
+// 6. Run the build.
 console.log(`\n→ Running: ${cmd}\n`);
 execSync(cmd, { stdio: 'inherit', env });

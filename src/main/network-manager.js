@@ -2,6 +2,7 @@ const log = require('./logger');
 const { app, session } = require('electron');
 const http = require('http');
 const net = require('net');
+const { normalizeSocksEndpoint } = require('../shared/socks-endpoint');
 const { createSessionProxyController } = require('./session-proxy-controller');
 const { registerWebRequestHandler, attachWebRequestDispatcher } = require('./webrequest-dispatcher');
 const { createSessionRoutingCoordinator } = require('./session-routing-coordinator');
@@ -206,8 +207,8 @@ async function resolveHnsFallbackTarget(authority = '', defaultPort = 443) {
         rootAddr: hnsRootResolverAddr,
       });
       resolverType = 'local';
-    } catch (error) {
-      log.info(`[Network] Local HNS delegation lookup failed for ${parsed.host}: ${error.message}`);
+    } catch {
+      log.info('[Network] Local HNS delegation lookup failed');
     }
   }
   if (!result) {
@@ -260,7 +261,7 @@ const HNS_UNVALIDATED_FALLBACK_MESSAGE =
 
 async function forwardConnectToDohFallback(req, clientSocket, head = Buffer.alloc(0), reason = 'unavailable') {
   if (!HNS_UNVALIDATED_FALLBACK_ENABLED) {
-    log.warn(`[Network] refusing unvalidated HNS CONNECT (${reason}): ${req.url}`);
+    log.warn(`[Network] Refusing unvalidated HNS CONNECT (${reason})`);
     writeProxyError(clientSocket, 502, HNS_UNVALIDATED_FALLBACK_MESSAGE);
     return;
   }
@@ -268,8 +269,8 @@ async function forwardConnectToDohFallback(req, clientSocket, head = Buffer.allo
   let target;
   try {
     target = await resolveHnsFallbackTarget(req.url, 443);
-  } catch (error) {
-    log.warn(`[Network] HNS resolution failed for ${req.url}: ${error.message}`);
+  } catch {
+    log.warn('[Network] HNS resolution failed');
     writeProxyError(clientSocket, 502, 'HNS lookup failed');
     return;
   }
@@ -281,7 +282,7 @@ async function forwardConnectToDohFallback(req, clientSocket, head = Buffer.allo
 
   const resolverLabel = target.resolverType === 'local' ? 'local delegation' : 'DoH last-resort';
   log.info(
-    `[Network] HNS ${resolverLabel} CONNECT (${reason}): ${req.url} -> ${target.address}:${target.port}`
+    `[Network] HNS ${resolverLabel} CONNECT (${reason})`
   );
   const upstreamSocket = net.connect(target.port, target.address, () => {
     clientSocket.write('HTTP/1.1 200 Connection Established\r\nConnection: keep-alive\r\n\r\n');
@@ -307,7 +308,7 @@ function formatFallbackHostHeader(target) {
 
 async function forwardHttpToDohFallback(req, res, host, defaultPort, requestPath, reason = 'unavailable') {
   if (!HNS_UNVALIDATED_FALLBACK_ENABLED) {
-    log.warn(`[Network] refusing unvalidated HNS request (${reason}): ${host}`);
+    log.warn(`[Network] Refusing unvalidated HNS request (${reason})`);
     res.writeHead(502);
     res.end(HNS_UNVALIDATED_FALLBACK_MESSAGE);
     return;
@@ -316,8 +317,8 @@ async function forwardHttpToDohFallback(req, res, host, defaultPort, requestPath
   let target;
   try {
     target = await resolveHnsFallbackTarget(host, defaultPort);
-  } catch (error) {
-    log.warn(`[Network] HNS resolution failed for ${host}: ${error.message}`);
+  } catch {
+    log.warn('[Network] HNS resolution failed');
     res.writeHead(502);
     res.end('HNS lookup failed');
     return;
@@ -331,7 +332,7 @@ async function forwardHttpToDohFallback(req, res, host, defaultPort, requestPath
 
   const resolverLabel = target.resolverType === 'local' ? 'local delegation' : 'DoH last-resort';
   log.info(
-    `[Network] HNS ${resolverLabel} request (${reason}): ${req.method} ${target.hostname} -> ${target.address}:${target.port}`
+    `[Network] HNS ${resolverLabel} request (${reason})`
   );
   const proxyReq = http.request(
     {
@@ -381,6 +382,14 @@ function buildPacScript(intent = getRoutingIntent()) {
     ? `  if (${hnsHostPredicate}) {\n    return "PROXY ${effectiveHnsProxyAddr}";\n  }`
     : `  if (${hnsHostPredicate}) {\n    return "DIRECT";\n  }`;
 
+  const ordinaryOnionRoute = intent.dvpnHost && intent.dvpnPort
+    ? `SOCKS5 ${intent.dvpnHost}:${intent.dvpnPort}; SOCKS ${intent.dvpnHost}:${intent.dvpnPort}; DIRECT`
+    : 'DIRECT';
+  const onionRoute = intent.torRoutingConfigured
+    ? (intent.torSocksEndpoint ? `SOCKS5 ${intent.torSocksEndpoint}` : 'PROXY 127.0.0.1:9')
+    : ordinaryOnionRoute;
+  const onionLine = `  if (host === "onion" || host.slice(-6) === ".onion") return "${onionRoute}";`;
+
   const dvpnLine = intent.dvpnHost && intent.dvpnPort
     ? `  return "SOCKS5 ${intent.dvpnHost}:${intent.dvpnPort}; SOCKS ${intent.dvpnHost}:${intent.dvpnPort}; DIRECT";`
     : `  return "DIRECT";`;
@@ -388,6 +397,7 @@ function buildPacScript(intent = getRoutingIntent()) {
   return `var hnsRoots = ${hnsRootMap};
 
 function FindProxyForURL(url, host) {
+${onionLine}
   function parseIPv4(value) {
     var match = /^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$/.exec(value);
     if (!match) return null;
@@ -572,6 +582,7 @@ function getRoutingIntent() {
   return { hnsUpstream: hnsUpstreamProxyAddr, rootResolver: hnsRootResolverAddr,
     trustIdentity: hnsUpstreamProxyAddr ? hnsTrustIdentity : null,
     dvpnHost: dvpnProxyHost, dvpnPort: dvpnProxyPort,
+    torSocksEndpoint, torRoutingConfigured,
     suffixes: [...getHnsPublicSuffixes()].sort() };
 }
 
@@ -580,7 +591,7 @@ async function prepareProxyPolicy(intent) {
   // Electron requests were withdrawn before this shared preparation began.
   await drainGuardResources();
   guardRoute = intent.hnsUpstream ? parseProxyAddress(intent.hnsUpstream) : null;
-  if (!intent.hnsUpstream && !intent.dvpnHost) {
+  if (!intent.hnsUpstream && !intent.dvpnHost && !intent.torRoutingConfigured) {
     return { configuration: { mode: 'direct' }, key: 'direct', guardNeeded: false };
   }
   if (intent.hnsUpstream) await startHnsGuardProxy();
@@ -592,6 +603,16 @@ async function prepareProxyPolicy(intent) {
     guardNeeded: Boolean(intent.hnsUpstream) };
 }
 
+let torSocksEndpoint = null;
+let torRoutingConfigured = false;
+
+const sessionDispatcherOptions = new WeakMap();
+
+function setProxySessionDispatcherOptions(targetSession, options) {
+  if (sessionDispatcherOptions.has(targetSession)) throw new Error('Session dispatcher options already set');
+  sessionDispatcherOptions.set(targetSession, { ...options });
+}
+
 const routing = createSessionRoutingCoordinator(proxySessions, {
   getIntent: getRoutingIntent,
   withdraw: () => { guardAllowed = false; guardResources.withdraw(); },
@@ -599,7 +620,7 @@ const routing = createSessionRoutingCoordinator(proxySessions, {
   isValid: (policy) => policy.configuration.mode === 'direct' ||
     (pacServer === policy.pacServer && Boolean(pacServer && pacPort) && currentPacContent === policy.content &&
       (!policy.guardNeeded || (hnsGuardServer === policy.guardServer && Boolean(hnsGuardServer && hnsGuardPort)))),
-  isInitialDirect: (intent) => !intent.hnsUpstream && !intent.dvpnHost && !pacServer && !hnsGuardServer,
+  isInitialDirect: (intent) => !intent.hnsUpstream && !intent.dvpnHost && !intent.torRoutingConfigured && !pacServer && !hnsGuardServer,
   retire: async (policy) => {
     if (!policy.guardNeeded) await stopHnsGuardProxy();
     if (policy.configuration.mode === 'direct') await stopPacServer();
@@ -608,7 +629,7 @@ const routing = createSessionRoutingCoordinator(proxySessions, {
     guardAllowed = policy.guardNeeded;
     if (guardAllowed) guardResources.publish();
   },
-  attach: (targetSession, getRequestPolicy) => attachWebRequestDispatcher(targetSession, { getRequestPolicy }),
+  attach: (targetSession, getRequestPolicy) => attachWebRequestDispatcher(targetSession, { ...sessionDispatcherOptions.get(targetSession), getRequestPolicy }),
 });
 
 function drainGuardResources() {
@@ -653,6 +674,24 @@ function clearHnsProxy() {
   hnsProxyHosts.clear();
   routing.intentChanged();
   log.info('[Network] HNS proxy cleared');
+}
+
+function setTorProxy(endpoint) {
+  const normalized = normalizeSocksEndpoint(endpoint);
+  if (!normalized || !/^[a-zA-Z0-9.:[\]-]+$/.test(normalized)) {
+    throw new Error('Invalid Tor SOCKS endpoint');
+  }
+  torRoutingConfigured = true;
+  torSocksEndpoint = normalized;
+  routing.intentChanged();
+  return routing.rebuild();
+}
+
+function clearTorProxy() {
+  torRoutingConfigured = false;
+  torSocksEndpoint = null;
+  routing.intentChanged();
+  return routing.rebuild();
 }
 
 function setDvpnProxy(host, port) {
@@ -721,6 +760,9 @@ function getDvpnProxy() {
 }
 
 module.exports = {
+  setTorProxy,
+  clearTorProxy,
+  setProxySessionDispatcherOptions,
   initializeSessionRouting,
   getProxySessionPolicy: proxySessions.policyFor,
   setProxySessionPolicyObserver: proxySessions.setPolicyObserver,

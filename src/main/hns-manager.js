@@ -97,17 +97,17 @@ function isExpectedHelperTunnelDnsFailure(line) {
 
 function logHnsStderrLine(line) {
   if (isExpectedHelperTunnelDnsFailure(line)) {
-    log.info(`[HNS helper] Local DNS miss; guard resolver will retry: ${line}`);
+    log.info('[HNS helper] Local DNS miss; guard resolver will retry');
     return;
   }
 
-  log.warn(`[HNS stderr]: ${line}`);
+  log.warn('[HNS helper] Diagnostic received; browsing details withheld');
 }
 
 function logSuppressedHnsStderr(previous) {
   const message = isExpectedHelperTunnelDnsFailure(previous.lastLine)
-    ? `[HNS helper] suppressed ${previous.suppressed} repeat local DNS miss(es): ${previous.lastLine}`
-    : `[HNS stderr]: suppressed ${previous.suppressed} repeat(s): ${previous.lastLine}`;
+    ? `[HNS helper] Suppressed ${previous.suppressed} repeat local DNS misses`
+    : `[HNS helper] Suppressed ${previous.suppressed} repeated diagnostics`;
   const level = isExpectedHelperTunnelDnsFailure(previous.lastLine) ? 'info' : 'warn';
   log[level](message);
 }

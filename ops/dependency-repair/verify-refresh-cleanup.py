@@ -6,7 +6,7 @@ import subprocess
 import sys
 
 def verify_cleanup(unit, output, stop_returncode):
-    assert re.fullmatch(r"freedom-jest-refresh-[0-9]+-[0-9]+\.service", unit)
+    assert re.fullmatch(r"freedom-(?:jest-refresh|upstream-validation)-[0-9]+-[0-9]+\.service", unit)
     receipt = {"passed": False, "unit": unit, "stop_returncode": stop_returncode, "state": {}}
     cgroup = Path("/sys/fs/cgroup/system.slice") / unit
     try:

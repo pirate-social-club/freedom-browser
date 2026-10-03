@@ -1,4 +1,6 @@
-node_modules/
+node_modules
+native/freedom-ipfs-node/build/
+native/freedom-ipfs-node/prebuilds/
 dist/
 out/
 *.log
@@ -12,14 +14,18 @@ coverage/
 tmp/
 *.swp
 .env
-bee-bin/
-bee-data/
+ant-bin/
+myotis-bin/
+ant-data/
+assets/adblock/
 ipfs-bin/
 ipfs-data/
 dev-scripts/
 helios-bin/
 radicle-bin/
 radicle-data/
+arti-bin/
+tor-data/
 dev-app-update.yml
 CLAUDE.md
 .codex
@@ -27,3 +33,10 @@ identity-data/
 hns-bin/
 hns-data/
 jacktrip-bin/
+research/
+playwright-report/
+test-results/
+
+# Retained cached helpers from the previous runtime.
+bee-bin/
+bee-data/

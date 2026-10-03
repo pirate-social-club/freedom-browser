@@ -1,0 +1,516 @@
+/**
+ * bzz:// protocol handler
+ *
+ * Registers a main-process handler for the `bzz:` scheme (standard, secure,
+ * streaming, CORS-enabled; see `registerSchemesAsPrivileged` in index.js).
+ * Every `bzz://<hash>/<path>` request — top-level navigation, sub-resource,
+ * `fetch`, media `Range`, CSS `url(...)`, service worker — flows through
+ * this handler instead of Chromium going directly to the Bee gateway.
+ *
+ * Why this lives here and not as a `webRequest` redirect:
+ *
+ * Cold Bee nodes produce transient 5xx responses on first contact with a
+ * chunk even when the content is healthy and peers are plentiful (see
+ * "Swarm Content Retrieval" in the README for measured reliability). The
+ * webRequest session API has no primitive for "retry this request", so a
+ * failed sub-resource can't be recovered at the session layer. Moving the
+ * transport here lets us retry transient failures transparently, stream
+ * the response back, and preserve Range semantics without injecting any
+ * script into the page.
+ *
+ * Contract:
+ *  - GET / HEAD are retried on 500, 502, 503, 504 with bounded
+ *    exponential backoff (~50 s total backoff budget).
+ *  - 404 is **not** retried. Top-level navigation is gated by the probe
+ *    in `swarm-probe.js`, which only resolves once Bee is warm enough to
+ *    HEAD the manifest. Subresource 404s after that point are almost
+ *    always genuine "asset doesn't exist" cases — e.g. SPAs feature-
+ *    detecting endpoints — and need to fail fast so the page can render
+ *    its own fallback rather than stalling for ~50 s per missing asset.
+ *  - Other methods are single-shot: the request body is a consumable
+ *    ReadableStream, so we can't replay it. This primarily affects POST,
+ *    which bzz sites don't use for reads.
+ *  - Every outgoing request carries `Swarm-Chunk-Retrieval-Timeout`,
+ *    `Swarm-Redundancy-Strategy`, and `Swarm-Redundancy-Fallback-Mode`
+ *    so Bee gets extra server-side runway per chunk. These are ignored
+ *    by Bee for non-redundant content, so they're always safe to set.
+ *  - Response body is streamed (no buffering), so large files and media
+ *    Range requests don't balloon memory.
+ */
+
+const log = require('../logger');
+const { getAntApiUrl } = require('../service-registry');
+const {
+  joinPublishedPath,
+  nameSystemLabelForHost,
+  nameSystemLabelForResult,
+  resolveContentName,
+} = require('../content-name-resolver');
+const { isDwebNameHost, isPotentialEnsName } = require('../../shared/origin-utils');
+const { rewriteGatewayLocation } = require('../lib/gateway-location');
+const {
+  runWithPrivateLogContext,
+  redactForLog,
+  redactUrlForLog,
+  redactedFailure,
+} = require('../private/private-log-context');
+
+// Per-attempt retry schedule. First entry is the delay BEFORE the 2nd
+// attempt, etc. Total backoff budget ≈ sum of all values (~50s). The probe
+// in `swarm-probe.js` already gates the top-level navigation on a longer
+// (~5 min) deadline, so per-subresource budgets can stay short — otherwise
+// a legitimate 404 paints the broken-image placeholder minutes late and
+// `<img onerror>` / `fetch().catch()` for real 404s also lag.
+const RETRY_DELAYS_MS = [500, 1000, 2000, 3000, 5000, 5000, 10000, 10000, 15000];
+
+// Per-attempt deadline. Bee's `Swarm-Chunk-Retrieval-Timeout: 30s` already
+// bounds server-side work, but it doesn't help if Bee accepts the TCP
+// connection and then stalls (crash mid-response, paused worker, debugger
+// breakpoint). This safety net mirrors the per-attempt timeout in
+// swarm-probe.js so the retry loop can always make progress.
+const ATTEMPT_TIMEOUT_MS = 30_000;
+
+// 5xx only — 404 is treated as a definitive "not found" so SPAs that
+// feature-detect missing endpoints render fast. See the file header for
+// rationale (the navigation probe handles the cold-start 404 case
+// upstream of subresource fetches).
+const RETRYABLE_STATUSES = new Set([500, 502, 503, 504]);
+const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD']);
+
+// 64-char or 128-char lowercase/uppercase hex (unencrypted / encrypted refs).
+const BZZ_HASH_RE = /^[a-fA-F0-9]{64}([a-fA-F0-9]{64})?$/;
+
+// Request headers we should not forward to Bee — either Chromium-injected
+// privileged-scheme noise or headers that refer to the bzz:// origin and
+// would confuse the gateway. `cookie` / `authorization` aren't a real
+// security risk against localhost Bee but stripping them keeps the request
+// shape consistent with how we strip Origin / Referer.
+const STRIPPED_REQUEST_HEADERS = new Set([
+  'host',
+  'origin',
+  'referer',
+  'cookie',
+  'authorization',
+  // Connection / hop-by-hop
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+]);
+
+function sanitizeRequestHeaders(requestHeaders) {
+  const out = new Headers();
+  for (const [name, value] of requestHeaders.entries()) {
+    if (STRIPPED_REQUEST_HEADERS.has(name.toLowerCase())) continue;
+    out.append(name, value);
+  }
+  out.set('Swarm-Chunk-Retrieval-Timeout', '30s');
+  out.set('Swarm-Redundancy-Strategy', '3');
+  out.set('Swarm-Redundancy-Fallback-Mode', 'true');
+  return out;
+}
+
+/**
+ * Translate `bzz://<host>/<path>?<q>#<f>` into the Bee gateway URL.
+ *
+ * `<host>` is either:
+ *  - a 64- or 128-char hex Swarm ref (synchronous path), OR
+ *  - a supported Ethereum name, resolved via the in-process
+ *    `ens-resolver` cache. Name resolution running here (not just in the
+ *    renderer's address-bar pipeline) is what makes `bzz://name.eth/`
+ *    survive as the URL Chromium loads — so DevTools, `window.location`,
+ *    storage origin, and subresource fetches all see the name rather
+ *    than the resolved hash.
+ *
+ * Returns one of:
+ *  - `{ ok: true, url }`              — usable Bee gateway URL.
+ *  - `{ ok: false, status, message, logMessage }` — semantic failure (404
+ *    mismatch / no contenthash, 415 unsupported codec, 502 resolver
+ *    conflict/error). `message` goes to the page, `logMessage` to the
+ *    persistent log — see `redactedFailure`, which builds both.
+ *  - `null`                           — malformed input. Caller emits 400
+ *    to keep the existing "invalid bzz reference" surface stable.
+ */
+async function buildGatewayUrl(bzzUrl) {
+  let parsed;
+  try {
+    parsed = new URL(bzzUrl);
+  } catch {
+    return null;
+  }
+
+  const host = parsed.hostname;
+
+  if (BZZ_HASH_RE.test(host)) {
+    const antApiUrl = getAntApiUrl();
+    if (!antApiUrl) {
+      return redactedFailure(503, () => 'Swarm node is not ready');
+    }
+
+    return {
+      ok: true,
+      url: `${antApiUrl}/bzz/${host}${parsed.pathname}${parsed.search}`,
+    };
+  }
+
+  if ((isDwebNameHost(host) || isPotentialEnsName(host)) && !hasEmptyLabel(host)) {
+    const antApiUrl = getAntApiUrl();
+    if (!antApiUrl) {
+      return redactedFailure(503, () => 'Swarm node is not ready');
+    }
+
+    return resolveEnsToGatewayUrl(host, parsed, antApiUrl);
+  }
+
+  return null;
+}
+
+// Cheap pre-filter for hosts with empty labels (e.g. `.eth`, `foo..eth`).
+// The resolver would reject these too, but catching them here avoids a
+// wasted RPC. Do NOT enforce any minimum label length: legacy two-char
+// `.eth` registrations (`me.eth`) and single-char subdomains
+// (`a.foo.eth`, `1.poap.eth`) are both valid and common.
+function hasEmptyLabel(host) {
+  return host.split('.').some((label) => label.length === 0);
+}
+
+// Resolve a supported Ethereum name host to a Bee gateway URL. `parsed` is the
+// original `bzz://name.eth/path?q` URL — pathname/search are forwarded verbatim.
+// Cross-transport mismatches (e.g. bzz://swarm.eth where the contenthash
+// is IPFS) return 404 with an explanatory body, mirroring the renderer's
+// transport assertion: a typed scheme is taken as user intent and we
+// don't silently switch transports.
+async function resolveEnsToGatewayUrl(host, parsed, antApiUrl) {
+  let result;
+  const fallbackSystemLabel = nameSystemLabelForHost(host);
+  try {
+    result = await resolveContentName(host);
+  } catch (err) {
+    // The resolver's own error text routinely names what it was asked to
+    // resolve, so it is redacted here and in the failure's log variant.
+    log.warn(
+      `[bzz-protocol] ${fallbackSystemLabel} resolver threw for ${redactForLog(host)}: ` +
+        `${redactForLog(err.message)}`
+    );
+    return redactedFailure(
+      502,
+      (detail) => `${fallbackSystemLabel} resolver error: ${detail}`,
+      err.message
+    );
+  }
+
+  if (!result) {
+    return redactedFailure(
+      502,
+      (name) => `${fallbackSystemLabel} resolver returned no result for ${name}`,
+      host
+    );
+  }
+
+  if (result.type === 'ok') {
+    const systemLabel = nameSystemLabelForResult(result, host);
+    if (result.protocol !== 'bzz') {
+      return redactedFailure(
+        404,
+        (name) => `${systemLabel} name ${name} resolves to ${result.protocol}, not Swarm`,
+        host
+      );
+    }
+    return {
+      ok: true,
+      url: `${antApiUrl}/bzz/${result.decoded}${joinPublishedPath(result.basePath, parsed.pathname)}${parsed.search}`,
+    };
+  }
+
+  if (result.type === 'not_found') {
+    const systemLabel = nameSystemLabelForResult(result, host);
+    const reason = result.reason || 'unknown';
+    return redactedFailure(
+      404,
+      (name) => `${systemLabel} name ${name} has no contenthash (${reason})`,
+      host
+    );
+  }
+
+  if (result.type === 'unsupported') {
+    const systemLabel = nameSystemLabelForResult(result, host);
+    return redactedFailure(
+      415,
+      (name) => `${systemLabel} name ${name} contenthash format unsupported`,
+      host
+    );
+  }
+
+  if (result.type === 'conflict') {
+    const systemLabel = nameSystemLabelForResult(result, host);
+    return redactedFailure(502, (name) => `${systemLabel} providers disagree on ${name}`, host);
+  }
+
+  // result.type === 'error' or anything we didn't model — degrade to 502.
+  const systemLabel = nameSystemLabelForResult(result, host);
+  return redactedFailure(
+    502,
+    (name, detail) => `${systemLabel} resolution failed for ${name}: ${detail}`,
+    host,
+    result.error || result.reason || 'unknown'
+  );
+}
+
+// JSON 4xx/5xx response with the Swarm-shaped body the rest of the handler
+// emits, so error pages and developer console messages don't see schema
+// drift between hex-host and name-host failures.
+function jsonErrorResponse(status, message) {
+  return new Response(JSON.stringify({ code: status, message }), {
+    status,
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+  });
+}
+
+function sleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function fetchOnce(gatewayUrl, init, fetchImpl, attemptTimeoutMs) {
+  // Per-attempt AbortController, linked to the upstream request signal so
+  // a webview cancellation still aborts the in-flight fetch, but with its
+  // own timeout so a stalled Bee response can't hang the retry loop.
+  const attemptCtl = new AbortController();
+  const upstream = init.signal;
+  const relayAbort = () => attemptCtl.abort();
+  if (upstream) {
+    if (upstream.aborted) attemptCtl.abort();
+    else upstream.addEventListener('abort', relayAbort, { once: true });
+  }
+  const timer = setTimeout(() => attemptCtl.abort(), attemptTimeoutMs);
+
+  try {
+    const response = await fetchImpl(gatewayUrl, { ...init, signal: attemptCtl.signal });
+    return { response };
+  } catch (err) {
+    // If we aborted but the upstream signal is still healthy, it was our
+    // attempt-level timeout — surface it as a transient error so the retry
+    // loop tries again rather than bubbling out the raw AbortError.
+    if (attemptCtl.signal.aborted && !upstream?.aborted) {
+      const e = new Error(`bee fetch timed out after ${attemptTimeoutMs}ms`);
+      e.code = 'ATTEMPT_TIMEOUT';
+      return { error: e };
+    }
+    return { error: err };
+  } finally {
+    clearTimeout(timer);
+    if (upstream) upstream.removeEventListener('abort', relayAbort);
+  }
+}
+
+function shouldRetry(result) {
+  if (result.error) return true;
+  return RETRYABLE_STATUSES.has(result.response.status);
+}
+
+async function fetchWithRetry(
+  gatewayUrl,
+  { method, headers, body, signal },
+  fetchImpl,
+  attemptTimeoutMs
+) {
+  const idempotent = IDEMPOTENT_METHODS.has(method.toUpperCase());
+
+  const attempt = async () => {
+    const init = { method, headers, signal, redirect: 'manual' };
+    // Web `fetch` requires `duplex: 'half'` for streaming request bodies. It's
+    // inert on GET/HEAD where body is undefined, so always passing it is safe.
+    if (body) {
+      init.body = body;
+      init.duplex = 'half';
+    }
+    return fetchOnce(gatewayUrl, init, fetchImpl, attemptTimeoutMs);
+  };
+
+  let result = await attempt();
+  if (!idempotent) {
+    if (result.error) throw result.error;
+    return result.response;
+  }
+
+  for (let i = 0; i < RETRY_DELAYS_MS.length; i++) {
+    if (!shouldRetry(result)) break;
+    if (signal?.aborted) break;
+
+    // Drain the previous response body so Node's fetch releases the socket
+    // before we start the next attempt.
+    if (result.response) {
+      try {
+        await result.response.body?.cancel();
+      } catch {
+        // ignored — the body may already be closed
+      }
+    }
+
+    const delay = RETRY_DELAYS_MS[i];
+    log.debug(
+      `[bzz-protocol] retry ${i + 1}/${RETRY_DELAYS_MS.length} in ${delay}ms ` +
+        `(status=${result.response?.status ?? result.error?.code ?? 'error'}) ` +
+        `${redactUrlForLog(gatewayUrl)}`
+    );
+    await sleep(delay, signal);
+    if (signal?.aborted) break;
+    result = await attempt();
+  }
+
+  if (result.error) throw result.error;
+  return result.response;
+}
+
+// Bee writes its redirects in the gateway's own URL space (`Location:
+// /bzz/<ref>/blog/`, a 308 from `pkg/api/bzz.go`'s directory canonicalisation),
+// but Chromium resolves them against the `bzz://` request URL it issued — it
+// never saw the gateway origin. Left alone, that redirect for
+// `bzz://name.eth/blog` commits
+// `bzz://name.eth/bzz/<resolved-hash>/blog/`: a doubled path that 404s and
+// publishes the resolved manifest hash in the address bar, `window.location`
+// and the storage origin, which is exactly what resolving the name in this
+// process is meant to avoid (see #95). `rewriteGatewayLocation` re-expresses a
+// same-origin, same-directory-or-below target as a relative reference, which
+// resolves identically in both spaces — so `bzz://name.eth/blog` canonicalises
+// to `bzz://name.eth/blog/`, and a hash-host `bzz://<ref>/blog` (where the hash
+// form IS the canonical URL) to `bzz://<ref>/blog/`.
+//
+// Following the redirect here instead (`redirect: 'follow'`) is NOT equivalent:
+// Chromium would stay on the slash-less URL, so every relative URL inside the
+// directory's manifest would resolve one level too high.
+//
+// Only 3xx carries a Location Chromium acts on, and a redirect's body is never
+// rendered, so the upstream body is dropped (and cancelled, freeing the socket)
+// rather than re-streamed with headers that no longer describe it.
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+function canonicalizeRedirect(response, gatewayUrl) {
+  if (!REDIRECT_STATUSES.has(response.status)) return response;
+  const location = response.headers.get('location');
+  if (!location) return response;
+  const rewritten = rewriteGatewayLocation(location, gatewayUrl);
+  if (!rewritten) return response;
+
+  const headers = new Headers(response.headers);
+  headers.set('location', rewritten);
+  // Describe the empty body we are about to send, not the upstream one.
+  headers.delete('content-length');
+  headers.delete('content-encoding');
+  headers.delete('transfer-encoding');
+  response.body?.cancel().catch(() => {});
+  return new Response(null, { status: response.status, statusText: response.statusText, headers });
+}
+
+/**
+ * Core handler, exported for testability. `fetchImpl` defaults to global
+ * fetch but tests can inject a stub. `attemptTimeoutMs` is exposed for
+ * tests that need to exercise per-attempt timeout behaviour.
+ *
+ * That default is undici, which never sees `session.setProxy` — so an external
+ * Ant API on a `.onion` host is resolved by the system resolver rather than
+ * dialled over Tor, the shape #355 fixed for the external IPFS gateway. This
+ * path needs verbs/bodies `ipfs/gateway-transport.js` does not support yet;
+ * tracked with the other Swarm call sites in #360.
+ */
+async function handleBzzRequest(
+  request,
+  { fetchImpl = fetch, attemptTimeoutMs = ATTEMPT_TIMEOUT_MS } = {}
+) {
+  const built = await buildGatewayUrl(request.url);
+  if (!built) {
+    return jsonErrorResponse(400, 'invalid bzz reference');
+  }
+  if (!built.ok) {
+    // `built.message` is the page-facing text and embeds the requested
+    // name; only the failure's own log variant may reach the persistent
+    // log. Fail closed: a failure that didn't declare one is assumed to
+    // name the destination.
+    log.info(
+      `[bzz-protocol] ${built.status} for ${redactUrlForLog(request.url)}: ` +
+        `${built.logMessage ?? redactForLog(built.message)}`
+    );
+    return jsonErrorResponse(built.status, built.message);
+  }
+  const gatewayUrl = built.url;
+
+  const headers = sanitizeRequestHeaders(request.headers);
+  const method = request.method || 'GET';
+  const body = method === 'GET' || method === 'HEAD' ? undefined : request.body;
+
+  try {
+    const response = await fetchWithRetry(
+      gatewayUrl,
+      { method, headers, body, signal: request.signal },
+      fetchImpl,
+      attemptTimeoutMs
+    );
+    return canonicalizeRedirect(response, gatewayUrl);
+  } catch (err) {
+    const code = err?.cause?.code || err?.code || '';
+    const isConnRefused = code === 'ECONNREFUSED' || code === 'ECONNRESET' || code === 'ENOTFOUND';
+    log.warn(
+      `[bzz-protocol] fetch failed for ${redactUrlForLog(gatewayUrl)}: ${err?.message || err}` +
+        (code ? ` (${code})` : '')
+    );
+    return jsonErrorResponse(
+      isConnRefused ? 503 : 502,
+      isConnRefused ? 'bee gateway unreachable' : 'bee gateway error'
+    );
+  }
+}
+
+/**
+ * Register the `bzz:` protocol handler on the given session.
+ * Call after `app.whenReady()`. The `bzz` scheme must already have been
+ * registered privileged via `protocol.registerSchemesAsPrivileged` before
+ * `app.ready` — see `main/index.js`.
+ */
+function registerBzzProtocol(targetSession, { privatePartition = null } = {}) {
+  if (!targetSession?.protocol?.handle) {
+    log.warn('[bzz-protocol] session.protocol.handle unavailable — skipping');
+    return;
+  }
+  // PRIVATE MODE GUARD (request logging): this handler is registered once
+  // per session, so a private window's session gets its own registration —
+  // the one place where private-ness is known for every request it serves.
+  // Marking the whole handler redacts the URL and gateway log lines here
+  // AND the name-resolution ones underneath (see private-log-context.js).
+  const isPrivate = !!privatePartition;
+  try {
+    targetSession.protocol.handle('bzz', (request) =>
+      runWithPrivateLogContext(isPrivate, () => handleBzzRequest(request))
+    );
+    log.info('[bzz-protocol] handler registered');
+  } catch (err) {
+    log.error('[bzz-protocol] failed to register handler:', err);
+  }
+}
+
+module.exports = {
+  registerBzzProtocol,
+  canonicalizeRedirect,
+  handleBzzRequest,
+  buildGatewayUrl,
+  sanitizeRequestHeaders,
+  RETRY_DELAYS_MS,
+  RETRYABLE_STATUSES,
+  ATTEMPT_TIMEOUT_MS,
+};

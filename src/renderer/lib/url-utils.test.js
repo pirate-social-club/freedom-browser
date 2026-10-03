@@ -4,83 +4,90 @@ import {
   deriveBzzBaseFromUrl,
   parseHashInput,
   formatBzzUrl,
+  looksLikeBzzInput,
   deriveDisplayValue,
-  parseSpacesRootInput,
   isValidCid,
   parseIpfsInput,
   deriveIpfsBaseFromUrl,
   formatIpfsUrl,
   applyEnsNamePreservation,
+  buildEnsDisplayUri,
+  isEnsBackedDisplay,
+  isIpfsGatewayFormUrl,
+  normalizeLegacyEnsBookmarkUrl,
   isValidRadicleId,
   parseRadicleInput,
-  deriveRadBaseFromUrl,
+  formatRadicleUrl,
   deriveRadicleDisplayValue,
-  normalizeLocalhostInput,
-  normalizeHnsHostInput,
+  formatOnchainAppUrl,
+  formatOnchainAppDisplayUrl,
+  looksLikeOnchainAppInput,
+  parseOnchainAppUrl,
 } from './url-utils.js';
 
 const BZZ_ROUTE_PREFIX = 'http://127.0.0.1:1633/bzz/';
 const IPFS_ROUTE_PREFIX = 'http://127.0.0.1:8080/ipfs/';
 const IPNS_ROUTE_PREFIX = 'http://127.0.0.1:8080/ipns/';
 const HOME_URL = 'file:///app/home.html';
-const REPRESENTATIVE_PIRATE_HOST = 'sable-harbor-4143.pirate';
 
 describe('url-utils', () => {
-  describe('normalizeLocalhostInput', () => {
-    test('normalizes bare local dev hosts to http URLs', () => {
-      expect(normalizeLocalhostInput('localhost:5173')).toBe('http://localhost:5173/');
-      expect(normalizeLocalhostInput('localhost:5173/path?q=1')).toBe(
-        'http://localhost:5173/path?q=1'
+  describe('onchain application URLs', () => {
+    const ADDRESS = '0x00000095643CFfA7D9fae407a84dfCB6406456c6';
+    const LOWER_ADDRESS = ADDRESS.toLowerCase();
+
+    test('canonicalizes the address, chain, and root path', () => {
+      expect(formatOnchainAppUrl(`web3://${ADDRESS}:1`)).toBe(
+        `web3://${LOWER_ADDRESS}.eip155-1/`
       );
-      expect(normalizeLocalhostInput('127.0.0.1:8787')).toBe('http://127.0.0.1:8787/');
-      expect(normalizeLocalhostInput('[::1]:5173')).toBe('http://[::1]:5173/');
+      expect(parseOnchainAppUrl(`web3://${ADDRESS}:100/swap?x=1#route`)).toEqual({
+        address: LOWER_ADDRESS,
+        chainId: 100,
+        displayUrl: `web3://${LOWER_ADDRESS}:100/swap?x=1#route`,
+        url: `web3://${LOWER_ADDRESS}.eip155-100/swap?x=1#route`,
+      });
     });
 
-    test('does not rewrite non-local or already explicit URLs', () => {
-      expect(normalizeLocalhostInput('example.com')).toBeNull();
-      expect(normalizeLocalhostInput('api.pirate.sc')).toBeNull();
-      expect(normalizeLocalhostInput('http://localhost:5173')).toBeNull();
-      expect(normalizeLocalhostInput('https://localhost:5173')).toBeNull();
-    });
-  });
-
-  describe('normalizeHnsHostInput', () => {
-    afterEach(() => {
-      delete globalThis.FREEDOM_HNS_HOSTS;
-    });
-
-    test('normalizes arbitrary single-label HNS hosts', () => {
-      expect(normalizeHnsHostInput('unknown-single-label')).toBe('https://unknown-single-label/');
-      expect(normalizeHnsHostInput('xn--pokmon-dva')).toBe('https://xn--pokmon-dva/');
-    });
-
-    test('normalizes the pirate root to the app host', () => {
-      expect(normalizeHnsHostInput('pirate')).toBe('https://app.pirate/');
-      expect(normalizeHnsHostInput('pirate/')).toBe('https://app.pirate/');
-      expect(normalizeHnsHostInput('pirate/feed')).toBe('https://app.pirate/feed');
-    });
-
-    test('normalizes representative .pirate hosts', () => {
-      expect(normalizeHnsHostInput(REPRESENTATIVE_PIRATE_HOST)).toBe(
-        `https://${REPRESENTATIVE_PIRATE_HOST}/`
-      );
-      expect(normalizeHnsHostInput(`${REPRESENTATIVE_PIRATE_HOST}/about`)).toBe(
-        `https://${REPRESENTATIVE_PIRATE_HOST}/about`
+    test('defaults an omitted chain to mainnet and makes it visible', () => {
+      expect(formatOnchainAppUrl(`web3://${ADDRESS}/`)).toBe(
+        `web3://${LOWER_ADDRESS}.eip155-1/`
       );
     });
 
-    test('normalizes imported namespace roots and subdomains when suffixes are loaded', () => {
-      globalThis.FREEDOM_HNS_HOSTS = {
-        getHnsPublicSuffixes: () => ['.pirate', '.xn--pokmon-dva'],
-      };
-
-      expect(normalizeHnsHostInput('xn--pokmon-dva')).toBe('https://xn--pokmon-dva/');
-      expect(normalizeHnsHostInput('v.xn--pokmon-dva')).toBe('https://v.xn--pokmon-dva/');
+    test('accepts the canonical CAIP-style origin and large chain IDs', () => {
+      expect(formatOnchainAppUrl(`web3://${LOWER_ADDRESS}.eip155-11155111/`)).toBe(
+        `web3://${LOWER_ADDRESS}.eip155-11155111/`
+      );
+      expect(
+        formatOnchainAppDisplayUrl(
+          `web3://${LOWER_ADDRESS}.eip155-11155111/swap?x=1#route`
+        )
+      ).toBe(`web3://${LOWER_ADDRESS}:11155111/swap?x=1#route`);
     });
 
-    test('rejects ordinary dotted web domains', () => {
-      expect(normalizeHnsHostInput('pirate.sc')).toBeNull();
-      expect(normalizeHnsHostInput('example.com')).toBeNull();
+    test('keeps Chromium origin encoding out of user-facing URLs', () => {
+      expect(formatOnchainAppDisplayUrl(`web3://${LOWER_ADDRESS}.eip155-1/`)).toBe(
+        `web3://${LOWER_ADDRESS}/`
+      );
+      expect(formatOnchainAppDisplayUrl(`web3://${ADDRESS}:1/swap`)).toBe(
+        `web3://${LOWER_ADDRESS}/swap`
+      );
+      expect(
+        formatOnchainAppDisplayUrl(`view-source:web3://${LOWER_ADDRESS}.eip155-100/`)
+      ).toBe(`view-source:web3://${LOWER_ADDRESS}:100/`);
+    });
+
+    test.each([
+      'web3://not-an-address:1/',
+      `web3://${ADDRESS}:0/`,
+      `web3://user@${ADDRESS}:1/`,
+      'https://example.com',
+    ])('rejects invalid app URL %s', (url) => {
+      expect(formatOnchainAppUrl(url)).toBeNull();
+    });
+
+    test('recognizes malformed web3 input as app intent', () => {
+      expect(looksLikeOnchainAppInput(' WEB3://invalid ')).toBe(true);
+      expect(looksLikeOnchainAppInput('https://example.com')).toBe(false);
     });
   });
 
@@ -106,6 +113,10 @@ describe('url-utils', () => {
     test('returns null for empty input after removing scheme', () => {
       expect(parseHashInput('bzz://', BZZ_ROUTE_PREFIX)).toBeNull();
       expect(parseHashInput('', BZZ_ROUTE_PREFIX)).toBeNull();
+    });
+
+    test('returns null when the bzz route prefix is not ready', () => {
+      expect(parseHashInput('bzz://abc123', null)).toBeNull();
     });
 
     test('parses hash with fragment', () => {
@@ -178,6 +189,24 @@ describe('url-utils', () => {
       const suffix = 'path/file.html';
       expect(composeTargetUrl(base, suffix)).toBe('not-a-valid-urlpath/file.html');
     });
+
+    test('keeps a colon-bearing first segment inside the base', () => {
+      // A bare `re:port` reference parses as scheme `re:`, not as a path
+      // relative to the base — the same RFC 3986 §4.2 trap
+      // `lib/gateway-location.js` guards against on the main-process side.
+      const base = 'http://127.0.0.1:1633/bzz/hash/';
+      expect(composeTargetUrl(base, '/re:port')).toBe('http://127.0.0.1:1633/bzz/hash/re:port');
+      expect(composeTargetUrl(base, 're:port/index.html')).toBe(
+        'http://127.0.0.1:1633/bzz/hash/re:port/index.html'
+      );
+    });
+
+    test('keeps a doubled leading slash inside the base', () => {
+      const base = 'http://127.0.0.1:1633/bzz/hash/';
+      expect(composeTargetUrl(base, '//evil.test/x')).toBe(
+        'http://127.0.0.1:1633/bzz/hash//evil.test/x'
+      );
+    });
   });
 
   describe('deriveBzzBaseFromUrl', () => {
@@ -217,6 +246,32 @@ describe('url-utils', () => {
     });
   });
 
+  describe('looksLikeBzzInput', () => {
+    const HASH = 'a'.repeat(64);
+
+    test('detects bzz:// and bzz: scheme inputs', () => {
+      expect(looksLikeBzzInput(`bzz://${HASH}`)).toBe(true);
+      expect(looksLikeBzzInput(`bzz://${HASH}/index.html`)).toBe(true);
+      expect(looksLikeBzzInput(`bzz:${HASH}`)).toBe(true);
+      expect(looksLikeBzzInput('  BZZ://name.eth  ')).toBe(true);
+    });
+
+    test('detects bare Swarm hashes (with or without a path)', () => {
+      expect(looksLikeBzzInput(HASH)).toBe(true);
+      expect(looksLikeBzzInput(`${HASH}/page.html`)).toBe(true);
+      expect(looksLikeBzzInput('a'.repeat(128))).toBe(true);
+    });
+
+    test('rejects non-Swarm inputs', () => {
+      expect(looksLikeBzzInput('')).toBe(false);
+      expect(looksLikeBzzInput(null)).toBe(false);
+      expect(looksLikeBzzInput('example.com')).toBe(false);
+      expect(looksLikeBzzInput('ipfs://QmTest')).toBe(false);
+      expect(looksLikeBzzInput('https://example.com')).toBe(false);
+      expect(looksLikeBzzInput('a'.repeat(63))).toBe(false);
+    });
+  });
+
   describe('formatBzzUrl', () => {
     test('formats explicit bzz:// protocol with hash only', () => {
       const input = 'bzz://1234567890abcdef';
@@ -234,6 +289,18 @@ describe('url-utils', () => {
       expect(result).toEqual({
         targetUrl: 'http://127.0.0.1:1633/bzz/1234567890abcdef/index.html',
         displayValue: 'bzz://1234567890abcdef/index.html',
+        baseUrl: 'http://127.0.0.1:1633/bzz/1234567890abcdef/',
+      });
+    });
+
+    test('formats a colon-bearing directory segment into the gateway path', () => {
+      // `:` is a legal Swarm manifest directory name; the composed gateway URL
+      // must stay under the base instead of becoming the bare `re:port` URL.
+      const input = 'bzz://1234567890abcdef/re:port/index.html';
+      const result = formatBzzUrl(input, BZZ_ROUTE_PREFIX);
+      expect(result).toEqual({
+        targetUrl: 'http://127.0.0.1:1633/bzz/1234567890abcdef/re:port/index.html',
+        displayValue: 'bzz://1234567890abcdef/re:port/index.html',
         baseUrl: 'http://127.0.0.1:1633/bzz/1234567890abcdef/',
       });
     });
@@ -289,12 +356,16 @@ describe('url-utils', () => {
       });
     });
 
-    test('converts syntactically valid dotted HNS-style hosts to https://', () => {
-      const input = 'portal.any-hns-root/path';
-      const result = formatBzzUrl(input, BZZ_ROUTE_PREFIX);
-      expect(result).toEqual({
-        targetUrl: 'https://portal.any-hns-root/path',
-        displayValue: 'https://portal.any-hns-root/path',
+    test('defaults bare .onion hosts to http:// (most are http-only)', () => {
+      expect(formatBzzUrl('abcdefghijklmnop.onion', BZZ_ROUTE_PREFIX)).toEqual({
+        targetUrl: 'http://abcdefghijklmnop.onion',
+        displayValue: 'http://abcdefghijklmnop.onion',
+        baseUrl: null,
+      });
+      // …and with a path
+      expect(formatBzzUrl('abcdefghijklmnop.onion/wiki', BZZ_ROUTE_PREFIX)).toEqual({
+        targetUrl: 'http://abcdefghijklmnop.onion/wiki',
+        displayValue: 'http://abcdefghijklmnop.onion/wiki',
         baseUrl: null,
       });
     });
@@ -349,8 +420,8 @@ describe('url-utils', () => {
       );
     });
 
-    test('returns the url for home url', () => {
-      expect(deriveDisplayValue(HOME_URL, BZZ_ROUTE_PREFIX, HOME_URL)).toBe(HOME_URL);
+    test('returns empty string for home url', () => {
+      expect(deriveDisplayValue(HOME_URL, BZZ_ROUTE_PREFIX, HOME_URL)).toBe('');
     });
 
     test('returns empty string for about:blank', () => {
@@ -360,6 +431,24 @@ describe('url-utils', () => {
     test('returns original url for non-bzz sites', () => {
       const url = 'https://google.com';
       expect(deriveDisplayValue(url, BZZ_ROUTE_PREFIX, HOME_URL)).toBe(url);
+    });
+
+    test('reverse-maps onchain navigation origins to standard display URLs', () => {
+      const address = '0x00000095643cffa7d9fae407a84dfcb6406456c6';
+      expect(
+        deriveDisplayValue(
+          `web3://${address}.eip155-1/swap?x=1#route`,
+          BZZ_ROUTE_PREFIX,
+          HOME_URL
+        )
+      ).toBe(`web3://${address}/swap?x=1#route`);
+      expect(
+        deriveDisplayValue(
+          `web3://${address}.eip155-100/swap?x=1#route`,
+          BZZ_ROUTE_PREFIX,
+          HOME_URL
+        )
+      ).toBe(`web3://${address}:100/swap?x=1#route`);
     });
 
     test('returns empty string for null/undefined/empty input', () => {
@@ -407,29 +496,13 @@ describe('url-utils', () => {
         deriveDisplayValue(url, BZZ_ROUTE_PREFIX, HOME_URL, IPFS_ROUTE_PREFIX, IPNS_ROUTE_PREFIX)
       ).toBe('ipns://docs.ipfs.tech/index.html');
     });
-  });
 
-  describe('Spaces shorthand helpers', () => {
-    test('parses root-only spaces input', () => {
-      expect(parseSpacesRootInput('@space')).toEqual({
-        routeKey: '@space',
-        displayValue: '@space',
-      });
-
-      expect(parseSpacesRootInput('@😀')).toEqual({
-        routeKey: '@😀',
-        displayValue: '@😀',
-      });
-    });
-
-    test('rejects invalid spaces shorthand input', () => {
-      expect(parseSpacesRootInput('name@space')).toBeNull();
-      expect(parseSpacesRootInput('@')).toBeNull();
-      expect(parseSpacesRootInput('@@space')).toBeNull();
-      expect(parseSpacesRootInput('@space path')).toBeNull();
-      expect(parseSpacesRootInput('@space/submit')).toBeNull();
-      expect(parseSpacesRootInput('https://pirate.sc/c/@space')).toBeNull();
-    });
+    // The Kubo subdomain-gateway form (`<cid>.ipfs.localhost`,
+    // `<key>.ipns.localhost`, including inline-DNSLink dash encoding) is no
+    // longer recognised by `deriveDisplayValue`. Chromium never sees those
+    // URLs since `ipfs:`/`ipns:` are standard schemes and the protocol
+    // handler in `src/main/ipfs/ipfs-protocol.js` follows Kubo's redirect
+    // internally — so the display-recovery branch had no live caller.
   });
 
   // ============ IPFS Tests ============
@@ -443,6 +516,23 @@ describe('url-utils', () => {
     test('validates CIDv1 base32 (bafy...)', () => {
       expect(isValidCid('bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi')).toBe(true);
       expect(isValidCid('bafkreifjjcie6lypi6ny7amxnfftagclbuxndqonfipmb64f2km2devei4')).toBe(true);
+    });
+
+    test('validates CIDv1 base32 with non-baf codec prefixes (bag.../bafz...)', () => {
+      // dag-json → `bagu…`. Cross-checked with `multiformats`:
+      // `CID.createV1(0x0129, sha256.digest('hello world')).toString()`.
+      // Earlier `^baf...` regex false-rejected these; the relaxed
+      // `^ba...` form covers all CIDv1 base32 codec prefixes.
+      expect(
+        isValidCid('baguqeeraxfgspomtju7arjjokll5u7nl7lcij37dpjjyb3uqrd32zyxpzxuq')
+      ).toBe(true);
+      // libp2p-key codec via base32: `bafzbei…` is also `baf` so still
+      // works, but `bafk2bzace…` (blake2b-256 multihash) is a real
+      // shape too. Cross-checked with `multiformats`:
+      // `CID.createV1(0x55, blake2b256.digest(bytes)).toString()`.
+      expect(
+        isValidCid('bafk2bzacec4u2j5zsngt4cfffzjnpwt5vp5mjbhp4n5fhahoscepplhc57g6s')
+      ).toBe(true);
     });
 
     test('rejects invalid CIDs', () => {
@@ -462,43 +552,48 @@ describe('url-utils', () => {
   });
 
   describe('parseIpfsInput', () => {
-    test('parses raw CID', () => {
-      const result = parseIpfsInput(
-        'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
-        IPFS_ROUTE_PREFIX
-      );
+    // Canonical CIDv1 base32 corresponding to the CIDv0 below — kept inline so
+    // the assertions are obviously self-consistent. Cross-checked with
+    // multiformats: CID.parse(CIDV0).toV1().toString().
+    const CIDV0 = 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
+    const CIDV1 = 'bafybeie5nqv6kd3qnfjupgvz34woh3oksc3iau6abmyajn7qvtf6d2ho34';
+
+    test('returns null when the IPFS route prefix is not ready', () => {
+      expect(parseIpfsInput(CIDV0, null)).toBeNull();
+    });
+
+    test('canonicalises raw CIDv0 to CIDv1 base32', () => {
+      const result = parseIpfsInput(CIDV0, IPFS_ROUTE_PREFIX);
       expect(result).toEqual({
-        cid: 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
+        cid: CIDV1,
         tail: '',
-        baseUrl: 'http://127.0.0.1:8080/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/',
+        baseUrl: `http://127.0.0.1:8080/ipfs/${CIDV1}/`,
         protocol: 'ipfs',
-        displayValue: 'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
+        displayValue: `ipfs://${CIDV1}`,
       });
     });
 
-    test('parses CID with path', () => {
-      const result = parseIpfsInput(
-        'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/readme',
-        IPFS_ROUTE_PREFIX
-      );
-      expect(result.cid).toBe('QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG');
-      expect(result.tail).toBe('/readme');
-      expect(result.displayValue).toBe(
-        'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/readme'
-      );
+    test('passes CIDv1 base32 through unchanged', () => {
+      const result = parseIpfsInput(CIDV1, IPFS_ROUTE_PREFIX);
+      expect(result.cid).toBe(CIDV1);
+      expect(result.displayValue).toBe(`ipfs://${CIDV1}`);
     });
 
-    test('parses ipfs:// scheme', () => {
-      const result = parseIpfsInput(
-        'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/path',
-        IPFS_ROUTE_PREFIX
-      );
-      expect(result.cid).toBe('QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG');
+    test('canonicalises CIDv0 with path', () => {
+      const result = parseIpfsInput(`${CIDV0}/readme`, IPFS_ROUTE_PREFIX);
+      expect(result.cid).toBe(CIDV1);
+      expect(result.tail).toBe('/readme');
+      expect(result.displayValue).toBe(`ipfs://${CIDV1}/readme`);
+    });
+
+    test('canonicalises CIDv0 carried over from ipfs:// scheme input', () => {
+      const result = parseIpfsInput(`ipfs://${CIDV0}/path`, IPFS_ROUTE_PREFIX);
+      expect(result.cid).toBe(CIDV1);
       expect(result.tail).toBe('/path');
       expect(result.protocol).toBe('ipfs');
     });
 
-    test('parses ipns:// scheme', () => {
+    test('parses ipns:// scheme with DNSLink name (preserved as-is)', () => {
       const result = parseIpfsInput('ipns://docs.ipfs.tech/index.html', IPFS_ROUTE_PREFIX);
       expect(result.cid).toBe('docs.ipfs.tech');
       expect(result.tail).toBe('/index.html');
@@ -506,17 +601,280 @@ describe('url-utils', () => {
       expect(result.baseUrl).toBe('http://127.0.0.1:8080/ipns/docs.ipfs.tech/');
     });
 
-    test('parses CID with query and fragment', () => {
-      const result = parseIpfsInput(
-        'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/page?v=1#section',
-        IPFS_ROUTE_PREFIX
-      );
+    test('canonicalises base58 IPNS peer IDs to libp2p-key base36', () => {
+      // Ed25519 peer ID — the canonical CIDv1 libp2p-key form is lowercase
+      // base36, which round-trips through the standard-scheme URL parser
+      // without being mangled by hostname lowercasing.
+      const peerId = '12D3KooWAsDaZWCkCEUN3myg49NoCMmrYYivmJVwjg7DVJBvWdaX';
+      const expected = 'k51qzi5uqu5dgkkr5wjh0m796f9u3tou74wn2q2u3shgh6yn52ce4hitig3if4';
+      const result = parseIpfsInput(`ipns://${peerId}/foo`, IPFS_ROUTE_PREFIX);
+      expect(result.cid).toBe(expected);
+      expect(result.displayValue).toBe(`ipns://${expected}/foo`);
+    });
+
+    test('canonicalises CIDv0 with query and fragment intact', () => {
+      const result = parseIpfsInput(`${CIDV0}/page?v=1#section`, IPFS_ROUTE_PREFIX);
+      expect(result.cid).toBe(CIDV1);
       expect(result.tail).toBe('/page?v=1#section');
     });
 
     test('returns null for empty input', () => {
       expect(parseIpfsInput('', IPFS_ROUTE_PREFIX)).toBeNull();
       expect(parseIpfsInput('ipfs://', IPFS_ROUTE_PREFIX)).toBeNull();
+    });
+
+    describe('gateway-form rewrite', () => {
+      // Kubo's directory listings emit links like
+      //   <a href="//localhost:8080/ipfs/<cid>">CID</a>
+      // which Chromium resolves against the page origin `ipfs://<cid>/` to
+      //   ipfs://localhost/ipfs/<cid>
+      // (port stripped because Chromium doesn't treat 8080 as default for
+      // `ipfs:`). Without rewriting, the protocol handler would try to
+      // load CID `localhost` from Kubo and 400. The fix: when host is
+      // *not* a real reference and path starts with /ipfs|/ipns, take
+      // the embedded ref as the actual content.
+
+      test('rewrites ipfs://localhost/ipfs/<cidv1> to ipfs://<cidv1>', () => {
+        const result = parseIpfsInput(
+          `ipfs://localhost/ipfs/${CIDV1}/sub/page.html`,
+          IPFS_ROUTE_PREFIX
+        );
+        expect(result.cid).toBe(CIDV1);
+        expect(result.tail).toBe('/sub/page.html');
+        expect(result.protocol).toBe('ipfs');
+        expect(result.displayValue).toBe(`ipfs://${CIDV1}/sub/page.html`);
+      });
+
+      test('rewrites ipfs://<gateway>/ipfs/<cidv0> AND canonicalises to base32', () => {
+        const result = parseIpfsInput(
+          `ipfs://127.0.0.1/ipfs/${CIDV0}/readme`,
+          IPFS_ROUTE_PREFIX
+        );
+        expect(result.cid).toBe(CIDV1);
+        expect(result.tail).toBe('/readme');
+      });
+
+      test.each([
+        ['dweb.link', 'dweb.link'],
+        ['ipfs.io', 'ipfs.io'],
+        ['cf-ipfs.com', 'cf-ipfs.com'],
+        ['gateway.pinata.cloud', 'gateway.pinata.cloud'],
+      ])(
+        'rewrites ipfs://<%s>/ipfs/<cid> public-gateway URLs to canonical ipfs://<cid>',
+        (_label, gatewayHost) => {
+          const result = parseIpfsInput(
+            `ipfs://${gatewayHost}/ipfs/${CIDV1}/img.png`,
+            IPFS_ROUTE_PREFIX
+          );
+          expect(result.cid).toBe(CIDV1);
+          expect(result.tail).toBe('/img.png');
+          expect(result.protocol).toBe('ipfs');
+          expect(result.displayValue).toBe(`ipfs://${CIDV1}/img.png`);
+        }
+      );
+
+      test('rewrites cross-namespace ipfs://localhost/ipns/<key> to ipns://<key>', () => {
+        const ipnsKey = 'k51qzi5uqu5dgkkr5wjh0m796f9u3tou74wn2q2u3shgh6yn52ce4hitig3if4';
+        const result = parseIpfsInput(
+          `ipfs://localhost/ipns/${ipnsKey}/install`,
+          IPFS_ROUTE_PREFIX
+        );
+        expect(result.cid).toBe(ipnsKey);
+        expect(result.protocol).toBe('ipns');
+        expect(result.tail).toBe('/install');
+        expect(result.baseUrl).toBe(`http://127.0.0.1:8080/ipns/${ipnsKey}/`);
+      });
+
+      test('preserves host when host IS a valid CID (legitimate /ipfs/ subdir)', () => {
+        // `ipfs://<cid>/ipfs/<sub>` could be a real subdirectory named
+        // `ipfs`. Don't silently redirect — load from the host CID.
+        const result = parseIpfsInput(
+          `ipfs://${CIDV1}/ipfs/somefile.txt`,
+          IPFS_ROUTE_PREFIX
+        );
+        expect(result.cid).toBe(CIDV1);
+        expect(result.tail).toBe('/ipfs/somefile.txt');
+      });
+
+      test('preserves host when host is a base58 IPNS peer ID', () => {
+        const peerId = 'k51qzi5uqu5dgkkr5wjh0m796f9u3tou74wn2q2u3shgh6yn52ce4hitig3if4';
+        const result = parseIpfsInput(
+          `ipns://${peerId}/ipfs/somefile`,
+          IPFS_ROUTE_PREFIX
+        );
+        expect(result.cid).toBe(peerId);
+        expect(result.tail).toBe('/ipfs/somefile');
+        expect(result.protocol).toBe('ipns');
+      });
+
+      test('preserves host when outer host is a DNSLink target (not a known gateway)', () => {
+        // `docs.ipfs.tech` isn't in the gateway allowlist — it's a
+        // DNSLink content host that genuinely serves a `/ipfs/coverage`
+        // path. Rewrites must not fire here even though the embedded
+        // `coverage` is a non-CID-shaped string. See the matching gate
+        // in `isKnownGatewayHost`.
+        const result = parseIpfsInput(
+          'ipns://docs.ipfs.tech/ipfs/coverage',
+          IPFS_ROUTE_PREFIX
+        );
+        expect(result.cid).toBe('docs.ipfs.tech');
+        expect(result.tail).toBe('/ipfs/coverage');
+      });
+
+      test('rewrites ipfs://dweb.link/ipns/<dnslink-name>/path to ipns://<dnslink-name>/path', () => {
+        // P3 from the round-3 review: with the outer host being a
+        // recognised public gateway, the `/ipns/<dnslink-name>` shape
+        // is unambiguously the gateway-form for a DNSLink target.
+        const result = parseIpfsInput(
+          'ipfs://dweb.link/ipns/docs.ipfs.tech/install',
+          IPFS_ROUTE_PREFIX
+        );
+        expect(result.cid).toBe('docs.ipfs.tech');
+        expect(result.protocol).toBe('ipns');
+        expect(result.tail).toBe('/install');
+        expect(result.displayValue).toBe('ipns://docs.ipfs.tech/install');
+      });
+
+      test('rewrites ipfs://localhost:<port>/ipfs/<cidv1> (port stripped before gateway check)', () => {
+        // P2 from the round-4 review: Kubo's directory listings emit
+        // `<a href="//localhost:8080/ipfs/<cid>">` which Chromium
+        // resolves against the page's `ipfs://` origin to
+        // `ipfs://localhost:8080/ipfs/<cid>` (port preserved because
+        // `ipfs:` doesn't have a default port). Without port stripping
+        // before the allowlist check, the embedded CID never gets
+        // hoisted out and the address bar permanently shows the
+        // gateway-origin form. parseIpfsInput is byte-level on purpose
+        // (preserves base58btc case), so a dedicated `stripPort` does
+        // the work `new URL().hostname` would do for `new URL`-friendly
+        // inputs.
+        const result = parseIpfsInput(
+          `ipfs://localhost:8080/ipfs/${CIDV1}/img.png`,
+          IPFS_ROUTE_PREFIX
+        );
+        expect(result.cid).toBe(CIDV1);
+        expect(result.tail).toBe('/img.png');
+        expect(result.protocol).toBe('ipfs');
+        expect(result.displayValue).toBe(`ipfs://${CIDV1}/img.png`);
+      });
+
+      test('rewrites ipfs://localhost:<port>/ipns/<key> (port stripped, cross-namespace)', () => {
+        const ipnsKey = 'k51qzi5uqu5dgkkr5wjh0m796f9u3tou74wn2q2u3shgh6yn52ce4hitig3if4';
+        const result = parseIpfsInput(
+          `ipfs://localhost:8080/ipns/${ipnsKey}/install`,
+          IPFS_ROUTE_PREFIX
+        );
+        expect(result.cid).toBe(ipnsKey);
+        expect(result.protocol).toBe('ipns');
+        expect(result.tail).toBe('/install');
+      });
+
+      test('rewrites ipfs://127.0.0.1:<port>/ipfs/<cidv1> (loopback IP with port)', () => {
+        const result = parseIpfsInput(
+          `ipfs://127.0.0.1:8080/ipfs/${CIDV1}/page`,
+          IPFS_ROUTE_PREFIX
+        );
+        expect(result.cid).toBe(CIDV1);
+        expect(result.tail).toBe('/page');
+      });
+
+      test('does NOT rewrite for unknown self-hosted gateways', () => {
+        // Conservative allowlist — a private gateway hostname can't be
+        // distinguished from a DNSLink content host by URL shape alone.
+        // Authors of self-hosted gateways can publish canonical
+        // `ipfs://<cid>/...` URLs directly. This test pins that the
+        // gate isn't reverted to the over-permissive
+        // "any-non-content-host" heuristic.
+        const result = parseIpfsInput(
+          `ipfs://my-gateway.example/ipfs/${CIDV1}/page`,
+          IPFS_ROUTE_PREFIX
+        );
+        // The outer host stays as the (invalid) "cid", which the main-
+        // process protocol handler then 400s when Kubo rejects it.
+        expect(result.cid).toBe('my-gateway.example');
+      });
+    });
+
+    describe('isIpfsGatewayFormUrl', () => {
+      // `loadTarget` consults `parseEnsInput` before `formatIpfsUrl`, and
+      // every gateway hostname above (`ipfs.io`, `dweb.link`, `127.0.0.1`,
+      // …) is a perfectly well-formed DNS name. Without this predicate the
+      // ENSv2 DNS-name branch claims them and the CID never loads — the
+      // regression this pins. Kept as the *same* matcher `parseIpfsInput`
+      // rewrites with, so the two can't drift.
+      test('recognises the forms parseIpfsInput rewrites', () => {
+        expect(isIpfsGatewayFormUrl(`ipfs://ipfs.io/ipfs/${CIDV0}`)).toBe(true);
+        expect(isIpfsGatewayFormUrl(`ipfs://dweb.link/ipfs/${CIDV1}/a/b`)).toBe(true);
+        expect(isIpfsGatewayFormUrl(`ipfs://127.0.0.1/ipfs/${CIDV1}`)).toBe(true);
+        expect(isIpfsGatewayFormUrl(`ipfs://localhost:8080/ipfs/${CIDV1}/page?q=1#top`)).toBe(true);
+        expect(isIpfsGatewayFormUrl(`ipns://ipfs.io/ipfs/${CIDV1}`)).toBe(true);
+        expect(
+          isIpfsGatewayFormUrl('ipfs://gateway.pinata.cloud/ipns/docs.ipfs.tech/install')
+        ).toBe(true);
+        expect(isIpfsGatewayFormUrl(`  ipfs://IPFS.IO/ipfs/${CIDV1}  `)).toBe(true);
+      });
+
+      test('leaves everything parseIpfsInput does not rewrite alone', () => {
+        // Gateway host but no gateway-form path, unknown gateway, DNSLink
+        // content host, a non-CID embedded ref, a bare CID, and the
+        // non-IPFS schemes — none of these are the rewrite's business, so
+        // the name parser stays free to claim them.
+        expect(isIpfsGatewayFormUrl('ipfs://ipfs.io/foo')).toBe(false);
+        expect(isIpfsGatewayFormUrl(`ipfs://my-gateway.example/ipfs/${CIDV1}`)).toBe(false);
+        expect(isIpfsGatewayFormUrl(`ipns://docs.ipfs.tech/ipfs/${CIDV1}`)).toBe(false);
+        expect(isIpfsGatewayFormUrl('ipfs://ipfs.io/ipfs/not-a-cid')).toBe(false);
+        expect(isIpfsGatewayFormUrl(`ipfs://${CIDV1}/page`)).toBe(false);
+        expect(isIpfsGatewayFormUrl('ipfs://gregskril.com/docs')).toBe(false);
+        expect(isIpfsGatewayFormUrl(`bzz://ipfs.io/ipfs/${CIDV1}`)).toBe(false);
+        expect(isIpfsGatewayFormUrl(`https://ipfs.io/ipfs/${CIDV1}`)).toBe(false);
+        expect(isIpfsGatewayFormUrl('')).toBe(false);
+        expect(isIpfsGatewayFormUrl(null)).toBe(false);
+      });
+
+      test('formatIpfsUrl still loads a gateway-form URL as its embedded CID', () => {
+        // End-to-end acceptance for the regression: the pasted gateway URL
+        // must come out as the canonical CID target, not an ENS lookup.
+        const result = formatIpfsUrl(`ipfs://ipfs.io/ipfs/${CIDV0}/readme`, IPFS_ROUTE_PREFIX);
+        expect(result.displayValue).toBe(`ipfs://${CIDV1}/readme`);
+        expect(result.targetUrl).toBe(`${IPFS_ROUTE_PREFIX}${CIDV1}/readme`);
+      });
+    });
+
+    describe('CIDv1 base58btc (z…) canonicalisation', () => {
+      // `z…` CIDs use base58btc encoding which, like CIDv0, is case-
+      // sensitive. Convert to base32 (lowercase) so Chromium's standard-
+      // scheme URL parser doesn't corrupt the bytes during host
+      // normalisation.
+      const Z_CID_DAGPB = 'zdj7Wm8AnNCTyaUbqz1afY6jSGdNi2DKwowmcwMFvbz3vL2Ce';
+      const Z_CID_DAGPB_AS_B32 =
+        'bafybeihjgbfpb6h5y66ampe35j6wrvogbykwbpfqnyittz42v46btbt2r4';
+
+      test('canonicalises z… (base58btc) to base32 lowercase', () => {
+        const result = parseIpfsInput(`ipfs://${Z_CID_DAGPB}/img.png`, IPFS_ROUTE_PREFIX);
+        expect(result.cid).toBe(Z_CID_DAGPB_AS_B32);
+        expect(result.tail).toBe('/img.png');
+        expect(result.displayValue).toBe(`ipfs://${Z_CID_DAGPB_AS_B32}/img.png`);
+      });
+
+      test('canonicalises z… inside gateway-form path too', () => {
+        const result = parseIpfsInput(
+          `ipfs://localhost/ipfs/${Z_CID_DAGPB}/file`,
+          IPFS_ROUTE_PREFIX
+        );
+        expect(result.cid).toBe(Z_CID_DAGPB_AS_B32);
+        expect(result.tail).toBe('/file');
+      });
+
+      test('lowercased z… is not silently re-encoded (caller surfaces 400)', () => {
+        // The renderer-side canonicaliser returns null for already-
+        // lowercased input rather than producing wrong content. The cid
+        // stays as the lowercased form; the main-process handler then
+        // 400s with an actionable message.
+        const result = parseIpfsInput(
+          `ipfs://${Z_CID_DAGPB.toLowerCase()}/img.png`,
+          IPFS_ROUTE_PREFIX
+        );
+        expect(result.cid).toBe(Z_CID_DAGPB.toLowerCase());
+      });
     });
   });
 
@@ -548,32 +906,49 @@ describe('url-utils', () => {
       const url = new URL('http://127.0.0.1:8080/ipfs/QmTest/file.html');
       expect(deriveIpfsBaseFromUrl(url)).toBe('http://127.0.0.1:8080/ipfs/QmTest/');
     });
+
+    test('returns null for the legacy Kubo subdomain-gateway form', () => {
+      // Chromium no longer encounters `<cid>.ipfs.localhost` URLs because
+      // the ipfs protocol handler follows Kubo's redirect internally.
+      expect(
+        deriveIpfsBaseFromUrl(
+          'http://bafybeigh3oq6pwrkspwgj4jcguizd7muxw4zdyq6cckqi5vl72yixnzpvm.ipfs.localhost:8080/readme'
+        )
+      ).toBeNull();
+      expect(deriveIpfsBaseFromUrl('http://k51qzi5uqu5dlvj.ipns.localhost:8080/install')).toBeNull();
+    });
   });
 
   describe('formatIpfsUrl', () => {
-    test('formats ipfs:// protocol', () => {
-      const input = 'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
-      const result = formatIpfsUrl(input, IPFS_ROUTE_PREFIX);
+    const CIDV0 = 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
+    const CIDV1 = 'bafybeie5nqv6kd3qnfjupgvz34woh3oksc3iau6abmyajn7qvtf6d2ho34';
+
+    test('formats ipfs:// protocol — CIDv0 input is canonicalised to CIDv1 base32', () => {
+      // Regression: when `ipfs:` is registered as a standard scheme,
+      // `new URL('ipfs://Qm.../')` lowercases the host and destroys the
+      // base58btc-encoded bytes, so Kubo returns
+      //   `400 invalid cid: selected encoding not supported`.
+      // formatIpfsUrl must therefore avoid `new URL` for the ipfs:/ipns:
+      // branches and canonicalise CIDv0 -> CIDv1 base32 before handing
+      // the URL to Chromium.
+      const result = formatIpfsUrl(`ipfs://${CIDV0}`, IPFS_ROUTE_PREFIX);
       expect(result).toEqual({
-        targetUrl: 'http://127.0.0.1:8080/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/',
-        displayValue: 'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
-        baseUrl: 'http://127.0.0.1:8080/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/',
+        targetUrl: `http://127.0.0.1:8080/ipfs/${CIDV1}/`,
+        displayValue: `ipfs://${CIDV1}`,
+        baseUrl: `http://127.0.0.1:8080/ipfs/${CIDV1}/`,
         protocol: 'ipfs',
       });
     });
 
-    test('formats ipfs:// with path', () => {
-      const input = 'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/readme';
-      const result = formatIpfsUrl(input, IPFS_ROUTE_PREFIX);
+    test('formats ipfs:// with path — CIDv0 host canonicalised, path preserved', () => {
+      const result = formatIpfsUrl(`ipfs://${CIDV0}/frontend/index.html`, IPFS_ROUTE_PREFIX);
       expect(result.targetUrl).toBe(
-        'http://127.0.0.1:8080/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/readme'
+        `http://127.0.0.1:8080/ipfs/${CIDV1}/frontend/index.html`
       );
-      expect(result.displayValue).toBe(
-        'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/readme'
-      );
+      expect(result.displayValue).toBe(`ipfs://${CIDV1}/frontend/index.html`);
     });
 
-    test('formats ipns:// protocol', () => {
+    test('formats ipns:// DNSLink name (preserved verbatim)', () => {
       const input = 'ipns://docs.ipfs.tech';
       const result = formatIpfsUrl(input, IPFS_ROUTE_PREFIX);
       expect(result.targetUrl).toBe('http://127.0.0.1:8080/ipns/docs.ipfs.tech/');
@@ -581,24 +956,32 @@ describe('url-utils', () => {
       expect(result.protocol).toBe('ipns');
     });
 
-    test('formats raw CIDv0', () => {
-      const input = 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
-      const result = formatIpfsUrl(input, IPFS_ROUTE_PREFIX);
-      expect(result.targetUrl).toBe(
-        'http://127.0.0.1:8080/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/'
-      );
-      expect(result.displayValue).toBe('ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG');
+    test('formats ipns:// ENS name (preserved verbatim — resolver lives in main proc)', () => {
+      const result = formatIpfsUrl('ipns://vitalik.eth/blog', IPFS_ROUTE_PREFIX);
+      expect(result.displayValue).toBe('ipns://vitalik.eth/blog');
+      expect(result.protocol).toBe('ipns');
     });
 
-    test('formats raw CIDv1', () => {
+    test('formats ipns:// base58 peer ID — canonicalised to libp2p-key base36', () => {
+      const peerId = '12D3KooWAsDaZWCkCEUN3myg49NoCMmrYYivmJVwjg7DVJBvWdaX';
+      const base36 = 'k51qzi5uqu5dgkkr5wjh0m796f9u3tou74wn2q2u3shgh6yn52ce4hitig3if4';
+      const result = formatIpfsUrl(`ipns://${peerId}/`, IPFS_ROUTE_PREFIX);
+      expect(result.displayValue).toBe(`ipns://${base36}/`);
+      expect(result.targetUrl).toBe(`http://127.0.0.1:8080/ipns/${base36}/`);
+      expect(result.protocol).toBe('ipns');
+    });
+
+    test('formats raw CIDv0 (no scheme) — also canonicalised', () => {
+      const result = formatIpfsUrl(CIDV0, IPFS_ROUTE_PREFIX);
+      expect(result.targetUrl).toBe(`http://127.0.0.1:8080/ipfs/${CIDV1}/`);
+      expect(result.displayValue).toBe(`ipfs://${CIDV1}`);
+    });
+
+    test('formats raw CIDv1 base32 — passed through unchanged', () => {
       const input = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
       const result = formatIpfsUrl(input, IPFS_ROUTE_PREFIX);
-      expect(result.targetUrl).toBe(
-        'http://127.0.0.1:8080/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi/'
-      );
-      expect(result.displayValue).toBe(
-        'ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi'
-      );
+      expect(result.targetUrl).toBe(`http://127.0.0.1:8080/ipfs/${input}/`);
+      expect(result.displayValue).toBe(`ipfs://${input}`);
     });
 
     test('returns null for empty input', () => {
@@ -645,28 +1028,28 @@ describe('url-utils', () => {
     });
 
     describe('Swarm (bzz://) ENS preservation', () => {
-      test('preserves ENS name for known Swarm hash', () => {
+      test('substitutes ENS name into bzz:// host for known Swarm hash', () => {
         const hash = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
         const ensNames = new Map([[hash, 'mydapp.eth']]);
 
         const result = applyEnsNamePreservation(`bzz://${hash}`, ensNames);
-        expect(result).toBe('ens://mydapp.eth');
+        expect(result).toBe('bzz://mydapp.eth');
       });
 
-      test('preserves ENS name with path for Swarm', () => {
+      test('preserves transport scheme + path for Swarm', () => {
         const hash = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
         const ensNames = new Map([[hash, 'mydapp.eth']]);
 
         const result = applyEnsNamePreservation(`bzz://${hash}/page.html`, ensNames);
-        expect(result).toBe('ens://mydapp.eth/page.html');
+        expect(result).toBe('bzz://mydapp.eth/page.html');
       });
 
-      test('preserves ENS name with path, query and fragment for Swarm', () => {
+      test('preserves transport scheme + path/query/fragment for Swarm', () => {
         const hash = 'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
         const ensNames = new Map([[hash, 'app.eth']]);
 
         const result = applyEnsNamePreservation(`bzz://${hash}/path?foo=bar#section`, ensNames);
-        expect(result).toBe('ens://app.eth/path?foo=bar#section');
+        expect(result).toBe('bzz://app.eth/path?foo=bar#section');
       });
 
       test('handles case-insensitive Swarm hash lookup', () => {
@@ -676,7 +1059,7 @@ describe('url-utils', () => {
 
         // Hash with uppercase should match lowercase key (hash is lowercased in lookup)
         const result = applyEnsNamePreservation(`bzz://${hashUpper}`, ensNames);
-        expect(result).toBe('ens://mysite.eth');
+        expect(result).toBe('bzz://mysite.eth');
       });
 
       test('returns original URL for unknown Swarm hash', () => {
@@ -689,28 +1072,43 @@ describe('url-utils', () => {
     });
 
     describe('IPFS ENS preservation', () => {
-      test('preserves ENS name for known IPFS CID', () => {
+      test('substitutes ENS name into ipfs:// host for known IPFS CID', () => {
         const cid = 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
         const ensNames = new Map([[cid, 'ipfsdapp.eth']]);
 
         const result = applyEnsNamePreservation(`ipfs://${cid}`, ensNames);
-        expect(result).toBe('ens://ipfsdapp.eth');
+        expect(result).toBe('ipfs://ipfsdapp.eth');
       });
 
-      test('preserves ENS name with path for IPFS', () => {
+      test('preserves transport scheme + path for IPFS', () => {
         const cid = 'QmT5NvUtoM5nWFfrQdVrFtvGfKFmG7AHE8P34isapyhCxX';
         const ensNames = new Map([[cid, 'myipfs.eth']]);
 
         const result = applyEnsNamePreservation(`ipfs://${cid}/docs/index.html`, ensNames);
-        expect(result).toBe('ens://myipfs.eth/docs/index.html');
+        expect(result).toBe('ipfs://myipfs.eth/docs/index.html');
       });
 
-      test('preserves ENS name for CIDv1', () => {
+      test('preserves transport scheme for CIDv1', () => {
         const cid = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
         const ensNames = new Map([[cid, 'modern.eth']]);
 
         const result = applyEnsNamePreservation(`ipfs://${cid}/app`, ensNames);
-        expect(result).toBe('ens://modern.eth/app');
+        expect(result).toBe('ipfs://modern.eth/app');
+      });
+
+      // The counterpart to the Swarm case-insensitivity test above: base58
+      // case is load-bearing, so a case-folded CIDv0 is a different,
+      // unresolvable reference (`buildGatewayUrl` answers it with a 400) and
+      // must not be painted with this name. See the note in
+      // `extractEnsResolutionMetadata`.
+      test('does not name-preserve a case-folded CIDv0 root', () => {
+        const cid = 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
+        const folded = cid.toLowerCase();
+        const ensNames = new Map([[cid, 'ipfsdapp.eth']]);
+
+        expect(applyEnsNamePreservation(`ipfs://${folded}/docs`, ensNames)).toBe(
+          `ipfs://${folded}/docs`
+        );
       });
 
       test('returns original URL for unknown IPFS CID', () => {
@@ -723,20 +1121,31 @@ describe('url-utils', () => {
     });
 
     describe('IPNS ENS preservation', () => {
-      test('preserves ENS name for known IPNS name', () => {
+      test('substitutes ENS name into ipns:// host for known IPNS name', () => {
         const ipnsId = 'k51qzi5uqu5dlvj2baxnqndepeb86cbk3lg7ekjjnof1ock2yxz7p8q1qf2v9o';
         const ensNames = new Map([[ipnsId, 'dynamic.eth']]);
 
         const result = applyEnsNamePreservation(`ipns://${ipnsId}`, ensNames);
-        expect(result).toBe('ens://dynamic.eth');
+        expect(result).toBe('ipns://dynamic.eth');
       });
 
-      test('preserves ENS name with path for IPNS', () => {
+      // Same rule as the CIDv0 case above, for a base58 peer-ID root.
+      test('does not name-preserve a case-folded base58 IPNS root', () => {
+        const ipnsId = '12D3KooWEyoppNCUx8Yx66oV9fJnriXwCcXwDDUA2kj6vnc6iDEp';
+        const folded = ipnsId.toLowerCase();
+        const ensNames = new Map([[ipnsId, 'dynamic.eth']]);
+
+        expect(applyEnsNamePreservation(`ipns://${folded}/other`, ensNames)).toBe(
+          `ipns://${folded}/other`
+        );
+      });
+
+      test('preserves transport scheme + path for IPNS', () => {
         const ipnsId = 'docs.ipfs.tech';
         const ensNames = new Map([[ipnsId, 'ipfsdocs.eth']]);
 
         const result = applyEnsNamePreservation(`ipns://${ipnsId}/install/`, ensNames);
-        expect(result).toBe('ens://ipfsdocs.eth/install/');
+        expect(result).toBe('ipns://ipfsdocs.eth/install/');
       });
 
       test('returns original URL for unknown IPNS name', () => {
@@ -778,9 +1187,10 @@ describe('url-utils', () => {
 
     describe('back/forward navigation scenario', () => {
       // This simulates the actual use case: user navigates to ENS name -> hash stored,
-      // then navigates elsewhere, then goes back -> should show ENS name again
+      // then navigates elsewhere, then goes back -> should show ENS name again under
+      // the resolved transport scheme.
 
-      test('simulates full navigation cycle with Swarm', () => {
+      test('full navigation cycle with Swarm preserves bzz:// transport', () => {
         const hash = 'fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321';
         const ensName = 'coolsite.eth';
 
@@ -788,33 +1198,27 @@ describe('url-utils', () => {
         // The system stores: knownEnsNames.set(hash, 'coolsite.eth')
         const knownEnsNames = new Map([[hash, ensName]]);
 
-        // Step 2: User navigates to another page
-        // (knownEnsNames still has the mapping)
-
-        // Step 3: User clicks back - browser navigates to bzz://hash
-        // The system should convert this back to ens://coolsite.eth
+        // Step 3: User clicks back — webview reports bzz://hash; preservation
+        // should swap the host for the ENS name while keeping the transport.
         const displayUrl = `bzz://${hash}/subpage`;
         const result = applyEnsNamePreservation(displayUrl, knownEnsNames);
 
-        expect(result).toBe('ens://coolsite.eth/subpage');
+        expect(result).toBe('bzz://coolsite.eth/subpage');
       });
 
-      test('simulates full navigation cycle with IPFS', () => {
+      test('full navigation cycle with IPFS preserves ipfs:// transport', () => {
         const cid = 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
         const ensName = 'ipfsapp.eth';
 
         const knownEnsNames = new Map([[cid, ensName]]);
 
-        // User goes back to ipfs://CID/page
         const displayUrl = `ipfs://${cid}/page`;
         const result = applyEnsNamePreservation(displayUrl, knownEnsNames);
 
-        expect(result).toBe('ens://ipfsapp.eth/page');
+        expect(result).toBe('ipfs://ipfsapp.eth/page');
       });
 
-      test('simulates navigation to same hash via direct URL (should show hash, not ENS)', () => {
-        // If user directly navigates to bzz://hash (not via ENS), the hash should NOT
-        // be in knownEnsNames, so it should display as hash
+      test('direct hash navigation (no ENS mapping) shows hash unchanged', () => {
         const hash = 'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
         const knownEnsNames = new Map(); // Empty - direct navigation doesn't add mapping
 
@@ -826,12 +1230,118 @@ describe('url-utils', () => {
     });
   });
 
+  describe('buildEnsDisplayUri', () => {
+    test('keeps DNS ENS names distinct from DNSLink across reloads and bookmarks', () => {
+      expect(buildEnsDisplayUri('ipns', 'example.com', '/docs')).toBe('ens://example.com/docs');
+      expect(normalizeLegacyEnsBookmarkUrl('ens://example.com/docs')).toBe('ens://example.com/docs');
+      expect(isEnsBackedDisplay('ens://example.com/docs')).toBe(true);
+      expect(isEnsBackedDisplay('ipfs://example.com/docs')).toBe(true);
+      expect(isEnsBackedDisplay('bzz://example.com/docs')).toBe(true);
+      expect(isEnsBackedDisplay('ipns://example.com/docs')).toBe(false);
+    });
+    test('builds bzz transport display for Swarm-backed ENS', () => {
+      expect(buildEnsDisplayUri('bzz', 'meinhard.eth')).toBe('bzz://meinhard.eth');
+      expect(buildEnsDisplayUri('bzz', 'meinhard.eth', '/docs?q=1')).toBe(
+        'bzz://meinhard.eth/docs?q=1'
+      );
+    });
+
+    test('builds ipfs transport display for IPFS-backed ENS', () => {
+      expect(buildEnsDisplayUri('ipfs', 'vitalik.eth')).toBe('ipfs://vitalik.eth');
+      expect(buildEnsDisplayUri('ipfs', 'vitalik.eth', '#/swap')).toBe('ipfs://vitalik.eth#/swap');
+    });
+
+    test('builds ipns transport display for IPNS-backed ENS', () => {
+      expect(buildEnsDisplayUri('ipns', 'app.eth', '/index.html')).toBe(
+        'ipns://app.eth/index.html'
+      );
+    });
+
+    test('returns null for unsupported protocols and missing names', () => {
+      expect(buildEnsDisplayUri('http', 'name.eth')).toBeNull();
+      expect(buildEnsDisplayUri('rad', 'name.eth')).toBeNull();
+      expect(buildEnsDisplayUri('bzz', '')).toBeNull();
+      expect(buildEnsDisplayUri('bzz', null)).toBeNull();
+    });
+  });
+
+  describe('isEnsBackedDisplay', () => {
+    test('recognises bare Ethereum names with .eth, .box, .wei, or .gwei', () => {
+      expect(isEnsBackedDisplay('vitalik.eth')).toBe(true);
+      expect(isEnsBackedDisplay('vitalik.eth/docs')).toBe(true);
+      expect(isEnsBackedDisplay('myapp.box')).toBe(true);
+      expect(isEnsBackedDisplay('alice.wei')).toBe(true);
+      expect(isEnsBackedDisplay('apoorv.gwei')).toBe(true);
+    });
+
+    test('recognises legacy ens:// form', () => {
+      expect(isEnsBackedDisplay('ens://vitalik.eth')).toBe(true);
+      expect(isEnsBackedDisplay('ens://Vitalik.ETH/path')).toBe(true);
+    });
+
+    test('recognises transport ENS forms (bzz/ipfs/ipns)', () => {
+      expect(isEnsBackedDisplay('bzz://meinhard.eth')).toBe(true);
+      expect(isEnsBackedDisplay('ipfs://vitalik.eth/docs')).toBe(true);
+      expect(isEnsBackedDisplay('ipns://app.box/page')).toBe(true);
+      expect(isEnsBackedDisplay('ipfs://alice.wei/page')).toBe(true);
+      expect(isEnsBackedDisplay('ipfs://apoorv.gwei/page')).toBe(true);
+      expect(isEnsBackedDisplay('ipfs://docs.example.tez/page')).toBe(true);
+      expect(isEnsBackedDisplay('docs.example.tez/page')).toBe(true);
+    });
+
+    test('rejects gateway-form ipfs URLs whose host merely reads like a DNS name', () => {
+      // Mirrors the `parseEnsInput` carve-out: `ipfs.io`/`dweb.link` are
+      // gateways, not names, so this display is CID-backed content.
+      const cid = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
+      expect(isEnsBackedDisplay(`ipfs://ipfs.io/ipfs/${cid}`)).toBe(false);
+      expect(isEnsBackedDisplay(`ipfs://dweb.link/ipfs/${cid}/a`)).toBe(false);
+      expect(isEnsBackedDisplay('ipfs://ipfs.io/foo')).toBe(true);
+    });
+
+    test('rejects raw transport URLs (hash/CID hosts) and other schemes', () => {
+      expect(isEnsBackedDisplay('bzz://abcdef1234')).toBe(false);
+      expect(isEnsBackedDisplay('ipfs://QmHash')).toBe(false);
+      expect(isEnsBackedDisplay('https://example.com')).toBe(false);
+      expect(isEnsBackedDisplay('rad://z123')).toBe(false);
+      expect(isEnsBackedDisplay('')).toBe(false);
+      expect(isEnsBackedDisplay(null)).toBe(false);
+    });
+  });
+
+  describe('normalizeLegacyEnsBookmarkUrl', () => {
+    test('rewrites ens://name.eth to bare-name form', () => {
+      expect(normalizeLegacyEnsBookmarkUrl('ens://vitalik.eth')).toBe('vitalik.eth');
+      expect(normalizeLegacyEnsBookmarkUrl('ens://vitalik.eth/docs')).toBe('vitalik.eth/docs');
+      expect(normalizeLegacyEnsBookmarkUrl('ens://app.eth/#/swap')).toBe('app.eth/#/swap');
+      expect(normalizeLegacyEnsBookmarkUrl('ens://Vitalik.ETH/Path')).toBe('vitalik.eth/Path');
+    });
+
+    test('passes through non-ENS bookmark targets unchanged', () => {
+      expect(normalizeLegacyEnsBookmarkUrl('bzz://abc123')).toBe('bzz://abc123');
+      expect(normalizeLegacyEnsBookmarkUrl('ipfs://QmHash/x')).toBe('ipfs://QmHash/x');
+      expect(normalizeLegacyEnsBookmarkUrl('https://example.com')).toBe('https://example.com');
+      expect(normalizeLegacyEnsBookmarkUrl('vitalik.eth')).toBe('vitalik.eth');
+    });
+
+    test('leaves non-ENS ens:// strings alone (defensive)', () => {
+      // Hypothetical malformed input — host is not an ENS name. Pass through
+      // so the navigation pipeline can reject it via its normal path.
+      expect(normalizeLegacyEnsBookmarkUrl('ens://example.com')).toBe('ens://example.com');
+    });
+
+    test('accepts non-string input without throwing', () => {
+      expect(normalizeLegacyEnsBookmarkUrl(null)).toBeNull();
+      expect(normalizeLegacyEnsBookmarkUrl(undefined)).toBeUndefined();
+    });
+  });
+
   // =========================================
   // Radicle utilities
   // =========================================
   describe('isValidRadicleId', () => {
     test('accepts valid Radicle ID', () => {
       expect(isValidRadicleId('z3gqcJUoA1n9HaHKufZs5FCSGazv5')).toBe(true);
+      expect(isValidRadicleId('z4V1sjrXqjvFdnCUbxPFqd5p4DtH5')).toBe(true);
     });
 
     test('accepts various valid RID lengths', () => {
@@ -863,7 +1373,7 @@ describe('url-utils', () => {
   });
 
   describe('parseRadicleInput', () => {
-    const RAD_PREFIX = 'http://127.0.0.1:8780/api/v1/repos/';
+    const RAD_PREFIX = 'radapi://local/api/v1/repos/';
     const SAMPLE_RID = 'z3gqcJUoA1n9HaHKufZs5FCSGazv5';
 
     test('parses rad:RID', () => {
@@ -898,46 +1408,34 @@ describe('url-utils', () => {
       expect(parseRadicleInput('rad://', RAD_PREFIX)).toBeNull();
       expect(parseRadicleInput('rad:', RAD_PREFIX)).toBeNull();
     });
+
+    test('returns null when the Radicle route prefix is not ready', () => {
+      expect(parseRadicleInput(`rad://${SAMPLE_RID}`, null)).toBeNull();
+    });
   });
 
-  describe('deriveRadBaseFromUrl', () => {
-    const RAD_BASE = 'http://127.0.0.1:8780/api/v1/repos/';
-    const SAMPLE_RID = 'z3gqcJUoA1n9HaHKufZs5FCSGazv5';
-
-    test('extracts base from Radicle API URL', () => {
-      const url = `${RAD_BASE}${SAMPLE_RID}/tree/main/README.md`;
-      expect(deriveRadBaseFromUrl(url)).toBe(`${RAD_BASE}${SAMPLE_RID}/`);
+  describe('formatRadicleUrl', () => {
+    test('formats a valid RID against the static embedded route', () => {
+      const rid = 'z4V1sjrXqjvFdnCUbxPFqd5p4DtH5';
+      const originalWindow = global.window;
+      global.window = { location: { href: 'file:///app/index.html' } };
+      try {
+        const result = formatRadicleUrl(`rad://${rid}`, 'radapi://local');
+        expect(result.displayValue).toBe(`rad://${rid}`);
+        expect(result.targetUrl).toContain(`rid=${rid}`);
+        expect(result.targetUrl).toContain('base=radapi%3A%2F%2Flocal');
+      } finally {
+        global.window = originalWindow;
+      }
     });
 
-    test('extracts base from URL object input', () => {
-      const url = new URL(`${RAD_BASE}${SAMPLE_RID}/commits`);
-      expect(deriveRadBaseFromUrl(url)).toBe(`${RAD_BASE}${SAMPLE_RID}/`);
-    });
-
-    test('returns null for legacy /projects/ path', () => {
-      const url = `http://127.0.0.1:8780/api/v1/projects/${SAMPLE_RID}/tree/main`;
-      expect(deriveRadBaseFromUrl(url)).toBeNull();
-    });
-
-    test('returns null for non-Radicle API paths', () => {
-      expect(deriveRadBaseFromUrl('http://127.0.0.1:8780/api/v1/')).toBeNull();
-      expect(deriveRadBaseFromUrl('http://127.0.0.1:8780/')).toBeNull();
-    });
-
-    test('returns null for invalid RID segment', () => {
-      const url = 'http://127.0.0.1:8780/api/v1/repos/not-a-rid/tree/main';
-      expect(deriveRadBaseFromUrl(url)).toBeNull();
-    });
-
-    test('returns null for invalid input values', () => {
-      expect(deriveRadBaseFromUrl(null)).toBeNull();
-      expect(deriveRadBaseFromUrl(undefined)).toBeNull();
-      expect(deriveRadBaseFromUrl('not-a-url')).toBeNull();
+    test('returns null when the Radicle base is not ready', () => {
+      expect(formatRadicleUrl('rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5', null)).toBeNull();
     });
   });
 
   describe('deriveRadicleDisplayValue', () => {
-    const RAD_PREFIX = 'http://127.0.0.1:8780/api/v1/repos/';
+    const RAD_PREFIX = 'radapi://local/api/v1/repos/';
     const SAMPLE_RID = 'z3gqcJUoA1n9HaHKufZs5FCSGazv5';
 
     test('converts API URL to rad:// display', () => {

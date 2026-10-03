@@ -1,4 +1,6 @@
 import { state } from './state.js';
+import { isModalDialogOpen } from './modal-dialog.js';
+import { boundPopoverToViewport } from './popover-bounds.js';
 
 // DOM references
 let bridgeBtn = null;
@@ -76,6 +78,10 @@ function showState(stateName) {
   importingState?.classList.toggle('hidden', stateName !== 'importing');
   successState?.classList.toggle('hidden', stateName !== 'success');
   errorState?.classList.toggle('hidden', stateName !== 'error');
+  // Each state is a different height, so the bound is re-taken on every switch
+  // (#328) — the panel is a toolbar popover like any other, and the chrome
+  // document is pinned, so an unbounded one is clipped rather than scrolled.
+  if (panelOpen) boundPopoverToViewport(panel);
 }
 
 /**
@@ -139,12 +145,11 @@ async function openPanel() {
 
   panelOpen = true;
   panel.classList.remove('hidden');
+  // Shown first, then bounded: the bound is measured from where the panel
+  // really is (#328).
+  panel.scrollTop = 0;
+  boundPopoverToViewport(panel);
   resetSteps();
-
-  if (!state.enableRadicleIntegration) {
-    showPrereqError('Radicle integration is disabled. Enable it in Settings > Experimental');
-    return;
-  }
 
   // Check prerequisites
   const radicleStatus = state.currentRadicleStatus;
@@ -184,15 +189,23 @@ function closePanel() {
   panel.classList.add('hidden');
 }
 
+// Public hook so the chrome's shared dismissal paths (index.js's
+// `closeAllOverlays` on the menu backdrop, and `onAnyMenuOpening`) can put this
+// panel away, the mirror of navigation.js' `closeTrustPopover` and
+// site-permissions-ui.js' `closePermissionPopover`. This is the third
+// address-bar surface that raises no backdrop of its own, so the backdrop
+// autocomplete raises could be pressed over it and leave it stranded (#67).
+// Hiding only: `closePanel` does not cancel an in-flight import, and the
+// click-away listener below already closes the panel mid-import, so this
+// changes nothing about a running one.
+export const closeGithubBridgePanel = () => {
+  if (panelOpen) closePanel();
+};
+
 /**
  * Start the import process.
  */
 async function startImport() {
-  if (!state.enableRadicleIntegration) {
-    showPrereqError('Radicle integration is disabled. Enable it in Settings > Experimental');
-    return;
-  }
-
   // Re-check fast-changing prerequisites immediately before import.
   if (state.currentRadicleStatus !== 'running') {
     showPrereqError('Radicle node is not running. Enable it from the Nodes menu in the toolbar.');
@@ -333,14 +346,6 @@ async function refreshBridgeButtonForUrl(url) {
  */
 export async function updateGithubBridgeIcon() {
   if (!bridgeBtn) return;
-  if (!state.enableRadicleIntegration) {
-    bridgeBtn.classList.add('hidden');
-    if (panelOpen) {
-      closePanel();
-    }
-    return;
-  }
-
   const addressInput = document.getElementById('address-input');
   const url = addressInput?.value || '';
 
@@ -437,9 +442,15 @@ export function initGithubBridgeUi() {
     }
   });
 
-  // Close panel on Escape
+  // Close panel on Escape. Consumed (`preventDefault`) so navigation.js's
+  // window-level Escape doesn't also stop an in-flight page load — Chrome
+  // closes the innermost surface only. See #306.
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && panelOpen) {
+      // A modal <dialog> over the panel owns the press and cannot mark it —
+      // see `isModalDialogOpen`.
+      if (isModalDialogOpen()) return;
+      e.preventDefault();
       closePanel();
     }
   });

@@ -1,5 +1,5 @@
 /**
- * Service Registry - Central tracking of IPFS and Swarm node state
+ * Service Registry - Central tracking of node state
  *
  * This module provides a port-agnostic way for Freedom to access nodes.
  * All URL rewriting resolves through this registry.
@@ -11,32 +11,50 @@ const IPC = require('../shared/ipc-channels');
 // Node modes
 const MODE = {
   BUNDLED: 'bundled',
+  // In-process node via the libradicle napi addon (no spawned binaries).
+  EMBEDDED: 'embedded',
   REUSED: 'reused',
   EXTERNAL: 'external',
+  DISABLED: 'disabled',
   NONE: 'none',
 };
 
 // Registry state
 const registry = {
   ipfs: {
-    api: null, // e.g., 'http://127.0.0.1:5001'
-    gateway: null, // e.g., 'http://127.0.0.1:8080'
+    api: null,
+    gateway: null,
     mode: MODE.NONE,
     statusMessage: null,
     tempMessage: null,
     tempMessageTimeout: null,
   },
-  bee: {
-    api: null, // e.g., 'http://127.0.0.1:1633'
-    gateway: null, // e.g., 'http://127.0.0.1:1635' (debug API serves as gateway)
+  myotis: {
+    api: null,
+    gateway: null,
+    mode: MODE.NONE,
+    statusMessage: null,
+    tempMessage: null,
+    tempMessageTimeout: null,
+  },
+  ant: {
+    api: null, // e.g., 'http://127.0.0.1:11633'
+    gateway: null, // Same as api for Ant/Bee-compatible HTTP
     mode: MODE.NONE,
     statusMessage: null,
     tempMessage: null,
     tempMessageTimeout: null,
   },
   radicle: {
-    api: null,        // e.g., 'http://127.0.0.1:8780'
-    gateway: null,    // Same as api for radicle-httpd
+    api: null,        // radapi://local while the in-process node is running
+    gateway: null,
+    mode: MODE.NONE,
+    statusMessage: null,
+    tempMessage: null,
+    tempMessageTimeout: null,
+  },
+  tor: {
+    socks: null,      // e.g., '127.0.0.1:9150' (Arti SOCKS5 proxy)
     mode: MODE.NONE,
     statusMessage: null,
     tempMessage: null,
@@ -91,23 +109,38 @@ const registry = {
   },
 };
 
+function createEmptyServiceState(service) {
+  if (SERVICE_DEFAULTS[service]) return { ...SERVICE_DEFAULTS[service] };
+  if (service === 'tor') {
+    return {
+      socks: null,
+      mode: MODE.NONE,
+      statusMessage: null,
+      tempMessage: null,
+      tempMessageTimeout: null,
+    };
+  }
+
+  return {
+    api: null,
+    gateway: null,
+    mode: MODE.NONE,
+    statusMessage: null,
+    tempMessage: null,
+    tempMessageTimeout: null,
+  };
+}
+
 // Default ports
 const DEFAULTS = {
-  ipfs: {
-    apiPort: 5001,
-    gatewayPort: 8080,
-    p2pPort: 4001,
-    fallbackRange: 10, // Try up to 10 ports above default
-  },
-  bee: {
+  ant: {
     apiPort: 1633,
     // Note: Newer Bee versions serve debug/gateway endpoints on the main API port
     p2pPort: 1634,
     fallbackRange: 10,
   },
-  radicle: {
-    httpPort: 8780,   // radicle-httpd port (avoids 8080 conflicts)
-    p2pPort: 8776,    // radicle-node P2P port
+  tor: {
+    socksPort: 19150, // Freedom-managed Arti SOCKS5 proxy; 9150 is treated as external
     fallbackRange: 10,
   },
 };
@@ -125,11 +158,13 @@ function getService(service) {
 function getRegistry() {
   return {
     ipfs: { ...registry.ipfs },
-    bee: { ...registry.bee },
+    myotis: { ...registry.myotis },
+    ant: { ...registry.ant },
     radicle: { ...registry.radicle },
     hns: { ...registry.hns },
     dvpn: { ...registry.dvpn },
     jacktrip: { ...registry.jacktrip },
+    tor: { ...registry.tor },
   };
 }
 
@@ -214,79 +249,9 @@ function clearErrorState(service) {
   broadcastRegistryUpdate();
 }
 
-const SERVICE_DEFAULTS = {
-  ipfs: {
-    api: null,
-    gateway: null,
-    mode: MODE.NONE,
-    statusMessage: null,
-    tempMessage: null,
-    tempMessageTimeout: null,
-  },
-  bee: {
-    api: null,
-    gateway: null,
-    mode: MODE.NONE,
-    statusMessage: null,
-    tempMessage: null,
-    tempMessageTimeout: null,
-  },
-  radicle: {
-    api: null,
-    gateway: null,
-    mode: MODE.NONE,
-    statusMessage: null,
-    tempMessage: null,
-    tempMessageTimeout: null,
-  },
-  hns: {
-    api: null,
-    proxy: null,
-    mode: MODE.NONE,
-    statusMessage: null,
-    tempMessage: null,
-    tempMessageTimeout: null,
-    synced: false,
-    canaryReady: false,
-    localResolverReady: false,
-    dohFallbackReady: false,
-    height: 0,
-    peerCount: 0,
-    syncProgress: 0,
-    publicSuffixes: ['.pirate'],
-  },
-  dvpn: {
-    api: null,
-    proxy: null,
-    mode: MODE.NONE,
-    statusMessage: null,
-    tempMessage: null,
-    tempMessageTimeout: null,
-    walletAddress: null,
-    balance: null,
-    funded: false,
-    connected: false,
-    sessionId: null,
-    protocol: null,
-    nodeAddress: null,
-    country: null,
-    ip: null,
-    lastDisconnectReason: null,
-  },
-  jacktrip: {
-    api: null,
-    gateway: null,
-    mode: MODE.NONE,
-    statusMessage: null,
-    tempMessage: null,
-    tempMessageTimeout: null,
-    connected: false,
-    server: null,
-    port: null,
-    audioSourceName: null,
-    audioSourceLabel: null,
-  },
-};
+const SERVICE_DEFAULTS = Object.fromEntries(
+  Object.entries(registry).map(([name, value]) => [name, { ...value }])
+);
 
 /**
  * Clear service state (when stopped)
@@ -298,7 +263,7 @@ function clearService(service) {
     clearTimeout(registry[service].tempMessageTimeout);
   }
 
-  registry[service] = { ...SERVICE_DEFAULTS[service] };
+  registry[service] = createEmptyServiceState(service);
 
   broadcastRegistryUpdate();
 }
@@ -332,35 +297,35 @@ function getDisplayMessage(service) {
  * Get URL for IPFS API
  */
 function getIpfsApiUrl() {
-  return registry.ipfs.api || `http://127.0.0.1:${DEFAULTS.ipfs.apiPort}`;
+  return registry.ipfs.api;
 }
 
 /**
  * Get URL for IPFS Gateway
  */
 function getIpfsGatewayUrl() {
-  return registry.ipfs.gateway || `http://127.0.0.1:${DEFAULTS.ipfs.gatewayPort}`;
+  return registry.ipfs.gateway;
 }
 
 /**
- * Get URL for Bee API
+ * Get URL for Ant API
  */
-function getBeeApiUrl() {
-  return registry.bee.api || `http://127.0.0.1:${DEFAULTS.bee.apiPort}`;
+function getAntApiUrl() {
+  return registry.ant.api;
 }
 
 /**
- * Get URL for Bee Gateway (same as API in newer Bee versions)
+ * Get URL for Ant Gateway (same as API)
  */
-function getBeeGatewayUrl() {
-  return registry.bee.gateway || `http://127.0.0.1:${DEFAULTS.bee.apiPort}`;
+function getAntGatewayUrl() {
+  return registry.ant.gateway;
 }
 
 /**
- * Get URL for Radicle API (radicle-httpd)
+ * Get the Arti SOCKS proxy host:port (or default)
  */
-function getRadicleApiUrl() {
-  return registry.radicle.api || `http://127.0.0.1:${DEFAULTS.radicle.httpPort}`;
+function getTorSocksUrl() {
+  return registry.tor.socks || `127.0.0.1:${DEFAULTS.tor.socksPort}`;
 }
 
 /**
@@ -386,9 +351,9 @@ module.exports = {
   getDisplayMessage,
   getIpfsApiUrl,
   getIpfsGatewayUrl,
-  getBeeApiUrl,
-  getBeeGatewayUrl,
-  getRadicleApiUrl,
+  getAntApiUrl,
+  getAntGatewayUrl,
+  getTorSocksUrl,
   broadcastRegistryUpdate,
   registerServiceRegistryIpc,
 };

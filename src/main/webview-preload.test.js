@@ -6,6 +6,7 @@ const {
 
 const originalWindow = global.window;
 const originalDocument = global.document;
+const originalMutationObserver = global.MutationObserver;
 const originalNavigator = global.navigator;
 const originalLocation = global.location;
 
@@ -13,11 +14,11 @@ const internalPages = {
   routable: {
     home: 'home.html',
     history: 'history.html',
-    'live-room': 'live-room.html',
     links: 'links.html',
     'protocol-test': 'protocol-test.html',
+    settings: 'settings.html',
   },
-  other: ['error.html', 'rad-browser.html', 'space-browser.html'],
+  other: ['error.html', 'rad-browser.html'],
 };
 
 const flushMicrotasks = async () => {
@@ -25,48 +26,64 @@ const flushMicrotasks = async () => {
   await Promise.resolve();
 };
 
+// The context-menu interceptor defers its send with setTimeout(0) so the
+// defaultPrevented check runs after the full event dispatch.
+const flushTimers = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 function loadWebviewPreloadModule(options = {}) {
   jest.resetModules();
 
-  const contextBridge = createContextBridgeMock();
+  const contextBridge = options.contextBridge || createContextBridgeMock();
   const ipcRenderer = createIpcRendererMock({
-    sendSyncImplementation: options.sendSyncImplementation,
     syncResponses: {
       [IPC.GET_INTERNAL_PAGES]: internalPages,
+      [IPC.GET_ETHEREUM_INJECT_SOURCE]: '/* ethereum inject source stub */',
+      [IPC.PRIVATE_IS_PRIVATE]: options.isPrivateWindow === true,
+      [IPC.GET_THEME]: options.theme ?? 'system',
       ...(options.syncResponses || {}),
     },
     invokeResponses: {
       [IPC.HISTORY_GET]: [{ url: 'https://example.com' }],
       [IPC.SETTINGS_GET]: { theme: 'dark' },
-      [IPC.WINDOW_GET_PLATFORM]: 'linux',
-      [IPC.SERVICE_REGISTRY_GET]: {
-        hns: {
-          mode: 'bundled',
-          canaryReady: true,
-          localResolverReady: true,
-          height: 325297,
-        },
-      },
       [IPC.BOOKMARKS_GET]: [{ target: 'https://example.com' }],
       [IPC.RADICLE_GET_STATUS]: { status: 'running' },
-      [IPC.JACKTRIP_GET_STATUS]: { status: 'DISCONNECTED' },
-      [IPC.JACKTRIP_CHECK_DEPS]: { available: true },
-      [IPC.JACKTRIP_LIST_PORTS]: ['system:capture_1'],
-      [IPC.PIRATE_AUTH_GET_STATUS]: { secureStorageAvailable: true, hasStoredAccessToken: true },
       ...(options.invokeResponses || {}),
     },
   });
   ipcRenderer.sendToHost = jest.fn();
 
   const documentHandlers = {};
+  const documentCaptureHandlers = {};
   const body = { tagName: 'BODY' };
+  // <html>. `options.documentElement === null` models document-start, where
+  // the preload runs before the element exists.
+  const attributes = {};
+  const documentElement =
+    options.documentElement === null
+      ? null
+      : {
+          tagName: 'HTML',
+          attributes,
+          setAttribute: jest.fn((name, value) => {
+            attributes[name] = value;
+          }),
+          getAttribute: jest.fn((name) => (name in attributes ? attributes[name] : null)),
+          removeAttribute: jest.fn((name) => {
+            delete attributes[name];
+          }),
+        };
   const document = {
     title: options.title || 'Internal Page',
     body,
-    addEventListener: jest.fn((event, handler) => {
+    documentElement,
+    addEventListener: jest.fn((event, handler, useCapture) => {
       documentHandlers[event] = handler;
+      if (useCapture === true) {
+        documentCaptureHandlers[event] = handler;
+      }
     }),
     execCommand: jest.fn(),
+    ...(options.documentOverrides || {}),
   };
   const location = options.location || {
     href: 'file:///app/pages/history.html',
@@ -74,22 +91,65 @@ function loadWebviewPreloadModule(options = {}) {
     pathname: '/app/pages/history.html',
   };
   const selectionText = options.selectionText || '';
+  // `isCollapsed` says where the text came from, which is what the context-menu
+  // handler's withholding rule reads: `false` (the default here) is a genuine
+  // document range — a page or contenteditable selection — while `true` is the
+  // shape Chromium reports for the internal selection of a focused form
+  // control, whose text the document range never covers. See the rule in
+  // webview-preload.js for the probe this models.
   const selection = {
     toString: jest.fn(() => selectionText),
+    isCollapsed: options.selectionCollapsed === true,
   };
+  // 'unknown' models a Selection with no `isCollapsed` at all — the shape the
+  // rule has to fail closed on rather than treat as a document range.
+  if (options.selectionCollapsed === 'unknown') delete selection.isCollapsed;
   const clipboard = {
     writeText: jest.fn().mockResolvedValue(undefined),
   };
 
   global.document = document;
+  const windowFetch = options.fetch || jest.fn();
+  const windowCaptureHandlers = {};
+  // Only `(prefers-color-scheme: dark)` is queried, by the internal-page theme
+  // bootstrap. The list is a single live object, so a spec can flip `matches`
+  // and fire `mediaChangeHandlers` to model the desktop switching scheme.
+  const mediaChangeHandlers = [];
+  const prefersDarkQuery = {
+    matches: options.prefersDark === true,
+    addEventListener: jest.fn((_event, handler) => mediaChangeHandlers.push(handler)),
+  };
   global.window = {
     location,
     getSelection: jest.fn(() => selection),
-    addEventListener: jest.fn(),
+    addEventListener: jest.fn((event, handler, useCapture) => {
+      if (useCapture === true) {
+        windowCaptureHandlers[event] = handler;
+      }
+    }),
+    matchMedia: jest.fn(() => prefersDarkQuery),
+    fetch: windowFetch,
   };
   global.location = location;
   global.navigator = {
     clipboard,
+  };
+  // The theme bootstrap falls back to observing `document` when <html> does
+  // not exist yet at document-start.
+  const mutationObservers = [];
+  global.MutationObserver = class {
+    constructor(callback) {
+      this.callback = callback;
+      this.disconnected = false;
+      mutationObservers.push(this);
+    }
+    observe(target, init) {
+      this.target = target;
+      this.init = init;
+    }
+    disconnect() {
+      this.disconnected = true;
+    }
   };
 
   jest.doMock('electron', () => ({
@@ -103,10 +163,18 @@ function loadWebviewPreloadModule(options = {}) {
     clipboard,
     contextBridge,
     document,
+    documentElement,
+    mediaChangeHandlers,
+    prefersDarkQuery,
+    mutationObservers,
     documentHandlers,
+    documentCaptureHandlers,
+    windowCaptureHandlers,
     exposures: contextBridge.exposedValues,
     ipcRenderer,
     location,
+    windowFetch,
+    getWindowFetch: () => global.window.fetch,
   };
 }
 
@@ -126,6 +194,7 @@ describe('webview-preload', () => {
     global.document = originalDocument;
     global.navigator = originalNavigator;
     global.location = originalLocation;
+    global.MutationObserver = originalMutationObserver;
     jest.restoreAllMocks();
   });
 
@@ -138,50 +207,38 @@ describe('webview-preload', () => {
       },
     });
 
-    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledWith(
-      'freedomAPI',
-      expect.any(Object)
-    );
-    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledWith(
-      'freedomBrowser',
-      { isFreedomBrowser: true }
-    );
+    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledWith('freedomAPI', expect.any(Object));
     expect(ipcRenderer.sendSync).toHaveBeenCalledWith(IPC.GET_INTERNAL_PAGES);
-    expect(exposures.freedomBrowser).toEqual({ isFreedomBrowser: true });
 
     const invokeCases = [
       ['getHistory', [{ limit: 10 }], IPC.HISTORY_GET, [{ limit: 10 }]],
-      ['addHistory', [{ url: 'https://example.com' }], IPC.HISTORY_ADD, [{ url: 'https://example.com' }]],
+      [
+        'addHistory',
+        [{ url: 'https://example.com' }],
+        IPC.HISTORY_ADD,
+        [{ url: 'https://example.com' }],
+      ],
       ['removeHistory', [5], IPC.HISTORY_REMOVE, [5]],
       ['clearHistory', [], IPC.HISTORY_CLEAR, []],
       ['getSettings', [], IPC.SETTINGS_GET, []],
+      ['saveSettings', [{ theme: 'light' }], IPC.SETTINGS_SAVE, [{ theme: 'light' }]],
       ['getPlatform', [], IPC.WINDOW_GET_PLATFORM, []],
+      ['getActiveProfile', [], IPC.PROFILE_GET_ACTIVE, []],
+      ['listProfiles', [], IPC.PROFILE_LIST, []],
       ['getServiceRegistry', [], IPC.SERVICE_REGISTRY_GET, []],
+      ['getMyotisStatus', [], IPC.MYOTIS_GET_STATUS, []],
+      ['openPublishSetup', [], IPC.SIDEBAR_OPEN_PUBLISH_SETUP, []],
       ['getBookmarks', [], IPC.BOOKMARKS_GET, []],
       ['openInNewTab', ['https://example.com'], IPC.OPEN_URL_IN_NEW_TAB, ['https://example.com']],
-      ['getCachedFavicon', ['https://example.com'], IPC.FAVICON_GET_CACHED, ['https://example.com']],
+      [
+        'getCachedFavicon',
+        ['https://example.com'],
+        IPC.FAVICON_GET_CACHED,
+        ['https://example.com'],
+      ],
       ['seedRadicle', ['z3abc'], IPC.RADICLE_SEED, ['z3abc']],
       ['getRadicleStatus', [], IPC.RADICLE_GET_STATUS, []],
-      ['getRadicleRepoPayload', ['z3abc'], IPC.RADICLE_GET_REPO_PAYLOAD, ['z3abc']],
       ['syncRadicleRepo', ['z3abc'], IPC.RADICLE_SYNC_REPO, ['z3abc']],
-      ['getJacktripStatus', [], IPC.JACKTRIP_GET_STATUS, []],
-      ['checkJacktripDeps', [], IPC.JACKTRIP_CHECK_DEPS, []],
-      ['connectJacktrip', [{ server: 'room.example', port: 4464 }], IPC.JACKTRIP_CONNECT, [{ server: 'room.example', port: 4464 }]],
-      ['disconnectJacktrip', [], IPC.JACKTRIP_DISCONNECT, []],
-      ['listJacktripPorts', [], IPC.JACKTRIP_LIST_PORTS, []],
-      ['setupJacktripAudio', [{ setDefaultSource: true }], IPC.JACKTRIP_SETUP_AUDIO, [{ setDefaultSource: true }]],
-      ['restoreJacktripAudio', [{ preferredSource: 'alsa_input.usb' }], IPC.JACKTRIP_RESTORE_AUDIO, [{ preferredSource: 'alsa_input.usb' }]],
-      ['startJacktripLocalServer', [{ port: 4464 }], IPC.JACKTRIP_START_LOCAL_SERVER, [{ port: 4464 }]],
-      ['stopJacktripLocalServer', [], IPC.JACKTRIP_STOP_LOCAL_SERVER, []],
-      ['attachLiveRoom', [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }], IPC.PIRATE_LIVE_ROOM_ATTACH, [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }]],
-      ['hostAttachLiveRoom', [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }], IPC.PIRATE_LIVE_ROOM_HOST_ATTACH, [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }]],
-      ['guestAttachLiveRoom', [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }], IPC.PIRATE_LIVE_ROOM_GUEST_ATTACH, [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }]],
-      ['endLiveRoom', [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }], IPC.PIRATE_LIVE_ROOM_END, [{ communityId: 'cmt_test', liveRoomId: 'lr_test' }]],
-      ['getPirateAuthStatus', [], IPC.PIRATE_AUTH_GET_STATUS, []],
-      ['startPirateDeviceAuth', [{ apiBase: 'http://localhost:8787' }], IPC.PIRATE_AUTH_START_DEVICE, [{ apiBase: 'http://localhost:8787' }]],
-      ['pollPirateDeviceAuth', [{ apiBase: 'http://localhost:8787', deviceCode: 'pdev_test' }], IPC.PIRATE_AUTH_POLL_DEVICE, [{ apiBase: 'http://localhost:8787', deviceCode: 'pdev_test' }]],
-      ['savePirateAccessToken', ['token'], IPC.PIRATE_AUTH_SAVE_ACCESS_TOKEN, ['token']],
-      ['clearPirateAccessToken', [], IPC.PIRATE_AUTH_CLEAR_ACCESS_TOKEN, []],
     ];
 
     for (const [method, args, channel, expectedArgs] of invokeCases) {
@@ -190,83 +247,166 @@ describe('webview-preload', () => {
       expect(ipcRenderer.invoke).toHaveBeenCalledWith(channel, ...expectedArgs);
     }
 
-    expect(consoleLogSpy).toHaveBeenCalledWith('[webview-preload] Loaded (freedomAPI + context menu + ethereum provider)');
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      '[webview-preload] Loaded (freedomAPI + context menu + ethereum + swarm + radicle providers)'
+    );
   });
 
-  test('exposes the Freedom marker even if internal page lookup fails', () => {
+  test('exposes profile mutation methods only on the settings page', async () => {
     const { exposures, ipcRenderer } = loadWebviewPreloadModule({
-      sendSyncImplementation: () => {
-        throw new Error('sync IPC unavailable');
-      },
       location: {
-        href: 'https://pirate.sc/p/pst_live',
-        protocol: 'https:',
-        pathname: '/p/pst_live',
+        href: 'file:///app/pages/settings.html',
+        protocol: 'file:',
+        pathname: '/app/pages/settings.html',
       },
     });
 
-    expect(ipcRenderer.sendSync).toHaveBeenCalledWith(IPC.GET_INTERNAL_PAGES);
-    expect(exposures.freedomBrowser).toEqual({ isFreedomBrowser: true });
-    expect(exposures.freedomAPI).toEqual(expect.any(Object));
+    const mutationCases = [
+      ['createProfile', [{ displayName: 'Work' }], IPC.PROFILE_CREATE, [{ displayName: 'Work' }]],
+      ['importProfile', ['work'], IPC.PROFILE_IMPORT, [{ id: 'work' }]],
+      [
+        'renameProfile',
+        ['work', 'Work'],
+        IPC.PROFILE_RENAME,
+        [{ id: 'work', displayName: 'Work' }],
+      ],
+      ['openProfile', ['work'], IPC.PROFILE_OPEN, [{ id: 'work' }]],
+      ['openProfileSettings', ['work'], IPC.PROFILE_OPEN, [{ id: 'work', openSettings: true }]],
+      [
+        'deleteProfile',
+        ['work', 'Work'],
+        IPC.PROFILE_DELETE,
+        [{ id: 'work', confirmDisplayName: 'Work' }],
+      ],
+      [
+        'updateProfileNodeConfig',
+        ['bee', { mode: 'disabled' }],
+        IPC.PROFILE_UPDATE_NODE_CONFIG,
+        [{ protocol: 'bee', config: { mode: 'disabled' } }],
+      ],
+      ['checkRadicleBinary', [], IPC.RADICLE_CHECK_BINARY, []],
+      ['checkTorBinary', [], IPC.TOR_CHECK_BINARY, []],
+    ];
+
+    for (const [method, args, channel, expectedArgs] of mutationCases) {
+      ipcRenderer.invoke.mockClear();
+      await exposures.freedomAPI[method](...args);
+      expect(ipcRenderer.invoke).toHaveBeenCalledWith(channel, ...expectedArgs);
+    }
+  });
+
+  test('blocks profile mutation methods on other internal pages', async () => {
+    const { exposures, ipcRenderer } = loadWebviewPreloadModule({
+      location: {
+        href: 'file:///app/pages/history.html',
+        protocol: 'file:',
+        pathname: '/app/pages/history.html',
+      },
+    });
+
+    // createProfile is a profile-management method (allowed on settings +
+    // profiles.html); updateProfileNodeConfig is settings-only. Both are blocked
+    // here on a non-manager internal page.
+    await expect(exposures.freedomAPI.createProfile({ displayName: 'Work' })).rejects.toThrow(
+      'freedomAPI profile changes are only available on profile management pages'
+    );
+    await expect(
+      exposures.freedomAPI.updateProfileNodeConfig('bee', {
+        mode: 'disabled',
+      })
+    ).rejects.toThrow('freedomAPI profile changes are only available on settings');
+    await expect(exposures.freedomAPI.checkTorBinary()).rejects.toThrow(
+      'freedomAPI profile changes are only available on settings'
+    );
+
+    expect(ipcRenderer.invoke).not.toHaveBeenCalledWith(IPC.TOR_CHECK_BINARY);
+    expect(ipcRenderer.invoke).not.toHaveBeenCalledWith(IPC.PROFILE_CREATE, expect.anything());
+    expect(ipcRenderer.invoke).not.toHaveBeenCalledWith(
+      IPC.PROFILE_UPDATE_NODE_CONFIG,
+      expect.anything()
+    );
     expect(consoleWarnSpy).toHaveBeenCalledWith(
-      '[webview-preload] Failed to load internal page list:',
-      expect.any(Error)
+      '[freedomAPI] blocked profile-management "createProfile" on page: file:///app/pages/history.html'
     );
   });
 
-  test('subscribes to service registry updates on internal pages', () => {
-    const { exposures, ipcRenderer } = loadWebviewPreloadModule({
-      location: {
-        href: 'file:///app/pages/home.html',
-        protocol: 'file:',
-        pathname: '/app/pages/home.html',
-      },
-    });
+  test('onSettingsUpdated forwards the broadcast and unsubscribes on pagehide', () => {
+    const { exposures, ipcRenderer } = loadWebviewPreloadModule();
+
     const callback = jest.fn();
+    const unsubscribe = exposures.freedomAPI.onSettingsUpdated(callback);
+    expect(typeof unsubscribe).toBe('function');
 
-    const unsubscribe = exposures.freedomAPI.onServiceRegistryUpdate(callback);
-    ipcRenderer.emit(IPC.SERVICE_REGISTRY_UPDATE, {
-      hns: { mode: 'bundled', canaryReady: true, localResolverReady: true, height: 325297 },
-    });
+    ipcRenderer.emit('settings:updated', { theme: 'dark' });
+    expect(callback).toHaveBeenCalledWith({ theme: 'dark' });
 
-    expect(callback).toHaveBeenCalledWith({
-      hns: { mode: 'bundled', canaryReady: true, localResolverReady: true, height: 325297 },
-    });
+    const pagehideHandler = global.window.addEventListener.mock.calls.find(
+      ([event]) => event === 'pagehide'
+    )?.[1];
+    expect(pagehideHandler).toBeDefined();
 
-    unsubscribe();
-    expect(ipcRenderer.removeListener).toHaveBeenCalledWith(
-      IPC.SERVICE_REGISTRY_UPDATE,
-      expect.any(Function)
-    );
+    pagehideHandler();
+    callback.mockClear();
+    ipcRenderer.emit('settings:updated', { theme: 'light' });
+    expect(callback).not.toHaveBeenCalled();
   });
 
-  test('subscribes to JackTrip status updates on internal pages', () => {
-    const { exposures, ipcRenderer } = loadWebviewPreloadModule({
-      location: {
-        href: 'file:///app/pages/live-room.html',
-        protocol: 'file:',
-        pathname: '/app/pages/live-room.html',
-      },
-    });
+  test('onRadicleSeedStatus forwards pushed clone progress', () => {
+    const { exposures, ipcRenderer } = loadWebviewPreloadModule();
     const callback = jest.fn();
+    const status = {
+      rid: 'rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5',
+      state: 'fetching',
+      progress: { phase: 'fetching', index: 1, total: 2 },
+    };
 
-    const unsubscribe = exposures.freedomAPI.onJacktripStatusUpdate(callback);
-    ipcRenderer.emit(IPC.JACKTRIP_STATUS_UPDATE, {
-      status: 'CONNECTED',
-      server: 'room.example',
-      port: 4464,
-    });
-
-    expect(callback).toHaveBeenCalledWith({
-      status: 'CONNECTED',
-      server: 'room.example',
-      port: 4464,
-    });
+    const unsubscribe = exposures.freedomAPI.onRadicleSeedStatus(callback);
+    ipcRenderer.emit(IPC.RADICLE_SEED_STATUS_UPDATE, status);
+    expect(callback).toHaveBeenCalledWith(status);
 
     unsubscribe();
-    expect(ipcRenderer.removeListener).toHaveBeenCalledWith(
-      IPC.JACKTRIP_STATUS_UPDATE,
-      expect.any(Function)
+    callback.mockClear();
+    ipcRenderer.emit(IPC.RADICLE_SEED_STATUS_UPDATE, status);
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  test('onProfileUpdated forwards the broadcast and unsubscribes on pagehide', () => {
+    const { exposures, ipcRenderer } = loadWebviewPreloadModule();
+
+    const callback = jest.fn();
+    const unsubscribe = exposures.freedomAPI.onProfileUpdated(callback);
+    expect(typeof unsubscribe).toBe('function');
+
+    ipcRenderer.emit(IPC.PROFILE_UPDATED, { id: 'work', displayName: 'Work' });
+    expect(callback).toHaveBeenCalledWith({ id: 'work', displayName: 'Work' });
+
+    const pagehideHandler = global.window.addEventListener.mock.calls.find(
+      ([event]) => event === 'pagehide'
+    )?.[1];
+    expect(pagehideHandler).toBeDefined();
+
+    pagehideHandler();
+    callback.mockClear();
+    ipcRenderer.emit(IPC.PROFILE_UPDATED, { id: 'personal', displayName: 'Personal' });
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  test('onSettingsUpdated returns a noop on non-internal pages', () => {
+    const { exposures, ipcRenderer } = loadWebviewPreloadModule({
+      location: {
+        href: 'https://example.com/',
+        protocol: 'https:',
+        pathname: '/',
+      },
+    });
+
+    const callback = jest.fn();
+    const unsubscribe = exposures.freedomAPI.onSettingsUpdated(callback);
+    expect(typeof unsubscribe).toBe('function');
+    ipcRenderer.emit('settings:updated', { theme: 'dark' });
+    expect(callback).not.toHaveBeenCalled();
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      '[freedomAPI] blocked subscription "onSettingsUpdated" on non-internal page'
     );
   });
 
@@ -282,14 +422,20 @@ describe('webview-preload', () => {
     await expect(exposures.freedomAPI.getHistory({ limit: 5 })).rejects.toThrow(
       'freedomAPI is only available on internal pages'
     );
-    expect(ipcRenderer.invoke).not.toHaveBeenCalled();
+    // The blocked freedomAPI call must not reach IPC. (The preload's
+    // cosmetic-filtering client does invoke 'adblock:cosmetic' on this
+    // real web page — that's expected and unrelated to freedomAPI.)
+    const historyInvokes = ipcRenderer.invoke.mock.calls.filter(
+      ([channel]) => channel !== 'adblock:cosmetic'
+    );
+    expect(historyInvokes).toHaveLength(0);
     expect(consoleWarnSpy).toHaveBeenCalledWith(
       '[freedomAPI] blocked "getHistory" on non-internal page: https://example.com/articles/1'
     );
   });
 
-  test('collects rich context menu data and forwards it to the host renderer', () => {
-    const { documentHandlers, ipcRenderer } = loadWebviewPreloadModule({
+  test('collects rich context menu data and forwards it to the host renderer', async () => {
+    const { windowCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
       selectionText: 'Selected text',
       title: 'Article Title',
       location: {
@@ -319,12 +465,14 @@ describe('webview-preload', () => {
       clientX: 12,
       clientY: 34,
       target: image,
-      preventDefault: jest.fn(),
+      defaultPrevented: false,
     };
 
-    documentHandlers.contextmenu(event);
+    // Registered in the capture phase so page-level stopPropagation()
+    // cannot starve the interceptor.
+    windowCaptureHandlers.contextmenu(event);
+    await flushTimers();
 
-    expect(event.preventDefault).toHaveBeenCalled();
     expect(ipcRenderer.sendToHost).toHaveBeenCalledWith('context-menu', {
       x: 12,
       y: 34,
@@ -336,12 +484,723 @@ describe('webview-preload', () => {
       imageSrc: 'https://linked.example/cover.png',
       imageAlt: 'Cover image',
       isEditable: true,
+      withholdSelection: false,
       mediaType: 'image',
     });
   });
 
-  test('detects video and audio media sources in the context menu handler', () => {
-    const { documentHandlers, ipcRenderer } = loadWebviewPreloadModule({
+  // #330 — Chromium reports a password field's selection as the masking
+  // bullets (probed in the shipping app), so the context withholds the
+  // selection and chrome drops the "Search <Engine> for …" item over it.
+  test('withholds a selection made inside a password field', async () => {
+    for (const [type, withholdSelection] of [
+      ['password', true],
+      ['text', false],
+      // A missing `type` is a text field.
+      [undefined, false],
+    ]) {
+      const { windowCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+        selectionText: '••••••',
+        // A field's own selection, which the document range never covers.
+        selectionCollapsed: true,
+        location: { href: 'https://example.com/form', protocol: 'https:', pathname: '/form' },
+        documentOverrides: {
+          activeElement: { tagName: 'INPUT', type, selectionStart: 0, selectionEnd: 6 },
+        },
+      });
+
+      windowCaptureHandlers.contextmenu({
+        clientX: 4,
+        clientY: 5,
+        target: { tagName: 'INPUT', type, parentElement: { tagName: 'BODY' } },
+        defaultPrevented: false,
+      });
+      await flushTimers();
+
+      expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
+        'context-menu',
+        expect.objectContaining({ isEditable: true, withholdSelection })
+      );
+    }
+  });
+
+  // The masking bullets travel with the *selection*, not with the element the
+  // menu was raised over: a page can select a password field's contents and
+  // dispatch a synthetic `contextmenu` somewhere else entirely, and the walk
+  // up the target's ancestors never sees the field.
+  test('withholds a password-field selection raised from an unrelated element', async () => {
+    const passwordField = {
+      tagName: 'INPUT',
+      type: 'password',
+      selectionStart: 0,
+      selectionEnd: 6,
+    };
+    const { windowCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+      selectionText: '••••••',
+      selectionCollapsed: true,
+      location: { href: 'https://example.com/form', protocol: 'https:', pathname: '/form' },
+      documentOverrides: { activeElement: passwordField },
+    });
+
+    windowCaptureHandlers.contextmenu({
+      clientX: 4,
+      clientY: 5,
+      target: { tagName: 'DIV', parentElement: { tagName: 'BODY' } },
+      defaultPrevented: false,
+    });
+    await flushTimers();
+
+    expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
+      'context-menu',
+      expect.objectContaining({ selectedText: '••••••', withholdSelection: true })
+    );
+  });
+
+  // The case the open-shadow-root fix above did not reach: a login form in
+  // `attachShadow({ mode: 'closed' })`. `composedPath()` stops at the host and
+  // `host.shadowRoot` is null, so neither guard can ever see the field — the
+  // handler has nothing left to identify the selection's source with and must
+  // withhold it rather than offer the bullets as a query. #330.
+  test.each([
+    ['raised at the closed host', { tagName: 'DIV', nodeType: 1, parentElement: null }],
+    ['raised at an unrelated element', { tagName: 'P', nodeType: 1, parentElement: null }],
+  ])('withholds a password selection inside a closed shadow root, %s', async (_label, target) => {
+    // What a closed root leaves visible: a plain host element, no `shadowRoot`.
+    const closedHost = { tagName: 'DIV', nodeType: 1, parentElement: { tagName: 'BODY' } };
+    const { windowCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+      selectionText: '•••••••••••••',
+      selectionCollapsed: true,
+      location: { href: 'https://example.com/login', protocol: 'https:', pathname: '/login' },
+      documentOverrides: { activeElement: closedHost },
+    });
+
+    windowCaptureHandlers.contextmenu({
+      clientX: 4,
+      clientY: 5,
+      target,
+      // The path a closed root exposes: everything from the host outwards.
+      composedPath: () => [closedHost],
+      defaultPrevented: false,
+    });
+    await flushTimers();
+
+    expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
+      'context-menu',
+      expect.objectContaining({ selectedText: '•••••••••••••', withholdSelection: true })
+    );
+  });
+
+  // A site that renders its login form inside an open shadow root (LWC,
+  // Stencil, embedded auth widgets) defeats both guards on its own:
+  // `event.target` retargets to the shadow host, and `parentElement` is null
+  // at the shadow boundary, so an ancestor walk from the retargeted target
+  // never reaches the field. `composedPath()` is the path the event really
+  // took, hosts included.
+  test('withholds a password field inside an open shadow root via the composed path', async () => {
+    const host = { tagName: 'LOGIN-FORM', nodeType: 1, parentElement: { tagName: 'BODY' } };
+    const shadowField = { tagName: 'INPUT', type: 'password', nodeType: 1, parentElement: null };
+    const { windowCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+      selectionText: '•••••••••••••',
+      selectionCollapsed: true,
+      location: { href: 'https://example.com/login', protocol: 'https:', pathname: '/login' },
+      documentOverrides: {
+        activeElement: { tagName: 'LOGIN-FORM', shadowRoot: { activeElement: shadowField } },
+      },
+    });
+
+    windowCaptureHandlers.contextmenu({
+      clientX: 4,
+      clientY: 5,
+      // What a listener outside the shadow tree sees.
+      target: host,
+      // What actually happened.
+      composedPath: () => [shadowField, { nodeType: 11 }, host],
+      defaultPrevented: false,
+    });
+    await flushTimers();
+
+    expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
+      'context-menu',
+      expect.objectContaining({
+        selectedText: '•••••••••••••',
+        isEditable: true,
+        withholdSelection: true,
+      })
+    );
+  });
+
+  // The same field, but the menu is raised at an unrelated element, so the
+  // composed path never touches it either — this is the activeElement guard,
+  // which retargets to the host just as `event.target` does and has to descend
+  // through the root's own `activeElement` to find the field.
+  test('withholds a shadow-root password selection raised from an unrelated element', async () => {
+    const shadowField = {
+      tagName: 'INPUT',
+      type: 'password',
+      selectionStart: 0,
+      selectionEnd: 13,
+    };
+    const host = { tagName: 'LOGIN-FORM', shadowRoot: { activeElement: shadowField } };
+    const { windowCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+      selectionText: '•••••••••••••',
+      selectionCollapsed: true,
+      location: { href: 'https://example.com/login', protocol: 'https:', pathname: '/login' },
+      documentOverrides: { activeElement: host },
+    });
+
+    windowCaptureHandlers.contextmenu({
+      clientX: 4,
+      clientY: 5,
+      target: { tagName: 'P', nodeType: 1, parentElement: { tagName: 'BODY' } },
+      defaultPrevented: false,
+    });
+    await flushTimers();
+
+    expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
+      'context-menu',
+      expect.objectContaining({ selectedText: '•••••••••••••', withholdSelection: true })
+    );
+  });
+
+  // Where the source cannot be read *at all*: with no `isCollapsed` to consult,
+  // the rule cannot tell a document range from a field's own selection, so it
+  // falls closed. Losing the item everywhere is loud and safe; publishing a
+  // password everywhere is neither.
+  test('withholds every selection when the Selection carries no isCollapsed', async () => {
+    const { windowCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+      selectionText: 'otters',
+      selectionCollapsed: 'unknown',
+      location: { href: 'https://example.com/', protocol: 'https:', pathname: '/' },
+    });
+
+    windowCaptureHandlers.contextmenu({
+      clientX: 4,
+      clientY: 5,
+      target: { tagName: 'P', nodeType: 1, parentElement: { tagName: 'BODY' } },
+      defaultPrevented: false,
+    });
+    await flushTimers();
+
+    expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
+      'context-menu',
+      expect.objectContaining({ selectedText: 'otters', withholdSelection: true })
+    );
+  });
+
+  // The composed path also carries the ordinary link/image context a shadow
+  // root used to hide entirely — the walk that missed the password field
+  // missed everything else inside a web component too.
+  test('reads a link inside an open shadow root from the composed path', async () => {
+    const host = { tagName: 'ARTICLE-CARD', nodeType: 1, parentElement: { tagName: 'BODY' } };
+    const link = {
+      tagName: 'A',
+      nodeType: 1,
+      href: 'https://linked.example/story',
+      textContent: 'Read more',
+      getAttribute: () => null,
+      parentElement: null,
+    };
+    const { windowCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+      location: { href: 'https://example.com/feed', protocol: 'https:', pathname: '/feed' },
+    });
+
+    windowCaptureHandlers.contextmenu({
+      clientX: 4,
+      clientY: 5,
+      target: host,
+      composedPath: () => [link, { nodeType: 11 }, host],
+      defaultPrevented: false,
+    });
+    await flushTimers();
+
+    expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
+      'context-menu',
+      expect.objectContaining({ linkUrl: 'https://linked.example/story', linkText: 'Read more' })
+    );
+  });
+
+  // The complement: a focused password field with no selection of its own
+  // means the document's own range is not collapsed, so the reported selection
+  // is the page's and the item is offered.
+  test('offers a page selection while a password field is merely focused', async () => {
+    const passwordField = {
+      tagName: 'INPUT',
+      type: 'password',
+      selectionStart: 3,
+      selectionEnd: 3,
+    };
+    const { windowCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+      selectionText: 'otters',
+      location: { href: 'https://example.com/form', protocol: 'https:', pathname: '/form' },
+      documentOverrides: { activeElement: passwordField },
+    });
+
+    windowCaptureHandlers.contextmenu({
+      clientX: 4,
+      clientY: 5,
+      target: { tagName: 'P', parentElement: { tagName: 'BODY' } },
+      defaultPrevented: false,
+    });
+    await flushTimers();
+
+    expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
+      'context-menu',
+      expect.objectContaining({ selectedText: 'otters', withholdSelection: false })
+    );
+  });
+
+  // The acceptance side of the withholding rule: a field's own selection is
+  // reported with a collapsed document range too, so the rule has to identify
+  // an ordinary field and let it through rather than withholding everything a
+  // collapsed range carries.
+  test('forwards a selection made inside an ordinary text field', async () => {
+    const textarea = { tagName: 'TEXTAREA', selectionStart: 0, selectionEnd: 11 };
+    const { windowCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+      selectionText: 'typed query',
+      selectionCollapsed: true,
+      location: { href: 'https://example.com/form', protocol: 'https:', pathname: '/form' },
+      documentOverrides: { activeElement: textarea },
+    });
+
+    windowCaptureHandlers.contextmenu({
+      clientX: 4,
+      clientY: 5,
+      target: { tagName: 'TEXTAREA', parentElement: { tagName: 'BODY' } },
+      defaultPrevented: false,
+    });
+    await flushTimers();
+
+    expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
+      'context-menu',
+      expect.objectContaining({
+        selectedText: 'typed query',
+        isEditable: true,
+        withholdSelection: false,
+      })
+    );
+  });
+
+  // ...and the same field one open root down is still identifiable, so it is
+  // still offered — the closed-root withholding above is not a blanket ban on
+  // shadow DOM.
+  test('forwards a selection made inside a text field in an open shadow root', async () => {
+    const shadowField = { tagName: 'INPUT', type: 'search', selectionStart: 0, selectionEnd: 6 };
+    const host = { tagName: 'SITE-SEARCH', shadowRoot: { activeElement: shadowField } };
+    const { windowCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+      selectionText: 'otters',
+      selectionCollapsed: true,
+      location: { href: 'https://example.com/', protocol: 'https:', pathname: '/' },
+      documentOverrides: { activeElement: host },
+    });
+
+    windowCaptureHandlers.contextmenu({
+      clientX: 4,
+      clientY: 5,
+      target: { tagName: 'P', nodeType: 1, parentElement: { tagName: 'BODY' } },
+      defaultPrevented: false,
+    });
+    await flushTimers();
+
+    expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
+      'context-menu',
+      expect.objectContaining({ selectedText: 'otters', withholdSelection: false })
+    );
+  });
+
+  // The documented cost of failing closed: an ordinary field inside a closed
+  // root is withheld too, because nothing distinguishes it from the password
+  // field one — the host looks identical from outside either way.
+  test('withholds an ordinary text selection inside a closed shadow root', async () => {
+    const closedHost = { tagName: 'SITE-SEARCH', nodeType: 1, parentElement: { tagName: 'BODY' } };
+    const { windowCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+      selectionText: 'otters',
+      selectionCollapsed: true,
+      location: { href: 'https://example.com/', protocol: 'https:', pathname: '/' },
+      documentOverrides: { activeElement: closedHost },
+    });
+
+    windowCaptureHandlers.contextmenu({
+      clientX: 4,
+      clientY: 5,
+      target: closedHost,
+      composedPath: () => [closedHost],
+      defaultPrevented: false,
+    });
+    await flushTimers();
+
+    expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
+      'context-menu',
+      expect.objectContaining({ selectedText: 'otters', withholdSelection: true })
+    );
+  });
+
+  test('skips the native context menu when the page calls preventDefault', async () => {
+    const { windowCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+      location: {
+        href: 'https://example.com/dapp',
+        protocol: 'https:',
+        pathname: '/dapp',
+      },
+    });
+    const event = {
+      clientX: 5,
+      clientY: 6,
+      target: global.document.body,
+      defaultPrevented: false,
+    };
+
+    windowCaptureHandlers.contextmenu(event);
+    // A page handler runs after the capture-phase interceptor and
+    // suppresses the menu; the deferred check must honor it.
+    event.defaultPrevented = true;
+    await flushTimers();
+
+    expect(ipcRenderer.sendToHost).not.toHaveBeenCalledWith('context-menu', expect.anything());
+  });
+
+  test('registers the contextmenu interceptor on window in the capture phase', () => {
+    const { windowCaptureHandlers, document } = loadWebviewPreloadModule();
+
+    // window-capture is the only spot no page handler can run before: the
+    // preload registers before any page script, and window is the first node
+    // in the capture path. A document-level or bubble-phase listener could be
+    // starved by a page calling stopPropagation() without preventDefault().
+    expect(typeof windowCaptureHandlers.contextmenu).toBe('function');
+    expect(
+      document.addEventListener.mock.calls.filter(([event]) => event === 'contextmenu')
+    ).toHaveLength(0);
+  });
+
+  test('intercepts ipfs/ipns anchor clicks before Chromium lowercases the host', () => {
+    const { documentCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+      location: {
+        href: 'file:///app/pages/links.html',
+        protocol: 'file:',
+        pathname: '/app/pages/links.html',
+      },
+    });
+    const anchor = {
+      tagName: 'A',
+      getAttribute: jest.fn((name) => {
+        if (name === 'href') return 'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
+        if (name === 'target') return '';
+        return null;
+      }),
+      parentElement: global.document.body,
+    };
+    const event = {
+      target: anchor,
+      button: 0,
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      defaultPrevented: false,
+      preventDefault: jest.fn(),
+    };
+
+    documentCaptureHandlers.click(event);
+
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(ipcRenderer.sendToHost).toHaveBeenCalledWith('link:navigate', {
+      url: 'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
+      disposition: 'currentTab',
+      target: null,
+    });
+  });
+
+  test('forwards a named target so the renderer can reuse the named tab', () => {
+    // P3 from the round-4 review: without forwarding `target`, a
+    // `<a target="docs" href="ipfs://...">` click hits the unconditional
+    // newTab branch in the renderer and silently loses the named-tab
+    // reuse semantics that `setWindowOpenHandler → tab:new-with-url`
+    // path applies for non-dweb links. Forwarding the attribute lets
+    // `link:navigate` route through the same `openInNewTabWithTarget`
+    // helper.
+    const { documentCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+      location: {
+        href: 'file:///app/pages/links.html',
+        protocol: 'file:',
+        pathname: '/app/pages/links.html',
+      },
+    });
+    const anchor = {
+      tagName: 'A',
+      getAttribute: jest.fn((name) => {
+        if (name === 'href') return 'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
+        if (name === 'target') return 'docs';
+        return null;
+      }),
+      parentElement: global.document.body,
+    };
+    const event = {
+      target: anchor,
+      button: 0,
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      defaultPrevented: false,
+      preventDefault: jest.fn(),
+    };
+
+    documentCaptureHandlers.click(event);
+
+    expect(event.preventDefault).toHaveBeenCalled();
+    // Named target → newTab disposition (Chromium's window.open semantics
+    // for any non-empty `target` other than the current frame), with the
+    // target name forwarded so the renderer's named-target reuse path
+    // can fire.
+    expect(ipcRenderer.sendToHost).toHaveBeenCalledWith('link:navigate', {
+      url: 'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
+      disposition: 'newTab',
+      target: 'docs',
+    });
+  });
+
+  test('resolves modifiers into Chrome dispositions (background tab, foreground tab, new window)', () => {
+    const makeAnchor = (target = '') => ({
+      tagName: 'A',
+      getAttribute: jest.fn((name) => {
+        if (name === 'href') return 'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
+        if (name === 'target') return target;
+        return null;
+      }),
+      parentElement: global.document.body,
+    });
+
+    // Each case names which DOM event fires for that activation in real
+    // Chromium. Middle-click goes through `auxclick`, NOT `click` —
+    // modern Chromium only dispatches `click` for the primary button
+    // (UI Events spec). A previous implementation listened only to
+    // `click` and checked `event.button === 1` inside, which is dead
+    // code for real middle-clicks; fixed by registering both listeners.
+    // Dispositions match Chrome (#303): Ctrl/Cmd+click and middle-click open a
+    // BACKGROUND tab (you stay on the page you are reading), adding Shift
+    // promotes it to the foreground, and a bare Shift+click opens a window.
+    // Every one of these used to collapse into a single foreground `newTab`.
+    const cases = [
+      {
+        label: 'cmd-click',
+        dispatchEvent: 'click',
+        overrides: { metaKey: true },
+        expected: 'newBackgroundTab',
+      },
+      {
+        label: 'ctrl-click',
+        dispatchEvent: 'click',
+        overrides: { ctrlKey: true },
+        expected: 'newBackgroundTab',
+      },
+      {
+        label: 'ctrl-shift-click',
+        dispatchEvent: 'click',
+        overrides: { ctrlKey: true, shiftKey: true },
+        expected: 'newTab',
+      },
+      {
+        label: 'cmd-shift-click',
+        dispatchEvent: 'click',
+        overrides: { metaKey: true, shiftKey: true },
+        expected: 'newTab',
+      },
+      {
+        label: 'shift-click',
+        dispatchEvent: 'click',
+        overrides: { shiftKey: true },
+        expected: 'newWindow',
+      },
+      {
+        label: 'middle-click',
+        dispatchEvent: 'auxclick',
+        overrides: { button: 1 },
+        expected: 'newBackgroundTab',
+      },
+      {
+        label: 'shift-middle-click',
+        dispatchEvent: 'auxclick',
+        overrides: { button: 1, shiftKey: true },
+        expected: 'newTab',
+      },
+      {
+        label: 'target=_blank',
+        dispatchEvent: 'click',
+        overrides: {},
+        target: '_blank',
+        expected: 'newTab',
+      },
+      {
+        // Modifiers beat the target attribute, as in Chrome: Ctrl+clicking a
+        // `target="_blank"` link still leaves you on the current page.
+        label: 'ctrl-click on target=_blank',
+        dispatchEvent: 'click',
+        overrides: { ctrlKey: true },
+        target: '_blank',
+        expected: 'newBackgroundTab',
+      },
+      {
+        // A named target keeps its name in every disposition so the renderer's
+        // tab-reuse path still fires.
+        label: 'ctrl-click on a named target',
+        dispatchEvent: 'click',
+        overrides: { ctrlKey: true },
+        target: 'docs',
+        expected: 'newBackgroundTab',
+      },
+    ];
+
+    for (const { label, dispatchEvent, overrides, target = '', expected } of cases) {
+      const { documentCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule();
+      const event = {
+        target: makeAnchor(target),
+        button: 0,
+        metaKey: false,
+        ctrlKey: false,
+        shiftKey: false,
+        altKey: false,
+        defaultPrevented: false,
+        preventDefault: jest.fn(),
+        ...overrides,
+      };
+      documentCaptureHandlers[dispatchEvent](event);
+      expect(event.preventDefault).toHaveBeenCalled();
+      // `label` names the failing case in the assertion message.
+      expect({ label, ...ipcRenderer.sendToHost.mock.calls[0][1] }).toEqual({
+        label,
+        url: 'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
+        disposition: expected,
+        target: target || null,
+      });
+      expect(ipcRenderer.sendToHost.mock.calls[0][0]).toBe('link:navigate');
+    }
+  });
+
+  test('ignores non-dweb anchor clicks', () => {
+    const { documentCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule();
+    const event = {
+      target: {
+        tagName: 'A',
+        getAttribute: jest.fn((name) => (name === 'href' ? 'https://example.com/' : null)),
+        parentElement: global.document.body,
+      },
+      button: 0,
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      defaultPrevented: false,
+      preventDefault: jest.fn(),
+    };
+    documentCaptureHandlers.click(event);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(ipcRenderer.sendToHost).not.toHaveBeenCalledWith('link:navigate', expect.anything());
+  });
+
+  test('routes trusted links out of an onchain app through browser chrome', () => {
+    const { documentCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+      location: {
+        href: 'web3://0x00000095643cffA7d9faE407A84Dfcb6406456C6.eip155-1/swap',
+        protocol: 'web3:',
+        pathname: '/swap',
+      },
+    });
+    const anchor = {
+      tagName: 'A',
+      hasAttribute: jest.fn(() => false),
+      getAttribute: jest.fn((name) => {
+        if (name === 'href') return '/about?from=swap';
+        if (name === 'target') return '';
+        return null;
+      }),
+      parentElement: global.document.body,
+    };
+    const event = {
+      target: anchor,
+      button: 0,
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      defaultPrevented: false,
+      isTrusted: true,
+      preventDefault: jest.fn(),
+    };
+
+    documentCaptureHandlers.click(event);
+
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(ipcRenderer.sendToHost).toHaveBeenCalledWith('link:navigate', {
+      url: 'web3://0x00000095643cffA7d9faE407A84Dfcb6406456C6.eip155-1/about?from=swap',
+      disposition: 'currentTab',
+      target: null,
+    });
+  });
+
+  test('does not elevate synthetic onchain clicks into browser navigation', () => {
+    const { documentCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+      location: {
+        href: 'web3://0x00000095643cffA7d9faE407A84Dfcb6406456C6.eip155-1/',
+        protocol: 'web3:',
+        pathname: '/',
+      },
+    });
+    const event = {
+      target: {
+        tagName: 'A',
+        hasAttribute: jest.fn(() => false),
+        getAttribute: jest.fn((name) => (name === 'href' ? 'https://evil.example/' : '')),
+        parentElement: global.document.body,
+      },
+      button: 0,
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      defaultPrevented: false,
+      isTrusted: false,
+      preventDefault: jest.fn(),
+    };
+
+    documentCaptureHandlers.click(event);
+
+    expect(ipcRenderer.sendToHost).not.toHaveBeenCalledWith('link:navigate', expect.anything());
+  });
+
+  test('context menu preserves raw dweb href before anchor.href normalisation', async () => {
+    const { windowCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+      location: {
+        href: 'file:///app/pages/links.html',
+        protocol: 'file:',
+        pathname: '/app/pages/links.html',
+      },
+    });
+    const anchor = {
+      tagName: 'A',
+      href: 'ipfs://qmywapjzv5czsna625s3xf2nemtygpphdwez79ojwnpbdg/',
+      getAttribute: jest.fn((name) =>
+        name === 'href' ? 'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG' : null
+      ),
+      textContent: 'CIDv0 link',
+      parentElement: global.document.body,
+    };
+
+    windowCaptureHandlers.contextmenu({
+      clientX: 1,
+      clientY: 2,
+      target: anchor,
+      defaultPrevented: false,
+    });
+    await flushTimers();
+
+    expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
+      'context-menu',
+      expect.objectContaining({
+        linkUrl: 'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
+        linkText: 'CIDv0 link',
+      })
+    );
+  });
+
+  test('detects video and audio media sources in the context menu handler', async () => {
+    const { windowCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
       location: {
         href: 'https://example.com/media',
         protocol: 'https:',
@@ -364,12 +1223,13 @@ describe('webview-preload', () => {
       parentElement: body,
     };
 
-    documentHandlers.contextmenu({
+    windowCaptureHandlers.contextmenu({
       clientX: 1,
       clientY: 2,
       target: video,
-      preventDefault: jest.fn(),
+      defaultPrevented: false,
     });
+    await flushTimers();
     expect(ipcRenderer.sendToHost).toHaveBeenLastCalledWith(
       'context-menu',
       expect.objectContaining({
@@ -378,12 +1238,13 @@ describe('webview-preload', () => {
       })
     );
 
-    documentHandlers.contextmenu({
+    windowCaptureHandlers.contextmenu({
       clientX: 3,
       clientY: 4,
       target: audio,
-      preventDefault: jest.fn(),
+      defaultPrevented: false,
     });
+    await flushTimers();
     expect(ipcRenderer.sendToHost).toHaveBeenLastCalledWith(
       'context-menu',
       expect.objectContaining({
@@ -413,5 +1274,339 @@ describe('webview-preload', () => {
     ipcRenderer.emit('context-menu-action', 'copy-text', { text: 'Failure case' });
     await flushMicrotasks();
     expect(consoleErrorSpy).toHaveBeenCalledWith(expect.any(Error));
+  });
+});
+
+// The page-side provider scripts are injected as source strings, so they are
+// exercised here by extracting and evaluating them in a sandbox rather than
+// through loadWebviewPreloadModule().
+describe('injected provider request timeouts', () => {
+  const fs = require('fs');
+  const preloadSource = fs.readFileSync(require.resolve('./webview-preload'), 'utf8');
+
+  function extractScript(varName) {
+    const start = preloadSource.indexOf(`${varName}.textContent = \``);
+    const bodyStart = preloadSource.indexOf('`', start) + 1;
+    const bodyEnd = preloadSource.indexOf('\n  `;', bodyStart);
+    expect(bodyStart).toBeGreaterThan(0);
+    expect(bodyEnd).toBeGreaterThan(bodyStart);
+    return preloadSource.slice(bodyStart, bodyEnd);
+  }
+
+  /** Evaluate an injected provider and report the timeout it arms per method. */
+  function timeoutFor(varName, globalName, method) {
+    let armed = null;
+    const sandboxWindow = {
+      postMessage: () => {},
+      addEventListener: () => {},
+      location: { origin: 'https://dapp.example' },
+    };
+    new Function('window', 'setTimeout', 'Map', extractScript(varName))(
+      sandboxWindow,
+      (_fn, ms) => {
+        armed = ms;
+      },
+      Map
+    );
+    sandboxWindow[globalName].request({ method }).catch(() => {});
+    return armed;
+  }
+
+  // A consent prompt blocks the response until the user decides. Timing that
+  // out page-side rejects the dApp's promise while main still records the
+  // grant and performs the write — the dApp retries and duplicates the COB.
+  test.each([
+    'radicle_requestAccess',
+    'radicle_seed',
+    'radicle_getIdentity',
+    'radicle_createIssue',
+    'radicle_commentIssue',
+    'radicle_editIssueState',
+    'radicle_commentPatch',
+  ])('radicle %s (can prompt) gets the 300s budget', (method) => {
+    expect(timeoutFor('radicleScript', 'radicle', method)).toBe(300000);
+  });
+
+  test.each([
+    'radicle_getCapabilities',
+    'radicle_getNodeStatus',
+    'radicle_listSeededRepos',
+    'radicle_unseed',
+    'radicle_sync',
+    'radicle_getSeedStatus',
+    'radicle_disconnect',
+  ])('radicle %s (never prompts) keeps the 60s budget', (method) => {
+    expect(timeoutFor('radicleScript', 'radicle', method)).toBe(60000);
+  });
+
+  // Parity with the sibling provider the radicle one was modelled on.
+  test('swarm prompt/long-running methods use the same 300s budget', () => {
+    expect(timeoutFor('swarmScript', 'swarm', 'swarm_getSigningIdentity')).toBe(300000);
+    expect(timeoutFor('swarmScript', 'swarm', 'swarm_readChunk')).toBe(60000);
+  });
+});
+
+// PRIVATE MODE GUARD coverage (providers): in private windows none of
+// window.ethereum / window.swarm / window.radicle is injected and none of the
+// provider bridges are installed — a dApp probing for a wallet sees nothing.
+describe('webview-preload private windows', () => {
+  let consoleLogSpy;
+
+  beforeEach(() => {
+    consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    global.window = originalWindow;
+    global.document = originalDocument;
+    global.navigator = originalNavigator;
+    global.location = originalLocation;
+    global.MutationObserver = originalMutationObserver;
+    jest.restoreAllMocks();
+  });
+
+  const providerChannels = [
+    'dapp:provider-response',
+    'dapp:provider-event',
+    'swarm:provider-response',
+    'swarm:provider-event',
+    'radicle:provider-response',
+    'radicle:provider-event',
+  ];
+
+  test('private window: no provider bridges, no page-world injection attempts', () => {
+    const { contextBridge, ipcRenderer, document } = loadWebviewPreloadModule({
+      isPrivateWindow: true,
+      location: {
+        href: 'https://dapp.example/',
+        protocol: 'https:',
+        pathname: '/',
+      },
+    });
+
+    expect(ipcRenderer.sendSync).toHaveBeenCalledWith(IPC.PRIVATE_IS_PRIVATE);
+    expect(contextBridge.executeInMainWorld).not.toHaveBeenCalled();
+
+    // No provider IPC bridges installed.
+    const onChannels = ipcRenderer.on.mock.calls.map(([channel]) => channel);
+    for (const channel of providerChannels) {
+      expect(onChannels).not.toContain(channel);
+    }
+
+    // No message bridges (page → host) registered on window.
+    const messageListeners = global.window.addEventListener.mock.calls.filter(
+      ([event]) => event === 'message'
+    );
+    expect(messageListeners).toHaveLength(0);
+
+    // No <script> injection is even attempted (createElement is absent on
+    // the doc mock and would have logged an injection failure).
+    expect(document.addEventListener.mock.calls.map(([e]) => e)).not.toContain('DOMContentLoaded');
+
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      '[webview-preload] Loaded (freedomAPI + context menu — private window, providers disabled)'
+    );
+  });
+
+  test('normal window: provider bridges are installed as before', () => {
+    const { contextBridge, ipcRenderer, document } = loadWebviewPreloadModule({
+      location: {
+        href: 'https://dapp.example/',
+        protocol: 'https:',
+        pathname: '/',
+      },
+    });
+
+    const onChannels = ipcRenderer.on.mock.calls.map(([channel]) => channel);
+    for (const channel of providerChannels) {
+      expect(onChannels).toContain(channel);
+    }
+
+    const messageListeners = global.window.addEventListener.mock.calls.filter(
+      ([event]) => event === 'message'
+    );
+    // ethereum, swarm and radicle page→host bridges.
+    expect(messageListeners).toHaveLength(3);
+
+    expect(contextBridge.executeInMainWorld).toHaveBeenCalledTimes(1);
+    expect(contextBridge.executeInMainWorld).toHaveBeenCalledWith({
+      func: expect.any(Function),
+    });
+    expect(document.addEventListener.mock.calls.map(([event]) => event)).not.toContain(
+      'DOMContentLoaded'
+    );
+  });
+
+  test('normal window: falls back to DOM injection if early main-world execution fails', () => {
+    const contextBridge = createContextBridgeMock();
+    contextBridge.executeInMainWorld.mockImplementation(() => {
+      throw new Error('early injection unavailable');
+    });
+    const scripts = [];
+    const head = { firstChild: null, insertBefore: jest.fn() };
+
+    const { documentHandlers } = loadWebviewPreloadModule({
+      contextBridge,
+      location: {
+        href: 'https://dapp.example/',
+        protocol: 'https:',
+        pathname: '/',
+      },
+      documentOverrides: {
+        createElement: jest.fn(() => {
+          const script = { remove: jest.fn(), textContent: '' };
+          scripts.push(script);
+          return script;
+        }),
+        head,
+        readyState: 'complete',
+      },
+    });
+
+    expect(documentHandlers.DOMContentLoaded).toBeUndefined();
+    expect(scripts[0].textContent).toBe('/* ethereum inject source stub */');
+    expect(head.insertBefore).toHaveBeenNthCalledWith(1, scripts[0], null);
+    expect(scripts[0].remove).toHaveBeenCalled();
+  });
+});
+
+// #233: internal pages used to follow the OS colour scheme only, so a dark app
+// on a light desktop rendered a dark toolbar over white pages. The preload now
+// resolves Settings > Appearance at document-start and stamps the answer on
+// <html>; the page stylesheets key their light palette (and `color-scheme`)
+// off that attribute.
+describe('webview-preload internal-page theme', () => {
+  beforeEach(() => {
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    global.window = originalWindow;
+    global.document = originalDocument;
+    global.navigator = originalNavigator;
+    global.location = originalLocation;
+    global.MutationObserver = originalMutationObserver;
+    jest.restoreAllMocks();
+  });
+
+  const internalLocation = {
+    href: 'file:///app/pages/history.html',
+    protocol: 'file:',
+    pathname: '/app/pages/history.html',
+  };
+
+  test.each([
+    ['dark', 'dark'],
+    ['light', 'light'],
+  ])('an explicit theme of %s wins over the OS scheme', (theme, expected) => {
+    // prefersDark is the *opposite* of the setting in both rows: the whole
+    // point of #233 is that the setting, not the desktop, decides.
+    const { documentElement, ipcRenderer } = loadWebviewPreloadModule({
+      location: internalLocation,
+      theme,
+      prefersDark: theme === 'light',
+    });
+
+    expect(ipcRenderer.sendSync).toHaveBeenCalledWith(IPC.GET_THEME);
+    expect(documentElement.setAttribute).toHaveBeenCalledWith('data-theme', expected);
+  });
+
+  test.each([
+    [true, 'dark'],
+    [false, 'light'],
+  ])('"system" still resolves through prefers-color-scheme (dark=%s)', (prefersDark, expected) => {
+    const { documentElement } = loadWebviewPreloadModule({
+      location: internalLocation,
+      theme: 'system',
+      prefersDark,
+    });
+
+    expect(documentElement.setAttribute).toHaveBeenCalledWith('data-theme', expected);
+  });
+
+  test('"system" repaints when the OS scheme changes, an explicit theme does not', () => {
+    const system = loadWebviewPreloadModule({
+      location: internalLocation,
+      theme: 'system',
+      prefersDark: false,
+    });
+    expect(system.documentElement.getAttribute('data-theme')).toBe('light');
+    expect(system.mediaChangeHandlers).toHaveLength(1);
+    // The desktop switches to dark: the live query flips, then notifies.
+    system.prefersDarkQuery.matches = true;
+    system.mediaChangeHandlers[0]();
+    expect(system.documentElement.getAttribute('data-theme')).toBe('dark');
+
+    // An explicit setting ignores the OS entirely.
+    const explicit = loadWebviewPreloadModule({
+      location: internalLocation,
+      theme: 'light',
+      prefersDark: false,
+    });
+    explicit.prefersDarkQuery.matches = true;
+    explicit.mediaChangeHandlers[0]();
+    expect(explicit.documentElement.getAttribute('data-theme')).toBe('light');
+  });
+
+  test('a settings:updated broadcast repaints an already-loaded page', () => {
+    // OS is dark here, so the "system" leg below is not satisfied by the
+    // starting value.
+    const { documentElement, ipcRenderer } = loadWebviewPreloadModule({
+      location: internalLocation,
+      theme: 'light',
+      prefersDark: true,
+    });
+    expect(documentElement.getAttribute('data-theme')).toBe('light');
+
+    const handlers = ipcRenderer.listeners.get(IPC.SETTINGS_UPDATED) || [];
+    expect(handlers).toHaveLength(1);
+    handlers[0]({}, { theme: 'dark' });
+    expect(documentElement.getAttribute('data-theme')).toBe('dark');
+
+    handlers[0]({}, { theme: 'light' });
+    expect(documentElement.getAttribute('data-theme')).toBe('light');
+
+    // Falling back to "system" re-reads the OS scheme, which is dark here.
+    handlers[0]({}, { theme: 'system' });
+    expect(documentElement.getAttribute('data-theme')).toBe('dark');
+  });
+
+  test('stamps <html> as soon as it is parsed when it does not exist yet', () => {
+    // Preloads run at document-start, before the parser has created <html>.
+    // Waiting for DOMContentLoaded instead would flash the wrong theme.
+    const { document, mutationObservers } = loadWebviewPreloadModule({
+      location: internalLocation,
+      theme: 'light',
+      documentElement: null,
+    });
+
+    expect(mutationObservers).toHaveLength(1);
+    expect(mutationObservers[0].target).toBe(document);
+    expect(mutationObservers[0].init).toEqual({ childList: true });
+
+    const attributes = {};
+    document.documentElement = {
+      setAttribute: (name, value) => {
+        attributes[name] = value;
+      },
+    };
+    mutationObservers[0].callback();
+    expect(attributes['data-theme']).toBe('light');
+    expect(mutationObservers[0].disconnected).toBe(true);
+  });
+
+  test('leaves non-internal pages alone', () => {
+    const { documentElement, ipcRenderer } = loadWebviewPreloadModule({
+      location: { href: 'https://dapp.example/', protocol: 'https:', pathname: '/' },
+      theme: 'dark',
+    });
+
+    expect(ipcRenderer.sendSync).not.toHaveBeenCalledWith(IPC.GET_THEME);
+    expect(documentElement.setAttribute).not.toHaveBeenCalled();
+    expect(ipcRenderer.listeners.get(IPC.SETTINGS_UPDATED)).toBeUndefined();
   });
 });

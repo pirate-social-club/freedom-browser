@@ -7,7 +7,7 @@ function createHnsGuardForwarding({ net, http, resources, getRoute, isAllowed,
     const route = getRoute();
     if (!route) return writeError(client, 503, 'HNS routing unavailable');
     if (!isAllowed(req.url)) {
-      log.warn(`[Network] Blocked non-HNS proxy CONNECT: ${req.url}`);
+      log.warn('[Network] Blocked non-HNS proxy CONNECT');
       return writeError(client, 502, 'HNS host not allowed');
     }
     markHost(parseAuthority(req.url).host);
@@ -101,7 +101,7 @@ function createHnsGuardForwarding({ net, http, resources, getRoute, isAllowed,
       defaultPort = url.protocol === 'https:' ? 443 : 80;
     } catch { /* Origin-form requests use Host. */ }
     if (!isAllowed(host)) {
-      log.warn(`[Network] Blocked non-HNS proxy request: ${req.method} ${host}`);
+      log.warn('[Network] Blocked non-HNS proxy request');
       res.writeHead(502);
       res.end('HNS host not allowed');
       return;

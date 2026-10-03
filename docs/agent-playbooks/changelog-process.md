@@ -1,33 +1,177 @@
 # Changelog Process Playbook
 
-Use this playbook when asked to update `CHANGELOG.md` for a new version.
+Use this playbook whenever a change earns a changelog entry: day to day that is
+a `changelog.d/` fragment on the pull request that makes the change (next
+section), and at release it is assembling those fragments into `CHANGELOG.md`.
 
-## Procedure
+## Day to day: write a fragment, not a changelog edit
 
-1. Find the baseline commit:
-   - `git log --oneline -p -- package.json`
+A pull request with a user-visible change adds one file under `changelog.d/`
+and leaves `CHANGELOG.md` alone — `changelog.d/<section>--<slug>.md`, body
+written to the voice rules below. `changelog.d/README.md` has the format.
+
+This is not bookkeeping preference. Every pull request used to edit the same
+few lines under the same heading, so the first merge of a batch left all the
+others conflicting there, and each needed a merge commit plus a full CI run to
+validate one paragraph. A file per change cannot collide.
+
+The exclusions in step 5 still decide whether a change earns an entry at all:
+no fragment for developer-only fixes, in-release polish, or internal work.
+
+## At release: assemble them
+
+### Procedure
+
+1. Find the baseline commit. Prefer the previous release's tag, which is unambiguous regardless of dev-suffix bookkeeping:
+   - `git rev-list -n 1 v<prev>` (e.g. `v0.7.0`).
+   - Fallback if the tag is unavailable: `git log --oneline -p -- package.json` and pick the most recent version-line edit _before_ the current release branch's "promote dev version" commit. With the dev-suffix workflow, the baseline is normally the `chore(release): open <current>-dev cycle` commit on `main`.
 2. Gather all commits since baseline:
    - `git log --pretty=format:"%H%n%s%n%b%n---" <baseline>..HEAD`
 3. Get the release date from git history:
    - `git show -s --format="%ad" --date=short HEAD`
-4. Categorize entries using Keep a Changelog headings:
+4. Categorize entries using Keep a Changelog headings, in this order:
    - `### Added`
    - `### Changed`
+   - `### Deprecated` (when applicable)
+   - `### Removed` (when applicable)
    - `### Fixed`
    - `### Security`
-   - (also `### Deprecated` and `### Removed` when applicable)
+
+   The order matches Keep a Changelog and the project's prior releases. Do not reorder — `Security` last keeps the heaviest, most prose-dense section out of the reader's path when they're scanning for what changed for them. Omit any heading that has no entries.
+
 5. Skip housekeeping commits:
-   - TODO/changelog/version-bump commits
+   - TODO/changelog commits
+   - version-bump commits, including `chore(release): open <next>-dev cycle` and `chore(release): bump version to <version>`
    - dependency lock-only updates
    - README/docs rewrites
    - internal refactors without user impact
    - test-only commits
+   - **developer-only fixes**: console-noise cleanup on `npm start`, dev-server bugs, build/lint/CI issues, anything whose impact is only visible to people running from source. The changelog audience is the binary user — if the fix doesn't affect them, drop the entry.
+   - **in-release polish**: fixes and refactors on functionality that didn't ship in the previous release. A "fix" to a feature first introduced in this release is part of how the feature shipped, not a regression a user would have hit. Drop the entry, or fold the user-visible aspect into the relevant `Added` parent.
 6. Merge related commits into a single user-facing entry.
 7. Inspect PR merge commits by reviewing underlying commits.
 8. Re-run the git log before editing to catch late commits.
-9. Prepend the new version section above the previous one.
+9. Give the fragments a heading to land in, then fold them in.
+   - Check for `## [Unreleased]` in `CHANGELOG.md` first. Under the fragment flow no pull request edits that file, so after every release the heading is gone — the release renamed it to `## [<version>] - <date>` and nothing re-introduced it. That is the normal state on `main`, not an edge case. Add it back above the latest released version before assembling; without it `npm run changelog:assemble` exits 1 — the dry run and `--write` alike, so the dry run cannot read as ready when it is not — with `CHANGELOG.md has no '## [Unreleased]' heading to assemble into`.
+   - `npm run changelog:assemble` to see what the fragments add — what is still _missing_ from `## [Unreleased]`, so after a `--write` it prints nothing rather than re-listing what it just spliced — then `npm run changelog:assemble -- --write` to splice them in. The `--` is not optional: npm swallows `npm run changelog:assemble --write` and it silently dry-runs.
+   - Fragments sharing a top-level bullet (the category leads below: `- Updated bundled nodes:` and friends) are folded into one entry, sub-bullet by sub-bullet — including under a lead an earlier bump already put in the block. Two bumps in a release window write two fragments and assemble into one bullet; neither is dropped for repeating the lead.
+   - The script never deletes the fragments, so remove the consumed ones yourself in the same commit: `git rm changelog.d/*--*.md`. Until that lands, re-running `--write` is safe — a sub-bullet already under `## [Unreleased]` is left alone rather than duplicated.
+10. Prepend the new version section above the previous one. While the release is still in candidates (`rc.N` tags), keep the heading as `## [Unreleased]` and only replace it with `## [<version>] - <YYYY-MM-DD>` when the bare version is cut (see `release-process.md` §1/§3). Step 9 is where a missing `## [Unreleased]` gets re-introduced; nothing else puts it back, since pull requests write fragments instead of editing this file.
 
 ## Output Style
 
-- Write user-facing outcomes, not implementation noise.
-- Prefer concise bullets that explain impact.
+The shipped releases (e.g. `0.6.x`, `0.7.0`) are the canonical voice. When drafting a new release, read the most recent shipped entry first and match its density. Drift is easy and shows up immediately in side-by-side comparison.
+
+### Density budget (check before the review gate)
+
+The voice rules below are descriptive of the `0.6.x` / `0.7.x` shipped entries, not aspirational. Before presenting a draft for review, read it side-by-side with the previous shipped release in the same file. If your entries are visibly longer, or your sub-bullets are full sentences where the previous release used noun phrases, you've drifted — tighten until the comparison stops looking lopsided.
+
+Mechanical sanity checks:
+
+- Top-level bullets: aim ≤ 25 words.
+- Sub-bullets: aim ≤ 15 words.
+- Sub-bullets across the whole release: aim ≤ 10 total for a two-to-three-week release, excluding the per-package dependency sub-bullets (see Structure rules). A longer cycle scales roughly with its length (`0.8.0`, two months, shipped 25; `0.8.5` about 30), but no single parent should carry more than 4 and no sub-bullet should restate its parent. If you're over, fold related surfaces into the parent or drop them.
+
+Drift patterns to cut on sight (every one of these has shipped into a draft and had to be trimmed later):
+
+- **Mechanism in user-facing copy.** RPC method names (`eth_call`), protocol terms ("Universal Resolver", "sync committee"), helper-function names — the reader doesn't need the protocol step. Leave it in the commit message and PR description.
+- **"so X" tails justifying the change.** `Forward and reverse lookups are both verified, so the wallet's recipient-name display carries the same guarantee` — the parent bullet already conveys it; drop the tail.
+- **Em-dash explanations expanding into mechanism.** `X keeps working — the prover does Y, ethers does Z, the final callback is independently proven`. The `X keeps working` half is the entry; drop the expansion. This is different from the short dash-tagline on a headline entry that says what the thing is _for_ (`— pay as you browse, straight from the built-in wallet`), which the voice rules allow.
+- **Consecutive sub-bullets repeating their subject.** Two bullets both opening with `Wallet send review screen shows…` — open each with the distinct surface (`Green ✓ next to a verified name`, `Amber ⚠ next to a spoofed name`) and let the parent carry the shared context.
+- **Defensive parentheticals.** `(zk-proven sync bootstrap by default)`, `(stale record or spoofing attempt)` — drop unless the reader genuinely can't infer the case.
+- **Thin sub-bullet groups.** If a parent has only 1–2 sub-bullets and they add no surface variety, fold them into the parent.
+
+If a sub-bullet runs past 20 words, opens with the same noun phrase as a sibling, or names an internal helper, rewrite it before committing.
+
+### Voice rules (apply across all sections)
+
+- **One thought per bullet.** If you joined two ideas with `;` or `. `, split into two bullets. Bullets are not paragraphs.
+- **No bold lead-ins.** Every entry opens with plain prose. Bold is for inline emphasis only. Plain-text labels on explainer sub-bullets (e.g. `Reasoning: …` on a "why this matters" sub-bullet) are fine — the rule is about bold marketing emphasis, not structural clarity.
+- **No trailing periods** on bullet entries.
+- **No cross-references between sections.** Don't write "see Added" or "as in the Security entry above" — each bullet stands alone.
+- **State user impact, not implementation.** Mechanism lives in the code, not the changelog. `Tab spinner stays on through ENS link clicks` — not `Tab spinner stays on because handler now awaits the resolver promise before clearing state`.
+- **Warm, not selling.** The register of the shipped sections is plain description with room for a short tagline on the headline entry and the occasional friendly comparison: `Native x402 payment support — pay as you browse, straight from the built-in wallet:` (`0.7.4`), `shown in the bottom-left like Chrome and Firefox` (`0.7.2`), `Node data and Swarm identity migrate in place on first launch` (`0.8.0`). What does not belong is evaluation: adjectives that would fit a landing page (`honest`, `fully`, `real`, `the key never leaves it`, `at their own pace`). Say what it does and, on the headline, what it is for.
+- **No editorial framing.** An entry states what changed and where to find it; it never comments on the release, the roadmap, or the reader. Do not write theme sentences (`the first of the everyday-browsing basics this release is built around`, added to `0.8.5`'s ad-blocking entry in #265 and dropped again in `1b983357` — only that sentence went; the reorder and UI hints #265 landed with it shipped and stand), intros, or connective prose between entries. A release's story is told by the order of entries and the headline's tagline, not by narration. Test: if a clause would survive with the feature name swapped for any other, it is framing; delete it. Check for it first at the review gate, before the density and register comparisons.
+- **Explain the non-obvious with a `Reasoning:` sub-bullet**, as `0.7.1` (CID canonicalisation) and `0.8.0` (in-house Rust nodes) do. One line, plain-text label, for changes whose "why" a reader cannot infer from the "what". Verify the reasoning against the code or README before writing it.
+- **Removed entries say why**, in a dash clause, as `0.8.0` does: `Local Kubo API and gateway ports (5001, 8080) — the embedded IPFS node exposes no local endpoints`. A bare "X was removed" leaves the reader guessing whether they lost something.
+- **Drop internal commentary.** `(already latest)` next to a version, `(precautionary)` qualifiers, project-internal context: noise.
+- **Migration guidance points to README**, doesn't duplicate it. Use a conversational pointer like `(see README for site-author migration)` rather than inlining the migration content.
+- **Click paths use `Settings > Submenu > Item`.** Space-separated `>` matches the project's prior changelogs (e.g. `Settings > Experimental` from `0.7.0`). Do not use arrows (`→`) or breadcrumb glyphs, and don't backtick the path. The bare `Settings > …` form reads as a UI location, not a code identifier.
+- **Contributor credits are inline, on the entry.** Credit external contributors as `(thanks @handle!)` on their most significant entry; further entries from the same contributor in the same release use the shorter `(also @handle)`. No separate thanks section, no credits for maintainers.
+- **Every entry links its issue or pull request, at the end of the line.** One reference per entry: the issue it fixes if there is one, otherwise the pull request — and the pull request when one change closes several issues (`0.8.6`'s camera and microphone entry cites #363, not #361 and #362). Write it as a full markdown link, `([#97](https://github.com/solardev-xyz/freedom-browser/issues/97))`: GitHub autolinks a bare `#97` in issues and release bodies but not in a rendered repository file, and the website links readers to `CHANGELOG.md` itself. A multi-line block carries it on the lead line, before the colon; sub-bullets carry none. A credit shares the parenthetical, reference first: `([#351](…), thanks @ivanmmurciaua!)`. Dependency update lines carry none — they are routine and usually come from a direct release-branch commit — and neither does an entry whose change never went through an issue or pull request. Sections before `0.8.6` carry no references; don't backfill them.
+- **No decorative Unicode glyphs in entry prose.** Symbols like `✓`, `⚠`, `↳`, `→`, or emoji don't belong inline as visual emphasis. Describe UI affordances in plain words (`verification mark`, `warning`, `spinner`) and let the user encounter the glyph in the app. For version transitions, write `Bee 2.7.0 to 2.7.1`, not `Bee 2.7.0 → 2.7.1` — even technical from-to arrows count as decorative here.
+
+### Per-section voice
+
+| Section  | Lead pattern                                                         | Example                                                               |
+| -------- | -------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Added    | noun phrase (the _thing_ added)                                      | `Verification shield in the address bar`                              |
+| Changed  | noun phrase or subject-led                                           | `Speculative gateway prefetch during ENS quorum waves`                |
+| Security | imperative verb-led for actions taken, subject-led for state changes | `Pinned uuid to ^14.0.0`; `Multi-RPC quorum required for ENS lookups` |
+| Fixed    | subject-led "X now does Y" / "X no longer does Y"                    | `Tab loading spinner stays on through ENS link clicks`                |
+
+### Structure rules
+
+- **Lead `Added` with the release's defining feature.** Every shipped section opens with its headline (`0.7.0` wallet, `0.7.2` Colibri verification, `0.7.4` x402, `0.8.0` Rust nodes); readers take the first bullet as the release's identity. Protocol, wallet and node features rank above browser-chrome conveniences unless the release really is about the chrome. `package.json`'s `description` is a fair signal of what the maintainers consider headline.
+- **Multi-surface features = one parent bullet + sub-bullets**, not multiple top-level entries. The `0.7.0` `Experimental Identity & Wallet system:` block is the model.
+- **The lead line of a multi-line `Added` block is a feature name, not a sentence.** Keep it crisp and headline-like — a few words, no trailing qualifier, no mechanism. Every qualifier or detail moves into the sub-bullets, which are themselves short and only as detailed as a reader scanning for a feature needs. The `0.8.5` draft had `Ad and tracker blocking, on by default, which also hides the empty spaces blocked ads leave:` and it should be `Ad and tracker blocking:` with sub-bullets `On by default` and — only if it earns its place — `Hides the empty spaces blocked ads leave`; that empty-spaces detail is arguably too fine-grained to keep at all. Two trailing forms identify the thing rather than qualify it, and stay on the lead line, commas and all: the headline entry's short dash-tagline saying what the thing is _for_ (`Native x402 payment support — pay as you browse, straight from the built-in wallet:`), already allowed by the density budget and voice rules; and the appositive naming what a first-shipped bundled component _is_, which the bundled-component rule below requires alongside its version and upstream link (`0.8.5` shipped `[Myotis](https://github.com/biafra23/myotis) 0.1.7, a peer-to-peer Ethereum and Gnosis light client:` and ``Tor for `.onion` addresses, through a bundled [Arti](https://gitlab.torproject.org/tpo/core/arti) 2.6.0 client:``). This rule covers `Added` feature blocks only: `Changed` and `Fixed` blocks keep the lead patterns in the Per-section voice table, where a subject-led sentence lead is correct — `0.7.1`'s multi-line `Swarm, IPFS, and IPNS pages load under custom …, standard schemes (see README for site-author migration):` block is the model.
+- **A bundled component shipping for the first time is named with its version and an upstream link** in its `Added` parent, as `0.8.0` did for `[Ant](https://github.com/freedom-hq/ant) 0.5.33` and `[freedom-ipfs](https://github.com/solardev-xyz/freedom-ipfs) 0.4.3`. Take the version from the pin in the matching `scripts/fetch-*.js` at the release head, not from memory. Later cycles then have a baseline for `name old to new`.
+- **Update lines carry no feature summaries.** `Updated bundled nodes:` / `Updated runtime dependencies:` sub-bullets are `name old to new` and nothing else (the one exception is Electron's Chromium/Node detail, below). If a node update changes something the user can see — peers counting up at launch, an upload that no longer stalls, a clearer error — that is its own `Changed` or `Fixed` entry, where `0.8.0` put `Radicle peer discovery follows the community seeds' move to radicle.network`. Packing it into a parenthetical on the version line hides it from anyone scanning for what changed for them.
+- **Dependency updates are one-per-line sub-bullets under a category lead.** Group by category (`Updated runtime dependencies:`, `Updated dev dependencies:`, `Updated bundled nodes:`) as the top-level bullet, then list each package on its own sub-bullet as `name old to new`. This keeps long Electron version strings (with their Chromium/Node detail) readable instead of buried mid-line. Example:
+
+```
+- Updated runtime dependencies:
+  - Electron 41.7.0 to 41.7.1 (Chromium 146.0.7680.216, Node 24.15.0 — same as 41.7.0; Electron-side patches only)
+  - `@corpus-core/colibri-stateless` 1.1.26 to 1.1.28
+- Updated dev dependencies:
+  - `eslint` 10.4.0 to 10.4.1
+```
+
+### Section choice and deduplication
+
+Each shipped change appears exactly once. **Before placing an entry in `Changed`, `Fixed`, or `Security`, run the previous-release test: did the affected surface ship in the previous release?**
+
+- **No** — the entry belongs in `Added` (as a sub-bullet of the parent feature, or as the parent itself), or is dropped entirely. Fixes and refactors on functionality that never shipped to users are part of how the new feature was developed, not regressions a user would have hit. A bug introduced and fixed within the same release cycle never reached users; describing it in `Fixed` would falsely advertise a regression that didn't exist for them. Fold the user-visible property into the relevant `Added` bullet, or drop it if it's just "the feature works as expected".
+- **Yes, and it now behaves differently** — `Changed` / `Fixed` / `Security` depending on the kind of difference.
+- **Yes, unchanged** — no entry.
+
+Common deduplication failures:
+
+- **Added ↔ Security**: a new feature with security motivation belongs in `Added`, not in both. Don't restate the threat-model framing as a separate `Security` bullet — the `Added` entry's user-facing surface (toggle name, settings page, interstitial) already conveys the property.
+- **Added ↔ Fixed**: polish on a feature that ships in this release is part of `Added`, not a separate `Fixed` entry. "X consistently with Y" or "X tightens its CSP" on a brand-new X is how it shipped, not a regression fix.
+
+### Security is not only version bumps
+
+Every shipped `Security` section except `0.7.3` lists at least one actual hardening besides dependency updates — CSP headers (`0.6.1`), IPC input validation (`0.6.2`), permission prompts keyed on the committed page URL (`0.7.2`). Before finalising, sweep the cycle specifically for hardening a user or dApp author would notice (origin checks, consent models, isolation, validation) and add it in `0.7.2`'s subject-led form. If the sweep finds nothing, say so in the review note with the PRs checked; a `Security` section that is only bumps should be a finding, not an omission.
+
+### Categorising dependency updates
+
+Dependency updates inside an active major series almost always carry upstream security fixes. Default to **Security** for these (matching `0.6.1`'s `Updated dependencies: Electron 39 to 40, …` placement). Use Changed only when the bump is purely a feature pickup with no security content.
+
+**Electron updates always state the bundled Chromium and Node versions.** Security-aware users track CVE coverage by Chromium and Node version, not by Electron version. Look them up in `https://releases.electronjs.org/releases.json` (one entry per Electron version, with `chrome` / `node` / `v8` fields).
+
+Format: `Updated Electron <old> to <new> (Chromium <old> to <new>, Node <old> to <new>)`. Use the full upstream version strings, not the marketing-major (`Chromium 146.0.7680.216`, not `Chromium 146`). If Chromium or Node did not change between the two Electron versions, still name the version that's bundled — knowing which Chromium/Node ships is the point, regardless of whether it moved this cycle:
+
+- Both moved: `Updated Electron 41 to 42 (Chromium 146.0.7680.216 to 148.0.7778.97, Node 24.15.0 unchanged)`
+- Neither moved: `Updated Electron 41.5.0 to 41.7.0 (Chromium 146.0.7680.216, Node 24.15.0 — same as 41.5.0; Electron-side patches only)`
+
+The vague historical phrasing (`Chromium and Node patches`, used in `0.7.1`'s `Electron 41.2.1 to 41.5.0`) is **not enough** — it doesn't let a reader confirm which Chromium they're getting, and in `0.7.2`'s case it was even inaccurate (Chromium/Node didn't actually change between 41.5.0 and 41.7.0).
+
+**Skip in-release version drift for dependencies first added in this release.** If `foo` is added at `1.0.0` mid-cycle and bumped to `1.0.2` before the release ships, users only ever see `1.0.2` — listing `foo 1.0.0 to 1.0.2` in `Security` misrepresents in-release iteration as a security update on a previously shipped surface. Mention the dep once, in the `Added` parent for the feature it backs, and let its shipping version stand on its own. Same logic as the in-release polish rule for fixes (Procedure step 5).
+
+### Review gate
+
+An agent draft is a starting point, not a final. Check the draft for editorial framing first (see Voice rules); an otherwise-sound reorder still fails the gate if it carries a theme sentence, and the fix is to cut the sentence, not the reorder. After drafting, diff the new section against the previous shipped release and trim/restructure until per-entry density matches. Compare more than word counts: lead patterns per section, whether first-shipped components carry version and link, whether update lines stay bare, and register (a `0.8.5` draft matched `0.8.0`'s headings and bullet counts while drifting on all four).
+
+**Scan the `Added` lead lines.** Read `Added` with every sub-bullet hidden: the lead lines on their own must give the reader the release's feature list. If a lead line's trailing text is a qualifier — a default, a scope, a click path, a shortcut, a mechanism — it belongs one level down; split it into a bare feature name plus a sub-bullet (see Structure rules). Trailing text that identifies rather than qualifies stays put even though it carries a comma: the headline's dash-tagline, and a first-shipped bundled component's version-link-and-what-it-is appositive. Lead lines in `Changed` and `Fixed` are read against the per-section voice table, not this scan.
+
+**Verify claims, not prose.** Before presenting, check every factual claim against the tree at the release head, and say in the review note what each entry was verified against:
+
+- Version pairs from both ends of the range (`git show v<prev>:scripts/fetch-*.js`, lockfile at both refs), never from a PR description.
+- A trailing clause shared by several sibling items (`…, usable across dApp signing, sends and x402 payments` over Ledger / phone / Safe) must hold for **every** sibling; check each in code. The 0.8.5 draft claimed x402 for Safe accounts, which cannot sign x402 authorizations.
+- An entry about a shared list or config (external-node candidates, chain catalogue, shortcut map, search providers) is checked against the **whole list at head**, not just the PR that motivated the entry: in 0.8.5 one PR removed the Radicle candidate (documented) while another PR in the same window had added a Tor candidate to the same array (missed).
+- Credits via `gh pr view <n> --json author`; links with a real request returning 200; feature reachability in `src/` (a route or IPC channel that nothing in the renderer calls is not a feature).
+
+**Nothing disappears silently.** When a draft trims or replaces entries that were already in `[Unreleased]` (or in an earlier agent draft), the PR or review note lists what was dropped and why — "Ant internals with no Freedom UI surface", "duplicate of the Added parent" — so the releaser decides, not the compressor. Restoring a dropped capability requires checking in `src/` that a user can actually reach it in this build; the old text is not evidence.
+
+**Do not land the changelog edits until the releaser has reviewed them.** Two equivalent ways to hold the gate: leave the `CHANGELOG.md` changes unstaged on the release branch and present the diff, creating the `docs(changelog): …` commit only after explicit approval; or, when the draft comes from an agent working on its own branch, open a PR **against the release branch** (not `main`) carrying the assembled `CHANGELOG.md` and the `git rm` of the `changelog.d/` fragments it consumed (step 9) — the PR is the presentation and the releaser's merge is the approval, retiring the fragments in the same commit that publishes their text. Leaving the `git rm` out is how a fragment survives the release and is re-spliced at the next one. Either way, keep `## [Unreleased]` as the heading while the release is still in candidates; the rename to `## [<version>] - <date>` happens when the bare version is cut. See `release-process.md` for how the gate sequences against verify / build / upload / tag.

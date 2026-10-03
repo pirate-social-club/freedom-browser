@@ -1,672 +1,341 @@
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const IPC = require('../shared/ipc-channels');
-const { failure, success } = require('./ipc-contract');
-const {
-  createAppMock,
-  createIpcMainMock,
-  loadMainModule,
-} = require('../../test/helpers/main-process-test-utils');
 
-const PROJECT_ROOT = path.join(__dirname, '..', '..');
-const DEV_RADICLE_DATA_DIR = path.join(PROJECT_ROOT, 'radicle-data');
-const DEFAULT_HOME_DIR = '/home/test';
-
-function flushMicrotasks() {
-  return Promise.resolve().then(() => Promise.resolve());
-}
-
-function createProcessMock(binary, options = {}) {
+function loadManager(options = {}) {
+  jest.resetModules();
   const handlers = new Map();
-  const onceHandlers = new Map();
-  const stdoutHandlers = new Map();
-  const stderrHandlers = new Map();
-
-  const emitHandlers = (store, event, args) => {
-    for (const handler of store.get(event) || []) {
-      handler(...args);
-    }
-  };
-
-  const proc = {
-    binary,
-    kills: [],
-    stdout: {
-      on: jest.fn((event, handler) => {
-        if (!stdoutHandlers.has(event)) {
-          stdoutHandlers.set(event, []);
-        }
-        stdoutHandlers.get(event).push(handler);
-      }),
-    },
-    stderr: {
-      on: jest.fn((event, handler) => {
-        if (!stderrHandlers.has(event)) {
-          stderrHandlers.set(event, []);
-        }
-        stderrHandlers.get(event).push(handler);
-      }),
-    },
-    on: jest.fn((event, handler) => {
-      if (!handlers.has(event)) {
-        handlers.set(event, []);
-      }
-      handlers.get(event).push(handler);
+  const ipcMain = { handle: jest.fn((channel, fn) => handlers.set(channel, fn)) };
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-radicle-manager-'));
+  const embedded = {
+    isAvailable: jest.fn(() => options.available !== false),
+    isStarted: jest.fn(() => false),
+    start: jest.fn(async () => ({ did: 'did:key:z6MkNative' })),
+    shutdown: jest.fn(async () => ({ ok: true })),
+    connectSeeds: jest.fn(async () => ({
+      connected: 4,
+      target: 4,
+      targetReached: true,
+      attempted: 6,
+      elapsedMs: 250,
+      failures: [],
+    })),
+    cloneRepo: jest.fn(async () => ({ ok: true })),
+    cloneRepoWithProgress: jest.fn(async (_rid, _timeout, onProgress) => {
+      onProgress({ phase: 'resolving', candidates: 2 });
+      onProgress({ phase: 'done' });
+      return { ok: true };
     }),
-    once: jest.fn((event, handler) => {
-      if (!onceHandlers.has(event)) {
-        onceHandlers.set(event, []);
-      }
-      onceHandlers.get(event).push(handler);
-    }),
-    emit(event, ...args) {
-      emitHandlers(handlers, event, args);
-      const oneTimeHandlers = onceHandlers.get(event) || [];
-      onceHandlers.delete(event);
-      oneTimeHandlers.forEach((handler) => handler(...args));
-    },
-    emitStdout(data) {
-      emitHandlers(stdoutHandlers, 'data', [data]);
-    },
-    emitStderr(data) {
-      emitHandlers(stderrHandlers, 'data', [data]);
-    },
-    kill: jest.fn((signal) => {
-      proc.kills.push(signal);
-      if (options.autoCloseOnKill !== false) {
-        proc.emit('close', options.closeCode ?? 0);
-      }
-      return true;
-    }),
+    cancelClone: jest.fn(async () => ({ cancelled: true })),
+    unseedRepo: jest.fn(async () => ({ unseeded: true })),
+    repoInfo: jest.fn(async () => ({
+      name: 'native', description: 'repo', defaultBranch: 'main',
+    })),
+    seeders: jest.fn(async () => ({ seeding: 2 })),
+    status: jest.fn(async () => ({ connectedPeers: 3 })),
+    listRepos: jest.fn(async () => [{ rid: 'rad:zRepoOne' }, { rid: 'rad:zRepoTwo' }]),
+    listSeededRepos: jest.fn(async () => [{ rid: 'rad:zRepoOne' }, { rid: 'rad:zRepoTwo' }]),
+    getVersion: jest.fn(() => '0.4.0'),
+    ...options.embedded,
   };
-
-  return proc;
-}
-
-function createSocketClass(portResolver) {
-  const queue = Array.isArray(portResolver) ? [...portResolver] : null;
-
-  return class MockSocket {
-    constructor() {
-      this.handlers = {};
-    }
-
-    setTimeout() {}
-
-    on(event, handler) {
-      this.handlers[event] = handler;
-    }
-
-    destroy() {}
-
-    connect(port, host) {
-      const result = typeof portResolver === 'function'
-        ? portResolver(port, host)
-        : queue && queue.length > 0
-          ? queue.shift()
-          : false;
-
-      process.nextTick(() => {
-        if (result === true) {
-          this.handlers.connect?.();
-          return;
-        }
-
-        if (result === 'timeout') {
-          this.handlers.timeout?.();
-          return;
-        }
-
-        this.handlers.error?.(new Error('closed'));
-      });
-    }
+  const registry = {
+    updateService: jest.fn(),
+    setStatusMessage: jest.fn(),
+    clearService: jest.fn(),
+    MODE: { EMBEDDED: 'embedded', DISABLED: 'disabled' },
   };
-}
+  const statusSend = jest.fn();
+  const windows = options.windows || [{ webContents: { send: statusSend } }];
 
-function createHttpGetMock(responseResolver) {
-  const resolveResponse = responseResolver || (() => ({ statusCode: 200, body: '{}' }));
-
-  return jest.fn((url, options, callback) => {
-    let handler = callback;
-    if (typeof options === 'function') {
-      handler = options;
-    }
-
-    const requestHandlers = new Map();
-    const request = {
-      on: jest.fn((event, fn) => {
-        requestHandlers.set(event, fn);
-        return request;
-      }),
-      end: jest.fn(),
-      destroy: jest.fn(),
-    };
-
-    process.nextTick(() => {
-      const responseConfig = resolveResponse(url);
-
-      if (responseConfig?.error) {
-        requestHandlers.get('error')?.(responseConfig.error);
-        return;
-      }
-
-      if (responseConfig?.timeout) {
-        requestHandlers.get('timeout')?.();
-        return;
-      }
-
-      const responseHandlers = new Map();
-      const response = {
-        statusCode: responseConfig?.statusCode ?? 200,
-        resume: jest.fn(),
-        on: jest.fn((event, fn) => {
-          if (!responseHandlers.has(event)) {
-            responseHandlers.set(event, []);
-          }
-          responseHandlers.get(event).push(fn);
-        }),
-      };
-
-      handler(response);
-
-      process.nextTick(() => {
-        const chunks = (() => {
-          if (responseConfig?.body === undefined || responseConfig?.body === null) {
-            return [];
-          }
-          if (typeof responseConfig.body === 'string') {
-            return [responseConfig.body];
-          }
-          return [JSON.stringify(responseConfig.body)];
-        })();
-
-        for (const chunk of chunks) {
-          for (const fn of responseHandlers.get('data') || []) {
-            fn(chunk);
-          }
-        }
-        for (const fn of responseHandlers.get('end') || []) {
-          fn();
-        }
-      });
-    });
-
-    return request;
-  });
-}
-
-function createWindowMock() {
-  return {
-    webContents: {
-      send: jest.fn(),
-    },
-  };
-}
-
-function loadRadicleManagerModule(options = {}) {
-  const ipcMain = options.ipcMain || createIpcMainMock();
-  const app = options.app || createAppMock({
-    isPackaged: options.isPackaged ?? false,
-    userDataDir: options.userDataDir || '/tmp/freedom-user-data',
-  });
-  const windows = options.windows || [];
-  const BrowserWindow = {
-    getAllWindows: jest.fn(() => windows),
-  };
-  const log = {
-    info: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
-  };
-  const updateService = jest.fn();
-  const setStatusMessage = jest.fn();
-  const setErrorState = jest.fn();
-  const clearErrorState = jest.fn();
-  const clearService = jest.fn();
-  const execFileSync = options.execFileSync || jest.fn();
-  const execFileAsync = options.execFileAsync || jest.fn().mockResolvedValue({ stdout: '', stderr: '' });
-  const spawnedProcesses = [];
-  const spawn = jest.fn((binary, args = [], spawnOptions = {}) => {
-    const proc = (options.createProcess || createProcessMock)(binary, options.processOptions || {});
-    proc.args = args;
-    proc.spawnOptions = spawnOptions;
-    spawnedProcesses.push(proc);
-    return proc;
-  });
-  const fsMock = {
-    existsSync: jest.fn((target) => {
-      if (typeof options.existsSync === 'function') {
-        return options.existsSync(target);
-      }
-
-      const systemSocketPath = path.join(options.homeDir || DEFAULT_HOME_DIR, '.radicle', 'node', 'control.sock');
-      if (target === systemSocketPath) {
-        return options.systemSocketExists === true;
-      }
-
-      if (target.endsWith(`${path.sep}node${path.sep}control.sock`)) {
-        return options.socketExists !== false;
-      }
-
-      if (target.endsWith(`${path.sep}config.json`)) {
-        return options.configExists === true;
-      }
-
-      if (target.endsWith(`${path.sep}keys`)) {
-        return options.keysDirExists !== false;
-      }
-
-      if (
-        target.endsWith(`${path.sep}rad`) || target.endsWith(`${path.sep}rad.exe`)
-      ) {
-        return options.radBinaryExists !== false;
-      }
-
-      if (
-        target.endsWith(`${path.sep}radicle-node`) || target.endsWith(`${path.sep}radicle-node.exe`)
-      ) {
-        return options.nodeBinaryExists !== false;
-      }
-
-      if (
-        target.endsWith(`${path.sep}radicle-httpd`) || target.endsWith(`${path.sep}radicle-httpd.exe`)
-      ) {
-        return options.httpdBinaryExists !== false;
-      }
-
-      if (target === DEV_RADICLE_DATA_DIR) {
-        return options.radicleDataDirExists === true;
-      }
-
-      return false;
-    }),
-    mkdirSync: jest.fn(),
-    unlinkSync: jest.fn(),
-    readdirSync: jest.fn(() => options.keyFiles || ['key']),
-    readFileSync: jest.fn(() => options.configContents || '{}'),
-    writeFileSync: jest.fn(),
-  };
-  const loadSettings = jest.fn(() => options.settings || { enableRadicleIntegration: true });
-  const httpGet = createHttpGetMock(options.httpResponse);
-  const Socket = createSocketClass(options.portSequence || options.portResolver || false);
-
-  const { mod } = loadMainModule(require.resolve('./radicle-manager'), {
-    app,
+  jest.doMock('electron', () => ({
     ipcMain,
-    BrowserWindow,
-    extraMocks: {
-      child_process: () => ({
-        spawn,
-        execFileSync,
-        execFile: jest.fn(),
-      }),
-      fs: () => fsMock,
-      http: () => ({
-        get: httpGet,
-      }),
-      net: () => ({
-        Socket,
-      }),
-      os: () => ({
-        ...jest.requireActual('os'),
-        homedir: jest.fn(() => options.homeDir || DEFAULT_HOME_DIR),
-      }),
-      util: () => ({
-        ...jest.requireActual('util'),
-        promisify: jest.fn(() => execFileAsync),
-      }),
-      [require.resolve('./logger')]: () => log,
-      [require.resolve('./service-registry')]: () => ({
-        MODE: {
-          BUNDLED: 'bundled',
-          REUSED: 'reused',
-          EXTERNAL: 'external',
-          NONE: 'none',
-        },
-        DEFAULTS: {
-          radicle: {
-            httpPort: 8780,
-            p2pPort: 8776,
-            fallbackRange: 10,
-          },
-        },
-        updateService,
-        setStatusMessage,
-        setErrorState,
-        clearErrorState,
-        clearService,
-      }),
-      [require.resolve('./settings-store')]: () => ({
-        loadSettings,
+    BrowserWindow: { getAllWindows: jest.fn(() => windows) },
+  }));
+  jest.doMock('./logger', () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn() }));
+  jest.doMock('./profile-paths', () => ({ getRadicleDataDir: jest.fn(() => dataDir) }));
+  jest.doMock('./profile-resolver', () => ({
+    getActiveProfile: jest.fn(() => options.profile || { metadata: { nodes: {} } }),
+  }));
+  jest.doMock('./radicle-embedded', () => embedded);
+  jest.doMock('./service-registry', () => registry);
+
+  const mod = require('./radicle-manager');
+  return { mod, embedded, registry, ipcMain, handlers, dataDir, statusSend };
+}
+
+afterEach(() => {
+  jest.restoreAllMocks();
+});
+
+test('normalizes Radicle IDs without changing base58 case', () => {
+  const ctx = loadManager();
+  expect(ctx.mod.validateAndNormalizeRid('rad://z3gqcJUoA1n9HaHKufZs5FCSGazv5')).toBe(
+    'rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5'
+  );
+  expect(ctx.mod.validateAndNormalizeRid('rad:z0bad')).toBeNull();
+  fs.rmSync(ctx.dataDir, { recursive: true, force: true });
+});
+
+test('starts and stops only the native addon', async () => {
+  const ctx = loadManager();
+  await expect(ctx.mod.startRadicle()).resolves.toEqual({ status: 'running', error: null });
+  expect(ctx.embedded.start).toHaveBeenCalledWith(ctx.dataDir, 'FreedomBrowser');
+  expect(ctx.registry.updateService).toHaveBeenCalledWith('radicle', {
+    api: 'radapi://local', gateway: 'radapi://local', mode: 'embedded',
+  });
+  expect(ctx.registry.setStatusMessage).toHaveBeenCalledWith('radicle', null);
+  await expect(ctx.mod.stopRadicle()).resolves.toEqual({ status: 'stopped', error: null });
+  expect(ctx.embedded.shutdown).toHaveBeenCalledTimes(1);
+  fs.rmSync(ctx.dataDir, { recursive: true, force: true });
+});
+
+test('pushes connection and repository metrics after native state changes', async () => {
+  const ctx = loadManager();
+  await ctx.mod.startRadicle();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  expect(ctx.statusSend).toHaveBeenCalledWith(
+    'radicle:statusUpdate',
+    expect.objectContaining({
+      status: 'running',
+      info: expect.objectContaining({ success: true, count: 3, reposCount: 2 }),
+    })
+  );
+  await ctx.mod.stopRadicle();
+  fs.rmSync(ctx.dataDir, { recursive: true, force: true });
+});
+
+test('fails closed when the addon is unavailable', async () => {
+  const ctx = loadManager({ available: false });
+  await expect(ctx.mod.startRadicle()).resolves.toEqual({
+    status: 'error', error: 'libradicle addon is not installed',
+  });
+  expect(ctx.embedded.start).not.toHaveBeenCalled();
+  fs.rmSync(ctx.dataDir, { recursive: true, force: true });
+});
+
+test('a stop during native startup shuts the completed runtime down once', async () => {
+  let finishStart;
+  const start = jest.fn(() => new Promise((resolve) => { finishStart = resolve; }));
+  const ctx = loadManager({ embedded: { start } });
+  const starting = ctx.mod.startRadicle();
+  const stopping = ctx.mod.stopRadicle();
+  await Promise.resolve();
+  finishStart({ did: 'did:key:z6MkNative' });
+  await Promise.all([starting, stopping]);
+  expect(ctx.embedded.shutdown).toHaveBeenCalledTimes(1);
+  expect(ctx.mod.getCurrentStatus()).toEqual({ status: 'stopped', error: null });
+  fs.rmSync(ctx.dataDir, { recursive: true, force: true });
+});
+
+test('a start requested during shutdown waits for shutdown to complete', async () => {
+  let finishShutdown;
+  const shutdown = jest.fn(() => new Promise((resolve) => { finishShutdown = resolve; }));
+  const ctx = loadManager({ embedded: { shutdown } });
+  await ctx.mod.startRadicle();
+
+  const stopping = ctx.mod.stopRadicle();
+  const restarting = ctx.mod.startRadicle();
+  await Promise.resolve();
+  expect(ctx.embedded.start).toHaveBeenCalledTimes(1);
+
+  finishShutdown({ ok: true });
+  await expect(stopping).resolves.toEqual({ status: 'stopped', error: null });
+  await expect(restarting).resolves.toEqual({ status: 'running', error: null });
+  expect(ctx.embedded.start).toHaveBeenCalledTimes(2);
+  fs.rmSync(ctx.dataDir, { recursive: true, force: true });
+});
+
+test('window.radicle operations use native calls and expose fetch status', async () => {
+  const ctx = loadManager();
+  await ctx.mod.startRadicle();
+  const rid = 'rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5';
+  await expect(ctx.mod.seedRepository(rid)).resolves.toMatchObject({
+    success: true, status: { rid, state: 'fetching' },
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  await expect(ctx.mod.getSeedFetchStatus(rid)).resolves.toMatchObject({
+    success: true,
+    status: { rid, inStorage: true, progress: { phase: 'done' }, seedersKnown: 2 },
+  });
+  await expect(ctx.mod.getConnections()).resolves.toMatchObject({
+    success: true,
+    count: 3,
+    reposCount: 2,
+    version: '0.4.0',
+  });
+  await expect(ctx.mod.unseedRepository(rid)).resolves.toMatchObject({ success: true });
+  expect(ctx.embedded.unseedRepo).toHaveBeenCalledWith(rid);
+  await ctx.mod.stopRadicle();
+  fs.rmSync(ctx.dataDir, { recursive: true, force: true });
+});
+
+test('unseed requests native cancellation and re-applies policy after a late clone', async () => {
+  let finishClone;
+  const cancelClone = jest
+    .fn()
+    .mockResolvedValueOnce({ cancelled: false })
+    .mockResolvedValueOnce({ cancelled: false })
+    .mockResolvedValue({ cancelled: true });
+  const cloneRepoWithProgress = jest.fn((_rid, _timeout, onProgress) => {
+    onProgress({ phase: 'fetching', nid: 'z6MkSeed', index: 1, total: 1 });
+    return new Promise((resolve) => { finishClone = resolve; });
+  });
+  const ctx = loadManager({ embedded: { cloneRepoWithProgress, cancelClone } });
+  await ctx.mod.startRadicle();
+  const rid = 'rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5';
+
+  await ctx.mod.seedRepository(rid);
+  await expect(ctx.mod.getSeedFetchStatus(rid)).resolves.toMatchObject({
+    success: true,
+    status: { state: 'fetching', progress: { phase: 'fetching', nid: 'z6MkSeed' } },
+  });
+  await expect(ctx.mod.unseedRepository(rid)).resolves.toMatchObject({ success: true });
+  expect(ctx.embedded.cancelClone).toHaveBeenCalledWith(rid);
+  expect(ctx.embedded.unseedRepo).toHaveBeenCalledTimes(1);
+
+  // cancelCloneWithRetry backs off 0/10/25ms before the third attempt reports
+  // `cancelled: true` and the loop stops. Poll for that instead of racing a
+  // single fixed sleep, which flakes when the event loop stalls under load,
+  // then settle past the next (100ms) backoff to prove it really stopped at 3.
+  for (let i = 0; i < 200 && ctx.embedded.cancelClone.mock.calls.length < 3; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  expect(ctx.embedded.cancelClone).toHaveBeenCalledTimes(3);
+
+  finishClone({ cancelled: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(ctx.embedded.unseedRepo).toHaveBeenCalledTimes(2);
+
+  await ctx.mod.stopRadicle();
+  fs.rmSync(ctx.dataDir, { recursive: true, force: true });
+});
+
+// The native fetch writes a seeding policy as it replicates, so sync must
+// stay a retry path for repos the user already committed to — it carries no
+// per-repo consent prompt of its own.
+test('sync refuses a repository the node is not already seeding', async () => {
+  const ctx = loadManager();
+  await ctx.mod.startRadicle();
+  const rid = 'rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5';
+
+  await expect(ctx.mod.refetchRepository(rid)).resolves.toMatchObject({
+    success: false,
+    error: { code: 'NOT_SEEDED' },
+  });
+  expect(ctx.embedded.cloneRepoWithProgress).not.toHaveBeenCalled();
+
+  await ctx.mod.stopRadicle();
+  fs.rmSync(ctx.dataDir, { recursive: true, force: true });
+});
+
+test('sync restarts the fetch for an already-seeded repository', async () => {
+  const rid = 'rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5';
+  const ctx = loadManager({
+    embedded: { listSeededRepos: jest.fn(async () => [{ rid }]) },
+  });
+  await ctx.mod.startRadicle();
+
+  await expect(ctx.mod.refetchRepository(rid)).resolves.toMatchObject({
+    success: true,
+    status: { rid, state: 'fetching' },
+  });
+  expect(ctx.embedded.cloneRepoWithProgress).toHaveBeenCalledWith(
+    rid,
+    expect.any(Number),
+    expect.any(Function)
+  );
+
+  await ctx.mod.stopRadicle();
+  fs.rmSync(ctx.dataDir, { recursive: true, force: true });
+});
+
+test('sync fails closed when the seeding policies cannot be read', async () => {
+  const ctx = loadManager({
+    embedded: {
+      listSeededRepos: jest.fn(async () => {
+        throw new Error('node busy');
       }),
     },
   });
+  await ctx.mod.startRadicle();
 
-  return {
-    app,
-    BrowserWindow,
-    clearErrorState,
-    clearService,
-    execFileAsync,
-    execFileSync,
-    fsMock,
-    httpGet,
-    ipcMain,
-    loadSettings,
-    log,
-    mod,
-    setErrorState,
-    setStatusMessage,
-    spawn,
-    spawnedProcesses,
-    updateService,
-    windows,
-  };
-}
+  await expect(
+    ctx.mod.refetchRepository('rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5')
+  ).resolves.toMatchObject({ success: false, error: { code: 'NOT_SEEDED' } });
+  expect(ctx.embedded.cloneRepoWithProgress).not.toHaveBeenCalled();
 
-describe('radicle-manager', () => {
-  afterEach(() => {
-    jest.clearAllTimers();
-    jest.useRealTimers();
-    jest.restoreAllMocks();
+  await ctx.mod.stopRadicle();
+  fs.rmSync(ctx.dataDir, { recursive: true, force: true });
+});
+
+test('disabled profiles never start the addon', async () => {
+  const ctx = loadManager({ profile: { metadata: { nodes: { radicle: { mode: 'disabled' } } } } });
+  await expect(ctx.mod.startRadicle()).resolves.toEqual({ status: 'stopped', error: null });
+  expect(ctx.embedded.start).not.toHaveBeenCalled();
+  expect(ctx.registry.updateService).toHaveBeenCalledWith('radicle', {
+    api: null, gateway: null, mode: 'disabled',
   });
+  fs.rmSync(ctx.dataDir, { recursive: true, force: true });
+});
 
-  test('returns the dev binary path and creates the dev data directory on demand', () => {
-    const ctx = loadRadicleManagerModule({
-      radicleDataDirExists: false,
-    });
-    const platformMap = {
-      darwin: 'mac',
-      linux: 'linux',
-      win32: 'win',
-    };
-    const platform = platformMap[process.platform] || process.platform;
-    const binaryName = process.platform === 'win32' ? 'radicle-node.exe' : 'radicle-node';
+test('profile mode changes stop and re-enable the embedded node', async () => {
+  const profile = { metadata: { nodes: { radicle: { mode: 'managed' } } } };
+  const ctx = loadManager({ profile });
+  await ctx.mod.startRadicle();
 
-    expect(ctx.mod.getRadicleBinaryPath('radicle-node')).toBe(
-      path.join(PROJECT_ROOT, 'radicle-bin', `${platform}-${process.arch}`, binaryName)
-    );
-    expect(ctx.mod.getRadicleDataPath()).toBe(DEV_RADICLE_DATA_DIR);
-    expect(ctx.fsMock.mkdirSync).toHaveBeenCalledWith(DEV_RADICLE_DATA_DIR, { recursive: true });
-    expect(ctx.mod.getActiveRadHome()).toBe(DEV_RADICLE_DATA_DIR);
+  profile.metadata.nodes.radicle.mode = 'disabled';
+  await expect(ctx.mod.syncProfileMode()).resolves.toEqual({ status: 'stopped', error: null });
+  expect(ctx.embedded.shutdown).toHaveBeenCalledTimes(1);
+  expect(ctx.registry.updateService).toHaveBeenLastCalledWith('radicle', {
+    api: null, gateway: null, mode: 'disabled',
   });
+  expect(ctx.registry.setStatusMessage).toHaveBeenLastCalledWith(
+    'radicle',
+    'Disabled for this profile'
+  );
 
-  test('registers IPC handlers, blocks disabled integration, and validates missing RIDs', async () => {
-    const ctx = loadRadicleManagerModule({
-      settings: { enableRadicleIntegration: false },
-    });
+  profile.metadata.nodes.radicle.mode = 'managed';
+  await expect(ctx.mod.syncProfileMode()).resolves.toEqual({ status: 'stopped', error: null });
+  expect(ctx.registry.clearService).toHaveBeenCalledWith('radicle');
+  fs.rmSync(ctx.dataDir, { recursive: true, force: true });
+});
 
-    ctx.mod.registerRadicleIpc();
-
-    expect([...ctx.ipcMain.handlers.keys()].sort()).toEqual([
-      IPC.RADICLE_START,
-      IPC.RADICLE_STOP,
-      IPC.RADICLE_GET_STATUS,
-      IPC.RADICLE_CHECK_BINARY,
-      IPC.RADICLE_SEED,
-      IPC.RADICLE_GET_CONNECTIONS,
-      IPC.RADICLE_GET_REPO_PAYLOAD,
-      IPC.RADICLE_SYNC_REPO,
-    ].sort());
-
-    await expect(ctx.ipcMain.invoke(IPC.RADICLE_START)).resolves.toEqual({
-      status: 'stopped',
-      error: 'Radicle integration is disabled. Enable it in Settings > Experimental',
-    });
-    await expect(ctx.ipcMain.invoke(IPC.RADICLE_GET_STATUS)).resolves.toEqual({
-      status: 'stopped',
-      error: 'Radicle integration is disabled. Enable it in Settings > Experimental',
-    });
-    await expect(ctx.ipcMain.invoke(IPC.RADICLE_SEED, 'z3QXuMvMmSeEX3ZgoUidZC1v5MkKE')).resolves.toEqual(
-      failure(
-        'RADICLE_DISABLED',
-        'Radicle integration is disabled. Enable it in Settings > Experimental'
-      )
-    );
-    await expect(ctx.ipcMain.invoke(IPC.RADICLE_GET_CONNECTIONS)).resolves.toEqual(
-      failure(
-        'RADICLE_DISABLED',
-        'Radicle integration is disabled. Enable it in Settings > Experimental',
-        undefined,
-        { count: 0 }
-      )
-    );
-    await expect(ctx.ipcMain.invoke(IPC.RADICLE_GET_REPO_PAYLOAD, '')).resolves.toEqual(
-      failure(
-        'RADICLE_DISABLED',
-        'Radicle integration is disabled. Enable it in Settings > Experimental'
-      )
-    );
-    await expect(ctx.ipcMain.invoke(IPC.RADICLE_SYNC_REPO, '')).resolves.toEqual(
-      failure(
-        'RADICLE_DISABLED',
-        'Radicle integration is disabled. Enable it in Settings > Experimental'
-      )
-    );
+test('IPC keeps profile gating and RID validation', async () => {
+  const ctx = loadManager({
+    profile: { metadata: { nodes: { radicle: { mode: 'disabled' } } } },
   });
-
-  test('reports binary availability and validates missing repository IDs when enabled', async () => {
-    const ctx = loadRadicleManagerModule({
-      nodeBinaryExists: false,
-    });
-
-    ctx.mod.registerRadicleIpc();
-
-    await expect(ctx.ipcMain.invoke(IPC.RADICLE_CHECK_BINARY)).resolves.toEqual({ available: false });
-    await expect(ctx.ipcMain.invoke(IPC.RADICLE_SEED, '')).resolves.toEqual(
-      failure('INVALID_RID', 'Missing Radicle Repository ID', { field: 'rid' })
-    );
-    await expect(ctx.ipcMain.invoke(IPC.RADICLE_GET_REPO_PAYLOAD, '')).resolves.toEqual(
-      failure('INVALID_RID', 'Missing Radicle Repository ID', { field: 'rid' })
-    );
-    await expect(ctx.ipcMain.invoke(IPC.RADICLE_SYNC_REPO, '')).resolves.toEqual(
-      failure('INVALID_RID', 'Missing Radicle Repository ID', { field: 'rid' })
-    );
+  ctx.mod.registerRadicleIpc();
+  const IPC = require('../shared/ipc-channels');
+  await expect(ctx.handlers.get(IPC.RADICLE_START)()).resolves.toMatchObject({ status: 'stopped' });
+  await expect(ctx.handlers.get(IPC.RADICLE_SEED)(null, '')).resolves.toMatchObject({
+    success: false, error: { code: 'RADICLE_DISABLED' },
   });
+  fs.rmSync(ctx.dataDir, { recursive: true, force: true });
+});
 
-  test('reuses an existing local httpd and serves seed, payload, sync, and connection IPC requests', async () => {
-    jest.spyOn(global, 'setInterval').mockReturnValue(1);
-    jest.spyOn(global, 'clearInterval').mockImplementation(() => {});
+test('IPC pushes native seed progress back to the requesting internal page', async () => {
+  const ctx = loadManager();
+  const IPC = require('../shared/ipc-channels');
+  await ctx.mod.startRadicle();
+  ctx.mod.registerRadicleIpc();
+  const sender = { isDestroyed: jest.fn(() => false), send: jest.fn() };
+  const rid = 'rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5';
 
-    const window = createWindowMock();
-    const execFileAsync = jest.fn((binary, args) => {
-      if (args[0] === 'seed') {
-        return Promise.resolve({ stdout: '', stderr: '' });
-      }
-      if (args[0] === 'inspect') {
-        return Promise.resolve({ stdout: JSON.stringify({ name: 'project' }), stderr: '' });
-      }
-      if (args[0] === 'sync') {
-        return Promise.resolve({ stdout: 'synced\n', stderr: '' });
-      }
-      if (args[0] === 'node' && args[1] === 'status') {
-        return Promise.resolve({
-          stdout: [
-            'Node is running',
-            '│ z6MkgNR111   iris.radicle.xyz:8776   ✓   ↗   1.75 minute(s) │',
-            '│ z6MkgNR222   rosa.radicle.xyz:8776   ✓   ↗   2.10 minute(s) │',
-            '│ z6MkgNR333   local.radicle.xyz:8776   ✗   ↗   0.10 minute(s) │',
-          ].join('\n'),
-          stderr: '',
-        });
-      }
-      throw new Error(`Unexpected execFileAsync call: ${binary} ${args.join(' ')}`);
-    });
-    const ctx = loadRadicleManagerModule({
-      execFileAsync,
-      windows: [window],
-      portSequence: [true],
-      httpResponse: (url) => {
-        if (url === 'http://127.0.0.1:8780/') {
-          return { statusCode: 200, body: { version: '0.1.0' } };
-        }
-        return { statusCode: 404, body: '' };
-      },
-    });
-
-    ctx.mod.registerRadicleIpc();
-
-    await ctx.mod.startRadicle();
-    await flushMicrotasks();
-
-    await expect(ctx.ipcMain.invoke(IPC.RADICLE_GET_STATUS)).resolves.toEqual({
-      status: 'running',
-      error: null,
-    });
-    expect(ctx.spawn).not.toHaveBeenCalled();
-    expect(ctx.updateService).toHaveBeenCalledWith('radicle', {
-      api: 'http://127.0.0.1:8780',
-      gateway: 'http://127.0.0.1:8780',
-      mode: 'reused',
-    });
-    expect(window.webContents.send).toHaveBeenCalledWith(IPC.RADICLE_STATUS_UPDATE, {
-      status: 'starting',
-      error: null,
-    });
-    expect(window.webContents.send).toHaveBeenLastCalledWith(IPC.RADICLE_STATUS_UPDATE, {
-      status: 'running',
-      error: null,
-    });
-
-    await expect(
-      ctx.ipcMain.invoke(IPC.RADICLE_SEED, 'z3QXuMvMmSeEX3ZgoUidZC1v5MkKE')
-    ).resolves.toEqual(success());
-    await expect(
-      ctx.ipcMain.invoke(IPC.RADICLE_GET_REPO_PAYLOAD, 'rad://z3QXuMvMmSeEX3ZgoUidZC1v5MkKE')
-    ).resolves.toEqual(success({ payload: { name: 'project' } }));
-    await expect(
-      ctx.ipcMain.invoke(IPC.RADICLE_SYNC_REPO, 'rad:z3QXuMvMmSeEX3ZgoUidZC1v5MkKE')
-    ).resolves.toEqual(success({ output: 'synced\n' }));
-    await expect(ctx.ipcMain.invoke(IPC.RADICLE_GET_CONNECTIONS)).resolves.toEqual(
-      success({ count: 2 })
-    );
-
-    await expect(ctx.ipcMain.invoke(IPC.RADICLE_SEED, 'not-a-rid')).resolves.toEqual(
-      failure('INVALID_RID', 'Invalid Radicle Repository ID', { rid: 'not-a-rid' })
-    );
-
-    await ctx.mod.stopRadicle();
+  await expect(ctx.handlers.get(IPC.RADICLE_SEED)({ sender }, rid)).resolves.toMatchObject({
+    success: true,
   });
+  await new Promise((resolve) => setImmediate(resolve));
 
-  test('starts a bundled node on a fallback port after a conflict and stops both processes cleanly', async () => {
-    const execFileAsync = jest.fn().mockResolvedValue({ stdout: '', stderr: '' });
-    const ctx = loadRadicleManagerModule({
-      execFileAsync,
-      configExists: false,
-      keyFiles: [],
-      portSequence: [true, false],
-      httpResponse: (url) => {
-        if (url === 'http://127.0.0.1:8780/') {
-          return { statusCode: 503, body: '' };
-        }
-        if (url === 'http://127.0.0.1:8781/') {
-          return { statusCode: 200, body: {} };
-        }
-        return { statusCode: 404, body: '' };
-      },
-    });
-
-    await ctx.mod.startRadicle();
-    await flushMicrotasks();
-    await new Promise((resolve) => setTimeout(resolve, 1100));
-    await flushMicrotasks();
-
-    expect(ctx.execFileSync).toHaveBeenCalledWith(
-      expect.stringContaining(`${path.sep}rad`),
-      ['auth', '--alias', 'FreedomBrowser'],
-      expect.objectContaining({
-        env: expect.objectContaining({
-          RAD_HOME: DEV_RADICLE_DATA_DIR,
-          RAD_PASSPHRASE: '',
-        }),
-        stdio: 'pipe',
-      })
-    );
-    expect(ctx.fsMock.writeFileSync).toHaveBeenCalledWith(
-      path.join(DEV_RADICLE_DATA_DIR, 'config.json'),
-      JSON.stringify({
-        preferredSeeds: [
-          'z6MkrLMMsiPWUcNPHcRajuMi9mDfYckSoJyPwwnknocNYPm7@iris.radicle.xyz:8776',
-          'z6Mkmqogy2qEM2ummccUthFEaaHvyYmYBYh3dbe9W4ebScxo@rosa.radicle.xyz:8776',
-        ],
-        node: {
-          alias: 'FreedomBrowser',
-        },
-      }, null, 2)
-    );
-    expect(ctx.spawnedProcesses).toHaveLength(2);
-    expect(ctx.spawnedProcesses[0].binary).toContain('radicle-node');
-    expect(ctx.spawnedProcesses[1].binary).toContain('radicle-httpd');
-    expect(ctx.spawnedProcesses[1].args).toEqual(['--listen', '127.0.0.1:8781']);
-    expect(ctx.updateService).toHaveBeenCalledWith('radicle', {
-      api: 'http://127.0.0.1:8781',
-      gateway: 'http://127.0.0.1:8781',
-      mode: 'bundled',
-    });
-    expect(ctx.setStatusMessage).toHaveBeenCalledWith('radicle', 'Fallback Port: 8781');
-    expect(ctx.mod.getActivePort()).toBe(8781);
-
-    const stopPromise = ctx.mod.stopRadicle();
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    await flushMicrotasks();
-    await stopPromise;
-
-    expect(ctx.spawnedProcesses[1].kills).toContain('SIGTERM');
-    expect(ctx.spawnedProcesses[0].kills).toContain('SIGTERM');
-    expect(ctx.clearService).toHaveBeenCalledWith('radicle');
-  });
-
-  test('starts httpd against a detected system node and stops only that spawned process', async () => {
-    const ctx = loadRadicleManagerModule({
-      systemSocketExists: true,
-      portSequence: [true, false],
-      httpResponse: (url) => {
-        if (url === 'http://127.0.0.1:8780/') {
-          return { statusCode: 503, body: '' };
-        }
-        if (url === 'http://127.0.0.1:8781/') {
-          return { statusCode: 200, body: {} };
-        }
-        return { statusCode: 404, body: '' };
-      },
-    });
-
-    await ctx.mod.startRadicle();
-    await flushMicrotasks();
-    await new Promise((resolve) => setTimeout(resolve, 1100));
-    await flushMicrotasks();
-
-    expect(ctx.spawnedProcesses).toHaveLength(1);
-    expect(ctx.spawnedProcesses[0].binary).toContain('radicle-httpd');
-    expect(ctx.spawnedProcesses[0].args).toEqual(['--listen', '127.0.0.1:8781']);
-    expect(ctx.updateService).toHaveBeenCalledWith('radicle', {
-      api: 'http://127.0.0.1:8781',
-      gateway: 'http://127.0.0.1:8781',
-      mode: 'reused',
-    });
-    expect(ctx.setStatusMessage).toHaveBeenCalledWith('radicle', 'System node: localhost:8781');
-    expect(ctx.mod.getActiveRadHome()).toBe(path.join(DEFAULT_HOME_DIR, '.radicle'));
-
-    const stopPromise = ctx.mod.stopRadicle();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    await stopPromise;
-
-    expect(ctx.spawnedProcesses[0].kills).toContain('SIGTERM');
-    expect(ctx.clearService).toHaveBeenCalledWith('radicle');
-  });
-
-  test('fails startup when identity creation cannot complete', async () => {
-    const ctx = loadRadicleManagerModule({
-      keyFiles: [],
-      radBinaryExists: false,
-      portSequence: [false],
-      httpResponse: () => ({ statusCode: 404, body: '' }),
-    });
-
-    await ctx.mod.startRadicle();
-    await flushMicrotasks();
-
-    expect(ctx.spawn).not.toHaveBeenCalled();
-    expect(ctx.setStatusMessage).toHaveBeenCalledWith('radicle', 'Node failed to start');
-    expect(ctx.log.error).toHaveBeenCalledWith('[Radicle] rad binary not found for identity creation');
-  });
+  expect(sender.send).toHaveBeenCalledWith(
+    IPC.RADICLE_SEED_STATUS_UPDATE,
+    expect.objectContaining({ rid, progress: { phase: 'resolving', candidates: 2 } })
+  );
+  expect(sender.send).toHaveBeenCalledWith(
+    IPC.RADICLE_SEED_STATUS_UPDATE,
+    expect.objectContaining({ rid, state: 'fetched', progress: { phase: 'done' } })
+  );
+  fs.rmSync(ctx.dataDir, { recursive: true, force: true });
 });
