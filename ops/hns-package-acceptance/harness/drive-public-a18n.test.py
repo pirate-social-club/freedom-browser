@@ -1,5 +1,6 @@
 """Reject false positive live-browser results without starting a browser."""
 import runpy
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -22,6 +23,19 @@ class LiveJourneyTests(unittest.TestCase):
         for targets in [[], [row, row], [{**row, "url": "https://other.invalid/src/renderer/index.html"}], [{**row, "type": "webview"}]]:
             with self.assertRaises(module["ObservationFailure"]):
                 select_ui(targets)
+
+    def test_changing_url_is_read_once_and_never_leaked(self):
+        async def check(expression):
+            program = """const vm=require('node:vm'),assert=require('node:assert/strict');let reads=0;const view={getURL(){reads++;return reads===1?'https://app.a18n/':'https://unlisted.invalid/second';},async executeJavaScript(){return {status:200};}};const context={window:{serviceRegistry:{async getRegistry(){return {hns:{localResolverReady:true}};}}},document:{querySelectorAll(){return [view];}}};Promise.resolve(vm.runInNewContext(process.argv[1],context)).then(result=>{assert.equal(reads,1);assert.equal(result.views[0].destination,'app.a18n');assert.ok(!JSON.stringify(result).includes('unlisted'));}).catch(()=>process.exit(1));"""
+            subprocess.run(["node", "-e", program, expression], check=True, capture_output=True)
+            return {"resolver_ready": True, "views": []}
+        globals_ = module["snapshot"].__globals__
+        previous = globals_["evaluate"]
+        try:
+            globals_["evaluate"] = check
+            module["snapshot"]()
+        finally:
+            globals_["evaluate"] = previous
 
     def test_three_real_host_verdicts(self):
         for host, status in [("app.a18n", 200), ("journeytest.a18n", 200), ("unclaimedtest.a18n", 421)]:

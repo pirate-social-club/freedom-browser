@@ -1,5 +1,5 @@
 {
-  "README.md": "165ec09a901821384a2e6410d4d1575f9f856e49b3982248c03f8e52258c6bc3",
+  "README.md": "da48818dba814bc4cdb820846cb53c4e17f6c4a6da386c01911c885cc3f78941",
   "agent-browser-pin.json": "b056d3ac845656934e2eecaa978c62d16b53623bf75734a6c1b529832e0325f2",
   "cold-setup.py": "ba664db01abf0d1b31a31dcd952b689346152d10cef34277ae1d3ec02280a0ed",
   "harness/authenticated-route.py": "4ee9eb8883b1c3a23c8492c9d0ef02b9435e21dbb7b7cc9ead5b4e93c9826dd0",
@@ -7,8 +7,8 @@
   "harness/checkpoint-integrity.json": "4edab3ec782db36dac70a50a7e6390b2d6b6c98d95e3574d15970e46952c126d",
   "harness/dns-copy.py": "179793ee3de6382afe42d2d817986b290a97f13dd6847b3cd05e1b0ee889ad64",
   "harness/drive-acceptance.py": "45ffde5c59941bd780cd74577807dca15abc1ce9c0587e97dd12766612b96402",
-  "harness/drive-public-a18n.py": "7eedf87177a96655b065dae50537df8be3461d076444125d5a3dc681cbab0937",
-  "harness/drive-public-a18n.test.py": "6049afbd43af00afddd381eb4dfa4e838ae1cd9fe8644a0c539fc4479c927092",
+  "harness/drive-public-a18n.py": "c75cd139b03361b729f3d7acf9c477dc8a0ae9efb78bd9c94fc61841db90a51a",
+  "harness/drive-public-a18n.test.py": "bbf73f53ad0a7ddfdc6f0c1a59ebdd9a8711b304bc1ee63d22c531a523972a3d",
   "harness/electron-context.py": "4b2219ee7d1216100de7b3110ee8cd8d25da21755c9e29432c29335b65858c8a",
   "harness/electron-context.test.py": "7907737cb5a8c7d0630c06679c272c3fe7cb4709b03da63955047d32b0d3cb0d",
   "harness/electron-provenance.py": "95702859f0d1c913a8c8cd9855f4fa1a6ac5bfdf33eec64173d70ab64b8449b6",

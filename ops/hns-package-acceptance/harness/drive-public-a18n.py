@@ -66,8 +66,8 @@ async def evaluate(expression):
 def snapshot():
     # Only public identity predicates are retained; no page text or profile data.
     content = "({status:performance.getEntriesByType('navigation')[0]?.responseStatus,community_id_present:document.documentElement.outerHTML.includes(" + json.dumps(COMMUNITY) + "),community_visible:document.body.innerText.includes('HNS a18n staging'),member_profile_present:document.querySelector('main[data-persona-profile-state=success]')!==null,claimed_label_visible:Array.from(document.querySelectorAll('main[data-persona-profile-state=success] ul[aria-label=Names] li')).some(e=>e.innerText.trim()==='journeytest.a18n'&&e.getClientRects().length>0)})"
-    destinations = json.dumps(["https://" + host + "/" for host, _ in TARGETS])
-    expression = "(async()=>({resolver_ready:(await window.serviceRegistry.getRegistry()).hns.localResolverReady===true,views:await Promise.all(Array.from(document.querySelectorAll('webview')).map(async v=>({destination:" + destinations + ".includes(v.getURL())?new URL(v.getURL()).hostname:null,content:await v.executeJavaScript(" + json.dumps(content) + ")})))}))()"
+    destinations = json.dumps([["https://" + host + "/", host] for host, _ in TARGETS])
+    expression = "(async()=>{const destinations=new Map(" + destinations + ");return {resolver_ready:(await window.serviceRegistry.getRegistry()).hns.localResolverReady===true,views:await Promise.all(Array.from(document.querySelectorAll('webview')).map(async v=>{const url=v.getURL();return {destination:destinations.get(url)??null,content:await v.executeJavaScript(" + json.dumps(content) + ")};}))};})()"
     return asyncio.run(evaluate(expression))
 
 
