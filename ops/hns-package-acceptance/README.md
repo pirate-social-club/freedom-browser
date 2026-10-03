@@ -52,9 +52,9 @@ and return 200 in their actual webview. The unclaimed host must return 421.
 Only finite identity predicates and navigation status are retained, alongside
 the existing provenance, sandbox, resource and cleanup receipts.
 
-The five pure driver regressions reject wrong status or destination, absent
+The six pure driver regressions reject wrong status or destination, absent
 rendered content, claimed content on an unclaimed host, an unready resolver,
-and missing or duplicate webviews. These are driver checks. A complete hosted
+missing or duplicate webviews, and a wrong or ambiguous installed UI target. These are driver checks. A complete hosted
 run is still required to establish actual browser acceptance. This task does
 not establish a browser upgrade, a new security release, local VPN behavior,
 full application restart, Bob Extension acceptance or production readiness.

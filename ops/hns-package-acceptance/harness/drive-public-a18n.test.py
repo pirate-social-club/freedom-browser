@@ -3,16 +3,26 @@ import runpy
 import unittest
 from pathlib import Path
 
-accepted = runpy.run_path(str(Path(__file__).with_name("drive-public-a18n.py")))["accepted"]
+module = runpy.run_path(str(Path(__file__).with_name("drive-public-a18n.py")))
+accepted = module["accepted"]
+select_ui = module["select_ui"]
+UI_URL = module["UI_URL"]
 
 
 def observation(host, status=200):
-    return {"resolver_ready": True, "views": [{"url": "https://" + host + "/", "content": {
+    return {"resolver_ready": True, "views": [{"destination": host, "content": {
         "status": status, "community_id_present": host == "app.a18n",
-        "community_visible": host == "app.a18n", "claimed_label_visible": host == "journeytest.a18n"}}]}
+        "community_visible": host == "app.a18n", "member_profile_present": host == "journeytest.a18n", "claimed_label_visible": host == "journeytest.a18n"}}]}
 
 
 class LiveJourneyTests(unittest.TestCase):
+    def test_only_unique_exact_installed_ui_is_selected(self):
+        row = {"type": "page", "url": UI_URL, "webSocketDebuggerUrl": "ws://127.0.0.1:9244/devtools/page/test"}
+        self.assertEqual(select_ui([row]), row)
+        for targets in [[], [row, row], [{**row, "url": "https://other.invalid/src/renderer/index.html"}], [{**row, "type": "webview"}]]:
+            with self.assertRaises(module["ObservationFailure"]):
+                select_ui(targets)
+
     def test_three_real_host_verdicts(self):
         for host, status in [("app.a18n", 200), ("journeytest.a18n", 200), ("unclaimedtest.a18n", 421)]:
             self.assertTrue(accepted(observation(host, status), host, status))
@@ -22,11 +32,11 @@ class LiveJourneyTests(unittest.TestCase):
             status = 421 if host.startswith("unclaimed") else 200
             self.assertFalse(accepted(observation(host, 503), host, status))
             value = observation(host, status)
-            value["views"][0]["url"] = "https://other.invalid/"
+            value["views"][0]["destination"] = None
             self.assertFalse(accepted(value, host, status))
 
     def test_missing_rendered_content_is_refused(self):
-        for host, predicate in [("app.a18n", "community_id_present"), ("app.a18n", "community_visible"), ("journeytest.a18n", "claimed_label_visible")]:
+        for host, predicate in [("app.a18n", "community_id_present"), ("app.a18n", "community_visible"), ("journeytest.a18n", "claimed_label_visible"), ("journeytest.a18n", "member_profile_present")]:
             value = observation(host)
             value["views"][0]["content"][predicate] = False
             self.assertFalse(accepted(value, host, 200))
