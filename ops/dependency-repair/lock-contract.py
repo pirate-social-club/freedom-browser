@@ -54,6 +54,32 @@ def resolved_graph(lock, roots):
     return graph
 
 
+def restore_protected_entries(manifest, original, generated):
+    roots = set()
+    for kind in ("dependencies", "optionalDependencies", "devDependencies"):
+        roots.update(manifest.get(kind, {}))
+    roots.difference_update(("jest", "babel-jest"))
+    protected = production_entries(original)
+    protected.update({path: value["entry"] for path, value in resolved_graph(original, roots).items()})
+    lock = copy.deepcopy(generated)
+    restored = {}
+    for path, entry in protected.items():
+        if lock["packages"].get(path) != entry:
+            lock["packages"][path] = copy.deepcopy(entry)
+            restored[path] = copy.deepcopy(entry)
+    isolated = {}
+    helper = "node_modules/@babel/helper-plugin-utils"
+    for parent in ("node_modules/@babel/plugin-syntax-jsx", "node_modules/@babel/plugin-syntax-typescript"):
+        if helper in restored and parent in generated["packages"]:
+            require(parent not in protected and parent in resolved_graph(generated, ("jest", "babel-jest")),
+                    "jest_helper_scope")
+            nested = parent + "/" + helper
+            require(nested not in lock["packages"], "jest_helper_already_nested")
+            lock["packages"][nested] = copy.deepcopy(generated["packages"][helper])
+            isolated[nested] = copy.deepcopy(generated["packages"][helper])
+    return lock, restored, isolated
+
+
 def validate_lock(original_manifest, original_lock, manifest, lock):
     require(manifest == candidate_manifest(original_manifest), "unrelated_manifest_change")
     require(lock.get("lockfileVersion") == original_lock.get("lockfileVersion") == 3,

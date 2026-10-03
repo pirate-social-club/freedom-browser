@@ -37,6 +37,51 @@ def inputs():
 
 
 class ContractTests(unittest.TestCase):
+    def test_shared_dependency_entries_are_preserved(self):
+        values = inputs()
+        values[3]["packages"]["node_modules/shared"]["version"] = "2"
+        repaired, restored, isolated = C["restore_protected_entries"](values[0], values[1], values[3])
+        self.assertEqual(restored, {"node_modules/shared": values[1]["packages"]["node_modules/shared"]})
+        self.assertTrue(C["validate_lock"](*values[:3], repaired))
+        self.assertEqual(isolated, {})
+
+    def test_preserved_entry_must_satisfy_incoming_ranges(self):
+        for range_value, passes in (("^1.0.0", True), ("^2.0.0", False)):
+            with tempfile.TemporaryDirectory(prefix="freedom-protected-range-") as directory:
+                root = Path(directory)
+                restored = {"node_modules/shared": {"version": "1.0.0"}}
+                packages = {**restored, "node_modules/jest": {"dependencies": {"shared": range_value}}}
+                (root / "restored.json").write_text(json.dumps(restored))
+                (root / "lock.json").write_text(json.dumps({"packages": packages}))
+                result = subprocess.run(["node", "-e", REFRESH["PROTECTED_RANGE_SCRIPT"],
+                                         str(root / "restored.json"), str(root / "lock.json"), str(root / "ranges.json")],
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode == 0, passes)
+                observation = json.loads((root / "ranges.json").read_text())
+                self.assertEqual(observation["passed"], passes)
+                self.assertEqual(observation["checked_edges"], 1)
+
+    def test_jest_syntax_helpers_have_their_own_new_copies(self):
+        values = inputs()
+        helper = "node_modules/@babel/helper-plugin-utils"
+        parents = ("node_modules/@babel/plugin-syntax-jsx", "node_modules/@babel/plugin-syntax-typescript")
+        old = {"version": "7.28.6", "dev": True}
+        new = {"version": "7.29.7", "dev": True}
+        values[1]["packages"][helper] = old
+        values[1]["packages"]["node_modules/builder"]["dependencies"]["@babel/helper-plugin-utils"] = "^7.28.0"
+        values[3]["packages"]["node_modules/builder"] = copy.deepcopy(values[1]["packages"]["node_modules/builder"])
+        values[3]["packages"][helper] = new
+        for parent in parents:
+            values[3]["packages"][parent] = {"version": "7.29.7", "dev": True,
+                                             "dependencies": {"@babel/helper-plugin-utils": "^7.29.7"}}
+        values[3]["packages"]["node_modules/jest"]["dependencies"] = {
+            "@babel/plugin-syntax-jsx": "^7.29.7", "@babel/plugin-syntax-typescript": "^7.29.7"}
+        repaired, restored, isolated = C["restore_protected_entries"](values[0], values[1], values[3])
+        self.assertEqual(repaired["packages"][helper], old)
+        self.assertEqual(isolated, {parent + "/" + helper: new for parent in parents})
+        self.assertEqual(restored, {helper: old})
+        self.assertTrue(C["validate_lock"](*values[:3], repaired))
+
     def test_distinct_empty_npm_configuration(self):
         with tempfile.TemporaryDirectory(prefix="freedom-refresh-config-") as directory:
             with mock.patch.dict(os.environ, {}, clear=True):

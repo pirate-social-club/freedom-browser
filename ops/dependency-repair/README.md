@@ -7,6 +7,15 @@ gone. It runs lifecycle-disabled installation, lint and the entire existing
 990-test Jest discovery. No application input, dependency override or audit
 policy changes during generation. Download/build validation is separate.
 
+The npm result and exact protected-entry restorations are retained separately.
+Unrelated production and development entries are restored from the original
+lock before validation, including original nested copies. A clean npm install
+and explicit semantic-version checks must accept every incoming edge to those
+entries before test success can validate the candidate.
+Jest's JSX and TypeScript syntax plugins keep their newer Babel helpers in
+nested copies, so other Babel consumers retain their original helper. Each
+resolution is checked.
+
 The full high-severity audit still runs. A successful refresh receipt means
 the Jest repair validated; its full_audit_passed field records whether the
 remaining downloader advisory still fails. The ordinary CI gate is unchanged.

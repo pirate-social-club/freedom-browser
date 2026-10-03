@@ -11,6 +11,41 @@ import time
 BASE_MANIFEST = "03f1fc938d26812151a5053320486b9db771bb74925452176bc4414d4e6944b4"
 BASE_LOCK = "aa207af2fd95c6fbccfcbabdcb8cc19c41f27e0aa3d672e941fc3ee3b5103044"
 
+PROTECTED_RANGE_SCRIPT = r"""
+const fs = require('fs');
+const semver = require('semver');
+const restored = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+const packages = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')).packages;
+function resolve(parent, name) {
+  for (;;) {
+    const path = (parent ? parent + '/' : '') + 'node_modules/' + name;
+    if (packages[path]) return path;
+    if (!parent) return null;
+    const position = parent.lastIndexOf('/node_modules/');
+    parent = position >= 0 ? parent.slice(0, position) : '';
+  }
+}
+let checked = 0;
+const failures = [];
+for (const [parent, entry] of Object.entries(packages)) {
+  for (const kind of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+    for (const [name, range] of Object.entries(entry[kind] || {})) {
+      const child = resolve(parent, name);
+      if (!Object.hasOwn(restored, child)) continue;
+      if (!semver.validRange(range) || !semver.satisfies(packages[child].version, range)) {
+        failures.push({parent, name, range, child, version: packages[child].version});
+      }
+      checked++;
+    }
+  }
+}
+const observation = {passed: !failures.length && (!Object.keys(restored).length || checked > 0),
+  checked_edges: checked, failures};
+fs.writeFileSync(process.argv[3], JSON.stringify(observation, null, 2) + '\n');
+if (!observation.passed) throw new Error('protected_dependency_range_unsatisfied');
+console.log(JSON.stringify(observation));
+"""
+
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -81,6 +116,16 @@ def main():
         receipt["stage"] = "lock_contract"
         new_manifest = json.loads((repo / "package.json").read_text())
         new_lock = json.loads((repo / "package-lock.json").read_text())
+        (public / "npm-generated-lock.json").write_text(json.dumps(new_lock, indent=2) + "\n")
+        new_lock, restored, isolated = contract["restore_protected_entries"](manifest, lock, new_lock)
+        (repo / "package-lock.json").write_text(json.dumps(new_lock, indent=2) + "\n")
+        restored_path = public / "protected-restoration.json"
+        restored_path.write_text(json.dumps(restored, indent=2) + "\n")
+        receipt["restored_protected_entries"] = sorted(restored)
+        (public / "isolated-jest-entries.json").write_text(json.dumps(isolated, indent=2) + "\n")
+        targets_path = public / "range-targets.json"
+        targets_path.write_text(json.dumps({**restored, **isolated}, indent=2) + "\n")
+        receipt["isolated_jest_entries"] = sorted(isolated)
         for name in ("package.json", "package-lock.json"):
             (public / name).write_bytes((repo / name).read_bytes())
         receipt.update({"candidate_manifest_sha256": digest(public / "package.json"),
@@ -93,6 +138,10 @@ def main():
         changes = contract["validate_lock"](manifest, lock, new_manifest, new_lock)
         run(["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund",
              "--registry=https://registry.npmjs.org"], "clean_install")
+        ranges_path = public / "protected-ranges.json"
+        run(["node", "-e", PROTECTED_RANGE_SCRIPT, str(targets_path), str(repo / "package-lock.json"), str(ranges_path)],
+            "protected_ranges")
+        receipt["protected_ranges"] = json.loads(ranges_path.read_text())
         receipt["stage"] = "full_audit"
         persist()
         audit = subprocess.run(["npm", "audit", "--json", "--audit-level=high",
