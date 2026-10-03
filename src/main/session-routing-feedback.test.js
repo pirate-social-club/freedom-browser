@@ -29,6 +29,7 @@ function fixture() {
     ipcMain: { handle: (channel, handler) => { expect(channel).toBe(IPC.ROUTING_STATUS_GET); read = handler; } },
     webContents: { getAllWebContents: () => [host, other, guest, foreign] },
     getMainWindows: () => windows, getDefaultSession: () => main,
+    getPartitionForWebContents: (host) => host.privatePartition || null,
     getPolicy: controller.policyFor, setPolicyObserver: controller.setPolicyObserver });
   app.emit('web-contents-created', {}, host);
   return { controller, host, guest, foreign, main, dialog, windows,
@@ -63,6 +64,28 @@ describe('read-only routing feedback', () => {
       f.host.mainFrame.url = indexUrl + suffix;
       expect(() => f.read()).toThrow('UI main frame');
     }
+  });
+
+  test('binds private chrome query to its registered partition', async () => {
+    const f = fixture();
+    f.windows.splice(1);
+    f.host.privatePartition = 'private-test';
+    f.host.mainFrame.url = indexUrl + '?privatePartition=private-test&initialUrl=https%3A%2F%2Fexample.com';
+    expect(f.read().ui.allowed).toBe(true);
+    await f.controller.quarantineAll();
+    await flush();
+    expect(f.host.send).toHaveBeenLastCalledWith(IPC.ROUTING_STATUS_UPDATE,
+      expect.objectContaining({ ui: expect.objectContaining({ allowed: false }) }));
+    expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
+    for (const suffix of ['', '?privatePartition=private-other',
+      '?privatePartition=private-test&privatePartition=private-test',
+      '?privatePartition=private-test&other=1']) {
+      f.host.mainFrame.url = indexUrl + suffix;
+      expect(() => f.read()).toThrow('UI main frame');
+    }
+    delete f.host.privatePartition;
+    f.host.mainFrame.url = indexUrl + '?privatePartition=private-test';
+    expect(() => f.read()).toThrow('UI main frame');
   });
 
   test('pushes quarantine and recovery without granting routing authority', async () => {

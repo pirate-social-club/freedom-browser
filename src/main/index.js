@@ -307,6 +307,7 @@ const {
   createPrivateWindow,
   setPrivateSessionConfigurator,
   registerPrivateCleanup,
+  getPartitionForWebContents,
 } = require('./private/private-windows');
 const { initUpdater } = require('./updater');
 const { setupApplicationMenu, updateTabMenuItems } = require('./menu');
@@ -429,7 +430,7 @@ async function bootstrap() {
   installX402Interception();
   registerApiRequestDiagnostics(defaultSession);
   initializeSessionRouting(terminateRouting);
-  registerSessionRoutingFeedback({ app, ipcMain, webContents, dialog, getMainWindows,
+  registerSessionRoutingFeedback({ app, ipcMain, webContents, dialog, getMainWindows, getPartitionForWebContents,
     getPolicy: getProxySessionPolicy, getDefaultSession: () => session.defaultSession,
     setPolicyObserver: setProxySessionPolicyObserver });
   await registerHnsSession(defaultSession);

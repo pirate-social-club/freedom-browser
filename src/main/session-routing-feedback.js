@@ -5,11 +5,14 @@ const IPC = require('../shared/ipc-channels');
 const indexUrl = pathToFileURL(path.join(__dirname, '..', 'renderer', 'index.html')).href;
 const states = new Set(['initial', 'ready', 'enrolling', 'updating', 'configured', 'quarantined', 'retired', 'unknown']);
 
-function isBrowserDocument(value) {
+function isBrowserDocument(value, privatePartition) {
   try {
     const url = new URL(value);
-    if (url.hash || [...url.searchParams.keys()].some((key) => key !== 'initialUrl') ||
-        url.searchParams.getAll('initialUrl').length > 1) return false;
+    const partitions = url.searchParams.getAll('privatePartition');
+    if (url.hash || [...url.searchParams.keys()].some((key) =>
+      key !== 'initialUrl' && key !== 'privatePartition') ||
+      url.searchParams.getAll('initialUrl').length > 1 || partitions.length > 1) return false;
+    if (privatePartition ? partitions[0] !== privatePartition : partitions.length !== 0) return false;
     url.search = '';
     return url.href === indexUrl;
   } catch { return false; }
@@ -17,7 +20,8 @@ function isBrowserDocument(value) {
 
 // Read-only feedback. Permission remains entirely with the controller/guard.
 function registerSessionRoutingFeedback({ app, ipcMain, webContents, dialog,
-  getMainWindows, getPolicy, getDefaultSession, setPolicyObserver }) {
+  getMainWindows, getPolicy, getDefaultSession, setPolicyObserver,
+  getPartitionForWebContents = () => null }) {
   const ready = new WeakSet();
   const unresponsive = new WeakSet();
   let revision = 0;
@@ -29,7 +33,9 @@ function registerSessionRoutingFeedback({ app, ipcMain, webContents, dialog,
       !win.isDestroyed() && win.webContents === host);
   }
   function trustedHost(host) {
-    return liveHost(host) && isBrowserDocument(host.mainFrame?.url);
+    try {
+      return liveHost(host) && isBrowserDocument(host.mainFrame?.url, getPartitionForWebContents(host));
+    } catch { return false; }
   }
   function status(targetSession) {
     try {

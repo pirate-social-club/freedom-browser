@@ -362,6 +362,15 @@
     },
     "viem": {
       "ws": "^8.21.0"
+    },
+    "axios": "^1.20.0",
+    "blue-js-sdk": {
+      ".": "2.8.0",
+      "@cosmjs/amino": "0.39.0",
+      "@cosmjs/crypto": "0.39.0",
+      "@cosmjs/encoding": "0.39.0",
+      "@cosmjs/proto-signing": "0.39.0",
+      "@cosmjs/stargate": "0.39.0"
     }
   },
   "title": "Freedom",
