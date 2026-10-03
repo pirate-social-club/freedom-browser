@@ -38,4 +38,23 @@ exact head. That automatic trigger is retired after adoption because its
 original baseline is obsolete. Historical run 37107456500 at 066cc653 retains
 the accepted generator source and inputs. Manual reproduction must use that
 historical pre-adoption source; the current installed lock is not a generation
-baseline. No workflow writes back to Git. Ordinary full-audit CI is unchanged.
+baseline. No workflow writes back to Git. The complete audit command remains.
+
+The workspace_owner approved the exact GHSA-ch52-4w7c-c8xp exception on
+2026-10-03. The immutable policy records the approved proposal digest, exact
+lock, all eight findings and their complete dependency records. The guard
+accepts it only in CI's dependency-audit job before 2026-10-10 at 00:00 UTC.
+Changed lock or manifest bytes, paths, records, finding identities, severity,
+advisory ancestry, runtime reachability, malformed audit or expired approval
+refuse the exception. Future policy changes require another owner decision.
+
+CI still runs the complete `npm audit --audit-level=high --json`, retaining
+the full output and actual exit code. Its job summary and separate verdict
+show that the full audit failed when this exception is used. A green
+development check under this policy provides no packaging or release
+acceptance. Effective downloader/cache configuration, isolated ownership and
+actual packaged exclusion evidence remain necessary before packaging. The
+installed-browser, ordinary Mullvad, three-public-host and exact release
+approval requirements remain. No broad development-dependency exclusion is
+applied. Pure refusal fixtures use the accepted hosted audit as their input
+and make no network requests.

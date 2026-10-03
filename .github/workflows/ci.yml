@@ -44,9 +44,25 @@ jobs:
         working-directory: freedom-browser
         run: npm ci --ignore-scripts
 
-      - name: Audit dependencies
+      - name: Verify scoped audit refusal fixtures
         working-directory: freedom-browser
-        run: npm audit --audit-level=high
+        run: python3 ops/dependency-repair/audit-scoped-exception.test.py
+
+      - name: Retain full audit and evaluate approved development exception
+        working-directory: freedom-browser
+        run: python3 ops/dependency-repair/audit-scoped-exception.py --output "$RUNNER_TEMP/freedom-dependency-audit"
+
+      - name: Upload full audit and separate exception verdict
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: dependency-audit
+          path: |
+            ${{ runner.temp }}/freedom-dependency-audit/full-audit.json
+            ${{ runner.temp }}/freedom-dependency-audit/audit-execution.json
+            ${{ runner.temp }}/freedom-dependency-audit/exception-verdict.json
+          if-no-files-found: error
+          retention-days: 7
 
   test:
     runs-on: ubuntu-latest
