@@ -2,15 +2,6 @@ name: Scoped Jest lock refresh
 
 on:
   workflow_dispatch:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - .github/workflows/dependency-lock-refresh.yml
-      - ops/dependency-repair/README.md
-      - ops/dependency-repair/lock-contract.py
-      - ops/dependency-repair/lock-contract.test.py
-      - ops/dependency-repair/refresh-jest-lock.py
-      - ops/dependency-repair/verify-refresh-cleanup.py
 
 permissions:
   contents: read

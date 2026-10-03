@@ -32,7 +32,10 @@ manifests, graph changes, public audit metadata and finite verification receipts
 Private command logs, full test objects, caches and installed trees stay on
 the disposable runner. The workflow records unit/cgroup cleanup separately.
 
-The first run uses a path-scoped pull-request event restricted to PR39's
-same-repository integration branch. Checkout and receipt source both bind to
-the exact pull-request head. Manual dispatch uses that branch after GitHub
-admits the workflow on the default branch. No workflow writes back to Git.
+Generation used a path-scoped pull-request event restricted to PR39's
+same-repository integration branch, with checkout and receipt bound to its
+exact head. That automatic trigger is retired after adoption because its
+original baseline is obsolete. Historical run 37107456500 at 066cc653 retains
+the accepted generator source and inputs. Manual reproduction must use that
+historical pre-adoption source; the current installed lock is not a generation
+baseline. No workflow writes back to Git. Ordinary full-audit CI is unchanged.
