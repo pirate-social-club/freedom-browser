@@ -65,7 +65,7 @@ runs:
     - name: Restore the Electron download cache
       id: electron-cache
       if: inputs.ignore-scripts != 'true'
-      uses: actions/cache@v4
+      uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
       with:
         path: ${{ steps.electron-cache-meta.outputs.dir }}
         key: electron-${{ runner.os }}-${{ runner.arch }}-${{ steps.electron-cache-meta.outputs.version }}

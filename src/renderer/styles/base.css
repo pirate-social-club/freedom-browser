@@ -64,8 +64,8 @@ body {
   justify-content: center;
   padding: 2rem;
   text-align: center;
-  background: var(--bg-primary, #1f2020);
-  color: var(--text-primary, #f5f5f5);
+  background: var(--bg);
+  color: var(--text);
 }
 
 .routing-notice[hidden] {

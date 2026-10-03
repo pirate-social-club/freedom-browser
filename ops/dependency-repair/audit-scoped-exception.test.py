@@ -2,6 +2,7 @@
 import copy
 import datetime
 import io
+import gzip
 import json
 from pathlib import Path
 import runpy
@@ -14,8 +15,10 @@ from unittest import mock
 
 C = runpy.run_path(str(Path(__file__).with_name("audit-scoped-exception.py")))
 ROOT = Path(__file__).resolve().parents[2]
-MANIFEST = (ROOT / "package.json").read_bytes()
-LOCK = (ROOT / "package-lock.json").read_bytes()
+# Fixed approval bytes exercise refusal boundaries after the live graph changes.
+# These fixtures grant no exception to the current candidate.
+MANIFEST = Path(__file__).with_name("approved-audit-manifest-fixture.json").read_bytes()
+LOCK = gzip.decompress(Path(__file__).with_name("approved-audit-lock-fixture.json.gz").read_bytes())
 POLICY = C["load_policy"]()
 AUDIT = json.loads(Path(__file__).with_name("audit-fixture.json").read_bytes())
 NOW = datetime.datetime(2026, 10, 3, 12, tzinfo=datetime.timezone.utc)
@@ -28,6 +31,19 @@ def evaluate(audit=None, code=1, manifest=MANIFEST, lock=LOCK, policy=None, now=
 
 
 class ExceptionTests(unittest.TestCase):
+    def test_current_changed_candidate_cannot_use_historical_approval(self):
+        current_manifest = (ROOT / "package.json").read_bytes()
+        current_lock = (ROOT / "package-lock.json").read_bytes()
+        if current_manifest == MANIFEST and current_lock == LOCK:
+            self.assertTrue(evaluate()["exception_applied"])
+        else:
+            with self.assertRaisesRegex(ValueError, "approved_(lock|manifest)_changed"):
+                evaluate(manifest=current_manifest, lock=current_lock)
+
+    def test_fixture_bytes_match_exact_owner_approval(self):
+        self.assertEqual(C["digest"](MANIFEST), C["MANIFEST_SHA256"])
+        self.assertEqual(C["digest"](LOCK), POLICY["candidate_lock_sha256"])
+
     def test_accepted_eight_finding_cycle_remains_failed_full_audit(self):
         result = evaluate()
         self.assertTrue(result["gate_passed"])

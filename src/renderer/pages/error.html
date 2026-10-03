@@ -223,7 +223,7 @@
 
       async function displayError() {
         if (error === 'HNS_NOT_READY') {
-          setErrorTitle('Handshake Resolver Not Ready');
+          setErrorTitle('Handshake resolver not ready');
           descriptionEl.textContent =
             'Freedom cannot query Handshake names yet. The resolver may still be starting, syncing, or recovering.';
           detailsEl.textContent = [url, syncStatus || (height ? `Current height: ${height}` : '')].filter(Boolean).join('\n\n');
@@ -231,7 +231,7 @@
         }
 
         if (error === 'HNS_LOOKUP_FAILED' || (error === 'ERR_TUNNEL_CONNECTION_FAILED' && isSingleLabelHost(url))) {
-          setErrorTitle('Handshake Site Unavailable');
+          setErrorTitle('Handshake site unavailable');
           descriptionEl.textContent =
             'Freedom could not resolve this Handshake site. The resolver may be degraded, or the name may not exist.';
           detailsEl.textContent = url ? `${url}\n\n${error}` : error || 'Handshake lookup failed';
