@@ -14,6 +14,7 @@
  *   --dist                  Create distributable (default: unpacked build via --dir)
  *   --unsigned              Skip code signing (macOS only)
  *   --no-notarize           Disable built-in notarization (macOS dist only)
+ *   --verify-tools          Verify release CLIs resolve without building
  *   --verbose               Enable electron-builder debug output
  *
  * Environment (see scripts/publish-channel.js):
@@ -67,6 +68,25 @@ if (archs.length === 0) {
   if (platform === 'mac') archs.push('arm64');
   else if (platform === 'win') archs.push('x64');
   else archs.push('arm64', 'x64'); // Linux defaults to both
+}
+
+// Direct CLI calls need the same local executables that npm puts on PATH.
+const env = { ...process.env };
+const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path') || 'PATH';
+const originalPath = env[pathKey];
+for (const key of Object.keys(env)) {
+  if (key.toLowerCase() === 'path') delete env[key];
+}
+env[pathKey] = [path.resolve(__dirname, '../node_modules/.bin'), originalPath]
+  .filter(Boolean).join(path.delimiter);
+
+// This mode observes the CLIs only. Native preparation and distributable
+// checks belong to the build path below and must not run in this mode.
+if (args.includes('--verify-tools')) {
+  if (platform === 'mac' && !unsigned) execSync('dotenv --version', { stdio: 'inherit', env });
+  execSync('electron-builder --version', { stdio: 'inherit', env });
+  console.log('Release CLIs resolved; no package was built or accepted.');
+  process.exit(0);
 }
 
 // Distributables must not ship the interim remote-signing bridge origin
@@ -159,8 +179,6 @@ if (dist) {
 }
 
 // 3. Environment
-const env = { ...process.env };
-
 if (verbose) {
   env.DEBUG =
     dist && platform === 'mac' && !unsigned
