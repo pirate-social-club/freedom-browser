@@ -10,10 +10,12 @@ module.exports = [
       'coverage/**',
       'node_modules/**',
       'src/renderer/vendor/**',
-      'bee-bin/**',
+      'ant-bin/**',
       'ipfs-bin/**',
-      'bee-data/**',
+      'ant-data/**',
       'ipfs-data/**',
+      'playwright-report/**',
+      'test-results/**',
     ],
   },
   {
@@ -53,6 +55,18 @@ module.exports = [
         ...globals.jest,
         ...globals.node,
         ...globals.browser,
+      },
+    },
+  },
+  {
+    // Playwright E2E specs run in Node and use the test fixtures from
+    // test-e2e/fixtures.js rather than the global jest harness.
+    files: ['test-e2e/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'script',
+      globals: {
+        ...globals.node,
       },
     },
   },

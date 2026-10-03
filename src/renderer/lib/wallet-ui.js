@@ -6,36 +6,67 @@
  */
 
 import { showOnboarding } from './onboarding.js';
+import { open as openSidebarPanel, isFeatureEnabled as isSidebarFeatureEnabled } from './sidebar.js';
+import { isPrivateWindow } from './private-mode.js';
 import { walletState } from './wallet/wallet-state.js';
+import { isSignatureInFlight, onSignatureFlightChange } from './wallet/signature-flight.js';
 import { truncateAddress, timeAgo } from './wallet/wallet-utils.js';
 
 // Submodule imports
 import { initBalanceDisplay, loadChainRegistry, refreshBalances, renderAssetList, loadCachedBalances, startBalanceRefresh } from './wallet/balance-display.js';
 import { initNodeStatus } from './wallet/node-status.js';
-import { initRpcSettings, closeRpcApiKeyScreen } from './wallet/rpc-settings.js';
+import { initRpcSettings } from './wallet/rpc-settings.js';
 import { initDappConnect, showDappConnect, updateConnectionBanner } from './wallet/dapp-connect.js';
 import { initDappTx, showDappTxApproval } from './wallet/dapp-tx.js';
 import { initDappSign, showDappSignApproval } from './wallet/dapp-sign.js';
-import { initSend, closeSend } from './wallet/send.js';
+import { initDappX402, updateX402ConnectionBanner } from './wallet/dapp-x402.js';
+import { initRecentPayments, refreshRecentPayments } from './wallet/recent-payments.js';
+import { initSend, openSend, closeSend } from './wallet/send.js';
 import { initExportMnemonic, closeExportMnemonic } from './wallet/export-mnemonic.js';
 import { initWalletSelector, loadDerivedWallets } from './wallet/wallet-selector.js';
 import { initChainSwitcher, updateChainSwitcherDisplay, getSelectedChainId, setSelectedChainId } from './wallet/chain-switcher.js';
 import { initReceive, closeReceive } from './wallet/receive.js';
 import { initWalletSettings, closeWalletSettings } from './wallet/wallet-settings.js';
 import { initCreateWallet, openCreateWallet, closeCreateWallet } from './wallet/create-wallet.js';
+import { initConnectLedger, openConnectLedger, closeConnectLedger } from './wallet/connect-ledger.js';
+import { initConnectPhone, openConnectPhone, closeConnectPhone } from './wallet/connect-phone.js';
+import { initCreateSafe, openCreateSafe, closeCreateSafe } from './wallet/create-safe.js';
+import { initSafeSigning, closeSafeSigning } from './wallet/safe-signing.js';
+import { initSafePendingList, closeSafePendingList } from './wallet/safe-pending-list.js';
+import { initRemoteSession } from './wallet/remote-session.js';
+import { initRemoteSigningPanel } from './wallet/remote-signing-panel.js';
+import { initPublishSetup, openPublishSetup, closePublishSetup } from './wallet/publish-setup.js';
+import { initStampManager, closeStampManager } from './wallet/stamp-manager.js';
+import { initChequebookDeposit, closeChequebookDeposit } from './wallet/chequebook-deposit.js';
+import { initSwarmConnect, showSwarmConnect, updateSwarmConnectionBanner, showSwarmPublishApproval, showSwarmFeedApproval, showSwarmMessagingApproval } from './wallet/swarm-connect.js';
+import { initVaultUnlock, showVaultUnlock } from './wallet/vault-unlock.js';
+import { initPermissionManage, showDappPermissions, showSwarmPermissions, showX402Permissions, closeDappPerms, closeSwarmPerms, closeX402Perms } from './wallet/permission-manage.js';
+import { initPublisherIdentities, closePublisherIdentities } from './wallet/publisher-identities.js';
+import { initPublisherIdentityCreate, closePublisherIdentityCreate } from './wallet/publisher-identity-create.js';
+import { initPermissionManifest, showPermissionManifest } from './wallet/permission-manifest.js';
 
-// Re-export public API consumed by dapp-provider.js and index.js
+// Re-export public API consumed by dapp-provider.js, swarm-provider.js, and index.js
 export { showDappConnect, updateConnectionBanner, showDappTxApproval, showDappSignApproval };
+export { showSwarmConnect, updateSwarmConnectionBanner, showSwarmPublishApproval, showSwarmFeedApproval, showSwarmMessagingApproval, showVaultUnlock };
+export { showPermissionManifest };
+export { updateX402ConnectionBanner };
+export { showDappPermissions, showSwarmPermissions, showX402Permissions };
 export { getSelectedChainId, setSelectedChainId };
 
 // DOM references owned by the coordinator
 let setupCta;
+let privateNotice;
 let swarmIdEl;
 let ipfsIdEl;
+let ipfsCopyBtn;
 let radicleIdEl;
 let passwordValueEl;
 let touchIdValueEl;
 let createdValueEl;
+
+const IPFS_EPHEMERAL_LABEL = 'Ephemeral';
+const IPFS_EPHEMERAL_TITLE =
+  'freedom-ipfs uses ephemeral peer identities for read-only retrieval in this release.';
 
 /**
  * Initialize the wallet UI module
@@ -43,9 +74,11 @@ let createdValueEl;
 export function initWalletUi() {
   // Cache coordinator DOM references
   setupCta = document.getElementById('sidebar-setup-cta');
+  privateNotice = document.getElementById('sidebar-private-notice');
   walletState.identityView = document.getElementById('sidebar-identity');
   swarmIdEl = document.getElementById('sidebar-swarm-id');
   ipfsIdEl = document.getElementById('sidebar-ipfs-id');
+  ipfsCopyBtn = document.querySelector('.node-copy-btn[data-copy="ipfs"]');
   radicleIdEl = document.getElementById('sidebar-radicle-id');
   passwordValueEl = document.getElementById('sidebar-password-value');
   touchIdValueEl = document.getElementById('sidebar-touchid-value');
@@ -56,20 +89,42 @@ export function initWalletUi() {
   initNodeStatus();
   initRpcSettings();
   initDappConnect();
+  initSwarmConnect();
+  initPermissionManifest();
+  initVaultUnlock();
+  initPermissionManage();
   initDappTx();
+  initDappX402();
+  initRecentPayments();
   initDappSign();
   initSend();
   initExportMnemonic(switchTab);
-  initWalletSelector(openCreateWallet);
+  initWalletSelector(openCreateWallet, openConnectLedger, openConnectPhone, openCreateSafe);
   initChainSwitcher();
   initReceive();
   initWalletSettings(switchTab);
   initCreateWallet();
+  initConnectLedger();
+  initConnectPhone();
+  initCreateSafe();
+  initSafeSigning();
+  initSafePendingList();
+  initRemoteSession();
+  initRemoteSigningPanel(); // after initRemoteSession — subscribes to its broker
+  initPublishSetup();
+  initStampManager();
+  initChequebookDeposit();
+  initPublisherIdentities();
+  initPublisherIdentityCreate();
 
-  // Load chain registry (updates registeredTokens/registeredChains, then render)
+  // Load chain registry (updates registeredTokens/registeredChains, then
+  // render everything that depends on those — the asset list AND the
+  // recent-payments mini-section which reads symbols/decimals from
+  // walletState.registeredTokens to format amounts).
   loadChainRegistry().then(() => {
     updateChainSwitcherDisplay();
     renderAssetList();
+    refreshRecentPayments().catch((err) => console.error('[wallet-ui] recent payments upgrade-after-registry failed:', err));
   });
 
   // Setup coordinator event listeners
@@ -105,12 +160,23 @@ function setupCoordinatorListeners() {
   }
 
   // Copy node identities
-  document.querySelectorAll('.node-copy-btn').forEach(btn => {
+  document.querySelectorAll('.node-copy-btn, .node-copy-btn-inline[data-copy]').forEach(btn => {
     btn.addEventListener('click', () => {
       const type = btn.dataset.copy;
       if (type) {
         copyToClipboard(type, btn);
       }
+    });
+  });
+
+  // The tab bar lives in the always-visible sidebar header, above whatever
+  // approval screen is up, so it gets the same treatment as the close
+  // button: visibly dead while a device confirmation owns the sidebar.
+  const tabs = Array.from(document.querySelectorAll('.sidebar-tab'));
+  onSignatureFlightChange((inFlight) => {
+    tabs.forEach(tab => {
+      tab.disabled = inFlight;
+      tab.title = inFlight ? 'Finish the confirmation on your device first' : '';
     });
   });
 
@@ -122,6 +188,9 @@ function setupCoordinatorListeners() {
       if ((tabName === 'wallet' || tabName === 'nodes') && (walletState.fullAddresses.wallet || walletState.fullAddresses.swarm)) {
         refreshBalances();
       }
+      if (tabName === 'wallet') {
+        refreshRecentPayments().catch((err) => console.error('[wallet-ui] recent payments refresh failed:', err));
+      }
     });
   });
 }
@@ -130,6 +199,15 @@ function setupCoordinatorListeners() {
  * Update identity state - called on init and after state changes
  */
 export async function updateIdentityState() {
+  // Private windows inject no wallet providers and persist nothing, so the
+  // panel must not offer identity setup here: the "Get Started" CTA would
+  // walk the user into creating/unlocking a vault this window cannot use
+  // (#240). Say so instead — the same promise the private start page makes.
+  if (isPrivateWindow()) {
+    showView('private');
+    return;
+  }
+
   try {
     const status = await window.identity.getStatus();
 
@@ -158,10 +236,12 @@ export async function updateIdentityState() {
 function showView(view) {
   walletState.viewMode = view;
   setupCta?.classList.toggle('hidden', view !== 'setup');
+  privateNotice?.classList.toggle('hidden', view !== 'private');
   walletState.identityView?.classList.toggle('hidden', view !== 'identity');
 
+  // Only the identity view has tabs to switch between.
   const tabBar = document.querySelector('.sidebar-tabs');
-  tabBar?.classList.toggle('hidden', view === 'setup');
+  tabBar?.classList.toggle('hidden', view !== 'identity');
 }
 
 /**
@@ -183,15 +263,35 @@ async function loadIdentityData() {
       swarmIdEl.title = addr;
     }
 
-    // Display IPFS Peer ID
+    // Display IPFS identity mode / Peer ID
     if (status.addresses?.ipfsPeerId) {
       const peerId = status.addresses.ipfsPeerId;
       walletState.fullAddresses.ipfs = peerId;
       ipfsIdEl.textContent = truncateAddress(peerId, 8, 6);
       ipfsIdEl.title = peerId;
+      if (ipfsCopyBtn) {
+        ipfsCopyBtn.hidden = false;
+        ipfsCopyBtn.disabled = false;
+        ipfsCopyBtn.title = 'Copy';
+      }
+    } else if (status.ipfsIdentityMode === 'ephemeral') {
+      delete walletState.fullAddresses.ipfs;
+      ipfsIdEl.textContent = IPFS_EPHEMERAL_LABEL;
+      ipfsIdEl.title = IPFS_EPHEMERAL_TITLE;
+      if (ipfsCopyBtn) {
+        ipfsCopyBtn.hidden = true;
+        ipfsCopyBtn.disabled = true;
+        ipfsCopyBtn.title = 'No stable IPFS Peer ID to copy';
+      }
     } else {
+      delete walletState.fullAddresses.ipfs;
       ipfsIdEl.textContent = '--';
       ipfsIdEl.title = '';
+      if (ipfsCopyBtn) {
+        ipfsCopyBtn.hidden = false;
+        ipfsCopyBtn.disabled = true;
+        ipfsCopyBtn.title = 'No IPFS Peer ID to copy';
+      }
     }
 
     // Display Radicle DID
@@ -269,10 +369,62 @@ async function updateSecurityStatus() {
 // ============================================
 
 /**
+ * Open the sidebar, switch to the Nodes tab, and surface the publish-setup
+ * checklist. Single entry point used by the freedom://settings deep-link.
+ *
+ * Bails out when:
+ *  - the Identity & Wallet feature is disabled (sidebar.open() would no-op
+ *    silently while openPublishSetup() would still start its 5s polling
+ *    interval against a hidden screen)
+ *  - the user is in onboarding (switchTab no-ops in setup mode and we don't
+ *    want publish-setup floating on top of the wizard)
+ */
+export function openPublishSetupFlow() {
+  if (!isSidebarFeatureEnabled()) return;
+  if (walletState.viewMode !== 'identity') return;
+  openSidebarPanel();
+  switchTab('nodes');
+  openPublishSetup();
+}
+
+// Open the wallet sidebar's Send screen with pre-filled recipient / chain /
+// amount. Used by the ethereum: URI scheme handler (EIP-681) so static web
+// pages can offer "Tip" links that route straight into the send flow.
+//
+// Same bail conditions as openPublishSetupFlow, but reported back to the
+// caller: each refusal has a different way out for the user (turn the feature
+// on, open a normal window, finish identity setup), so a single boolean would
+// force the caller to guess — and guessing "enable the feature" at a user
+// whose wallet is already enabled leaves them no path forward (#240).
+// Returns 'ok' when the send screen opened, otherwise one of the reasons.
+export const SEND_FLOW_OK = 'ok';
+export const SEND_FLOW_DISABLED = 'disabled';
+export const SEND_FLOW_PRIVATE = 'private';
+export const SEND_FLOW_SETUP = 'setup';
+
+export function openSendFlow({ recipient, chainId, amount } = {}) {
+  if (!isSidebarFeatureEnabled()) return SEND_FLOW_DISABLED;
+  if (walletState.viewMode === 'private') return SEND_FLOW_PRIVATE;
+  if (walletState.viewMode !== 'identity') return SEND_FLOW_SETUP;
+  openSidebarPanel();
+  switchTab('wallet');
+  openSend({ recipient, chainId, amount });
+  return SEND_FLOW_OK;
+}
+
+/**
  * Switch between Wallet and Identity tabs
  */
 function switchTab(tabName) {
-  if (walletState.viewMode === 'setup') return;
+  if (walletState.viewMode !== 'identity') return;
+  // Swapping panels puts the identity view back on screen alongside a live
+  // device confirmation the renderer cannot recall — and the cascade below
+  // would tear that confirmation's neighbours down. The approval screen owns
+  // the sidebar until the device answers (see signature-flight.js).
+  if (isSignatureInFlight()) {
+    console.warn('[WalletUI] Tab not switched: a signature is in flight');
+    return;
+  }
 
   closeAllSubscreens();
 
@@ -295,16 +447,39 @@ function switchTab(tabName) {
 
 /**
  * Close all open sub-screens (proper cleanup)
+ *
+ * Refuses while a signature is in flight. Only closeSend() carries its own
+ * ownership check; every other close* here un-hides the identity view
+ * unconditionally, so running the cascade over a live confirmation would
+ * stack an interactive identity view (with its own unguarded Receive /
+ * Settings / Ledger openers) on top of the device prompt — see
+ * wallet/signature-flight.js.
  */
 function closeAllSubscreens() {
-  if (walletState.viewMode === 'setup') return;
+  if (walletState.viewMode !== 'identity') return;
+  if (isSignatureInFlight()) {
+    console.warn('[WalletUI] Sub-screens not closed: a signature is in flight');
+    return;
+  }
 
   closeExportMnemonic();
   closeCreateWallet();
+  closeConnectLedger();
+  closeConnectPhone();
+  closeCreateSafe();
+  closeSafeSigning();
+  closeSafePendingList();
   closeReceive();
   closeWalletSettings();
   closeSend();
-  closeRpcApiKeyScreen();
+  closePublishSetup();
+  closeStampManager();
+  closeChequebookDeposit();
+  closeDappPerms();
+  closeSwarmPerms();
+  closeX402Perms();
+  closePublisherIdentities();
+  closePublisherIdentityCreate({ reject: true });
 }
 
 /**

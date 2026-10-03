@@ -3,11 +3,17 @@ const { app, dialog, ipcMain } = require('electron');
 const log = require('./logger');
 const path = require('path');
 const { loadSettings } = require('./settings-store');
+const { getActiveProfile } = require('./profile-resolver');
+const { DEFAULT_PROFILE_ID } = require('./profile-catalog');
+const {
+  releaseUpdaterOwnerLock,
+  tryAcquireUpdaterOwnerLock,
+} = require('./updater-owner-lock');
 
 // IPC handler for restart and install
 ipcMain.on('update:restart-and-install', () => {
   log.info('[updater] Restart and install requested via IPC');
-  autoUpdater.quitAndInstall(false, true);
+  installUpdate();
 });
 
 // IPC handler for manual update check
@@ -51,6 +57,144 @@ let mainWindow = null;
 let updateDownloaded = false;
 let menuUpdateCallback = null;
 let isManualCheck = false;
+let updaterOwnerLock = null;
+let releaseRegistered = false;
+let ownershipRetryInterval = null;
+let initialUpdateCheckTimeout = null;
+let periodicUpdateCheckInterval = null;
+
+const UPDATER_OWNERSHIP_RETRY_MS = 30000;
+const INITIAL_UPDATE_CHECK_DELAY_MS = 10000;
+const PERIODIC_UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
+
+function getInstallRelaunchMode(profile = getActiveProfile()) {
+  // Named and explicit profile-dir launches cannot rely on Squirrel preserving profile argv.
+  const canRelaunchToSameProfile =
+    profile?.source === 'catalog' && profile?.id === DEFAULT_PROFILE_ID;
+
+  if (canRelaunchToSameProfile) {
+    return {
+      autoRunAfterInstall: true,
+      actionLabel: 'Install now',
+      menuLabel: 'Install Update and Restart…',
+      readyMessage: null,
+    };
+  }
+
+  return {
+    autoRunAfterInstall: false,
+    actionLabel: 'Install and close',
+    menuLabel: 'Install Update and Close…',
+    readyMessage:
+      'Freedom will close after installing. Reopen this profile from the profile manager when the update finishes.',
+  };
+}
+
+function quitAndInstallForActiveProfile() {
+  const mode = getInstallRelaunchMode();
+  autoUpdater.autoRunAppAfterInstall = mode.autoRunAfterInstall;
+  log.info('[updater] Installing update', {
+    autoRunAppAfterInstall: mode.autoRunAfterInstall,
+    profileId: getActiveProfile()?.id,
+    profileSource: getActiveProfile()?.source,
+  });
+  autoUpdater.quitAndInstall(false, mode.autoRunAfterInstall);
+}
+
+function hasUpdaterOwnership() {
+  return Boolean(updaterOwnerLock && !updaterOwnerLock.released);
+}
+
+function acquireUpdaterOwnership(options = {}) {
+  if (hasUpdaterOwnership()) {
+    return true;
+  }
+
+  const profile = options.profile || getActiveProfile();
+  updaterOwnerLock = tryAcquireUpdaterOwnerLock(profile, { logger: log });
+  if (!updaterOwnerLock) {
+    return false;
+  }
+
+  if (!releaseRegistered) {
+    releaseRegistered = true;
+    app.on('will-quit', () => {
+      releaseUpdaterOwnerLock(updaterOwnerLock, { logger: log });
+      updaterOwnerLock = null;
+    });
+  }
+
+  log.info('[updater] This profile owns update checks', {
+    profileId: profile?.id,
+    appRoot: profile?.appRoot,
+  });
+  return true;
+}
+
+function clearUpdaterTimers() {
+  if (ownershipRetryInterval) {
+    clearInterval(ownershipRetryInterval);
+    ownershipRetryInterval = null;
+  }
+  if (initialUpdateCheckTimeout) {
+    clearTimeout(initialUpdateCheckTimeout);
+    initialUpdateCheckTimeout = null;
+  }
+  if (periodicUpdateCheckInterval) {
+    clearInterval(periodicUpdateCheckInterval);
+    periodicUpdateCheckInterval = null;
+  }
+}
+
+function ensureUpdaterCleanupRegistered() {
+  if (releaseRegistered) {
+    return;
+  }
+
+  releaseRegistered = true;
+  app.on('will-quit', () => {
+    clearUpdaterTimers();
+    releaseUpdaterOwnerLock(updaterOwnerLock, { logger: log });
+    updaterOwnerLock = null;
+  });
+}
+
+function scheduleOwnedUpdateChecks() {
+  if (initialUpdateCheckTimeout || periodicUpdateCheckInterval) {
+    return;
+  }
+
+  // Check for updates 10 seconds after this process becomes updater owner.
+  initialUpdateCheckTimeout = setTimeout(() => {
+    initialUpdateCheckTimeout = null;
+    checkForUpdates();
+  }, INITIAL_UPDATE_CHECK_DELAY_MS);
+
+  // Check for updates every 6 hours while this process owns updates.
+  periodicUpdateCheckInterval = setInterval(
+    () => {
+      checkForUpdates();
+    },
+    PERIODIC_UPDATE_CHECK_MS
+  );
+}
+
+function scheduleOwnershipRetry(options = {}) {
+  if (ownershipRetryInterval) {
+    return;
+  }
+
+  const retryMs = options.ownershipRetryMs || UPDATER_OWNERSHIP_RETRY_MS;
+  ownershipRetryInterval = setInterval(() => {
+    if (!acquireUpdaterOwnership(options)) {
+      return;
+    }
+
+    clearInterval(ownershipRetryInterval);
+    ownershipRetryInterval = null;
+    scheduleOwnedUpdateChecks();
+  }, retryMs);
+}
 
 function setMainWindow(window) {
   mainWindow = window;
@@ -62,6 +206,11 @@ function isUpdateCheckEnabled() {
 }
 
 function checkForUpdates() {
+  if (!hasUpdaterOwnership()) {
+    log.info('[updater] Skipping update check; another profile owns updater');
+    return;
+  }
+
   if (!isUpdateCheckEnabled()) {
     log.info('[updater] Auto-update is disabled');
     return;
@@ -123,6 +272,7 @@ autoUpdater.on('download-progress', (progressObj) => {
 autoUpdater.on('update-downloaded', (info) => {
   log.info('[updater] Update downloaded:', info.version);
   updateDownloaded = true;
+  const installMode = getInstallRelaunchMode();
 
   // Update the application menu to show "Install Update..."
   if (menuUpdateCallback) {
@@ -135,12 +285,12 @@ autoUpdater.on('update-downloaded', (info) => {
     mainWindow.webContents.send('show-update-notification', {
       type: 'ready',
       version: info.version,
-      message: `Update v${info.version} ready to install`,
+      message: installMode.readyMessage || `Update v${info.version} ready to install`,
+      actionLabel: installMode.actionLabel,
     });
   }
 
-  // Update will install automatically on next quit (autoInstallOnAppQuit = true)
-  log.info('[updater] Update ready - will install on next quit');
+  log.info('[updater] Update ready for manual install');
 });
 
 // Event: Error
@@ -163,26 +313,32 @@ autoUpdater.on('error', (error) => {
 });
 
 // Initialize updater
-function initUpdater(window, onMenuUpdate) {
+function initUpdater(window, onMenuUpdate, options = {}) {
   setMainWindow(window);
   menuUpdateCallback = onMenuUpdate;
+  ensureUpdaterCleanupRegistered();
 
-  // Check for updates 10 seconds after app start
-  setTimeout(() => {
-    checkForUpdates();
-  }, 10000);
+  if (!acquireUpdaterOwnership(options)) {
+    log.info('[updater] Update checks disabled in this profile process');
+    scheduleOwnershipRetry(options);
+    return false;
+  }
 
-  // Check for updates every 6 hours
-  setInterval(
-    () => {
-      checkForUpdates();
-    },
-    6 * 60 * 60 * 1000
-  );
+  scheduleOwnedUpdateChecks();
+  return true;
 }
 
 // Manual update check (from menu)
 function checkForUpdatesManually() {
+  if (!hasUpdaterOwnership()) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'Updates Managed Elsewhere',
+      message: 'Another open Freedom profile is already handling update checks.',
+    });
+    return;
+  }
+
   if (process.env.NODE_ENV === 'development' && !process.env.ENABLE_DEV_UPDATER) {
     dialog.showMessageBox(mainWindow, {
       type: 'info',
@@ -214,7 +370,7 @@ function isUpdateReady() {
 function installUpdate() {
   if (updateDownloaded) {
     log.info('[updater] Manually triggering update install');
-    autoUpdater.quitAndInstall(false, true);
+    quitAndInstallForActiveProfile();
   }
 }
 
@@ -223,4 +379,7 @@ module.exports = {
   checkForUpdates: checkForUpdatesManually,
   isUpdateReady,
   installUpdate,
+  hasUpdaterOwnership,
+  getInstallRelaunchMode,
+  UPDATER_OWNERSHIP_RETRY_MS,
 };

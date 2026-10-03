@@ -23,10 +23,25 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   padding: 4px;
   min-width: 180px;
+  /* The selection group's `Search <Engine> for "…"` row is the one menu label
+     built from page- and settings-controlled text, so it is the only one that
+     can grow without bound: a long custom engine name plus a CJK selection
+     measures 709px in a 1200px window unclamped. Cap the menu and ellipsise
+     the row (below) rather than let one item stretch the menu across the
+     window or wrap it to two lines against Copy's one. 420px still fits the
+     widest ordinary label — the longest built-in engine name with a full
+     32-character selection — without eliding it. */
+  max-width: 420px;
 }
 
 .context-menu.hidden {
   display: none;
+}
+
+/* The page context menu takes focus so Escape works while the guest page had
+   the keyboard; that focus is plumbing, not a highlight the user should see. */
+.context-menu:focus {
+  outline: none;
 }
 
 .context-menu-item {
@@ -41,6 +56,11 @@
   cursor: default;
   border-radius: 4px;
   font-family: inherit;
+  /* Every row stays exactly one line high and clips to "…" at the menu's
+     max-width above — same treatment .menu-item-label already gets. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .context-menu-item:hover {
@@ -96,7 +116,8 @@
   margin: 0 1px;
 }
 
-.menu-button:hover {
+.menu-button:hover,
+.menu-button[aria-expanded='true'] {
   background: rgba(255, 255, 255, 0.1);
 }
 
@@ -115,8 +136,12 @@
   z-index: 10000;
 }
 
-.menu-dropdown {
+.menu-dropdown,
+.bee-dropdown {
   min-width: 240px;
+  /* Bound the width so a long label clips to "…" rather than stretching the
+     menu across the window; the label never wraps (.menu-item-label). */
+  max-width: 320px;
 }
 
 .menu-dropdown.open,
@@ -159,12 +184,28 @@
   font-family: inherit;
 }
 
-.menu-item:hover {
+/* The row that owns the currently open flyout keeps the hover treatment while
+   the flyout is up (Chrome/macOS submenus do the same), so it stays obvious
+   which row the flyout belongs to once the pointer has moved into it. */
+.menu-item:hover:not(:disabled),
+.menu-item-has-flyout.flyout-open > .menu-item {
   background: rgba(255, 255, 255, 0.1);
+}
+
+.menu-item:disabled {
+  color: var(--muted);
+  opacity: 0.62;
+  cursor: default;
 }
 
 .menu-item-label {
   flex: 1;
+  /* Menu rows never wrap — a long label (e.g. a profile name) clips to "…".
+     min-width: 0 lets the flex item shrink below its content width. */
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .menu-item-shortcut {
@@ -172,6 +213,100 @@
   font-size: 12px;
   margin-left: 16px;
   font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+}
+
+/* Inline icon before a menu-item label (e.g. the Profiles row). Sits inline
+   without creating a gutter, so other rows are not indented. */
+.menu-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  /* Keep the icon within the 13px text's line box so the Profiles row is
+     exactly the same height as the text-only rows (New Tab, History, …). */
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  color: var(--text);
+}
+
+.menu-item-icon svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
+.menu-item-chevron {
+  color: var(--muted);
+  font-size: 14px;
+  /* Cap the line box so the larger glyph doesn't make the Profiles row taller
+     than the text-only rows (New Tab, History, …). */
+  line-height: 1;
+  margin-left: 8px;
+}
+
+/* A menu row that anchors a side flyout (submenu). */
+.menu-item-has-flyout {
+  position: relative;
+}
+
+/* Side flyout / submenu. It reuses the .menu-dropdown container chrome (this
+   element carries BOTH classes), so background, border, radius, padding and
+   item metrics are shared with the main hamburger menu — one source of truth.
+   This rule only re-anchors it to the LEFT of the parent row (the hamburger is
+   pinned top-right) and drives its show/hide via the `hidden` attribute instead
+   of the .open class the main dropdown uses. It stays a child of #menu-dropdown
+   so the hamburger's outside-click handler treats flyout clicks as inside. */
+.menu-flyout {
+  top: -4px;
+  right: 100%;
+  /* Flush against the menu edge so the cursor can cross into the flyout
+     without passing over a dead gap (macOS-style submenu hover). */
+  margin: 0;
+  min-width: 220px;
+  /* Bound the width so a long profile name clips to "…" rather than stretching
+     the flyout across the window; the label rule below does the truncation. */
+  max-width: 320px;
+  z-index: 10001;
+}
+
+.menu-flyout:not([hidden]) {
+  display: block;
+}
+
+.menu-flyout[hidden] {
+  display: none;
+}
+
+.menu-flyout-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+/* Leading check gutter on a profile row — reuses the .menu-item-icon box so
+   profile names align with the hamburger's Profiles row. */
+.menu-item-check {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.menu-flyout-empty,
+.menu-flyout-status {
+  padding: 8px 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.menu-flyout-status[hidden] {
+  display: none;
+}
+
+.menu-flyout-status.error {
+  color: var(--danger);
 }
 
 .menu-divider {

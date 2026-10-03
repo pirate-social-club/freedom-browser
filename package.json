@@ -2,7 +2,7 @@
   "name": "freedom-browser",
   "version": "0.7.15",
   "license": "AGPL-3.0-or-later",
-  "description": "Freedom \\u2013 A browser for the decentralized web, with Swarm, IPFS, and ENS as first-class protocols.",
+  "description": "Freedom – A browser for the decentralized web, with Swarm, IPFS, onchain apps, and ENS as first-class protocols.",
   "author": {
     "name": "Freedom Team",
     "email": "browser@freedom.baby"
@@ -10,23 +10,33 @@
   "homepage": "https://freedombrowser.eth.limo/",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pirate-social-club/freedom-browser"
+    "url": "https://github.com/solardev-xyz/freedom-browser"
   },
   "bugs": {
-    "url": "https://github.com/pirate-social-club/freedom-browser/issues"
+    "url": "https://github.com/solardev-xyz/freedom-browser/issues"
   },
   "main": "src/main/index.js",
   "scripts": {
     "start": "electron .",
     "test": "npm run test:unit",
     "test:unit": "jest",
-    "test:capabilities": "jest --runInBand src/shared/platform-capabilities.test.js scripts/check-binaries.test.js src/main/hns-manager.test.js src/main/dvpn-manager.test.js src/renderer/lib/settings-ui.test.js",
-    "test:coverage": "jest --coverage --runInBand",
+    "test:coverage": "jest --coverage --runInBand --forceExit",
+    "test:migration": "jest --runInBand src/main/migrate-user-data.test.js src/main/__tests__/integration/v08-upgrade.test.js src/main/profile-resolver.test.js src/main/profile-paths.test.js src/main/profile-catalog.test.js src/main/identity/__tests__/integration/postage-publisher-continuity.test.js",
+    "test:e2e": "playwright test --project=harness",
+    "test:e2e:live": "playwright test --project=live",
+    "test:e2e:packaged": "playwright test --project=packaged --project=packaged-live",
+    "test:e2e:onboarding": "playwright test --project=live test-e2e/live/onboarding-identity.spec.js",
+    "test:e2e:tor": "FREEDOM_LIVE_E2E_DISABLE_DEFAULT_NODES=1 playwright test --project=live test-e2e/live/tor-onion.spec.js",
     "lint": "eslint .",
+    "changelog:assemble": "node scripts/assemble-changelog.js",
+    "styles:inventory": "node scripts/update-renderer-color-literals.js",
+    "test:e2e:theme-parity": "playwright test --project=harness test-e2e/theme-parity.spec.js",
+    "test:e2e:theme-parity:update": "THEME_CONTRAST_UPDATE=1 playwright test --project=harness test-e2e/theme-parity.spec.js",
+    "test:e2e:screenshots": "FREEDOM_E2E_STABLE_TEXT=1 playwright test --project=harness test-e2e/renderer-screenshots.spec.js",
+    "test:e2e:screenshots:update": "FREEDOM_E2E_STABLE_TEXT=1 playwright test --project=harness test-e2e/renderer-screenshots.spec.js --update-snapshots",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check-binaries": "node scripts/check-binaries.js",
-    "smoke:hns:packaged": "node scripts/hns-packaged-smoke.js",
     "build": "node scripts/build.js",
     "dist": "node scripts/build.js --dist",
     "dist:mac:prepare-notary": "npm run dist -- --mac --no-notarize",
@@ -34,29 +44,43 @@
     "dist:mac:notary-status": "dotenv -- node scripts/macos-notary.js status",
     "dist:mac:notary-log": "dotenv -- node scripts/macos-notary.js log",
     "dist:mac:staple-notary": "dotenv -- node scripts/macos-notary.js staple",
-    "dist:linux:arm64:docker": "docker run --rm -v \"$PWD\":/app -v /app/node_modules -v \"${ELECTRON_CACHE:-$HOME/Library/Caches/electron}\":/root/.cache/electron -w /app -e USE_SYSTEM_FPM=true -e GITHUB_TOKEN=\"${GITHUB_TOKEN:-}\" --platform linux/arm64 node:24 bash -c \"apt-get update && apt-get install -y ruby ruby-dev build-essential xz-utils && gem install fpm --no-document && npm ci && npm audit --audit-level=high && npm run radicle:download && npm run dist -- --linux --arm64\"",
-    "dist:linux:x64:docker": "docker run --rm -v \"$PWD\":/app -v \"${ELECTRON_CACHE:-$HOME/Library/Caches/electron}\":/root/.cache/electron -w /app -e GITHUB_TOKEN=\"${GITHUB_TOKEN:-}\" --platform linux/amd64 electronuserland/builder:20 bash -c \"npm run bee:download -- --target linux-x64 && npm run ipfs:download -- --target linux-x64 && npm run radicle:download -- --target linux-x64 && npm run dist -- --linux --x64\"",
-    "bee:download": "node scripts/fetch-bee.js",
-    "bee:init": "node scripts/init-bee.js",
-    "bee:start": "test -f bee-data/config.yaml || npm run bee:init; ./bee-bin/mac-arm64/bee start --config=./bee-data/config.yaml",
-    "bee:stop": "pkill -SIGTERM bee || echo 'Bee not running or failed to stop'",
-    "bee:status": "echo '--- HEALTH ---'; curl -s http://127.0.0.1:1633/health; echo '\n\n--- READINESS ---'; curl -s http://127.0.0.1:1633/readiness; echo '\n\n--- STATUS ---'; curl -s http://127.0.0.1:1633/status; echo '\n\n--- PEERS ---'; curl -s http://127.0.0.1:1633/peers | grep -o '\"address\":' | wc -l | xargs echo 'Peer Count:'; echo '\n--- ADDRESSES ---'; curl -s http://127.0.0.1:1633/addresses",
-    "bee:reset": "rm -rf bee-data && echo 'Bee data reset.'",
-    "ipfs:download": "node scripts/fetch-ipfs.js",
-    "ipfs:init": "node scripts/init-ipfs.js",
-    "ipfs:start": "test -d ipfs-data || npm run ipfs:init; IPFS_PATH=./ipfs-data ./ipfs-bin/mac-arm64/ipfs daemon",
-    "ipfs:stop": "pkill -SIGTERM ipfs || echo 'IPFS not running or failed to stop'",
-    "ipfs:status": "echo '--- ID ---'; IPFS_PATH=./ipfs-data curl -s -X POST http://127.0.0.1:5001/api/v0/id | head -c 500; echo '\n\n--- PEERS ---'; curl -s -X POST http://127.0.0.1:5001/api/v0/swarm/peers | grep -o '\"Peer\":' | wc -l | xargs echo 'Peer Count:'",
-    "ipfs:reset": "rm -rf ipfs-data && echo 'IPFS data reset.'",
-    "radicle:download": "node scripts/fetch-radicle.js",
-    "radicle:init": "node scripts/init-radicle.js",
-    "radicle:status": "curl -s http://127.0.0.1:8780/api/v1/ | head -c 500",
-    "radicle:reset": "rm -rf radicle-data && echo 'Radicle data reset.'",
-    "identity:reset": "rm -rf bee-data ipfs-data radicle-data identity-data && echo 'All identity data reset (bee, ipfs, radicle, vault).'",
+    "dist:linux:arm64:docker": "docker run --rm -v \"$PWD\":/app -v /app/node_modules -v \"${ELECTRON_CACHE:-$HOME/Library/Caches/electron}\":/root/.cache/electron -w /app -e USE_SYSTEM_FPM=true --platform linux/arm64 node:24-trixie bash -c \"apt-get update && apt-get install -y ruby ruby-dev build-essential xz-utils libarchive-tools curl git ca-certificates && gem install fpm --no-document && npm ci && npm run ant:download -- --target linux-arm64 && npm run radicle:download -- --linux --arm64 && npm run ipfs:download -- --target linux-arm64 && MYOTIS_DOWNLOAD_TARGET=linux-arm64 npm run myotis:download && npm run dist -- --linux --arm64\"",
+    "dist:linux:x64:docker": "docker run --rm -v \"$PWD\":/app -v /app/node_modules -v \"${ELECTRON_CACHE:-$HOME/Library/Caches/electron}\":/root/.cache/electron -w /app -e USE_SYSTEM_FPM=true --platform linux/amd64 node:24-trixie bash -c \"apt-get update && apt-get install -y ruby ruby-dev build-essential xz-utils libarchive-tools curl git ca-certificates && gem install fpm --no-document && npm ci && npm run ant:download -- --target linux-x64 && npm run radicle:download -- --linux --x64 && npm run ipfs:download -- --target linux-x64 && MYOTIS_DOWNLOAD_TARGET=linux-x64 npm run myotis:download && npm run dist -- --linux --x64\"",
+    "adblock:download": "node scripts/fetch-adblock-lists.js",
+    "ant:download": "node scripts/fetch-ant.js",
+    "myotis:build-supervisor": "node scripts/build-myotis-supervisor.js",
+    "myotis:download": "node scripts/fetch-myotis.js",
+    "myotis:smoke": "node scripts/smoke-myotis.js",
+    "ant:init": "node scripts/init-ant.js",
+    "ant:start": "echo 'ant:start is a legacy alias for system-ant:start (repo-root ant-data on ecosystem port 1633).'; npm run system-ant:start",
+    "ant:stop": "echo 'ant:stop is a legacy alias for system-ant:stop.'; npm run system-ant:stop",
+    "ant:status": "echo 'Checking the Freedom-managed default-profile Ant. For a default-port system Ant/Bee-compatible node, use npm run system-ant:status.'; ANT_API=${ANT_API:-http://127.0.0.1:11633}; echo '--- HEALTH ---'; curl -s \"$ANT_API/health\"; echo '\n\n--- STATUS ---'; curl -s \"$ANT_API/status\"; echo '\n\n--- PEERS ---'; curl -s \"$ANT_API/peers\" | grep -o '\"address\":' | wc -l | xargs echo 'Peer Count:'; echo '\n--- ADDRESSES ---'; curl -s \"$ANT_API/addresses\"",
+    "ant:reset": "echo 'ant:reset is a legacy alias for system-ant:reset and removes repo-root ant-data.'; npm run system-ant:reset",
+    "ant:cache:reset": "node scripts/reset-ant-cache.js",
+    "ant:smoke-upload": "node scripts/smoke-upload.js",
+    "system-ant:start": "test -f ant-data/config.yaml || npm run ant:init; ./ant-bin/mac-arm64/antd --config=./ant-data/config.yaml",
+    "system-ant:stop": "pkill -SIGTERM antd || echo 'Ant not running or failed to stop'",
+    "system-ant:status": "ANT_API=${ANT_API:-http://127.0.0.1:1633}; echo '--- HEALTH ---'; curl -s \"$ANT_API/health\"; echo '\n\n--- STATUS ---'; curl -s \"$ANT_API/status\"; echo '\n\n--- PEERS ---'; curl -s \"$ANT_API/peers\" | grep -o '\"address\":' | wc -l | xargs echo 'Peer Count:'; echo '\n--- ADDRESSES ---'; curl -s \"$ANT_API/addresses\"",
+    "system-ant:reset": "rm -rf ant-data && echo 'System Ant data reset.'",
+    "ipfs:download": "node scripts/fetch-freedom-ipfs-native.js",
+    "ipfs:build": "node scripts/fetch-freedom-ipfs-native.js --from-source",
+    "ipfs:native:smoke": "node scripts/smoke-freedom-ipfs-native.js",
+    "ipfs:reset": "rm -rf ipfs-data && echo 'Legacy repo-root IPFS data reset.'",
+    "tor:download": "node scripts/fetch-arti.js",
+    "tor:reset": "rm -rf tor-data && echo 'Tor data reset.'",
+    "radicle:download": "node scripts/fetch-radicle-addon.js",
+    "radicle:reset": "rm -rf radicle-data && echo 'Legacy repo-root Radicle data removed; managed profile data was not changed.'",
+    "identity:reset": "rm -rf ant-data ipfs-data radicle-data identity-data && echo 'Legacy repo-root Ant/IPFS/Radicle/identity data removed; managed profile data was not changed.'",
     "dapp:reset": "node scripts/reset-dapp-permissions.js",
+    "vendor:openlv": "node scripts/bundle-openlv.js",
+    "bridge:serve": "node scripts/serve-bridge.js",
+    "openlv:ios-harness": "node scripts/openlv-ios-harness.js",
     "serve:updates": "node scripts/serve-updates.js",
     "start:test-updater": "ENABLE_DEV_UPDATER=true npm start",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "node scripts/better-sqlite3-prebuilds.js && electron-builder install-app-deps",
+    "radicle:build-addon": "node scripts/build-radicle-addon.js",
+    "smoke:hns:packaged": "node scripts/hns-packaged-smoke.js",
+    "test:capabilities": "jest --runInBand src/shared/platform-capabilities.test.js scripts/check-binaries.test.js src/main/hns-manager.test.js src/main/dvpn-manager.test.js src/renderer/lib/settings-ui.test.js"
   },
   "build": {
     "appId": "baby.freedom.browser",
@@ -67,16 +91,9 @@
     },
     "publish": {
       "provider": "generic",
-      "url": "https://freedom.baby/downloads"
+      "url": "https://freedom.baby/downloads",
+      "channel": "latest"
     },
-    "protocols": [
-      {
-        "name": "Freedom URLs",
-        "schemes": [
-          "freedom"
-        ]
-      }
-    ],
     "mac": {
       "target": [
         "dmg",
@@ -85,31 +102,40 @@
       "icon": "assets/icon.png",
       "identity": "Solar Dev Ltd (46XPHRBLH5)",
       "hardenedRuntime": true,
+      "binaries": [
+        "Contents/Resources/myotis-node/myotis-supervisor"
+      ],
+      "sign": "./scripts/sign-myotis-helper.js",
       "gatekeeperAssess": false,
+      "extendInfo": {
+        "LSMultipleInstancesProhibited": false,
+        "NSCameraUsageDescription": "Freedom needs camera access so websites you allow can use it for video calls.",
+        "NSMicrophoneUsageDescription": "Freedom needs microphone access so websites you allow can use it for video calls."
+      },
       "entitlements": "config/entitlements.mac.plist",
       "entitlementsInherit": "config/entitlements.mac.plist",
       "notarize": true,
+      "files": [
+        "!**/node_modules/better-sqlite3/prebuilds/!(darwin-${arch}).node"
+      ],
       "extraResources": [
         {
           "from": "radicle-bin/${os}-${arch}/",
           "to": "radicle-bin",
           "filter": [
-            "**/*"
+            "libradicle.node"
           ]
         },
         {
-          "from": "hns-bin/${os}-${arch}/",
-          "to": "hns-bin",
+          "from": "arti-bin/${os}-${arch}/",
+          "to": "arti-bin",
           "filter": [
             "**/*"
           ]
         },
         {
-          "from": "dvpn-bin/${os}-${arch}/",
-          "to": "dvpn-bin",
-          "filter": [
-            "**/*"
-          ]
+          "from": "node_modules/electron/dist/LICENSES.chromium.html",
+          "to": "LICENSES.chromium.html"
         }
       ]
     },
@@ -120,45 +146,79 @@
       "icon": "assets/icons",
       "category": "Network;WebBrowser",
       "executableName": "freedom",
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "freedom-browser"
+        }
+      },
       "mimeTypes": [
         "x-scheme-handler/freedom",
         "x-scheme-handler/ipfs",
         "x-scheme-handler/ipns",
         "x-scheme-handler/bzz"
       ],
+      "files": [
+        "!**/node_modules/better-sqlite3/prebuilds/!(linux-${arch}).node"
+      ],
       "extraResources": [
         {
           "from": "radicle-bin/${os}-${arch}/",
           "to": "radicle-bin",
           "filter": [
-            "**/*"
+            "libradicle.node"
           ]
         },
         {
-          "from": "hns-bin/${os}-${arch}/",
-          "to": "hns-bin",
-          "filter": [
-            "**/*"
-          ]
-        },
-        {
-          "from": "dvpn-bin/${os}-${arch}/",
-          "to": "dvpn-bin",
+          "from": "arti-bin/${os}-${arch}/",
+          "to": "arti-bin",
           "filter": [
             "**/*"
           ]
         }
       ]
     },
+    "pacman": {
+      "synopsis": "A browser for the decentralized web, with Swarm, IPFS, onchain apps, and ENS as first-class protocols",
+      "depends": [
+        "gtk3",
+        "libnotify",
+        "nss",
+        "libxss",
+        "libxtst",
+        "xdg-utils",
+        "at-spi2-core",
+        "alsa-lib",
+        "libsecret"
+      ]
+    },
+    "nsis": {
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
     "win": {
       "target": [
         "nsis",
         "zip"
       ],
-      "icon": "assets/icon.png"
-    },
-    "nsis": {
-      "artifactName": "${productName}.Setup.${version}.${ext}"
+      "icon": "assets/icon.png",
+      "files": [
+        "!**/node_modules/better-sqlite3/prebuilds/!(win32-${arch}).node"
+      ],
+      "extraResources": [
+        {
+          "from": "radicle-bin/${os}-${arch}/",
+          "to": "radicle-bin",
+          "filter": [
+            "libradicle.node"
+          ]
+        },
+        {
+          "from": "arti-bin/${os}-${arch}/",
+          "to": "arti-bin",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ]
     },
     "files": [
       "src/**/*",
@@ -167,22 +227,55 @@
       "!**/coverage/**"
     ],
     "asarUnpack": [
-      "**/node_modules/better-sqlite3/**"
+      "**/node_modules/better-sqlite3/**",
+      "**/*.node"
     ],
     "extraResources": [
       {
-        "from": "bee-bin/${os}-${arch}/",
-        "to": "bee-bin",
+        "from": "ant-bin/${os}-${arch}/",
+        "to": "ant-bin",
         "filter": [
           "**/*"
         ]
       },
       {
-        "from": "ipfs-bin/${os}-${arch}/",
-        "to": "ipfs-bin",
+        "from": "native/freedom-ipfs-node/prebuilds/${os}-${arch}/",
+        "to": "freedom-ipfs-node",
+        "filter": [
+          "freedom_ipfs_native.node"
+        ]
+      },
+      {
+        "from": "myotis-bin/${os}-${arch}/",
+        "to": "myotis-node",
+        "filter": [
+          "myotis-node.node",
+          "myotis-supervisor",
+          "myotis-supervisor.exe"
+        ]
+      },
+      {
+        "from": "assets/",
+        "to": "assets",
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "config/ant.yaml",
+        "to": "ant.yaml"
+      },
+      {
+        "from": "config/default-bookmarks.json",
+        "to": "default-bookmarks.json"
+      },
+      {
+        "from": "LICENSE",
+        "to": "LICENSE"
+      },
+      {
+        "from": "NOTICES",
+        "to": "NOTICES"
       },
       {
         "from": "hns-bin/${os}-${arch}/",
@@ -199,21 +292,6 @@
         ]
       },
       {
-        "from": "assets/",
-        "to": "assets",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "config/bee.yaml",
-        "to": "bee.yaml"
-      },
-      {
-        "from": "config/default-bookmarks.json",
-        "to": "default-bookmarks.json"
-      },
-      {
         "from": "scripts/jacktrip/",
         "to": "jacktrip-scripts",
         "filter": [
@@ -223,42 +301,78 @@
     ]
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=24.11.0 <25"
   },
   "devDependencies": {
-    "@babel/preset-env": "^7.29.0",
+    "@babel/core": "^8.0.1",
+    "@babel/preset-env": "^8.0.2",
     "@eslint/js": "^10.0.1",
-    "babel-jest": "^30.2.0",
+    "@playwright/test": "^1.60.0",
+    "aedes": "^1.1.2",
+    "babel-jest": "^30.4.1",
     "dotenv-cli": "^11.0.0",
-    "electron": "^42.10.0",
-    "electron-builder": "^26.7.0",
-    "eslint": "^10.0.0",
-    "globals": "^17.3.0",
-    "jest": "^30.2.0",
-    "prettier": "^3.8.1"
+    "electron": "^44.4.5",
+    "electron-builder": "^26.8.1",
+    "esbuild": "^0.28.1",
+    "eslint": "^10.4.0",
+    "globals": "^17.6.0",
+    "jest": "^30.4.2",
+    "prettier": "^3.8.3",
+    "ws": "^8.21.0"
   },
   "dependencies": {
+    "@adraffy/ens-normalize": "^1.11.1",
+    "@corpus-core/colibri-stateless": "3.0.0",
     "@ensdomains/content-hash": "^3.0.0",
+    "@ethersphere/bee-js": "^13.0.0",
+    "@ghostery/adblocker": "^2.18.1",
+    "@ledgerhq/hw-app-eth": "^7.8.8",
+    "@ledgerhq/hw-transport-node-hid": "^6.33.5",
     "@metamask/browser-passworder": "^6.0.0",
-    "@scure/bip39": "^2.0.1",
-    "better-sqlite3": "^12.11.1",
-    "electron-log": "^5.4.3",
-    "electron-updater": "^6.7.3",
-    "ethers": "^6.16.0",
-    "micro-key-producer": "^0.8.2",
+    "@openlv/core": "^0.2.0",
+    "@openlv/session": "^0.2.0",
+    "@safe-global/protocol-kit": "^8.0.3",
+    "@scure/bip39": "^2.2.0",
+    "@x402/core": "^2.12.0",
+    "@x402/evm": "^2.12.0",
+    "better-sqlite3": "^13.0.3",
+    "electron-log": "^5.4.4",
+    "electron-updater": "^6.8.3",
+    "ethers": "^6.17.0",
+    "micro-key-producer": "^0.10.0",
+    "proper-lockfile": "^4.1.2",
     "qrcode": "^1.5.4",
     "sentinel-ai-connect": "https://codeload.github.com/Sentinel-Autonomybuilder/blue-ai-connect/tar.gz/924d472cb8be47b11f2432515f23bd5ea20d297c"
   },
-  "title": "Freedom",
-  "displayName": "Freedom",
   "overrides": {
-    "@cosmjs/amino": "0.39.0",
-    "@cosmjs/crypto": "0.39.0",
-    "@cosmjs/encoding": "0.39.0",
-    "@cosmjs/proto-signing": "0.39.0",
-    "@cosmjs/stargate": "0.39.0",
-    "js-yaml": "^4.3.2",
-    "uuid": "11.1.1",
-    "tmp": "0.2.7"
-  }
+    "@ledgerhq/domain-service": {
+      "axios": "^1.20.0"
+    },
+    "@ledgerhq/evm-tools": {
+      "axios": "^1.20.0"
+    },
+    "@ledgerhq/hw-app-eth": {
+      "axios": "^1.20.0"
+    },
+    "@metamask/utils": {
+      "uuid": "^14.0.0"
+    },
+    "ethers": {
+      "ws": "^8.21.0"
+    },
+    "viem": {
+      "ws": "^8.21.0"
+    },
+    "axios": "^1.20.0",
+    "blue-js-sdk": {
+      ".": "2.8.0",
+      "@cosmjs/amino": "0.39.0",
+      "@cosmjs/crypto": "0.39.0",
+      "@cosmjs/encoding": "0.39.0",
+      "@cosmjs/proto-signing": "0.39.0",
+      "@cosmjs/stargate": "0.39.0"
+    }
+  },
+  "title": "Freedom",
+  "displayName": "Freedom"
 }

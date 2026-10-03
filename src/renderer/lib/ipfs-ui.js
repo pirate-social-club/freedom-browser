@@ -1,13 +1,13 @@
 // IPFS node UI controls
-import { state, buildIpfsApiUrl, getDisplayMessage } from './state.js';
+import { state, getDisplayMessage } from './state.js';
 import { pushDebug } from './debug.js';
+import { versionText } from './ui-format.js';
 
 // DOM elements (initialized in initIpfsUi)
 let ipfsToggleBtn = null;
 let ipfsToggleSwitch = null;
-let ipfsPeersCount = null;
-let ipfsBandwidthDown = null;
-let ipfsBandwidthUp = null;
+let ipfsActiveRequestsCount = null;
+let ipfsDataRead = null;
 let ipfsVersionText = null;
 let ipfsInfoPanel = null;
 let ipfsStatusRow = null;
@@ -17,164 +17,173 @@ let ipfsStatusValue = null;
 // Binary availability state
 let ipfsBinaryAvailable = true;
 
+// Guards one-time listener/subscription wiring so re-running initIpfsUi (e.g.
+// to re-check binary availability) doesn't bind the click handler twice.
+let ipfsListenersAttached = false;
+
 export const stopIpfsInfoPolling = () => {
-  if (state.ipfsPeersInterval) {
-    clearInterval(state.ipfsPeersInterval);
-    state.ipfsPeersInterval = null;
+  if (state.ipfsInfoInterval) {
+    clearInterval(state.ipfsInfoInterval);
+    state.ipfsInfoInterval = null;
   }
   ipfsInfoPanel?.classList.remove('visible');
-  if (ipfsPeersCount) ipfsPeersCount.textContent = '0';
-  if (ipfsBandwidthDown) ipfsBandwidthDown.textContent = '';
-  if (ipfsBandwidthUp) ipfsBandwidthUp.textContent = '';
+  if (ipfsActiveRequestsCount) ipfsActiveRequestsCount.textContent = '0';
+  if (ipfsDataRead) ipfsDataRead.textContent = '';
   if (ipfsVersionText)
-    ipfsVersionText.textContent = state.ipfsVersionFetched ? state.ipfsVersionValue : '';
+    ipfsVersionText.textContent = versionText(
+      state.ipfsVersionFetched ? state.ipfsVersionValue : ''
+    );
 };
 
-const formatBandwidth = (bytesPerSec) => {
-  if (bytesPerSec < 1024) return `${Math.round(bytesPerSec)} B/s`;
-  if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
-  return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
+const formatBytes = (bytes) => {
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-const fetchPeersAndBandwidth = async () => {
-  if (!state.beeMenuOpen) return;
-  if (state.currentIpfsStatus === 'stopped') {
+const parseNativeBuildInfo = (raw) => {
+  if (!raw) return null;
+  if (typeof raw === 'object') return raw;
+  if (typeof raw !== 'string') return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+};
+
+const readNativeVersion = (diagnostics = {}) => {
+  const buildInfo = parseNativeBuildInfo(diagnostics.nativeBuildInfo);
+  return (
+    (typeof buildInfo?.version === 'string' && buildInfo.version) ||
+    (typeof diagnostics.nativeVersion === 'string' && diagnostics.nativeVersion) ||
+    ''
+  );
+};
+
+// The native node only reports its version once it's actually running. Read it
+// off each stats poll and cache it the first time a real version appears — and
+// only then. A poll taken while the node is still spinning up (stopped status /
+// no diagnostics) shows the menu's shared 'Unknown' placeholder (#253) but does
+// NOT mark the version fetched, so later polls keep upgrading it instead of
+// locking in the placeholder forever.
+// Identity label for an external gateway: the detected node version when the
+// RPC answered, otherwise the gateway endpoint. Falls back to the registry's
+// configured endpoint when no diagnostics are at hand (immediate UI updates that
+// don't carry a stats poll). `externalGateway` is the configured endpoint and is
+// published in external mode whether or not the node is serving; `gateway` only
+// appears while it actually is (see publishExternalIpfsMode in main/ipfs-manager.js).
+const externalIdentityLabel = (diagnostics) => {
+  if (diagnostics?.externalVersion) return diagnostics.externalVersion;
+  const registryIpfs = state.registry?.ipfs;
+  const gateway =
+    diagnostics?.externalGateway || registryIpfs?.externalGateway || registryIpfs?.gateway || '';
+  return gateway ? `External · ${gateway.replace(/^https?:\/\//, '')}` : 'External gateway';
+};
+
+const updateVersionFromDiagnostics = (diagnostics) => {
+  if (state.ipfsVersionFetched) return;
+  const version = readNativeVersion(diagnostics);
+  if (version) {
+    state.ipfsVersionValue = `Freedom IPFS v${version}`;
+    state.ipfsVersionFetched = true;
+  }
+  if (ipfsVersionText) ipfsVersionText.textContent = versionText(state.ipfsVersionValue);
+};
+
+// The real backend state, ignoring any pending user intent.
+const isIpfsLiveRunning = () =>
+  state.currentIpfsStatus === 'running' || state.currentIpfsStatus === 'starting';
+
+// What the UI should show: the user's target while a toggle is pending
+// (ipfsDesiredRunning !== null), otherwise the live backend state. The switch
+// and stats polling read this so the toggle reflects the latest click instantly
+// and never flickers back to a transient/stale backend status mid-transition.
+const isIpfsEffectivelyRunning = () =>
+  state.ipfsDesiredRunning !== null ? state.ipfsDesiredRunning : isIpfsLiveRunning();
+
+const fetchNativeStats = async () => {
+  if (!state.antMenuOpen) return;
+  if (!isIpfsEffectivelyRunning()) {
     stopIpfsInfoPolling();
     return;
   }
   if (!ipfsInfoPanel?.classList.contains('visible')) return;
 
-  // Fetch version if not yet fetched
-  if (!state.ipfsVersionFetched) fetchVersionOnce();
-
-  // Fetch peers
   try {
-    const response = await fetch(buildIpfsApiUrl('/api/v0/swarm/peers'), { method: 'POST' });
+    const status = await window.ipfs?.getStatus?.();
     if (!ipfsInfoPanel?.classList.contains('visible')) return;
-    if (response.ok) {
-      const data = await response.json();
-      const peers = data?.Peers || [];
-      if (ipfsPeersCount) ipfsPeersCount.textContent = String(peers.length ?? 0);
-    } else if (ipfsPeersCount) {
-      ipfsPeersCount.textContent = '0';
+    const stats = JSON.parse(status?.diagnostics?.nativeGatewayStats || '{}');
+    if (ipfsActiveRequestsCount) {
+      ipfsActiveRequestsCount.textContent = String(stats.active_native_handles ?? 0);
     }
-  } catch {
-    if (ipfsPeersCount) ipfsPeersCount.textContent = '0';
-  }
-
-  // Fetch bandwidth stats
-  try {
-    const bwResponse = await fetch(buildIpfsApiUrl('/api/v0/stats/bw'), { method: 'POST' });
-    if (!ipfsInfoPanel?.classList.contains('visible')) return;
-    if (bwResponse.ok) {
-      const bwData = await bwResponse.json();
-      const rateIn = bwData?.RateIn || 0;
-      const rateOut = bwData?.RateOut || 0;
-      if (ipfsBandwidthDown) ipfsBandwidthDown.textContent = `↓${formatBandwidth(rateIn)}`;
-      if (ipfsBandwidthUp) ipfsBandwidthUp.textContent = `↑${formatBandwidth(rateOut)}`;
+    if (ipfsDataRead) {
+      ipfsDataRead.textContent = formatBytes(stats.bytes_read || 0);
+    }
+    if (state.registry?.ipfs?.mode === 'external') {
+      if (ipfsVersionText) {
+        ipfsVersionText.textContent = externalIdentityLabel(status?.diagnostics);
+      }
     } else {
-      if (ipfsBandwidthDown) ipfsBandwidthDown.textContent = '';
-      if (ipfsBandwidthUp) ipfsBandwidthUp.textContent = '';
+      updateVersionFromDiagnostics(status?.diagnostics);
     }
   } catch {
-    if (ipfsBandwidthDown) ipfsBandwidthDown.textContent = '';
-    if (ipfsBandwidthUp) ipfsBandwidthUp.textContent = '';
-  }
-};
-
-const fetchVersionOnce = async () => {
-  if (state.ipfsVersionFetched) return;
-  try {
-    const response = await fetch(buildIpfsApiUrl('/api/v0/id'), { method: 'POST' });
-    if (response.ok) {
-      const data = await response.json();
-      state.ipfsVersionValue = data?.AgentVersion?.split('/')[1]?.split('-')[0] || '';
-      state.ipfsVersionFetched = true;
-      if (ipfsVersionText) ipfsVersionText.textContent = state.ipfsVersionValue;
-    } else {
-      if (ipfsVersionText) ipfsVersionText.textContent = '';
-    }
-  } catch {
-    if (ipfsVersionText) ipfsVersionText.textContent = '';
+    if (ipfsActiveRequestsCount) ipfsActiveRequestsCount.textContent = '0';
+    if (ipfsDataRead) ipfsDataRead.textContent = '';
   }
 };
 
 export const startIpfsInfoPolling = () => {
-  if (!state.beeMenuOpen || state.currentIpfsStatus === 'stopped') {
+  if (!state.antMenuOpen || !isIpfsEffectivelyRunning()) {
     stopIpfsInfoPolling();
     return;
   }
 
   ipfsInfoPanel?.classList.add('visible');
 
-  fetchPeersAndBandwidth();
-  if (!state.ipfsVersionFetched) fetchVersionOnce();
+  // fetchNativeStats also reads the node version off the same getStatus call and
+  // upgrades the label once a real version is available (see
+  // updateVersionFromDiagnostics).
+  fetchNativeStats();
 
-  if (state.ipfsPeersInterval) clearInterval(state.ipfsPeersInterval);
-  state.ipfsPeersInterval = setInterval(fetchPeersAndBandwidth, 1000);
+  if (state.ipfsInfoInterval) clearInterval(state.ipfsInfoInterval);
+  state.ipfsInfoInterval = setInterval(fetchNativeStats, 1000);
 };
 
 export const updateIpfsUi = (status, error) => {
-  if (state.suppressIpfsRunningStatus && status === 'running') {
-    return;
-  }
-  if (status === 'stopped' || status === 'error') {
-    state.suppressIpfsRunningStatus = false;
-  }
-
   state.currentIpfsStatus = status;
 
-  // Update status line and toggle state from registry
+  // Update status line and toggle disabled/external state from registry
   updateIpfsStatusLine();
   updateIpfsToggleState();
 
+  // NOTE: the external-mode identity/version line is owned solely by the stats
+  // poll (fetchNativeStats), which has the diagnostics to show the detected node
+  // version. Setting it here too made the label flicker between identity/version
+  // and the endpoint.
   if (!ipfsToggleBtn || !ipfsToggleSwitch) return;
 
-  ipfsToggleSwitch.classList.remove('running');
-  switch (status) {
-    case 'running':
-    case 'starting':
-      ipfsToggleSwitch.classList.add('running');
-      break;
-    case 'error':
-      if (error) pushDebug(`IPFS Error: ${error}`);
-      break;
-    case 'stopping':
-    case 'stopped':
-    default:
-      // Clear status row when stopped
-      if (ipfsStatusRow) ipfsStatusRow.classList.remove('visible');
-      break;
+  // While a toggle is pending (ipfsDesiredRunning !== null) the switch follows
+  // the user's target and ignores transient/stale backend states. The intent is
+  // cleared by the reconcile loop once it reaches the target or gives up (see
+  // reconcileIpfsToggle), after which the switch follows live status again.
+  const showRunning = isIpfsEffectivelyRunning();
+
+  ipfsToggleSwitch.classList.toggle('running', showRunning);
+
+  if (status === 'error') {
+    if (error) pushDebug(`IPFS Error: ${error}`);
+  } else if (!showRunning && ipfsStatusRow) {
+    // Clear the status row once the node is no longer running.
+    ipfsStatusRow.classList.remove('visible');
   }
 
-  if (state.beeMenuOpen) {
-    if (status === 'stopped') {
+  if (state.antMenuOpen) {
+    if (!showRunning) {
       stopIpfsInfoPolling();
-    } else if (!state.ipfsPeersInterval && ipfsToggleSwitch?.classList.contains('running')) {
+    } else if (!state.ipfsInfoInterval) {
       startIpfsInfoPolling();
     }
-  }
-};
-
-export const resetIpfsVersion = () => {
-  state.ipfsVersionFetched = false;
-  state.ipfsVersionValue = '';
-  if (ipfsVersionText) ipfsVersionText.textContent = '';
-  if (ipfsBandwidthDown) ipfsBandwidthDown.textContent = '';
-  if (ipfsBandwidthUp) ipfsBandwidthUp.textContent = '';
-};
-
-const setToggleDisabled = (disabled) => {
-  if (!ipfsToggleBtn) return;
-
-  if (disabled) {
-    ipfsToggleBtn.classList.add('disabled');
-    ipfsToggleBtn.setAttribute('disabled', 'true');
-    ipfsToggleBtn.setAttribute('title', 'IPFS binary not found');
-  } else {
-    ipfsToggleBtn.classList.remove('disabled');
-    ipfsToggleBtn.removeAttribute('disabled');
-    ipfsToggleBtn.removeAttribute('title');
   }
 };
 
@@ -184,7 +193,7 @@ export const updateIpfsStatusLine = () => {
 
   const message = getDisplayMessage('ipfs');
 
-  if (message) {
+  if (message && ipfsStatusRow) {
     // Parse "Label: value" format
     const colonIndex = message.indexOf(':');
     if (colonIndex > 0) {
@@ -203,19 +212,92 @@ export const updateIpfsStatusLine = () => {
   }
 };
 
-// Update toggle disabled state based on node mode
+// Sole writer of the toggle's disabled/external/title state: it reads BOTH
+// inputs — the native-addon availability probe and the registry mode — so
+// neither can clobber the other's decision regardless of which lands first. (A
+// separate binary-probe writer used to disable the toggle unconditionally,
+// re-disabling an external gateway the registry had just declared controllable.)
 export const updateIpfsToggleState = () => {
   if (!ipfsToggleBtn) return;
 
   const mode = state.registry?.ipfs?.mode;
-  const isReused = mode === 'reused';
 
-  if (isReused) {
-    ipfsToggleBtn.classList.add('external');
-    ipfsToggleBtn.setAttribute('title', 'Using existing node — cannot be controlled from Freedom');
-  } else if (ipfsBinaryAvailable) {
-    ipfsToggleBtn.classList.remove('external');
+  // A user-configured external gateway is controllable and needs no native
+  // addon, so it stays enabled even when the binary probe came back negative —
+  // it is the escape hatch for exactly the hosts where the addon can't load.
+  const disabled = !ipfsBinaryAvailable && mode !== 'external';
+
+  ipfsToggleBtn.classList.toggle('disabled', disabled);
+  if (disabled) {
+    ipfsToggleBtn.setAttribute('disabled', 'true');
+  } else {
+    ipfsToggleBtn.removeAttribute('disabled');
+  }
+
+  // An auto-detected node Freedom didn't start is shown as external but can't
+  // be controlled (the click handler declines it).
+  ipfsToggleBtn.classList.toggle('external', mode === 'reused');
+
+  const title =
+    mode === 'reused'
+      ? 'Using existing node — cannot be controlled from Freedom'
+      : mode === 'external'
+        ? 'Using an external IPFS gateway'
+        : disabled
+          ? 'IPFS binary not found'
+          : null;
+  if (title) {
+    ipfsToggleBtn.setAttribute('title', title);
+  } else {
     ipfsToggleBtn.removeAttribute('title');
+  }
+};
+
+// True while the background reconcile loop is converging the backend toward the
+// user's target, so a flurry of clicks doesn't spawn overlapping loops.
+let ipfsReconciling = false;
+
+// Drive the backend toward state.ipfsDesiredRunning. The click handler sets the
+// target and the switch instantly; this loop does the slow start()/stop() work
+// in the background and always converges to the *latest* target, so the user can
+// toggle rapidly and the node ends up where they last left the switch.
+//
+// Each iteration re-reads the target, so a click made mid-flight redirects the
+// loop. If an operation completes without reaching a still-unchanged target
+// (e.g. a stop that left the node running, or a start that failed), the loop
+// gives up rather than spinning, and the switch falls back to the real status.
+const reconcileIpfsToggle = async () => {
+  if (ipfsReconciling) return;
+  ipfsReconciling = true;
+  try {
+    while (state.ipfsDesiredRunning !== null && state.ipfsDesiredRunning !== isIpfsLiveRunning()) {
+      const target = state.ipfsDesiredRunning;
+      let status;
+      let error;
+      try {
+        const result = (target ? await window.ipfs.start() : await window.ipfs.stop()) || {};
+        ({ status, error } = result);
+      } catch (err) {
+        console.error('Failed to toggle IPFS', err);
+        pushDebug(`Failed to toggle IPFS: ${err.message}`);
+        // The call threw; re-query the real status so the UI reflects reality.
+        const live = await window.ipfs?.getStatus?.()?.catch(() => null);
+        status = live?.status ?? state.currentIpfsStatus;
+        error = live?.error;
+      }
+      updateIpfsUi(status, error);
+      // If the target hasn't changed but the op didn't reach it, don't spin —
+      // accept reality. If the target changed mid-flight, loop again toward it.
+      if (state.ipfsDesiredRunning === target && state.ipfsDesiredRunning !== isIpfsLiveRunning()) {
+        break;
+      }
+    }
+  } finally {
+    ipfsReconciling = false;
+    // Stop overriding the switch: the loop reached the target or gave up, so the
+    // live status is now the source of truth.
+    state.ipfsDesiredRunning = null;
+    updateIpfsUi(state.currentIpfsStatus);
   }
 };
 
@@ -223,9 +305,8 @@ export const initIpfsUi = () => {
   // Initialize DOM elements
   ipfsToggleBtn = document.getElementById('ipfs-toggle-btn');
   ipfsToggleSwitch = document.getElementById('ipfs-toggle-switch');
-  ipfsPeersCount = document.getElementById('ipfs-peers-count');
-  ipfsBandwidthDown = document.getElementById('ipfs-bandwidth-down');
-  ipfsBandwidthUp = document.getElementById('ipfs-bandwidth-up');
+  ipfsActiveRequestsCount = document.getElementById('ipfs-active-requests-count');
+  ipfsDataRead = document.getElementById('ipfs-data-read');
   ipfsVersionText = document.getElementById('ipfs-version-text');
   ipfsInfoPanel = document.querySelector('.ipfs-info');
   ipfsStatusRow = document.getElementById('ipfs-status-row');
@@ -236,46 +317,45 @@ export const initIpfsUi = () => {
   if (window.ipfs) {
     window.ipfs.checkBinary().then(({ available }) => {
       ipfsBinaryAvailable = available;
-      setToggleDisabled(!available);
+      // Re-derive the toggle state from both inputs rather than disabling
+      // outright: the profile may be on an external gateway, which the missing
+      // addon says nothing about.
+      updateIpfsToggleState();
       if (!available) {
         pushDebug('IPFS binary not found - toggle disabled');
       }
     });
   }
 
+  if (ipfsListenersAttached) return;
+  ipfsListenersAttached = true;
+
   // Toggle button listener
   ipfsToggleBtn?.addEventListener('click', () => {
-    if (!ipfsBinaryAvailable) return;
-
-    // Don't allow toggling when using an external node
+    // Don't allow toggling when reusing an auto-detected node it can't control.
     const mode = state.registry?.ipfs?.mode;
     if (mode === 'reused') return;
 
-    if (state.currentIpfsStatus === 'running' || state.currentIpfsStatus === 'starting') {
-      state.suppressIpfsRunningStatus = true;
-      ipfsToggleSwitch?.classList.remove('running');
-      stopIpfsInfoPolling();
-      pushDebug('User toggled IPFS Off');
-      window.ipfs
-        .stop()
-        .then(({ status, error }) => updateIpfsUi(status, error))
-        .catch((err) => {
-          console.error('Failed to toggle IPFS', err);
-          pushDebug(`Failed to toggle IPFS: ${err.message}`);
-        });
-    } else {
-      state.suppressIpfsRunningStatus = false;
-      ipfsToggleSwitch?.classList.add('running');
+    // A user-configured external gateway is controllable and does not need the
+    // native addon.
+    if (!ipfsBinaryAvailable && mode !== 'external') return;
+
+    // Flip to the opposite of whatever the switch currently shows (the pending
+    // target if one is set, otherwise live status), so each click reverses the
+    // last one even mid-transition.
+    const desired = !isIpfsEffectivelyRunning();
+    state.ipfsDesiredRunning = desired;
+
+    // Update the switch and stats panel instantly; the reconcile loop drives the
+    // backend toward this target in the background and coalesces rapid clicks.
+    ipfsToggleSwitch?.classList.toggle('running', desired);
+    if (desired) {
       startIpfsInfoPolling();
-      pushDebug('User toggled IPFS On');
-      window.ipfs
-        .start()
-        .then(({ status, error }) => updateIpfsUi(status, error))
-        .catch((err) => {
-          console.error('Failed to toggle IPFS', err);
-          pushDebug(`Failed to toggle IPFS: ${err.message}`);
-        });
+    } else {
+      stopIpfsInfoPolling();
     }
+    pushDebug(`User toggled IPFS ${desired ? 'On' : 'Off'}`);
+    reconcileIpfsToggle();
   });
 
   // Listen for status updates from main process

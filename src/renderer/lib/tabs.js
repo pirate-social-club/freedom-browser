@@ -1,12 +1,41 @@
+import { refreshSessionRoutingNotice } from './session-routing-ui.js';
 // Tab management module
 import { pushDebug } from './debug.js';
 import { closeMenus } from './menus.js';
 import { hideBookmarkContextMenu } from './bookmarks-ui.js';
 import { showMenuBackdrop, hideMenuBackdrop } from './menu-backdrop.js';
-import { setupWebviewContextMenu } from './page-context-menu.js';
-import { homeUrl, isHomeUrl } from './page-urls.js';
-import { setupWebviewProvider, setActiveWebview, unregisterWebviewProvider } from './dapp-provider.js';
-import { normalizeLocalhostInput } from './url-utils.js';
+import { setupWebviewContextMenu, notifyPageContextMenuNavigated } from './page-context-menu.js';
+import {
+  homeUrl,
+  getInternalPageName,
+  getOnchainInterstitialTarget,
+  internalPages,
+  isHomePageUrl,
+  isNewTabPageName,
+  isNewTabPageUrl,
+} from './page-urls.js';
+import { getPrivatePartition, isPrivateWindow } from './private-mode.js';
+import { setupWebviewProvider, setActiveWebview } from './dapp-provider.js';
+import { setupSwarmProvider } from './swarm-provider.js';
+import { setupRadicleProvider } from './radicle-provider.js';
+import {
+  notifyFindBarNavigated,
+  notifyFindBarNavigationStarted,
+  notifyFindBarTabClosed,
+  notifyFindBarTabSwitched,
+} from './find-bar.js';
+import { consumeHistoryTraversal } from './history-traversal.js';
+import { matchesShortcut } from './shortcuts.js';
+import { isModalDialogOpen } from './modal-dialog.js';
+import { placePopoverAtPoint } from './popover-bounds.js';
+import { onWindowDeactivated } from './window-deactivation.js';
+import {
+  clearLinkStatus,
+  clearHoverStatus,
+  showLinkStatus,
+  setLinkStatusSide,
+} from './link-status.js';
+import { formatOnchainAppDisplayUrl } from './url-utils.js';
 
 const electronAPI = window.electronAPI;
 
@@ -16,12 +45,18 @@ export const setOnContextMenuOpening = (callback) => {
   onContextMenuOpening = callback;
 };
 
-// Set loading state for a specific tab (or active tab if no tabId)
+let hnsWaitingPageReadyHandler = null;
+export const setHnsWaitingPageReadyHandler = (handler) => {
+  hnsWaitingPageReadyHandler = handler;
+};
+
+// Set loading state for a specific tab (or active tab if no tabId).
 export const setTabLoading = (isLoading, tabId = null) => {
   const tab = tabId
     ? tabState.tabs.find((t) => t.id === tabId)
     : tabState.tabs.find((t) => t.id === tabState.activeTabId);
   if (tab) {
+    if (tab.id === tabState.activeTabId) refreshSessionRoutingNotice(tab.webview);
     tab.isLoading = isLoading;
     renderTabs();
   }
@@ -32,8 +67,14 @@ export const updateTabFavicon = async (tabId, pageUrl) => {
   const tab = tabState.tabs.find((t) => t.id === tabId);
   if (!tab) return;
 
-  // Skip for internal pages or empty URLs
-  if (!pageUrl || pageUrl.startsWith('freedom://') || pageUrl.includes('/pages/')) {
+  // Skip for internal pages or empty URLs — internal pages that want a
+  // favicon declare it via <link rel="icon"> and are picked up by the
+  // page-favicon-updated webview event instead of the HTTP fetch pipeline.
+  // Anchored (isInternalPageUrl), not an `/pages/` substring: the sibling
+  // of the split in that handler, and with a substring test a remote
+  // `https://example.com/pages/about.html` blanks the strip on every paint,
+  // dropping the cached icon main just fetched for it (#376).
+  if (!pageUrl || isInternalPageUrl(pageUrl)) {
     tab.favicon = null;
     renderTabs();
     return;
@@ -90,12 +131,47 @@ let webviewPreloadPath = null;
 
 // Event handler references (set by navigation.js)
 let onWebviewEvent = null;
+let onOnchainProvenanceChange = null;
 let onLoadTarget = null;
 let onReload = null;
 let onHardReload = null;
 
 export const setWebviewEventHandler = (handler) => {
   onWebviewEvent = handler;
+};
+
+// Report a commit that Chromium produced for a back/forward traversal, so
+// navigation.js can re-verify an ENS-backed restored entry under today's
+// verification settings (#86). Reported for background tabs too — the regular
+// `did-navigate` forward above is active-tab-only, and a user who switches
+// tabs between pressing Back and the commit landing would otherwise keep the
+// stale trust object for the restored entry.
+//
+// `consumeHistoryTraversal` is called unconditionally (even with no handler
+// registered) so the mark can never outlive the commit it belongs to.
+//
+// `previousUrl` — the URL this tab was on before the restored entry
+// committed — rides along because the refresh needs it to tell "the user
+// pressed Back onto a blocked name" from "the user pressed Back *out of* the
+// interstitial we raised over that name". Re-raising it in the second case
+// puts the user in a loop they can only leave through the address bar.
+//
+// `wroteCommittedIdentity` — whether *this* commit actually updated the tab's
+// `committedDisplayUrl`. The refresh keys on that URL, so a commit that
+// deliberately leaves it alone — `about:blank`, or a tab that has already
+// gone away — must not be reported:
+// the refresh would re-resolve the entry the traversal just *left* and could
+// raise that name's interstitial over the restored entry, with the restored
+// entry's own forward history gone. Same reasoning as the same-document case
+// in `did-navigate-in-page`; there the identity is never written either.
+const reportHistoryTraversalCommit = (webview, tabId, previousUrl, wroteCommittedIdentity) => {
+  const traversed = consumeHistoryTraversal(webview);
+  if (!traversed || !wroteCommittedIdentity || !onWebviewEvent) return;
+  onWebviewEvent('history-traversal-committed', { tabId, previousUrl: previousUrl || '' });
+};
+
+export const setOnchainProvenanceChangeHandler = (handler) => {
+  onOnchainProvenanceChange = handler;
 };
 
 export const setLoadTargetHandler = (handler) => {
@@ -173,23 +249,189 @@ export const closeAllDevTools = () => {
 // Get all tabs
 export const getTabs = () => tabState.tabs;
 
+// Get a tab by its numeric id, or null when no match is found.
+export const getTabById = (tabId) => {
+  if (tabId === null || tabId === undefined) return null;
+  return tabState.tabs.find((t) => t.id === tabId) || null;
+};
+
+// Resolve the tab id stored on a webview's `data-tab-id` attribute, or
+// null when the webview is unmanaged or missing the attribute. Centralised
+// so the renderer doesn't sprinkle `Number(webview.dataset.tabId)` across
+// async-tab-routing call sites.
+export const getTabIdForWebview = (webview) => {
+  if (!webview) return null;
+  const raw = webview.dataset?.tabId;
+  if (raw === undefined) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+// True when `tabId` matches the currently active tab. Used by async
+// callbacks that want to gate UI updates (alerts, address bar writes,
+// favicon refresh) on the originating tab still being foregrounded.
+export const isActiveTab = (tabId) =>
+  tabId !== null && tabId !== undefined && tabId === tabState.activeTabId;
+
+/**
+ * Get the committed display URL for a specific webview.
+ * Reads from the tab's `committedDisplayUrl` — the user-facing identity of
+ * the last URL committed by a `did-navigate` event for this tab's webview.
+ * Never falls back
+ * to the live address bar input or to `addressBarSnapshot`, which is
+ * transient draft/restoration state (overwritten on `focusin` and on
+ * `tab-switched`, so it can carry unsubmitted typed-but-not-yet-loaded
+ * values).
+ *
+ * This is critical for provider permission checks — if a page fires a
+ * request while the user is typing in the address bar (or has switched
+ * away from a tab whose snapshot now carries a draft), we must derive
+ * the origin from the committed navigation identity, not partial input.
+ *
+ * Returns the empty string for tabs that haven't yet committed a
+ * navigation. New tabs initialize `committedDisplayUrl: ''` and the
+ * value is populated on the first `did-navigate`.
+ *
+ * @param {HTMLElement} webview - The webview element
+ * @returns {string} The committed display URL for this webview's tab
+ */
+export const getDisplayUrlForWebview = (webview) => {
+  const tab = tabState.tabs.find((t) => t.webview === webview);
+  if (!tab) return '';
+  return tab.navigationState?.committedDisplayUrl || '';
+};
+
+export const getNavigationKeyForWebview = (webview) => {
+  const tab = tabState.tabs.find((candidate) => candidate.webview === webview);
+  if (!tab) return '';
+  return `${tab.id}:${tab.navigationState?.committedNavigationSequence || 0}`;
+};
+
 // Create default navigation state for a tab
-const createNavigationState = (initialUrl = '') => {
-  const initialDisplay =
-    !initialUrl || initialUrl === 'about:blank' || isHomeUrl(initialUrl) ? '' : initialUrl;
-  return {
-    currentPageUrl: initialUrl,
-    pendingNavigationUrl: initialUrl,
-    pendingHnsUrl: null,
-    pendingTitleForUrl: initialUrl || null,
-    hasNavigatedDuringCurrentLoad: false,
-    isWebviewLoading: false,
-    currentBzzBase: null,
-    addressBarSnapshot: initialDisplay,
-    displayAliases: new Map(),
-    cachedWebContentsId: null,
-    resolvingWebContentsId: null,
-  };
+const createNavigationState = () => ({
+  currentPageUrl: '',
+  pendingNavigationUrl: '',
+  pendingTitleForUrl: null,
+  hasNavigatedDuringCurrentLoad: false,
+  isWebviewLoading: false,
+  currentBzzBase: null,
+  // `addressBarSnapshot` is transient draft/restoration state — it's
+  // overwritten with `addressInput.value` on focusin and on tab-switched, so
+  // it can hold unsubmitted user input (e.g. typed-but-not-submitted ENS
+  // names). Reload and other commit-keyed decisions must NOT key on it; use
+  // `committedDisplayUrl` instead.
+  addressBarSnapshot: '',
+  // Chrome's per-tab "user input in progress": the uncommitted address-bar
+  // edit for this tab (a string, possibly empty) or `null` when the user has
+  // no edit in flight. Owned by `address-bar-edit.js`. While it is a string,
+  // navigation commits leave the address input alone (#305) and a switch back
+  // to this tab restores the draft and its selection (#314).
+  addressBarPendingInput: null,
+  addressBarPendingSelection: null,
+  // `committedDisplayUrl` is the user-facing identity of the URL Chromium
+  // committed for this tab's last navigation. For most schemes it equals
+  // `webview.getURL()`; onchain apps reverse-map their synthetic Chromium
+  // origin to the standard `web3://<contract>:<chainId>/` form. It's written
+  // only by tabs.js' per-webview did-navigate handler — never by focusin,
+  // tab-switched, or setAddressDisplayForTab — so it stays a stable identity
+  // for the active page even while the user is mid-typing or while a slow
+  // navigation is in flight. The actual navigation URL remains in `tab.url`
+  // and `currentPageUrl`.
+  committedDisplayUrl: '',
+  committedNavigationSequence: 0,
+  // The commit counter's sibling, for the other half of the question an
+  // async landing site has to ask. `committedNavigationSequence` answers
+  // "has this tab moved on since I started?"; this one answers "is it about
+  // to?" — bumped by every navigation this guest has been *asked* for,
+  // whether or not it ever commits: Chromium's own main-frame,
+  // cross-document `did-start-navigation` (a back/forward traversal, a link
+  // click, any `loadURL`) and `loadTarget`'s entry, which records the intent
+  // before a name resolution that can take a second has produced a start
+  // event at all. Work that navigates the guest itself when it settles must
+  // compare this too, or it cancels the navigation the user asked for while
+  // it was in flight and takes the forward history with it (#86).
+  requestedNavigationSequence: 0,
+  cachedWebContentsId: null,
+  resolvingWebContentsId: null,
+  pendingSwarmProbeId: null,
+  swarmProbeVersion: 0,
+});
+
+// --- Tab audio state (indicator + mute) ------------------------------------
+
+/**
+ * Pure reducer for the tab-strip audio indicator.
+ * Muted wins over audible so a muted tab keeps showing the muted-speaker
+ * affordance (and stays unmutable) even while no sound is being produced.
+ *
+ * @param {{isMuted?: boolean, isAudible?: boolean}|null} tab
+ * @returns {'muted'|'audible'|null} indicator to render, or null for none
+ */
+export const getTabAudioState = (tab) => {
+  if (!tab) return null;
+  if (tab.isMuted === true) return 'muted';
+  if (tab.isAudible === true) return 'audible';
+  return null;
+};
+
+// Sample a webview's audibility and update the tab flag. `fallback` is what
+// the triggering media event implies, used when isCurrentlyAudible isn't
+// available (tests, detached webviews) or throws (guest not attached yet).
+const applyTabAudibleState = (tabId, fallback) => {
+  const tab = tabState.tabs.find((t) => t.id === tabId);
+  if (!tab || !tab.webview) return;
+  let audible = fallback === true;
+  try {
+    if (typeof tab.webview.isCurrentlyAudible === 'function') {
+      audible = tab.webview.isCurrentlyAudible() === true;
+    }
+  } catch {
+    audible = fallback === true;
+  }
+  if (tab.isAudible !== audible) {
+    tab.isAudible = audible;
+    renderTabs();
+  }
+};
+
+// One delayed re-sample per media edge (never self-rescheduling) so the
+// indicator converges on the real audible state without a standing poll.
+const AUDIBLE_RECHECK_MS = 1000;
+const scheduleAudibleRecheck = (tabId) => {
+  const tab = tabState.tabs.find((t) => t.id === tabId);
+  if (!tab) return;
+  if (tab.audioStateTimer) {
+    clearTimeout(tab.audioStateTimer);
+  }
+  tab.audioStateTimer = setTimeout(() => {
+    tab.audioStateTimer = null;
+    applyTabAudibleState(tabId, tab.isAudible);
+  }, AUDIBLE_RECHECK_MS);
+};
+
+// Push tab.isMuted down to the webview. Webview methods throw until the
+// guest is attached, so failures are swallowed here and the flag — which
+// lives on the tab, not the webview — is re-applied by the dom-ready
+// handler. Muting is webContents-level, so it survives navigation without
+// any extra bookkeeping.
+const applyMuteToWebview = (tab) => {
+  if (!tab?.webview || typeof tab.webview.setAudioMuted !== 'function') return;
+  try {
+    tab.webview.setAudioMuted(tab.isMuted === true);
+  } catch {
+    // Guest not attached yet — dom-ready re-applies.
+  }
+};
+
+// Toggle mute for a tab: flips the tab flag immediately (indicator updates)
+// and pushes it to the webview, with dom-ready as the fallback apply point.
+export const toggleMuteTab = (tabId) => {
+  const tab = tabState.tabs.find((t) => t.id === tabId);
+  if (!tab) return;
+  tab.isMuted = tab.isMuted !== true;
+  applyMuteToWebview(tab);
+  renderTabs();
+  pushDebug(`${tab.isMuted ? 'Muted' : 'Unmuted'} tab ${tabId}`);
 };
 
 // Get navigation state of the active tab
@@ -207,9 +449,72 @@ export const updateActiveTabTitle = (title) => {
   }
 };
 
+// The friendly URL of the private start page; private windows open new
+// tabs here instead of the home page.
+const PRIVATE_START_URL = 'freedom://private';
+
+// URL every fresh tab in this window starts on.
+const defaultNewTabUrl = () => (isPrivateWindow() ? PRIVATE_START_URL : homeUrl);
+
+// True for both forms the private start page appears as in tab.url —
+// the friendly freedom:// form while resolving and the resolved
+// file://…/pages/private.html form once loaded.
+//
+// The resolved form is a bare suffix match, so it is scoped to private
+// windows: in a NORMAL window a perfectly ordinary web page whose path ends
+// in /pages/private.html (https://example.com/pages/private.html) would
+// otherwise be silently excluded from the Ctrl/Cmd+Shift+T reopen stack.
+// The internal page only ever loads from a file:// URL inside a private
+// window, so the narrower check loses nothing.
+const isPrivateStartUrl = (url) =>
+  url === PRIVATE_START_URL ||
+  (isPrivateWindow() &&
+    typeof url === 'string' &&
+    url.startsWith('file:') &&
+    url.endsWith('/pages/private.html'));
+
+const refreshOnchainProvenance = async (tab, url) => {
+  if (!tab?.navigationState) return;
+  const sequence = tab.navigationState.committedNavigationSequence;
+  tab.onchainProvenance = null;
+  onOnchainProvenanceChange?.(tab.id);
+  if (!url.startsWith('web3://') || !electronAPI?.getOnchainAppProvenance) return;
+
+  let webContentsId;
+  try {
+    webContentsId = tab.webview.getWebContentsId();
+  } catch {
+    return;
+  }
+
+  try {
+    const provenance = await electronAPI.getOnchainAppProvenance(webContentsId, url);
+    const current = tabState.tabs.find((candidate) => candidate.id === tab.id);
+    if (
+      !current ||
+      current.navigationState?.committedNavigationSequence !== sequence ||
+      current.url !== url
+    ) {
+      return;
+    }
+    current.onchainProvenance = provenance || null;
+    onOnchainProvenanceChange?.(current.id);
+  } catch (err) {
+    pushDebug(`[Tabs] Onchain provenance lookup failed: ${err.message}`);
+  }
+};
+
 // Create a webview element
 const createWebview = (tabId, initialUrl) => {
   const webview = document.createElement('webview');
+  // PRIVATE MODE GUARD (partition): in a private window every webview runs
+  // on the window's unique non-persisted `private-<uuid>` session. The
+  // partition attribute only takes effect before the first navigation, so
+  // it is stamped here — before `src` is assigned — and never mutated.
+  const privatePartition = getPrivatePartition();
+  if (privatePartition) {
+    webview.setAttribute('partition', privatePartition);
+  }
   webview.setAttribute('allowpopups', '');
   webview.setAttribute('allowfullscreen', '');
   webview.setAttribute(
@@ -227,19 +532,73 @@ const createWebview = (tabId, initialUrl) => {
 
   // Create named event handlers so they can be removed later
   const handlers = {
+    // A main-frame, cross-document navigation started: bump the per-tab
+    // requested-navigation counter (see `createNavigationState`), and record
+    // whether the find bar was open for this tab, which is what decides at
+    // commit whether the bar closes — Chrome's rule. Nothing visible happens
+    // here, because this navigation may never commit (a download link, Stop,
+    // an external protocol handler), and the user is then still on this page
+    // with a live search that must survive.
+    'did-start-navigation': (event) => {
+      if (event.isMainFrame === false || event.isInPlace) return;
+      const tab = tabState.tabs.find((t) => t.id === tabId);
+      if (tab?.navigationState) {
+        tab.navigationState.requestedNavigationSequence += 1;
+        if (event.url && event.url !== tab.navigationState.pendingHnsWaitingUrl) {
+          tab.navigationState.pendingHnsUrl = null;
+          tab.navigationState.pendingHnsWaitingUrl = null;
+        }
+      }
+      notifyFindBarNavigationStarted(webview);
+    },
     'did-start-loading': () => {
       const tab = tabState.tabs.find((t) => t.id === tabId);
       if (tab) {
+        // A real load is starting — the phantom stop that proactive
+        // suppression guards against has either already fired, been
+        // elided by Chromium, or is interleaved earlier in this same
+        // event-loop tick. Disarm so the paired real did-stop-loading
+        // isn't swallowed. This is what keeps fast-scheme clicks
+        // (freedom://, rad:, ethereum:) from getting a stuck spinner
+        // when their real stop lands inside the 200 ms safety window.
+        if (tab.suppressNextStop) {
+          tab.suppressNextStop = false;
+          if (tab.suppressNextStopTimer) {
+            clearTimeout(tab.suppressNextStopTimer);
+            tab.suppressNextStopTimer = null;
+          }
+        }
         tab.isLoading = true;
         renderTabs();
       }
       if (tabId === tabState.activeTabId && onWebviewEvent) {
-        onWebviewEvent('did-start-loading', { tabId });
+        onWebviewEvent('did-start-loading', {
+          tabId,
+          url: webview.getURL(),
+          pendingNavigationUrl: tab?.navigationState?.pendingNavigationUrl || '',
+        });
       }
     },
     'did-stop-loading': () => {
       const tab = tabState.tabs.find((t) => t.id === tabId);
       if (tab) {
+        // Paired suppression for the will-navigate intercept (see did-fail-load
+        // below). The aborted nav fires `did-fail-load -3` then
+        // `did-stop-loading`; both describe a phantom load that never had a
+        // real start — they don't represent the real navigation we're about
+        // to perform via `loadTarget`. Swallowing them entirely (including
+        // the active-tab `onWebviewEvent` forwarding) prevents the
+        // navigation-side handler from clearing `isLoading`, resetting the
+        // reload button, or pushing the aborted URL into history mid-ENS-
+        // resolution.
+        if (tab.suppressNextStop) {
+          tab.suppressNextStop = false;
+          if (tab.suppressNextStopTimer) {
+            clearTimeout(tab.suppressNextStopTimer);
+            tab.suppressNextStopTimer = null;
+          }
+          return;
+        }
         tab.isLoading = false;
         tab.url = webview.getURL();
         renderTabs();
@@ -249,8 +608,48 @@ const createWebview = (tabId, initialUrl) => {
       }
     },
     'did-fail-load': (event) => {
+      // Chromium fires `did-fail-load` for **any** frame, including hidden
+      // sub-frames (verify-API attestation iframes, ad-tech cookie-sync
+      // pixels, third-party widgets, etc.). Without this guard, every
+      // failed sub-resource iframe load would clear the main-frame loading
+      // state and — via the navigation-side handler — replace the entire
+      // page with `pages/error.html`. That breaks WalletConnect-using
+      // dapps and any site with heavy ad-tech under Freedom.
+      //
+      // Treat undefined as main-frame for backward compatibility with
+      // tests that don't synthesize the field; production Electron always
+      // sets it.
+      if (event.isMainFrame === false) {
+        return;
+      }
       const tab = tabState.tabs.find((t) => t.id === tabId);
       if (tab) {
+        // When the main process intercepts a `will-navigate` for a custom
+        // protocol (bzz://, ens://, ipfs://, ipns://, freedom://, rad:,
+        // ethereum:) it calls `event.preventDefault()` on the source
+        // webview. Chromium emits `did-fail-load -3` (ERR_ABORTED) +
+        // `did-stop-loading` for the cancelled navigation. We swallow
+        // exactly that pair so the spinner survives the slow resolution
+        // that follows. The aborted URL must match `tab.pendingAbortUrl`
+        // — comparing URLs (rather than gating only on the flag's
+        // presence) prevents an unrelated abort during the suppression
+        // window (Stop button, programmatic abort) from being silently
+        // consumed.
+        //
+        // Active-tab `onWebviewEvent` forwarding is also skipped for the
+        // suppressed event since the navigation-side handler
+        // unconditionally calls `setLoading(false)` and resets the
+        // reload button — both wrong for the phantom abort.
+        const abortedUrl = event.validatedURL || event.url || null;
+        if (event.errorCode === -3 && tab.pendingAbortUrl && abortedUrl === tab.pendingAbortUrl) {
+          tab.pendingAbortUrl = null;
+          if (tab.pendingAbortTimer) {
+            clearTimeout(tab.pendingAbortTimer);
+            tab.pendingAbortTimer = null;
+          }
+          tab.suppressNextStop = true;
+          return;
+        }
         tab.isLoading = false;
       }
       if (tabId === tabState.activeTabId && onWebviewEvent) {
@@ -259,17 +658,89 @@ const createWebview = (tabId, initialUrl) => {
     },
     'did-navigate': (event) => {
       const tab = tabState.tabs.find((t) => t.id === tabId);
+      // Hoisted out of the block below so the traversal report at the tail
+      // can name the page this commit replaced, and can tell whether this
+      // commit wrote a new committed identity at all.
+      let previousCommittedUrl = null;
+      let wroteCommittedIdentity = false;
       if (tab) {
         // Use webview.getURL() for full URL (includes view-source: prefix)
         // event.url doesn't include the view-source: prefix
         const webviewUrl = webview.getURL();
+        const previousUrl = tab.url;
+        previousCommittedUrl = previousUrl;
         tab.url = webviewUrl;
         tab.hasCertError = false; // Reset cert error on new navigation
         // Track view-source state directly on tab for reliable detection in page-title-updated
         tab.isViewingSource = webviewUrl.startsWith('view-source:');
-        // Clear favicon and set title for home page navigation (e.g., when hitting back)
-        if (isHomeUrl(event.url)) {
+        // Commit the post-navigation page identity for both active and
+        // background tabs. This is the single source of truth for reload
+        // ("what page are we actually on?") and for provider permission
+        // keying (Swarm/dapp prompts), which must never see destination
+        // URLs of in-flight navigations or unsubmitted address-bar drafts.
+        // about:blank is skipped because Chromium fires did-navigate
+        // through about:blank during "open in new window" before the real
+        // loadURL runs; clobbering the previous commit there would lose
+        // the actual page identity.
+        //
+        // The sequence counter is *not* skipped with it. It answers a
+        // different question — "has this tab moved on since I started?" —
+        // which every async landing site that writes back into this tab
+        // compares against (the onchain provenance lookup below, the ENS
+        // trust refresh a traversal kicks off in navigation.js). An
+        // about:blank commit moves the tab on like any other, so leaving
+        // the counter behind let work started for the previous entry settle
+        // over the blank page: a re-resolution that came back `conflict`
+        // raised that entry's interstitial on top of it.
+        if (tab.navigationState && event.url) {
+          tab.navigationState.committedNavigationSequence += 1;
+          if (event.url !== 'about:blank') {
+            const interstitialTarget = getOnchainInterstitialTarget(webviewUrl);
+            tab.navigationState.committedDisplayUrl =
+              formatOnchainAppDisplayUrl(interstitialTarget || webviewUrl) || webviewUrl;
+            wroteCommittedIdentity = true;
+          }
+        }
+        // A committed main-frame navigation replaces the document, so the
+        // previous page's title must not survive it. Chromium fires
+        // `page-title-updated` only when the new document actually declares a
+        // title, so without this reset a titleless page — or one whose
+        // <title> arrives late — keeps showing the previous page's title, and
+        // the history entry written at did-stop-loading records it too. That
+        // is issue #236: the Swarm error page inherited "RPC servers
+        // disagreed" from the page visited before it. Clearing to the empty
+        // title renders as "New Tab", which is already what a titleless page
+        // loaded into a fresh tab shows. Same-URL commits (reload) keep their
+        // title so a reload doesn't flicker; view-source titles are owned by
+        // navigation.js and set right after this handler forwards the event.
+        if (
+          event.url &&
+          event.url !== 'about:blank' &&
+          webviewUrl !== previousUrl &&
+          !tab.isViewingSource &&
+          tab.title
+        ) {
+          tab.title = '';
+          renderTabs();
+          if (tabId === tabState.activeTabId) {
+            electronAPI?.setWindowTitle?.('');
+          }
+        }
+        void refreshOnchainProvenance(tab, webviewUrl);
+        // Clear any stale favicon from the previous page when navigating to
+        // an internal page — page-favicon-updated will paint one back in if
+        // the page declares a <link rel="icon">.
+        if (isInternalPageUrl(event.url)) {
           tab.favicon = null;
+          renderTabs();
+        }
+        // Reset title to "New Tab" on home-page navigation (e.g., back button).
+        // Anchored (isHomePageUrl), not an `/pages/home.html` suffix: a remote
+        // page is free to serve that path, and the suffix test gave it the
+        // new-tab-page title treatment — the tab relabelled "New Tab" and the
+        // window title blanked over the site's own content (#376, same
+        // discipline as the internal-page split above).
+        if (isHomePageUrl(event.url)) {
           tab.title = 'New Tab';
           renderTabs();
           if (tabId === tabState.activeTabId) {
@@ -282,21 +753,150 @@ const createWebview = (tabId, initialUrl) => {
           renderTabs();
         }
       }
+      // A committed navigation ends this tab's find session (Chrome closes
+      // the bar unless the user opened it after the navigation started).
+      // Every tab reports it, not just the foreground one: find state is
+      // per tab, so a background tab that navigates must not keep a bar or
+      // a match count that no longer describes its page.
+      notifyFindBarNavigated(webview);
+      // ...and any page context menu raised on the document that just went
+      // away. Chrome's context menu never outlives its page: leaving it up
+      // meant Open Link in New Tab / Copy Link Address still acting on the
+      // previous page's link, over a document that no longer has it (#308).
+      notifyPageContextMenuNavigated(webview);
       if (tabId === tabState.activeTabId && onWebviewEvent) {
         onWebviewEvent('did-navigate', { tabId, event });
       }
+      reportHistoryTraversalCommit(webview, tabId, previousCommittedUrl, wroteCommittedIdentity);
     },
     'did-navigate-in-page': (event) => {
+      // A same-document navigation (an in-page anchor, a history.pushState
+      // route change) is still a navigation: the menu's link/selection context
+      // was read off the pre-navigation DOM. #308.
+      notifyPageContextMenuNavigated(webview);
       if (tabId === tabState.activeTabId && onWebviewEvent) {
         onWebviewEvent('did-navigate-in-page', { tabId, event });
+      }
+      // A back/forward traversal mark is deliberately *not* read here: this
+      // event cannot tell the commit a traversal asked for apart from one the
+      // page made for itself, and guessing wrong is worse than not refreshing.
+      //
+      // Chromium reports both through the identical event. Probed against a
+      // real guest on Electron 44 (`did-start-navigation` / commit pairs
+      // logged while a back traversal to a deliberately slow page was in
+      // flight), a page's own `history.replaceState` and a same-document
+      // history traversal are indistinguishable from the embedder:
+      //
+      //   * both arrive as `did-navigate-in-page` with `isMainFrame: true`
+      //     and nothing else on the event (`url` and `isMainFrame` are its
+      //     only fields) — the subframe gate this replaces saw a main-frame
+      //     `replaceState` as the traversal's commit;
+      //   * both are preceded, 1-2ms earlier, by a main-frame
+      //     `did-start-navigation` carrying the same URL and `isInPlace:
+      //     true`, so the start event does not separate them either — and the
+      //     traversal's own start arrives *after* the first of the page's, so
+      //     "wait for a start before consuming" does not either;
+      //   * the session-history position, probed through `canGoToOffset`,
+      //     reports the *pending* traversal's target for the whole window, so
+      //     a page commit landing mid-traversal reads exactly the index the
+      //     traversal's own commit would.
+      //
+      // Letting any of them consume the mark is what a page on a timer
+      // exploited: a `replaceState` loop on the page being left ate the mark
+      // before the restored entry committed, so either the restored entry was
+      // never re-verified, or the refresh ran against `committedDisplayUrl` —
+      // still the outgoing entry, since this event does not write it — and
+      // raised *that* page's interstitial over the traversal, landing Back on
+      // `ens-conflict.html` for the page the user was walking away from with
+      // the forward history gone.
+      //
+      // So only a cross-document commit (`did-navigate`, above) reports a
+      // traversal. What that gives up is the refresh on a same-document
+      // traversal, which costs nothing real: the document is unchanged, so
+      // the restored entry carries the same origin and therefore the same
+      // name, and the verdict already on the shield is that name's.
+      //
+      // The mark such a traversal leaves standing is bounded by
+      // `clearHistoryTraversal` on every shell-initiated navigation, and
+      // otherwise by the next cross-document commit, which consumes it. That
+      // second bound means a commit the user never asked to be a traversal
+      // can be reported as one — but not one the refresh acts on, and the
+      // reason is worth writing down because it lives in another process:
+      //
+      //   * to reach the refresh at all, the committed URL has to parse as a
+      //     name, which means one of the dweb schemes (`bzz:`/`ipfs:`/
+      //     `ipns:`). Every page-driven navigation to one of those is
+      //     `preventDefault()`ed in the main process (`will-navigate` in
+      //     webcontents-setup.js) and re-routed through `navigate-to-url` →
+      //     `loadTarget`, which clears the mark before anything commits;
+      //   * a page-driven navigation to http(s) is *not* intercepted, so it
+      //     does consume a stale mark and is reported — and then
+      //     `parseEnsInput` declines its `https://…` URL and the refresh
+      //     returns having done nothing.
+      //
+      // Probed rather than reasoned (2026-09-22, harness): from an
+      // `ipfs://name.eth/` page, an in-page `pushState` hop then Back — which
+      // leaves the mark standing by design — followed by a page-driven
+      // `location.assign()` to `ipfs://name.eth/after` and, separately, to
+      // `https://example.com/after`. Neither produced a single "History
+      // traversal re-verifying" line; the dweb hop went through `loadTarget`,
+      // the http hop parsed as nothing. A control without the Back behaved
+      // identically. So this is a real bound, not a silent gap — but it rests
+      // on that main-process intercept: widen the refresh past committed
+      // display URLs, or drop a scheme from that list, and the stale mark
+      // becomes reachable.
+      //
+      // Narrowing it further is not available to the embedder anyway: nothing
+      // on a same-document commit, on its `did-start-navigation`, or in the
+      // session-history position separates a traversal's own same-document
+      // commit from the page's own (the probe above), so "the traversal
+      // already happened" is not knowable at the point the mark would have to
+      // be dropped. See history-traversal.js.
+    },
+    'page-favicon-updated': (event) => {
+      const tab = tabState.tabs.find((t) => t.id === tabId);
+      if (!tab) return;
+      const icon = event.favicons?.[0];
+      if (!icon) return;
+      const pageUrl = webview.getURL();
+      // Internal pages paint the reported URL straight into the strip: it is
+      // a URL out of our own bundle, so there is nothing to fetch or cache
+      // per domain. `isInternalPageUrl` is anchored to the shell's own
+      // resolved `pages/` base, so a remote path that merely looks like one
+      // (`https://example.com/pages/about.html`) takes the external branch
+      // and its icon still goes through the cached-copy path (#376).
+      if (isInternalPageUrl(pageUrl)) {
+        tab.favicon = icon;
+        renderTabs();
+        return;
+      }
+      // External sites: this event *is* Chromium's `<link rel="icon">` parse
+      // of the document the webview already downloaded, so it is what the
+      // main process now works from (#75). It does not become `tab.favicon`
+      // directly — the strip paints the per-domain cached copy that main
+      // fetches and stores, which is also what survives across sessions, so
+      // there is no race with the cached value on subsequent loads (the
+      // reason this event used to be ignored for external pages).
+      // Every tab forwards its report, not just the foreground one. Chromium
+      // emits this *after* did-stop-loading, so a switch inside that window
+      // would otherwise drop the report of the tab that just finished
+      // loading and leave that visit with no icon fetched at all (#376).
+      // Which tab it belongs to is carried in `tabId`: navigation.js pairs
+      // the report with the load half recorded for *that* tab, so a tab that
+      // recorded none (a background load, whose address bar never supplied a
+      // cache key, or any load in a private window) still fetches nothing.
+      if (onWebviewEvent) {
+        onWebviewEvent('page-favicon-updated', { tabId, pageUrl, iconUrl: icon });
       }
     },
     'page-title-updated': (event) => {
       const tab = tabState.tabs.find((t) => t.id === tabId);
       if (tab) {
         const currentUrl = webview.getURL();
-        // For home page, always use "New Tab" regardless of what the page reports
-        if (isHomeUrl(currentUrl)) {
+        // For home page, always use "New Tab" regardless of what the page
+        // reports — anchored the same way as the did-navigate reset above, so
+        // a remote `…/pages/home.html` keeps its own <title> (#376).
+        if (isHomePageUrl(currentUrl)) {
           if (tab.title !== 'New Tab') {
             tab.title = 'New Tab';
             renderTabs();
@@ -323,9 +923,34 @@ const createWebview = (tabId, initialUrl) => {
       }
     },
     'dom-ready': () => {
+      if (hnsWaitingPageReadyHandler) queueMicrotask(hnsWaitingPageReadyHandler);
+      // Re-apply the tab-level mute flag once the webview is attached and
+      // ready. Covers mutes toggled before attach (races right after
+      // createTab) — webview methods throw until the guest is live, so
+      // this is the reliable apply point.
+      const tab = tabState.tabs.find((t) => t.id === tabId);
+      if (tab?.isMuted) {
+        applyMuteToWebview(tab);
+      }
       if (tabId === tabState.activeTabId && onWebviewEvent) {
+        refreshSessionRoutingNotice(webview);
         onWebviewEvent('dom-ready', { tabId });
       }
+    },
+    // Audio indicator state. Electron's <webview> emits media-started-playing /
+    // media-paused (there is no per-webview audio-state-changed event — that
+    // one only exists on main-process webContents), so on each media edge we
+    // sample isCurrentlyAudible() where available and fall back to what the
+    // event implies. A single delayed re-sample catches audibility settling
+    // after the event (e.g. a video whose audio track fades in, or another
+    // media element still playing when one pauses).
+    'media-started-playing': () => {
+      applyTabAudibleState(tabId, true);
+      scheduleAudibleRecheck(tabId);
+    },
+    'media-paused': () => {
+      applyTabAudibleState(tabId, false);
+      scheduleAudibleRecheck(tabId);
     },
     'console-message': (event) => {
       if (tabId === tabState.activeTabId) {
@@ -345,6 +970,50 @@ const createWebview = (tabId, initialUrl) => {
         onWebviewEvent('certificate-error', { tabId, event });
       }
     },
+    'ipc-message': (event) => {
+      // Link-hover preview cursor-zone updates from webview-preload — flip
+      // the bar to the opposite corner so it never covers the hovered link.
+      // Handled directly here (not via navigation.js) because it doesn't
+      // touch tab/navigation state.
+      if (event.channel === 'link-status:zone') {
+        if (tabId === tabState.activeTabId) {
+          const tab = tabState.tabs.find((t) => t.id === tabId);
+          const inLeftZone = event.args?.[0]?.inLeftZone === true;
+          // Remember per-tab so switchTab can restore without waiting for
+          // the preload to re-emit. The preload only emits on zone
+          // transitions, and a hidden webview's `linkStatusInZone` freezes
+          // at whatever value it held when the tab was backgrounded — so
+          // without per-tab state, returning to a tab whose pointer is
+          // still in the bottom-left band would leave the bar on the
+          // default `left` side and paint it over the hovered link until
+          // the pointer leaves and re-enters the zone.
+          if (tab) {
+            tab.linkStatusInLeftZone = inLeftZone;
+          }
+          setLinkStatusSide(inLeftZone ? 'right' : 'left');
+        }
+        return;
+      }
+      // Messages from internal pages (e.g. ens-unverified interstitial
+      // bubbling a "Continue once" signal). Route through the registered
+      // onWebviewEvent handler so navigation.js can stay the sole owner
+      // of tab-state mutations.
+      if (tabId === tabState.activeTabId && onWebviewEvent) {
+        onWebviewEvent('ipc-message', { tabId, channel: event.channel, args: event.args });
+      }
+    },
+    'update-target-url': (event) => {
+      // Gate at the tab edge (same shape as `link-status:zone`) so the
+      // link-status module never sees background-tab hover events. Empty
+      // url → fade out; non-empty → start the show pipeline.
+      if (tabId !== tabState.activeTabId) return;
+      const url = typeof event.url === 'string' ? event.url : '';
+      if (url) {
+        showLinkStatus(url);
+      } else {
+        clearHoverStatus();
+      }
+    },
   };
 
   // Attach event listeners
@@ -358,8 +1027,10 @@ const createWebview = (tabId, initialUrl) => {
   // Set up context menu listener
   setupWebviewContextMenu(webview);
 
-  // Set up Ethereum provider (window.ethereum)
+  // Set up providers (window.ethereum + window.swarm)
   setupWebviewProvider(webview);
+  setupSwarmProvider(webview);
+  setupRadicleProvider(webview);
 
   return webview;
 };
@@ -374,8 +1045,44 @@ const CORNER_RIGHT_SVG = `<svg viewBox="0 0 10 10"><path d="M0 0C0 5.52 4.48 10 
 // Default globe icon (same as address bar HTTP icon)
 const GLOBE_ICON_SVG = `<svg class="tab-icon-default" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
 
+// Internal pages are served from the bundled renderer (freedom:// or
+// file:///…/pages/…). The HTTP favicon fetch pipeline skips them, so their
+// favicons come in via the webview's page-favicon-updated event.
+//
+// Anchored to the shell's *resolved* `pages/` base, never an `/pages/`
+// substring: an external site is free to serve
+// `https://example.com/pages/about.html`, and treating that as chrome makes
+// the page-favicon-updated handler below paint its remote icon URL straight
+// into the tab strip — a dial of the site from the chrome renderer, with the
+// per-domain cached copy bypassed entirely (#376). Same discipline as
+// page-urls.js#matchesInternalPage (#235).
+let internalPagesBase;
+const getInternalPagesBase = () => {
+  if (internalPagesBase === undefined) {
+    try {
+      internalPagesBase = new URL('pages/', window.location?.href).toString();
+    } catch {
+      internalPagesBase = null;
+    }
+  }
+  return internalPagesBase;
+};
+
+const isInternalPageUrl = (url) => {
+  if (typeof url !== 'string') return false;
+  if (url.startsWith('freedom://')) return true;
+  const base = getInternalPagesBase();
+  return Boolean(base) && url.startsWith(base);
+};
+
 // Loading spinner (same style as address bar)
 const SPINNER_HTML = `<span class="tab-icon-spinner"></span>`;
+
+// Audio indicator icons — speaker (tab is audible) and muted speaker (tab is
+// muted). Both live inside the .tab-audio button; CSS picks one via the
+// tab's data-audio-state attribute.
+const AUDIO_ON_SVG = `<svg class="tab-audio-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>`;
+const AUDIO_MUTED_SVG = `<svg class="tab-audio-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`;
 
 // Map to track existing tab DOM elements by tab ID
 const tabElements = new Map();
@@ -389,6 +1096,7 @@ const createTabElement = (tab) => {
   const tabEl = document.createElement('button');
   tabEl.className = 'tab';
   tabEl.dataset.tabId = tab.id;
+  tabEl.dataset.test = 'tab';
   tabEl.draggable = true;
 
   // Tab icon container (favicon, spinner, or default globe)
@@ -416,6 +1124,18 @@ const createTabElement = (tab) => {
 
   tabEl.appendChild(iconContainer);
 
+  // Audio indicator / mute toggle (hidden unless the tab is audible or
+  // muted — visibility driven by the tab's data-audio-state attribute).
+  const audioBtn = document.createElement('button');
+  audioBtn.className = 'tab-audio';
+  audioBtn.dataset.test = 'tab-audio';
+  audioBtn.innerHTML = AUDIO_ON_SVG + AUDIO_MUTED_SVG;
+  audioBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleMuteTab(tab.id);
+  });
+  tabEl.appendChild(audioBtn);
+
   // Tab title
   const titleEl = document.createElement('span');
   titleEl.className = 'tab-title';
@@ -425,6 +1145,7 @@ const createTabElement = (tab) => {
   // Close button
   const closeEl = document.createElement('button');
   closeEl.className = 'tab-close';
+  closeEl.dataset.test = 'tab-close';
   closeEl.innerHTML =
     '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7"/></svg>';
   closeEl.addEventListener('click', (e) => {
@@ -576,6 +1297,18 @@ const updateTabElement = (tabEl, tab, isActive, isBeforeActive) => {
     }
   }
 
+  // Update audio indicator (speaker / muted speaker / hidden)
+  const audioState = getTabAudioState(tab);
+  if (audioState) {
+    tabEl.dataset.audioState = audioState;
+  } else {
+    delete tabEl.dataset.audioState;
+  }
+  const audioBtn = tabEl.querySelector('.tab-audio');
+  if (audioBtn) {
+    audioBtn.title = audioState === 'muted' ? 'Unmute tab' : 'Mute tab';
+  }
+
   // Update title
   const titleEl = tabEl.querySelector('.tab-title');
   const newTitle = tab.title || 'New Tab';
@@ -598,6 +1331,45 @@ const updateTabElement = (tabEl, tab, isActive, isBeforeActive) => {
   // Update separator visibility (via CSS, but control presence)
   const separator = tabEl.querySelector('.tab-separator');
   separator.style.display = !isActive && !isBeforeActive ? '' : 'none';
+};
+
+// Tab-strip overflow (#311).
+//
+// Tabs shrink to the `min-width` floor in tabs.css first; past that the strip
+// scrolls horizontally instead of clipping, which is what Chrome does. Two
+// things have to follow from that: the edges need a fade so it is visible that
+// more tabs exist in that direction, and the *active* tab must always be
+// scrolled into view — a tab you cannot see or click is the actual bug.
+
+// Toggle the edge-fade classes from the current scroll offsets. Cheap enough
+// to run on every scroll event; reads only layout properties the browser has
+// already computed for the scroll.
+const updateTabStripOverflow = () => {
+  if (!tabBar?.classList) return;
+  const scrollLeft = tabBar.scrollLeft || 0;
+  const scrollWidth = tabBar.scrollWidth || 0;
+  const clientWidth = tabBar.clientWidth || 0;
+  // 1px slack absorbs sub-pixel layout rounding, which would otherwise leave
+  // a permanent fade on a strip that is not actually overflowing.
+  const overflowing = scrollWidth - clientWidth > 1;
+  tabBar.classList.toggle('overflow-start', overflowing && scrollLeft > 1);
+  tabBar.classList.toggle(
+    'overflow-end',
+    overflowing && scrollLeft + clientWidth < scrollWidth - 1
+  );
+};
+
+// Keep the active tab reachable. Called from `switchTab` (and after a close
+// promotes another tab) rather than from `renderTabs`, which also runs on
+// title/loading churn — scrolling the strip back on every spinner tick would
+// fight a user who scrolled it themselves.
+const scrollActiveTabIntoView = () => {
+  const tabEl = tabElements.get(tabState.activeTabId);
+  // `scrollIntoView` is a real-DOM API; the unit tests' fake DOM omits it.
+  if (typeof tabEl?.scrollIntoView === 'function') {
+    tabEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+  updateTabStripOverflow();
 };
 
 // Render the tab bar incrementally
@@ -644,28 +1416,117 @@ const renderTabs = () => {
 
     previousSibling = tabEl;
   });
+
+  // Adding or removing a tab changes whether the strip overflows.
+  updateTabStripOverflow();
 };
 
-// Create a new tab
-export const createTab = (url = null) => {
+// URLs `createTab` is allowed to load directly as the initial webview
+// `src`. Everything else — dweb schemes, hostile `file://`/`data:`/
+// `javascript:`, anything we don't recognise — is parked on
+// `about:blank` and dispatched to `loadTarget`, which routes the
+// schemes it understands and silently drops the rest. This narrow
+// allowlist is what keeps `createTab('file:///etc/passwd')` (e.g. from
+// a malicious `tab:new-with-url` IPC or `setWindowOpenHandler` flow)
+// from turning into a direct local-file navigation.
+const isDirectLoadUrl = (url) => {
+  if (!url) return true;
+  if (url === 'about:blank') return true;
+  if (url === homeUrl) return true;
+  return /^https?:\/\//i.test(url);
+};
+
+// Resolve a trusted `freedom://<page>[/<sub>]` URL to the real internal page URL
+// (file://…/pages/<page>.html[#<sub>]) it ultimately loads, or null if `url`
+// isn't a recognised internal page. This mirrors loadTarget's freedom://
+// handling, but lets `createTab` load the resolved URL as the webview's *initial*
+// src — so a freshly opened internal-page tab never parks on about:blank first.
+// Parking it (the generic non-direct path) left an about:blank entry in the
+// webview's back history, so the toolbar Back button landed on a blank page.
+// Only URLs derived from the known internalPages map resolve here; arbitrary
+// file:// stays excluded and keeps flowing through about:blank + loadTarget.
+const resolveInternalPageUrl = (url) => {
+  const target = freedomInternalPageTarget(url);
+  if (!target) return null;
+  const pageUrl = internalPages[target.pageName];
+  if (!pageUrl) return null;
+  return target.subPath ? `${pageUrl}#${target.subPath}` : pageUrl;
+};
+
+// Create a new tab.
+//
+// `options.background` leaves the current tab active and keeps its keyboard
+// focus — Chrome's disposition for Ctrl/Cmd+click and middle-click on a link
+// (#303). The tab is still created, appended and navigated; only the switch is
+// skipped. Everything else opens in the foreground, as before.
+export const createTab = (url = null, options = {}) => {
   const tabId = tabState.nextTabId++;
-  const targetUrl = normalizeLocalhostInput(url) || url || homeUrl;
-  const webview = createWebview(tabId, targetUrl);
+  // Direct loads: empty/null (use homeUrl), http(s), about:blank, and
+  // the app's own `homeUrl` (production: file:///…/pages/home.html).
+  // Anything else parks on about:blank while `onLoadTarget` resolves
+  // it — this keeps dweb URLs working (their resolution pipeline takes
+  // ~50 ms) without producing the GUEST_VIEW_MANAGER_CALL log noise
+  // that pointing the webview at homeUrl first did, and prevents
+  // hostile schemes from ever becoming a direct webview navigation.
+  // Trusted internal freedom:// pages resolve to their real file://…/pages URL up
+  // front and load directly — no about:blank parking step (which otherwise leaves
+  // a blank entry in the back history; see resolveInternalPageUrl). tab.url keeps
+  // the friendly freedom:// form so the address bar and singleton-tab reuse still
+  // match on it while the page loads.
+  // Empty/null falls back to this window's default new-tab page — the
+  // private start page in private windows, the home page otherwise.
+  const fallbackUrl = defaultNewTabUrl();
+  const resolvedInternalUrl = resolveInternalPageUrl(url || fallbackUrl);
+  const isDirect = resolvedInternalUrl != null || isDirectLoadUrl(url);
+  const webviewUrl = resolvedInternalUrl || (isDirect ? url || fallbackUrl : 'about:blank');
+  const webview = createWebview(tabId, webviewUrl);
+  // Webviews are created visible and `switchTab` hides every other one. A
+  // background tab never switches, so it has to start hidden or it would
+  // render on top of the page the user is still reading (#303).
+  if (options.background) {
+    webview.classList.add('hidden');
+  }
 
   const tab = {
     id: tabId,
-    url: targetUrl,
+    url: url || fallbackUrl,
     title: 'New Tab',
     isLoading: false,
+    isAudible: false,
+    isMuted: false,
     webview,
-    navigationState: createNavigationState(targetUrl),
+    navigationState: createNavigationState(),
+    onchainProvenance: null,
   };
 
   tabState.tabs.push(tab);
   webviewContainer?.appendChild(webview);
 
-  // Switch to the new tab
-  switchTab(tabId, { isNewTab: true });
+  // Switch to the new tab — unless it was asked for in the background, in
+  // which case the strip still has to pick up the new tab element.
+  if (options.background) {
+    renderTabs();
+    pushTabMenuState();
+  } else {
+    switchTab(tabId, { isNewTab: true });
+  }
+
+  // Anything that isn't a direct-load URL flows through the resolution
+  // pipeline. For routed schemes (bzz://, ipfs://, ens://, rad:,
+  // ethereum:, view-source:, bare ENS names, and freedom:// pages that
+  // aren't recognised internal pages) loadTarget performs the real
+  // navigation; for unrecognised inputs (file://, data:, javascript:,
+  // etc.) it falls through to a debug-log no-op, leaving the tab on
+  // about:blank. Recognised freedom:// pages took the direct path above.
+  //
+  // The new tab's own webview is passed explicitly: `loadTarget` otherwise
+  // falls back to the *active* webview, which for a background tab is the tab
+  // the user is still looking at (#303).
+  if (!isDirect) {
+    setTimeout(() => {
+      if (onLoadTarget) onLoadTarget(url, null, webview);
+    }, 50);
+  }
 
   pushDebug(`Created tab ${tabId}`);
   return tab;
@@ -676,7 +1537,6 @@ const cleanupWebview = (webview) => {
   if (!webview) return;
 
   const handlers = webview._eventHandlers;
-  unregisterWebviewProvider(webview);
   if (handlers) {
     for (const [eventName, handler] of Object.entries(handlers)) {
       webview.removeEventListener(eventName, handler);
@@ -690,11 +1550,21 @@ export const closeTab = (tabId) => {
   const tabIndex = tabState.tabs.findIndex((t) => t.id === tabId);
   if (tabIndex === -1) return;
 
+  // A tab context menu open over the strip is anchored to a layout — and to a
+  // `contextMenuTabId` — that closing a tab invalidates. Chrome dismisses it;
+  // leaving it up pointed every destructive item at whatever tab now sits
+  // under it. Harmless when the close *came from* the menu (the item handler
+  // hides it first). See #315.
+  hideTabContextMenu();
+
   const tab = tabState.tabs[tabIndex];
 
-  // Save to closed tabs stack for reopening later (skip blank/empty tabs)
+  // Save to closed tabs stack for reopening later (skip blank/empty tabs
+  // and the private start page). The stack itself is per-window renderer
+  // state, so a private window's closed tabs die with the window and can
+  // never be resurrected from a normal window's Cmd/Ctrl+Shift+T.
   const tabUrl = tab.url || tab.navigationState?.currentPageUrl;
-  if (tabUrl && tabUrl !== 'about:blank' && !isHomeUrl(tabUrl)) {
+  if (tabUrl && tabUrl !== 'about:blank' && tabUrl !== homeUrl && !isPrivateStartUrl(tabUrl)) {
     closedTabsStack.push({ url: tabUrl, title: tab.title });
     if (closedTabsStack.length > MAX_CLOSED_TABS) {
       closedTabsStack.shift();
@@ -705,6 +1575,26 @@ export const closeTab = (tabId) => {
   if (tab.webview?.isDevToolsOpened?.()) {
     tab.webview.closeDevTools();
   }
+
+  // Cancel the phantom-abort safety-net timers if they're still pending —
+  // otherwise they would fire on a detached tab object (writing to a dead
+  // tab and pinning it for up to 1.5s after close).
+  if (tab.pendingAbortTimer) {
+    clearTimeout(tab.pendingAbortTimer);
+    tab.pendingAbortTimer = null;
+  }
+  if (tab.suppressNextStopTimer) {
+    clearTimeout(tab.suppressNextStopTimer);
+    tab.suppressNextStopTimer = null;
+  }
+  if (tab.audioStateTimer) {
+    clearTimeout(tab.audioStateTimer);
+    tab.audioStateTimer = null;
+  }
+
+  // Drop this tab's find state (bar, query, count) with the tab itself,
+  // rather than leaving the detached webview keyed in the find module.
+  notifyFindBarTabClosed(tab.webview);
 
   // Remove event listeners before removing webview (prevents memory leak)
   cleanupWebview(tab.webview);
@@ -744,6 +1634,12 @@ export const closeTab = (tabId) => {
   }
 
   renderTabs();
+  // Closing a tab reflows the strip: one that sat left of the viewport takes
+  // its width with it and slides the active tab towards (or past) an edge.
+  // `renderTabs` only repaints the fades, so scroll the active tab back too —
+  // the close that promoted a new active tab already went through `switchTab`,
+  // this covers the closes that did not (#311).
+  scrollActiveTabIntoView();
   pushTabMenuState();
   pushDebug(`Closed tab ${tabId}`);
 };
@@ -821,20 +1717,6 @@ export const switchToPrevTab = () => {
   switchTab(tabState.tabs[prevIndex].id);
 };
 
-export const switchToTabIndex = (index) => {
-  if (!Number.isInteger(index) || index < 0 || tabState.tabs.length === 0) return;
-  const targetIndex = index === 8 ? tabState.tabs.length - 1 : index;
-  const tab = tabState.tabs[targetIndex];
-  if (!tab) return;
-  switchTab(tab.id);
-};
-
-const getAltDigitTabIndex = (event) => {
-  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return null;
-  if (!/^[1-9]$/.test(event.key || '')) return null;
-  return Number(event.key) - 1;
-};
-
 // Toggle pin state for a tab
 const togglePinTab = (tabId) => {
   const tab = tabState.tabs.find((t) => t.id === tabId);
@@ -872,6 +1754,12 @@ const showContextMenu = (x, y, tabId) => {
     pinBtn.textContent = tab.pinned ? 'Unpin Tab' : 'Pin Tab';
   }
 
+  // Update mute button text
+  const muteBtn = tabContextMenu.querySelector('[data-action="mute"]');
+  if (muteBtn) {
+    muteBtn.textContent = tab.isMuted ? 'Unmute Tab' : 'Mute Tab';
+  }
+
   // Disable "Close Tabs to the Right" if there are no tabs to the right (excluding pinned)
   const tabIndex = tabState.tabs.findIndex((t) => t.id === tabId);
   const tabsToRight = tabState.tabs.slice(tabIndex + 1).filter((t) => !t.pinned);
@@ -887,19 +1775,10 @@ const showContextMenu = (x, y, tabId) => {
     closeOthersBtn.disabled = otherTabs.length === 0;
   }
 
-  // Position menu
-  tabContextMenu.style.left = `${x}px`;
-  tabContextMenu.style.top = `${y}px`;
+  // Position menu: clamped into the viewport, flipped up when the space below
+  // the pointer is too small, scrolling inside when neither side fits (#324).
   tabContextMenu.classList.remove('hidden');
-
-  // Adjust if menu goes off screen
-  const rect = tabContextMenu.getBoundingClientRect();
-  if (rect.right > window.innerWidth) {
-    tabContextMenu.style.left = `${window.innerWidth - rect.width - 8}px`;
-  }
-  if (rect.bottom > window.innerHeight) {
-    tabContextMenu.style.top = `${window.innerHeight - rect.height - 8}px`;
-  }
+  placePopoverAtPoint(tabContextMenu, x, y);
 };
 
 // Hide context menu
@@ -919,7 +1798,50 @@ export const switchTab = (tabId, options = {}) => {
   const tab = tabState.tabs.find((t) => t.id === tabId);
   if (!tab) return;
 
+  // Any tab activation dismisses the tab context menu, whatever caused it.
+  // A strip *click* already reached the document-click listener; a keyboard
+  // switch (Ctrl+Tab, Ctrl+PageDown) did not, leaving the menu open over the
+  // tab you just left with Close Tab / Close Others / Close to the Right /
+  // Pin / Mute all still bound to it. See #315.
+  //
+  // Dismissal happens *before* the already-foreground early return below:
+  // activating the tab that is already foreground (the address bar's
+  // "switch to open tab" suggestion for the current tab, or any future
+  // select-tab-by-index binding) is still an activation, and the menu it
+  // leaves up is anchored to another tab with every destructive item live.
+  // Hiding an already-hidden menu is a no-op, so this costs nothing on the
+  // ordinary path.
+  hideTabContextMenu();
+  // Same for the page context menu: it belongs to the document it was raised
+  // on, so a switch to another tab takes it down rather than leaving it
+  // floating over a page it knows nothing about (#308).
+  notifyPageContextMenuNavigated();
+
+  // Already foreground — nothing to swap, and running the swap anyway has
+  // real side effects (closing an open find bar, re-hiding webviews).
+  if (tabState.activeTabId === tabId) return;
+
+  // Reset the link-hover preview before swapping active tabs:
+  // - immediate clear so the previous tab's URL never trails into the new tab
+  // - restore side from the incoming tab's last-known cursor-zone state
+  //   rather than blindly resetting to `left`. The preload's zone tracker
+  //   only emits on transitions, and a hidden webview's `linkStatusInZone`
+  //   freezes at whatever value it held when the tab was backgrounded —
+  //   so the next zone IPC may never arrive until the pointer leaves and
+  //   re-enters the band. Without restoring per-tab state, returning to
+  //   a tab whose pointer is in the bottom-left band would leave the bar
+  //   on `left` and paint it over the hovered link.
+  clearLinkStatus({ immediate: true });
+  setLinkStatusSide(tab.linkStatusInLeftZone ? 'right' : 'left');
   tabState.activeTabId = tabId;
+  refreshSessionRoutingNotice(getActiveWebview());
+
+  // Find state lives on the tab (Chrome's model): re-render the bar for the
+  // incoming tab — its own query, its own count, hidden if it never opened
+  // one — and leave the outgoing tab's session running so switching back
+  // shows it exactly as the user left it. Called after the activeTabId flip
+  // so the find module reads the incoming tab's state.
+  notifyFindBarTabSwitched();
 
   // Hide all webviews, show active one
   for (const t of tabState.tabs) {
@@ -933,20 +1855,333 @@ export const switchTab = (tabId, options = {}) => {
     setActiveWebview(tab.webview);
   }
 
+  // Give the page keyboard focus, the way Chrome does on every tab
+  // activation (click, Ctrl+Tab, Ctrl+1..8, the tab promoted when another
+  // closes): scrolling and typing work immediately, focus is never left on
+  // the tab button, and it is never stranded on the now-hidden outgoing
+  // webview (#304).
+  //
+  // Three cases are deliberately excluded and handed to the navigation
+  // module's `tab-switched` case instead, because all of them focus the
+  // *address bar* and only that module knows it:
+  //
+  // - A brand-new tab: only the address-bar derivation knows whether the tab
+  //   landed on this window's new-tab page (focus the address bar — #312) or
+  //   on a real page opened from a link (focus the page).
+  // - An existing tab sitting on this window's new-tab page: the guest there
+  //   (`home.html` / `private.html`) has no focus target, so focusing it drops
+  //   the keystroke the user is about to type. Chrome focuses the omnibox when
+  //   you switch back to a tab on the NTP; the same `isNewTabPageUrl` test the
+  //   brand-new case uses recognises both forms of that URL.
+  // - A tab left with an uncommitted address-bar edit: it comes back mid-edit
+  //   with the bar focused and its selection restored (#314), so the page must
+  //   not take the keyboard from under the draft. `addressBarPendingInput` is
+  //   a string only while such an edit is in flight — see `address-bar-edit.js`,
+  //   which owns the field this module declares in `createNavigationState`.
+  //   (Read directly rather than through that module's helper: it imports
+  //   `tabs.js`, so importing it back would close an import cycle.) A draft
+  //   outranks the new-tab-page rule: the bar is focused either way, but only
+  //   this branch restores the selection, so the URL test must not claim it.
+  //
+  // Focusing here as well is not harmless in any of them: `<webview>.focus()`
+  // hands focus to the guest asynchronously, so it lands *after* a synchronous
+  // `addressInput.focus()` and takes the address bar's focus away again.
+  //
+  // The URL read mirrors navigation.js' `tab-switched` case exactly
+  // (`tab.url` first, then the navigation state's committed URL): the two
+  // conditions are complements, so any drift would leave a switch with the
+  // keyboard nowhere at all.
+  const tabHasAddressBarEdit = typeof tab.navigationState?.addressBarPendingInput === 'string';
+  const tabIsOnNewTabPage =
+    !tabHasAddressBarEdit && isNewTabPageUrl(tab.url || tab.navigationState?.currentPageUrl || '');
+  if (!options.isNewTab && !tabHasAddressBarEdit && !tabIsOnNewTabPage) {
+    tab.webview?.focus?.();
+  }
+
   // Update window title
   if (tab.title) {
     electronAPI?.setWindowTitle?.(tab.title);
   }
 
-  // Notify navigation module
+  // Notify navigation module. `fromAddressBarCommit` marks a switch the
+  // address bar itself commanded (a picked "switch to tab" suggestion): the
+  // text in the bar at that moment is the *target* tab's URL or the leftover
+  // query, so the tab we're leaving must not adopt it as its display.
   if (onWebviewEvent) {
-    onWebviewEvent('tab-switched', { tabId, tab, isNewTab: options.isNewTab || false });
+    onWebviewEvent('tab-switched', {
+      tabId,
+      tab,
+      isNewTab: options.isNewTab || false,
+      fromAddressBarCommit: options.fromAddressBarCommit || false,
+    });
   }
 
   renderTabs();
+  // The strip scrolls once tabs hit their minimum width, so the tab we just
+  // activated can be sitting past its edge (#311).
+  scrollActiveTabIntoView();
   pushTabMenuState();
 
   pushDebug(`Switched to tab ${tabId}`);
+};
+
+/**
+ * Open a URL in a new tab, honouring named-target tab reuse.
+ *
+ * If `targetName` is a non-empty string and a tab is already mapped to
+ * that name (via a previous call from this function or the
+ * `setWindowOpenHandler` → `tab:new-with-url` IPC path), the existing
+ * tab is switched to and re-navigated to the new URL. Otherwise a new
+ * tab is created and (if the target name is named, i.e. not `_blank`
+ * passed through verbatim) registered under that name.
+ *
+ * Used by both the main-process `tab:new-with-url` IPC handler (for
+ * `setWindowOpenHandler`-routed http(s) windows) and the renderer's
+ * `link:navigate` handler (for dweb-link clicks intercepted in
+ * `webview-preload.js`). Centralising the named-target logic here
+ * keeps both paths consistent — without it, `target="docs"` on a
+ * `<a href="ipfs://...">` would silently lose its tab-reuse semantics
+ * because dweb clicks bypass `setWindowOpenHandler` (so the click can
+ * be intercepted before Chromium lowercases the host).
+ *
+ * `options.background` opens the tab without leaving the current one — the
+ * Ctrl/Cmd+click and middle-click disposition (#303). It also suppresses named
+ * -target *reuse*: as in Chrome, the modifier wins over the `target` attribute
+ * and always yields a fresh background tab (which then takes the name), rather
+ * than navigating the named — possibly current — tab in place. It carries into
+ * the `freedom://` internal-page singleton branch below for the same reason.
+ *
+ * @param {string} url - target URL
+ * @param {string|null} targetName - HTML `target` attribute, if any
+ * @param {{ background?: boolean }} [options] - opening disposition
+ * @returns {object|null} the (possibly new) tab, or null on noop
+ */
+// Parse a `freedom://<page>[/<sub-path>]` URL into `{ pageName, subPath }` when
+// `<page>` is a recognised internal page, else null. A sub-path of any depth is
+// accepted (e.g. `freedom://settings/profile`, `freedom://settings/chains/1`) so
+// deep links still resolve to the page's singleton tab — the sub-path routes the
+// (possibly reused) tab to the right section. It is as deep as the page's own
+// fragment because that is what `page-urls.js#getInternalPageName` emits for it,
+// and that is what the address bar shows and a bookmark hands back; stopping at
+// one segment made the chrome's own chain-detail URL unroutable (#280). Keep in
+// step with `navigation.js#FREEDOM_PAGE_PATTERN`, the sibling copy the
+// address-bar branch uses. An unrecognised page, or anything outside
+// `[a-z0-9-]` segments, returns null.
+const freedomInternalPageTarget = (url) => {
+  const match = /^freedom:\/\/([a-z0-9-]+)(?:\/([a-z0-9-]+(?:\/[a-z0-9-]+)*))?\/?$/i.exec(
+    url || ''
+  );
+  if (!match || !internalPages) return null;
+  const pageName = match[1].toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(internalPages, pageName)) return null;
+  return { pageName, subPath: match[2] ? match[2].toLowerCase() : null };
+};
+
+export const openInNewTabWithTarget = (url, targetName, options = {}) => {
+  if (!url) return null;
+  const background = !!options.background;
+
+  // EVERY freedom:// internal page (profiles, history, settings, …) is treated
+  // as a singleton: an untargeted open focuses the existing tab instead of
+  // opening a duplicate — same behaviour as the hamburger menu, and deliberately
+  // applied to all internal pages, not just profiles. (Trade-off: you can no
+  // longer open two history/settings tabs via a link or tab:new-with-url; use a
+  // named target to keep the explicit reuse semantics below.) A sub-path
+  // (settings/profile) reuses the base page's tab and routes it to that section.
+  // The new-tab pages are the exception `findInternalPageTab` encodes: a link
+  // to `freedom://home` opens another New Tab, it never steals an existing one.
+  if (!targetName) {
+    const internal = freedomInternalPageTarget(url);
+    // `background` carries through: a Ctrl/Cmd+click or middle-click on a
+    // `freedom://` link must leave the user where they are, exactly like every
+    // other background open (#303). Without it the singleton branch below
+    // switched to (or foreground-created) the internal page's tab regardless
+    // of the disposition Chromium had already derived.
+    if (internal)
+      return openOrFocusInternalPage(internal.pageName, internal.subPath, { background });
+  }
+
+  // A named target is only *reused* for an unmodified activation. Chrome
+  // resolves the modifier first: Ctrl/Cmd+click and middle-click always open a
+  // new background tab, they never re-navigate the window the `target` names —
+  // which, when the named tab is the one the user is reading, would navigate
+  // the page out from under them, the opposite of what the modifier asks for
+  // (#303). The fresh tab takes over the name, as Chromium's own
+  // `CreateNewWindow` does with the activation's frame name.
+  if (targetName && !background && namedTargets.has(targetName)) {
+    const existingTabId = namedTargets.get(targetName);
+    const existingTab = tabState.tabs.find((t) => t.id === existingTabId);
+    if (existingTab) {
+      pushDebug(`Reusing tab ${existingTabId} for target "${targetName}": ${url}`);
+      switchTab(existingTabId);
+      setTimeout(() => {
+        if (onLoadTarget) {
+          // Same reason as `createTab`: name the webview so a re-navigation
+          // cannot land in whatever tab happens to be active.
+          onLoadTarget(url, null, existingTab.webview);
+        }
+      }, 50);
+      return existingTab;
+    }
+    namedTargets.delete(targetName);
+  }
+
+  pushDebug(`Opening new tab with URL: ${url}${targetName ? ` (target: ${targetName})` : ''}`);
+
+  // Pass the target URL through to createTab (not homeUrl). createTab
+  // already does the right thing for both shapes: direct URLs load
+  // straight into the webview (no home-page flash), and dweb URLs
+  // (ens://, bzz://, ipfs://, ipns://, etc.) keep the webview on
+  // homeUrl while routing through `onLoadTarget` for resolution.
+  // Critically, this also makes `tab.url` reflect the actual target,
+  // so the `tab-switched` handler can derive a meaningful address bar
+  // value immediately instead of leaving it empty until ENS resolves.
+  const newTab = createTab(url, { background });
+
+  if (targetName && newTab) {
+    namedTargets.set(targetName, newTab.id);
+  }
+
+  return newTab;
+};
+
+// The window's tab already showing internal page `pageName`, or undefined.
+//
+// `tab.url` holds the resolved `file://…/pages/<page>.html` form once loaded,
+// but the `freedom://<page>` form while the tab is still resolving — match both.
+//
+// A new-tab page (`home`, `private`) is never matched: it is not a singleton
+// (see `routeInternalPageNavigation`), so an open to one must never be
+// answered with some other empty tab from elsewhere in the strip.
+const findInternalPageTab = (pageName) => {
+  if (isNewTabPageName(pageName)) return undefined;
+  return tabState.tabs.find((tab) => {
+    if (!tab.url) return false;
+    // Resolved file://…/pages/<page>.html form (page already loaded).
+    if ((getInternalPageName(tab.url) || '').split('/')[0] === pageName) return true;
+    // Unresolved freedom://<page>[/<sub>] form while the tab is still resolving.
+    // Matching by base page (sub-path and all) lets a rapid second open of
+    // e.g. freedom://settings/profile reuse the in-flight tab instead of
+    // racing it to a duplicate. getInternalPageName only recognises the
+    // resolved file:// form, so this arm is what covers the resolving window.
+    return freedomInternalPageTarget(tab.url)?.pageName === pageName;
+  });
+};
+
+// A tab with nothing in it: this window's new-tab page (`home.html` /
+// `private.html`, in either the friendly or the resolved form) or the
+// `about:blank` a window opened with an `initialUrl` parks on while the
+// target resolves. Chrome overwrites such a tab rather than opening another
+// one next to it (`ShowSingletonTabOverwritingNTP`); anything else is content
+// the user would lose.
+const isEmptyTab = (tab) => {
+  if (!tab) return false;
+  const url = tab.url || tab.navigationState?.currentPageUrl || '';
+  return !url || url === 'about:blank' || isNewTabPageUrl(url);
+};
+
+/**
+ * Where a chrome-initiated `freedom://<page>` navigation should land, following
+ * Chrome's singleton-tab model for its own internal pages: an existing tab wins
+ * over a new one, and an empty tab is overwritten rather than left behind.
+ *
+ * Called by `loadTarget` (the funnel every chrome navigation goes through: the
+ * hamburger menu's Settings item, an address-bar commit, a bookmark, a
+ * same-tab link click, an interstitial's "open settings" button), which owns
+ * the in-place navigation itself.
+ *
+ * The new-tab pages (`freedom://home`, `freedom://private`) are the documented
+ * exception — see below.
+ *
+ * @param {string} pageName - internal page name, e.g. 'settings'
+ * @param {string|null} [subPath] - optional section within the page
+ * @param {object|null} [currentWebview] - webview the navigation targets
+ * @returns {boolean} true when this handled the open (an existing tab was
+ *   focused, or a new tab created) and the caller must not navigate
+ *   `currentWebview`; false when the caller should navigate it in place.
+ */
+export const routeInternalPageNavigation = (pageName, subPath = null, currentWebview = null) => {
+  if (!pageName) return false;
+
+  // A new-tab page is not a singleton. Chrome keeps as many New Tab pages open
+  // as you like, and a committed `chrome://newtab` — typed, bookmarked, or a
+  // same-tab link (links.html has a `freedom://home` one) — navigates the tab
+  // you are on. Routing it through the singleton rule would instead strand the
+  // page you were reading in a leftover tab and spawn a second New Tab, or
+  // hijack whichever New Tab happens to sit first in the strip. Answer "this
+  // tab", which is what `main` did before the rule reached `loadTarget`.
+  if (isNewTabPageName(pageName)) return false;
+
+  const currentTab = getTabById(getTabIdForWebview(currentWebview));
+  const existingTab = findInternalPageTab(pageName);
+
+  // Already the page's own tab: navigate in place. This is both the ordinary
+  // "Settings while on Settings" re-open and the second leg of the reuse path
+  // below, which re-enters `loadTarget` with the focused tab's own webview to
+  // route it to a sub-path — the in-place answer is what terminates it.
+  if (existingTab && currentTab && existingTab.id === currentTab.id) return false;
+
+  // No tab to reuse and nothing to lose here: overwrite this one, as Chrome
+  // does when Settings is opened from a fresh New Tab.
+  if (!existingTab && isEmptyTab(currentTab)) {
+    // Claim the page for this tab immediately. The caller's `loadURL` only
+    // reaches `tab.url` when `did-navigate` commits (~100 ms later), and until
+    // then `findInternalPageTab` sees an empty New Tab — so a second open
+    // arriving inside that window would find no tab and create the duplicate
+    // this rule exists to prevent. The friendly `freedom://` form is exactly
+    // what `createTab` parks on a freshly opened internal-page tab, and it is
+    // the form `findInternalPageTab`'s second arm matches. See #325.
+    currentTab.url = subPath ? `freedom://${pageName}/${subPath}` : `freedom://${pageName}`;
+    return false;
+  }
+
+  openOrFocusInternalPage(pageName, subPath);
+  return true;
+};
+
+/**
+ * Open an internal page (e.g. 'profiles', 'settings') in its own tab. If a tab
+ * already has that page open (`findInternalPageTab`), switch to it instead of
+ * opening a duplicate.
+ *
+ * An optional `subPath` (e.g. 'profile' for `freedom://settings/profile`)
+ * routes the page to a section: a reused tab is navigated there, and a freshly
+ * opened tab is created on the deep link. Tab matching is always by base page,
+ * so the edit pencil's `settings/profile` reuses a plain `settings` tab.
+ *
+ * `options.background` (a Ctrl/Cmd+click or middle-click on a `freedom://`
+ * link, #303) keeps the user on the page they are reading: an existing tab is
+ * still routed to the requested section, and a new one is created hidden — in
+ * neither case is it switched to.
+ *
+ * @param {string} pageName - internal page name, e.g. 'profiles'
+ * @param {string|null} [subPath] - optional section within the page
+ * @param {{ background?: boolean }} [options] - opening disposition
+ * @returns {object|null} the focused or newly created tab, or null on noop
+ */
+export const openOrFocusInternalPage = (pageName, subPath = null, options = {}) => {
+  if (!pageName) return null;
+  const background = !!options.background;
+
+  const fullUrl = subPath ? `freedom://${pageName}/${subPath}` : `freedom://${pageName}`;
+
+  const existingTab = findInternalPageTab(pageName);
+
+  if (existingTab) {
+    pushDebug(`${background ? 'Routing' : 'Focusing'} existing ${pageName} tab ${existingTab.id}`);
+    if (!background) switchTab(existingTab.id);
+    // Route the reused tab to the requested section. The webview is named
+    // explicitly — as the named-target reuse path above does — so a background
+    // re-navigation lands in that tab rather than in whichever one the user is
+    // still looking at. Bare pages need no re-navigation.
+    if (subPath && onLoadTarget) {
+      setTimeout(() => onLoadTarget(fullUrl, null, existingTab.webview), 50);
+    }
+    return existingTab;
+  }
+
+  pushDebug(`Opening ${pageName} in a new${background ? ' background' : ''} tab`);
+  return createTab(fullUrl, { background });
 };
 
 // Initialize tabs module
@@ -961,20 +2196,33 @@ export const initTabs = async () => {
   if (tabContextMenu) {
     tabContextMenu.addEventListener('click', (e) => {
       const action = e.target.dataset?.action;
-      if (!action || !contextMenuTabId) return;
+      const targetTabId = contextMenuTabId;
+      if (!action || !targetTabId) return;
+      // Fail safe on a stale target. Every activation and every close now
+      // dismisses the menu (#315), so a menu that is still up always points at
+      // a live tab — but each item here is destructive, so a target that has
+      // gone away is refused rather than resolved to whatever tab took its
+      // place.
+      if (!tabState.tabs.some((t) => t.id === targetTabId)) {
+        hideTabContextMenu();
+        return;
+      }
 
       switch (action) {
         case 'close':
-          closeTab(contextMenuTabId);
+          closeTab(targetTabId);
           break;
         case 'close-others':
-          closeOtherTabs(contextMenuTabId);
+          closeOtherTabs(targetTabId);
           break;
         case 'close-right':
-          closeTabsToRight(contextMenuTabId);
+          closeTabsToRight(targetTabId);
           break;
         case 'pin':
-          togglePinTab(contextMenuTabId);
+          togglePinTab(targetTabId);
+          break;
+        case 'mute':
+          toggleMuteTab(targetTabId);
           break;
       }
       hideTabContextMenu();
@@ -988,18 +2236,38 @@ export const initTabs = async () => {
     }
   });
 
-  // Hide context menu on escape or when window loses focus
+  // Hide context menu on escape or when window loses focus. A press that
+  // actually closes the menu is consumed (`preventDefault`), so navigation.js's
+  // window-level Escape doesn't also stop an in-flight page load — Chrome
+  // closes the innermost surface only. See #306.
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      hideTabContextMenu();
-    }
+    if (e.key !== 'Escape') return;
+    if (!tabContextMenu || tabContextMenu.classList.contains('hidden')) return;
+    // A modal <dialog> raised over the menu (the external-node or
+    // profile-create prompt arrives on its own schedule) owns the press and
+    // cannot mark it — see `isModalDialogOpen`.
+    if (isModalDialogOpen()) return;
+    e.preventDefault();
+    hideTabContextMenu();
   });
-  window.addEventListener('blur', hideTabContextMenu);
+  // Window deactivation only: a `<webview>` guest taking the keyboard raises
+  // the same event while the window is still active (#328).
+  onWindowDeactivated(hideTabContextMenu);
+  // (The `focus`/`mousedown` dismissal that used to hang off
+  // `document.getElementById('bzz-webview')` is gone: webviews are created
+  // id-less, so that lookup was always null and the listeners never existed.
+  // `#menu-backdrop` covers the window while the menu is open, so a click into
+  // the page dismisses it through the document-click listener above. See #315,
+  // #306.)
 
-  // Hide context menu when webview gets focus
-  const webviewElement = document.getElementById('bzz-webview');
-  webviewElement?.addEventListener('focus', hideTabContextMenu);
-  webviewElement?.addEventListener('mousedown', hideTabContextMenu);
+  // Keep the tab strip's edge fades in sync with a scroll the user drove
+  // themselves (trackpad/shift-wheel), not just with the programmatic
+  // `scrollActiveTabIntoView` ones (#311).
+  tabBar?.addEventListener('scroll', updateTabStripOverflow, { passive: true });
+  // A resize changes how much of the strip is visible, so the active tab can
+  // end up past the new edge — the same "a tab you cannot see or click" bug
+  // #311 is about. Scroll it back rather than only repainting the fades.
+  window.addEventListener('resize', scrollActiveTabIntoView);
 
   // Fetch webview preload path for internal pages
   try {
@@ -1013,12 +2281,12 @@ export const initTabs = async () => {
 
   // New tab button
   newTabBtn?.addEventListener('click', () => {
-    createTab(homeUrl);
+    createTab(defaultNewTabUrl());
   });
 
   // Menu IPC handlers
   electronAPI?.onNewTab?.(() => {
-    createTab(homeUrl);
+    createTab(defaultNewTabUrl());
   });
 
   electronAPI?.onCloseTab?.(() => {
@@ -1027,54 +2295,78 @@ export const initTabs = async () => {
     }
   });
 
-  electronAPI?.onNewTabWithUrl?.((url, targetName) => {
-    if (url) {
-      // Check if we should reuse an existing tab with this target name
-      if (targetName && namedTargets.has(targetName)) {
-        const existingTabId = namedTargets.get(targetName);
-        const existingTab = tabState.tabs.find((t) => t.id === existingTabId);
-        if (existingTab) {
-          pushDebug(`Reusing tab ${existingTabId} for target "${targetName}": ${url}`);
-          switchTab(existingTabId);
-          // Navigate the existing tab to the new URL
-          setTimeout(() => {
-            if (onLoadTarget) {
-              onLoadTarget(url, null, existingTab.webview);
-            }
-          }, 50);
-          return;
-        }
-        // Tab no longer exists, clean up stale entry
-        namedTargets.delete(targetName);
-      }
-
-      pushDebug(`Opening new tab with URL: ${url}${targetName ? ` (target: ${targetName})` : ''}`);
-
-      // For http/https URLs, load directly without going through homeUrl first
-      // This avoids the brief flash of the home page before navigation
-      const isDirectUrl = url.startsWith('http://') || url.startsWith('https://');
-      const newTab = createTab(isDirectUrl ? url : homeUrl);
-
-      // Associate this tab with the target name if specified
-      if (targetName && newTab) {
-        namedTargets.set(targetName, newTab.id);
-      }
-
-      // For dweb URLs (ipfs://, ipns://, bzz://), use loadTarget for URL resolution
-      if (!isDirectUrl) {
-        setTimeout(() => {
-          if (onLoadTarget) {
-            onLoadTarget(url, null, newTab.webview);
-          }
-        }, 50);
-      }
+  electronAPI?.onNewTabWithUrl?.((url, targetName, options = {}) => {
+    if (!url) return;
+    // The main process forwards the disposition Chromium derived from the
+    // activation's modifiers (`setWindowOpenHandler`), so a Ctrl/Cmd+click or
+    // middle-click on an http(s) link opens in the background and a
+    // Shift+click opens a window — see #303. Callers that don't send options
+    // (the app menu's "Open Downloads/History/Profiles", the webview
+    // context menu) keep the plain foreground-tab behaviour.
+    if (options?.newWindow) {
+      electronAPI?.openUrlInNewWindow?.(url);
+      return;
     }
+    openInNewTabWithTarget(url, targetName || null, { background: !!options?.background });
   });
 
   electronAPI?.onNavigateToUrl?.((url) => {
     if (url && onLoadTarget) {
       pushDebug(`Navigating to URL: ${url}`);
-      onLoadTarget(url);
+      // The main process intercepted a will-navigate for a custom protocol
+      // (`bzz://`, `ens://`, `ipfs://`, `ipns://`, `freedom://`, `rad:`,
+      // `ethereum:`) and called `event.preventDefault()`. That prevent
+      // causes Chromium to emit a phantom `did-stop-loading` (sometimes
+      // also preceded by `did-fail-load -3`) on the source webview for
+      // the cancelled navigation, which would clear `tab.isLoading` and
+      // kill the spinner during the slow ENS lookup that follows.
+      //
+      // We mark the active tab here so the per-tab handlers in
+      // `createWebview` can swallow exactly that one phantom. Active tab
+      // is correct because the user just clicked a link in the
+      // foreground. `pendingAbortUrl` (1500 ms self-clear) is the primary
+      // matcher used by `did-fail-load` when Chromium emits one.
+      //
+      // We also arm `suppressNextStop` proactively (with its own 200 ms
+      // self-clear) for two reasons exposed by live tracing:
+      //   1. The `<webview>` events and the `navigate-to-url` IPC
+      //      travel on independent channels, so the phantom can land
+      //      *after* this handler runs but *before* `did-fail-load`
+      //      arrives — there is no time for the existing chain
+      //      (did-fail-load → arm `suppressNextStop`) to fire.
+      //   2. Chromium can elide `did-fail-load -3` entirely for an
+      //      intercepted navigation, emitting only `did-start-loading`
+      //      → `did-stop-loading`. Without proactive arming, the
+      //      paired `did-stop-loading` has no entry point that would
+      //      mark it as a phantom.
+      // The 200 ms cap is far shorter than any real `did-stop-loading`
+      // following the ENS resolution + content fetch, so an unconsumed
+      // flag can't swallow a legitimate later stop.
+      const activeTab = tabState.tabs.find((t) => t.id === tabState.activeTabId);
+      if (activeTab) {
+        activeTab.pendingAbortUrl = url;
+        if (activeTab.pendingAbortTimer) {
+          clearTimeout(activeTab.pendingAbortTimer);
+        }
+        activeTab.pendingAbortTimer = setTimeout(() => {
+          activeTab.pendingAbortUrl = null;
+          activeTab.pendingAbortTimer = null;
+        }, 1500);
+
+        activeTab.suppressNextStop = true;
+        if (activeTab.suppressNextStopTimer) {
+          clearTimeout(activeTab.suppressNextStopTimer);
+        }
+        activeTab.suppressNextStopTimer = setTimeout(() => {
+          activeTab.suppressNextStop = false;
+          activeTab.suppressNextStopTimer = null;
+        }, 200);
+      }
+      // The page navigated itself (a link click or a scripted `location`
+      // change to a custom scheme); the main process cancelled it and handed
+      // it back here. Flagged as page-initiated so it repaints the address
+      // bar only when the user isn't mid-edit. See #305.
+      onLoadTarget(url, null, null, { pageInitiated: true });
     }
   });
 
@@ -1126,10 +2418,6 @@ export const initTabs = async () => {
     switchToPrevTab();
   });
 
-  electronAPI?.onSwitchToTabIndex?.((index) => {
-    switchToTabIndex(index);
-  });
-
   electronAPI?.onMoveTabLeft?.(() => {
     moveTab('left');
   });
@@ -1142,62 +2430,75 @@ export const initTabs = async () => {
     reopenLastClosedTab();
   });
 
-  // Keyboard shortcuts that do not already route through the main-process menu
+  // Keyboard shortcuts (fallback for when menu doesn't handle it).
+  // Every binding resolves through the shared shortcut registry — including
+  // fixed aliases (Ctrl+Tab, Ctrl+F4, F12, …) and any user remaps, which
+  // apply live via settings:updated.
   window.addEventListener('keydown', (event) => {
-    const altDigitTabIndex = getAltDigitTabIndex(event);
-    if (altDigitTabIndex !== null) {
+    // New tab
+    if (matchesShortcut(event, 'tab.new')) {
       event.preventDefault();
-      switchToTabIndex(altDigitTabIndex);
-      return;
+      createTab(defaultNewTabUrl());
     }
-
-    // Cmd+Option+I (Mac) or Ctrl+Shift+I (Win/Linux) - Toggle DevTools
-    if (
-      (event.metaKey && event.altKey && event.key.toLowerCase() === 'i') ||
-      (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'i')
-    ) {
+    // New private window (fallback for when the menu accelerator doesn't
+    // handle it — e.g. the frameless/auto-hidden menu bar on Linux)
+    if (matchesShortcut(event, 'window.newPrivate')) {
+      event.preventDefault();
+      electronAPI?.newPrivateWindow?.();
+    }
+    // Close tab (skip pinned tabs)
+    if (matchesShortcut(event, 'tab.close')) {
+      event.preventDefault();
+      if (tabState.activeTabId) {
+        const activeTab = tabState.tabs.find((t) => t.id === tabState.activeTabId);
+        if (activeTab && !activeTab.pinned) {
+          closeTab(tabState.activeTabId);
+        }
+      }
+    }
+    // Toggle DevTools (Cmd/Ctrl+Alt+I, Ctrl+Shift+I, F12)
+    if (matchesShortcut(event, 'devtools.toggle')) {
       event.preventDefault();
       toggleDevTools();
     }
-    // Ctrl+Tab / Ctrl+PageDown - Next tab (all platforms)
-    // Cmd+Shift+] - Next tab (macOS alternative)
-    if (
-      (event.ctrlKey && event.key === 'Tab' && !event.shiftKey) ||
-      (event.ctrlKey && event.key === 'PageDown' && !event.shiftKey) ||
-      (event.metaKey && event.shiftKey && event.key === ']')
-    ) {
+    // Focus address bar
+    if (matchesShortcut(event, 'view.focusAddressBar')) {
+      event.preventDefault();
+      const addressInput = document.getElementById('address-input');
+      if (addressInput) {
+        addressInput.focus();
+        addressInput.select();
+      }
+    }
+    // Next tab (Ctrl+PageDown; aliases Ctrl+Tab, Cmd+Shift+])
+    if (matchesShortcut(event, 'tab.next')) {
       event.preventDefault();
       switchToNextTab();
     }
-    // Ctrl+Shift+Tab / Ctrl+PageUp - Previous tab (all platforms)
-    // Cmd+Shift+[ - Previous tab (macOS alternative)
-    if (
-      (event.ctrlKey && event.key === 'Tab' && event.shiftKey) ||
-      (event.ctrlKey && event.key === 'PageUp' && !event.shiftKey) ||
-      (event.metaKey && event.shiftKey && event.key === '[')
-    ) {
+    // Previous tab (Ctrl+PageUp; aliases Ctrl+Shift+Tab, Cmd+Shift+[)
+    if (matchesShortcut(event, 'tab.previous')) {
       event.preventDefault();
       switchToPrevTab();
     }
-    // Ctrl+Shift+PageDown - Move tab right
-    if (event.ctrlKey && event.shiftKey && event.key === 'PageDown') {
+    // Move tab right
+    if (matchesShortcut(event, 'tab.moveRight')) {
       event.preventDefault();
       moveTab('right');
     }
-    // Ctrl+Shift+PageUp - Move tab left
-    if (event.ctrlKey && event.shiftKey && event.key === 'PageUp') {
+    // Move tab left
+    if (matchesShortcut(event, 'tab.moveLeft')) {
       event.preventDefault();
       moveTab('left');
     }
-    // F11 - Toggle fullscreen
-    if (event.key === 'F11') {
+    // Reopen closed tab
+    if (matchesShortcut(event, 'tab.reopenClosed')) {
+      event.preventDefault();
+      reopenLastClosedTab();
+    }
+    // Toggle fullscreen
+    if (matchesShortcut(event, 'view.fullscreen')) {
       event.preventDefault();
       electronAPI?.toggleFullscreen?.();
-    }
-    // F12 - Toggle DevTools
-    if (event.key === 'F12') {
-      event.preventDefault();
-      toggleDevTools();
     }
   });
 
@@ -1214,9 +2515,9 @@ export const initTabs = async () => {
         addressInput.value = initialUrl;
       }
       // Use loadTarget for proper URL resolution (handles dweb URLs, ENS, etc.)
-      setTimeout(() => onLoadTarget(initialUrl, null, tab.webview), 50);
+      setTimeout(() => onLoadTarget(initialUrl), 50);
     }
   } else {
-    createTab(homeUrl);
+    createTab(defaultNewTabUrl());
   }
 };

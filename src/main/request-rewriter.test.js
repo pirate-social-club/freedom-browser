@@ -1,171 +1,46 @@
+// The dispatcher's a singleton — wipe its registry before each test so the
+// rewriter-install assertions don't trip over residue from earlier tests.
+jest.mock('./webrequest-dispatcher', () => {
+  const handlers = [];
+  return {
+    registerWebRequestHandler: jest.fn((event, name, handler) => {
+      handlers.push({ event, name, handler });
+    }),
+    _getHandlers: () => handlers,
+    _reset: () => handlers.splice(0),
+  };
+});
+
 const {
   shouldRewriteRequest,
   buildRewriteTarget,
-  convertProtocolUrl,
   shouldBlockInvalidBzzRequest,
-  registerRequestRewriter,
+  rewriteRequestForDispatch,
+  installRequestRewriter,
 } = require('./request-rewriter');
-const log = require('./logger');
-const { activeRadBases } = require('./state');
-const { formatRadicleUrl, deriveRadBaseFromUrl, deriveDisplayValue } = require('../renderer/lib/url-utils.js');
-
-// Mock service-registry so convertProtocolUrl can resolve gateway URLs
-jest.mock('./service-registry', () => ({
-  getBeeApiUrl: () => 'http://127.0.0.1:1633',
-  getIpfsGatewayUrl: () => 'http://127.0.0.1:8080',
-  getRadicleApiUrl: () => 'http://127.0.0.1:8780',
-}));
-
-jest.mock('./settings-store', () => ({
-  loadSettings: jest.fn(() => ({ enableRadicleIntegration: true })),
-}));
-const { loadSettings } = require('./settings-store');
+const dispatcherMock = require('./webrequest-dispatcher');
 
 const BASE_URL = 'http://127.0.0.1:1633/bzz/abc123def456/';
 const VALID_HASH = 'a'.repeat(64);
 const VALID_ENCRYPTED_HASH = 'a'.repeat(128);
-const originalHnsDiagnostics = process.env.FREEDOM_HNS_DIAGNOSTICS;
 
 describe('request-rewriter', () => {
-  afterEach(() => {
-    activeRadBases.clear();
-    loadSettings.mockReturnValue({ enableRadicleIntegration: true });
-    if (originalHnsDiagnostics === undefined) {
-      delete process.env.FREEDOM_HNS_DIAGNOSTICS;
-    } else {
-      process.env.FREEDOM_HNS_DIAGNOSTICS = originalHnsDiagnostics;
-    }
-    jest.restoreAllMocks();
-  });
+  // `bzz://`, `ipfs://`, `ipns://`, and `rad:`/`rad://` are owned by the
+  // custom protocol handlers (bzz-protocol.js, ipfs-protocol.js,
+  // rad-protocol.js) — requests for these schemes never reach webRequest,
+  // and the rewriter must not touch them if one ever leaks through.
+  describe('rewriteRequestForDispatch – scheme pass-through', () => {
+    const SAMPLE_RID = 'z3gqcJUoA1n9HaHKufZs5FCSGazv5';
 
-  describe('convertProtocolUrl', () => {
-    test('returns converted: false for null/undefined/empty', () => {
-      expect(convertProtocolUrl(null)).toEqual({ converted: false, url: null });
-      expect(convertProtocolUrl(undefined)).toEqual({ converted: false, url: undefined });
-      expect(convertProtocolUrl('')).toEqual({ converted: false, url: '' });
-    });
-
-    test('returns converted: false for non-protocol URLs', () => {
-      expect(convertProtocolUrl('https://example.com')).toEqual({
-        converted: false,
-        url: 'https://example.com',
-      });
-      expect(convertProtocolUrl('http://127.0.0.1:1633/bzz/hash')).toEqual({
-        converted: false,
-        url: 'http://127.0.0.1:1633/bzz/hash',
-      });
-    });
-
-    // bzz:// tests
-    test('converts valid bzz:// URL with 64-char hex hash', () => {
-      const result = convertProtocolUrl(`bzz://${VALID_HASH}`);
-      expect(result).toEqual({ converted: true, url: `http://127.0.0.1:1633/bzz/${VALID_HASH}` });
-    });
-
-    test('converts valid bzz:// URL with hash and path', () => {
-      const result = convertProtocolUrl(`bzz://${VALID_HASH}/index.html`);
-      expect(result).toEqual({
-        converted: true,
-        url: `http://127.0.0.1:1633/bzz/${VALID_HASH}/index.html`,
-      });
-    });
-
-    test('converts valid bzz:// URL with hash, path, query and fragment', () => {
-      const result = convertProtocolUrl(`bzz://${VALID_HASH}/page?v=1#top`);
-      expect(result).toEqual({
-        converted: true,
-        url: `http://127.0.0.1:1633/bzz/${VALID_HASH}/page?v=1#top`,
-      });
-    });
-
-    test('converts valid bzz:// URL with 128-char encrypted hash', () => {
-      const result = convertProtocolUrl(`bzz://${VALID_ENCRYPTED_HASH}`);
-      expect(result).toEqual({
-        converted: true,
-        url: `http://127.0.0.1:1633/bzz/${VALID_ENCRYPTED_HASH}`,
-      });
-    });
-
-    test('rejects bzz:// with empty hash', () => {
-      expect(convertProtocolUrl('bzz://')).toEqual({ converted: false, url: 'bzz://' });
-    });
-
-    test('rejects bzz:/// with no hash (only slashes)', () => {
-      expect(convertProtocolUrl('bzz:///')).toEqual({ converted: false, url: 'bzz:///' });
-    });
-
-    test('rejects bzz:///favicon.ico (no hash, just path)', () => {
-      expect(convertProtocolUrl('bzz:///favicon.ico')).toEqual({
-        converted: false,
-        url: 'bzz:///favicon.ico',
-      });
-    });
-
-    test('rejects bzz:// with non-hex hash', () => {
-      expect(convertProtocolUrl('bzz://not-a-valid-hash')).toEqual({
-        converted: false,
-        url: 'bzz://not-a-valid-hash',
-      });
-    });
-
-    test('rejects bzz:// with too-short hash', () => {
-      expect(convertProtocolUrl('bzz://abcdef1234')).toEqual({
-        converted: false,
-        url: 'bzz://abcdef1234',
-      });
-    });
-
-    // ipfs:// tests
-    test('converts valid ipfs:// URL with CIDv0', () => {
-      const cid = 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
-      const result = convertProtocolUrl(`ipfs://${cid}`);
-      expect(result).toEqual({ converted: true, url: `http://127.0.0.1:8080/ipfs/${cid}` });
-    });
-
-    test('converts valid ipfs:// URL with path', () => {
-      const cid = 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
-      const result = convertProtocolUrl(`ipfs://${cid}/file.txt`);
-      expect(result).toEqual({
-        converted: true,
-        url: `http://127.0.0.1:8080/ipfs/${cid}/file.txt`,
-      });
-    });
-
-    test('rejects ipfs:// with invalid CID', () => {
-      expect(convertProtocolUrl('ipfs://notacid')).toEqual({
-        converted: false,
-        url: 'ipfs://notacid',
-      });
-    });
-
-    test('rejects ipfs:// with empty CID', () => {
-      expect(convertProtocolUrl('ipfs://')).toEqual({ converted: false, url: 'ipfs://' });
-    });
-
-    test('rejects ipfs:/// with no CID', () => {
-      expect(convertProtocolUrl('ipfs:///')).toEqual({ converted: false, url: 'ipfs:///' });
-    });
-
-    // ipns:// tests
-    test('converts valid ipns:// URL', () => {
-      const result = convertProtocolUrl('ipns://example.eth');
-      expect(result).toEqual({ converted: true, url: 'http://127.0.0.1:8080/ipns/example.eth' });
-    });
-
-    test('converts valid ipns:// URL with path', () => {
-      const result = convertProtocolUrl('ipns://example.eth/page.html');
-      expect(result).toEqual({
-        converted: true,
-        url: 'http://127.0.0.1:8080/ipns/example.eth/page.html',
-      });
-    });
-
-    test('rejects ipns:// with empty name', () => {
-      expect(convertProtocolUrl('ipns://')).toEqual({ converted: false, url: 'ipns://' });
-    });
-
-    test('rejects ipns:/// with no name', () => {
-      expect(convertProtocolUrl('ipns:///')).toEqual({ converted: false, url: 'ipns:///' });
+    test.each([
+      ['bzz', `bzz://${VALID_HASH}/index.html`],
+      ['ipfs', 'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/file.txt'],
+      ['ipns', 'ipns://example.eth/page.html'],
+      ['rad slashes', `rad://${SAMPLE_RID}/tree/main`],
+      ['rad urn', `rad:${SAMPLE_RID}`],
+      ['https', 'https://example.com'],
+    ])('passes %s URLs through untouched', (_name, url) => {
+      expect(rewriteRequestForDispatch({ webContentsId: 1, url })).toBeNull();
     });
   });
 
@@ -198,6 +73,20 @@ describe('request-rewriter', () => {
     test('handles case-insensitive /BZZ/ path', () => {
       const result = shouldRewriteRequest('http://127.0.0.1:1633/BZZ/other-hash/file.js', BASE_URL);
       expect(result).toEqual({ shouldRewrite: false, reason: 'already_bzz_path' });
+    });
+
+    // The rad rewrite arm this exclusion belonged to is gone: Radicle is
+    // served in-process over rad:/radapi:, which never reach webRequest. A
+    // `/api/v1/repos/...` request here is an ordinary same-origin asset of
+    // the bzz page, and skipping it sent the request to the Bee node's real
+    // origin, where it 404s.
+    test('rewrites same-origin /api/v1/repos/ assets of a bzz page', () => {
+      expect(
+        shouldRewriteRequest('http://127.0.0.1:1633/api/v1/repos/index.json', BASE_URL)
+      ).toEqual({ shouldRewrite: true });
+      expect(buildRewriteTarget('http://127.0.0.1:1633/api/v1/repos/index.json', BASE_URL)).toBe(
+        'http://127.0.0.1:1633/bzz/abc123def456/api/v1/repos/index.json'
+      );
     });
 
     test('returns false with reason for cross-origin requests', () => {
@@ -319,9 +208,9 @@ describe('request-rewriter', () => {
     });
 
     test('allows /bzz/ with valid 128-char hex hash (encrypted reference)', () => {
-      expect(shouldBlockInvalidBzzRequest(`http://127.0.0.1:1633/bzz/${VALID_ENCRYPTED_HASH}`)).toBe(
-        false
-      );
+      expect(
+        shouldBlockInvalidBzzRequest(`http://127.0.0.1:1633/bzz/${VALID_ENCRYPTED_HASH}`)
+      ).toBe(false);
     });
 
     test('allows /bzz/ with valid encrypted hash and sub-path', () => {
@@ -331,7 +220,9 @@ describe('request-rewriter', () => {
     });
 
     test('blocks /bzz/ with invalid length hash (65 chars)', () => {
-      expect(shouldBlockInvalidBzzRequest(`http://127.0.0.1:1633/bzz/${'a'.repeat(65)}`)).toBe(true);
+      expect(shouldBlockInvalidBzzRequest(`http://127.0.0.1:1633/bzz/${'a'.repeat(65)}`)).toBe(
+        true
+      );
     });
 
     test('allows non-bzz URLs', () => {
@@ -345,235 +236,16 @@ describe('request-rewriter', () => {
     });
   });
 
-  // =========================================
-  // Radicle protocol support
-  // =========================================
-  describe('convertProtocolUrl – rad: protocol', () => {
-    const RADICLE_API = 'http://127.0.0.1:8780';
-    const SAMPLE_RID = 'z3gqcJUoA1n9HaHKufZs5FCSGazv5';
+  test('installRequestRewriter registers a single onBeforeRequest handler in the dispatcher', () => {
+    dispatcherMock._reset();
+    installRequestRewriter();
 
-    test('converts rad:RID to API URL', () => {
-      const result = convertProtocolUrl(`rad:${SAMPLE_RID}`);
-      expect(result).toEqual({
-        converted: true,
-        url: `${RADICLE_API}/api/v1/repos/${SAMPLE_RID}`,
-      });
+    const registered = dispatcherMock._getHandlers();
+    expect(registered).toHaveLength(1);
+    expect(registered[0]).toMatchObject({
+      event: 'onBeforeRequest',
+      name: 'request-rewriter',
     });
-
-    test('converts rad://RID to API URL', () => {
-      const result = convertProtocolUrl(`rad://${SAMPLE_RID}`);
-      expect(result).toEqual({
-        converted: true,
-        url: `${RADICLE_API}/api/v1/repos/${SAMPLE_RID}`,
-      });
-    });
-
-    test('converts rad:RID with sub-path', () => {
-      const result = convertProtocolUrl(`rad:${SAMPLE_RID}/tree/main/README.md`);
-      expect(result).toEqual({
-        converted: true,
-        url: `${RADICLE_API}/api/v1/repos/${SAMPLE_RID}/tree/main/README.md`,
-      });
-    });
-
-    test('converts rad://RID with sub-path', () => {
-      const result = convertProtocolUrl(`rad://${SAMPLE_RID}/tree/main/src`);
-      expect(result).toEqual({
-        converted: true,
-        url: `${RADICLE_API}/api/v1/repos/${SAMPLE_RID}/tree/main/src`,
-      });
-    });
-
-    test('does not convert non-rad protocols', () => {
-      expect(convertProtocolUrl('https://example.com')).toEqual({
-        converted: false,
-        url: 'https://example.com',
-      });
-    });
-
-    test('blocks rad: with path traversal attempt', () => {
-      const malicious = 'rad://../../etc/passwd';
-      const result = convertProtocolUrl(malicious);
-      expect(result.converted).toBe(false);
-    });
-
-    test('blocks rad: with invalid RID characters', () => {
-      expect(convertProtocolUrl('rad:invalid!rid').converted).toBe(false);
-      expect(convertProtocolUrl('rad:0000000000000000000000').converted).toBe(false);
-    });
-
-    test('blocks rad: with too-short RID', () => {
-      expect(convertProtocolUrl('rad:zabc').converted).toBe(false);
-    });
-
-    test('does not convert rad: when integration is disabled', () => {
-      loadSettings.mockReturnValue({ enableRadicleIntegration: false });
-      expect(convertProtocolUrl(`rad:${SAMPLE_RID}`)).toEqual({
-        converted: false,
-        url: `rad:${SAMPLE_RID}`,
-      });
-    });
-  });
-
-  describe('shouldRewriteRequest – Radicle paths', () => {
-    const RAD_BASE = 'http://127.0.0.1:8780/api/v1/repos/z3gqcJUoA1n9HaHKufZs5FCSGazv5/';
-
-    test('does not rewrite requests already on /api/v1/repos/ path', () => {
-      const result = shouldRewriteRequest(
-        'http://127.0.0.1:8780/api/v1/repos/z3gqcJUoA1n9HaHKufZs5FCSGazv5/tree/main',
-        RAD_BASE
-      );
-      expect(result.shouldRewrite).toBe(false);
-      expect(result.reason).toBe('already_rad_path');
-    });
-
-    test('rewrites relative resource requests from a Radicle base', () => {
-      const result = shouldRewriteRequest(
-        'http://127.0.0.1:8780/some-relative-asset.js',
-        RAD_BASE
-      );
-      expect(result.shouldRewrite).toBe(true);
-    });
-
-    test('does not rewrite cross-origin requests', () => {
-      const result = shouldRewriteRequest(
-        'https://cdn.example.com/lib.js',
-        RAD_BASE
-      );
-      expect(result.shouldRewrite).toBe(false);
-    });
-  });
-
-  describe('integration: rad:// entry -> navigation -> rewrite -> display roundtrip', () => {
-    const SAMPLE_RID = 'z3gqcJUoA1n9HaHKufZs5FCSGazv5';
-    const RADICLE_BASE = 'http://127.0.0.1:8780';
-    const RADICLE_API_PREFIX = `${RADICLE_BASE}/api/v1/repos/`;
-
-    test('roundtrips rad:// URL through target, rewrite, and display value', () => {
-      const previousWindow = global.window;
-      try {
-        global.window = { location: { href: 'file:///app/index.html' } };
-
-        const entryUrl = `rad://${SAMPLE_RID}/tree/main/README.md`;
-
-        // Entry -> navigation target
-        const navTarget = formatRadicleUrl(entryUrl, RADICLE_BASE);
-        expect(navTarget).not.toBeNull();
-        expect(navTarget.displayValue).toBe(entryUrl);
-
-        // Custom protocol conversion used by request interception
-        const converted = convertProtocolUrl(entryUrl);
-        expect(converted).toEqual({
-          converted: true,
-          url: `${RADICLE_BASE}/api/v1/repos/${SAMPLE_RID}/tree/main/README.md`,
-        });
-
-        // Navigation-derived base enables same-origin relative request rewriting
-        const radBase = deriveRadBaseFromUrl(converted.url);
-        expect(radBase).toBe(`${RADICLE_API_PREFIX}${SAMPLE_RID}/`);
-
-        const relativeRequest = `${RADICLE_BASE}/assets/code.css`;
-        expect(shouldRewriteRequest(relativeRequest, radBase)).toEqual({ shouldRewrite: true });
-        expect(buildRewriteTarget(relativeRequest, radBase)).toBe(
-          `${RADICLE_API_PREFIX}${SAMPLE_RID}/assets/code.css`
-        );
-
-        // Internal API URL -> display value in address bar
-        const display = deriveDisplayValue(
-          converted.url,
-          'http://127.0.0.1:1633/bzz/',
-          'file:///app/home.html',
-          'http://127.0.0.1:8080/ipfs/',
-          'http://127.0.0.1:8080/ipns/',
-          RADICLE_API_PREFIX
-        );
-        expect(display).toBe(entryUrl);
-      } finally {
-        global.window = previousWindow;
-      }
-    });
-
-    test('rewrites same-origin Radicle requests via registered session handler', () => {
-      const webContentsId = 42;
-      const sessionMock = {
-        webRequest: {
-          onBeforeRequest: jest.fn(),
-        },
-      };
-
-      activeRadBases.set(webContentsId, `${RADICLE_API_PREFIX}${SAMPLE_RID}/`);
-      registerRequestRewriter(sessionMock);
-
-      expect(sessionMock.webRequest.onBeforeRequest).toHaveBeenCalledTimes(1);
-      const [handler] = sessionMock.webRequest.onBeforeRequest.mock.calls[0];
-      const callback = jest.fn();
-
-      handler(
-        {
-          webContentsId,
-          url: `${RADICLE_BASE}/blob/main/src/index.js`,
-        },
-        callback
-      );
-
-      expect(callback).toHaveBeenCalledWith({
-        redirectURL: `${RADICLE_API_PREFIX}${SAMPLE_RID}/blob/main/src/index.js`,
-      });
-    });
-
-    test('does not rewrite Radicle requests when integration is disabled', () => {
-      loadSettings.mockReturnValue({ enableRadicleIntegration: false });
-      const webContentsId = 42;
-      const sessionMock = {
-        webRequest: {
-          onBeforeRequest: jest.fn(),
-        },
-      };
-
-      activeRadBases.set(webContentsId, `${RADICLE_API_PREFIX}${SAMPLE_RID}/`);
-      registerRequestRewriter(sessionMock);
-
-      const [handler] = sessionMock.webRequest.onBeforeRequest.mock.calls[0];
-      const callback = jest.fn();
-
-      handler(
-        {
-          webContentsId,
-          url: `${RADICLE_BASE}/blob/main/src/index.js`,
-        },
-        callback
-      );
-
-      expect(callback).toHaveBeenCalledWith({});
-    });
-
-    test('does not log single-label HNS requests as bypassed', () => {
-      process.env.FREEDOM_HNS_DIAGNOSTICS = '1';
-      const warnSpy = jest.spyOn(log, 'warn').mockImplementation(() => {});
-      const sessionMock = {
-        webRequest: {
-          onBeforeRequest: jest.fn(),
-        },
-      };
-
-      registerRequestRewriter(sessionMock);
-
-      const [handler] = sessionMock.webRequest.onBeforeRequest.mock.calls[0];
-      const callback = jest.fn();
-      handler(
-        {
-          frameId: 0,
-          initiator: 'https://app.pirate',
-          method: 'GET',
-          resourceType: 'xhr',
-          url: 'https://unknown-single-label/?token=secret',
-          webContentsId: 21,
-        },
-        callback
-      );
-
-      expect(callback).toHaveBeenCalledWith({});
-      expect(warnSpy).not.toHaveBeenCalled();
-    });
+    expect(registered[0].handler).toBe(rewriteRequestForDispatch);
   });
 });

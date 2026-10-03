@@ -5,8 +5,20 @@
  */
 
 import { walletState, registerScreenHider } from './wallet-state.js';
-import { escapeHtml } from './wallet-utils.js';
+import {
+  isSignatureInFlight,
+  beginSignatureFlight,
+  endSignatureFlight,
+} from './signature-flight.js';
+import { escapeHtml, accountType, walletRecord, bypassUnlockGateForDevice, renderSafeFeePayer, isSafeDeployed, GNOSIS_CHAIN_ID } from './wallet-utils.js';
+import { openSafeSigningBoard } from './safe-signing.js';
 import { refreshBalances, getTokensWithBalance, getChainsWithBalance, sortTokens } from './balance-display.js';
+import {
+  getTrustStatusSentence,
+  describeUnverifiedForward,
+  describeUnverifiedReverse,
+} from '../navigation-utils.js';
+import { isPotentialEnsName } from '../origin-utils.js';
 import { createTab } from '../tabs.js';
 
 // DOM references
@@ -18,7 +30,6 @@ let sendPendingView;
 let sendSuccessView;
 let sendErrorView;
 let sendRecipientInput;
-let sendResolvedAddress;
 let sendRecipientError;
 // Send chain selector
 let sendChainSelector;
@@ -64,6 +75,10 @@ let sendRetryBtn;
 let sendTxState = {
   selectedToken: null,
   recipient: '',
+  // { name, trust } when `recipient` was resolved from ENS (or a reverse
+  // lookup of a raw address succeeded), null otherwise. Bundled so that
+  // clearing one half can't leak a stale other half.
+  recipientResolution: null,
   amount: '',
   gasLimit: null,
   maxFeePerGas: null,
@@ -72,6 +87,12 @@ let sendTxState = {
   estimatedFee: null,
   chainId: null,
 };
+
+// Token identifying *this* screen's in-flight signature while
+// wallet:send-transaction is awaiting the device. Identity (not a boolean)
+// so a late release from a superseded send cannot free a lock it no longer
+// holds — see signature-flight.js.
+let sendFlight = null;
 
 export function initSend() {
   sendScreen = document.getElementById('sidebar-send');
@@ -82,7 +103,6 @@ export function initSend() {
   sendSuccessView = document.getElementById('send-success-view');
   sendErrorView = document.getElementById('send-error-view');
   sendRecipientInput = document.getElementById('send-recipient');
-  sendResolvedAddress = document.getElementById('send-resolved-address');
   sendRecipientError = document.getElementById('send-recipient-error');
   sendChainSelector = document.getElementById('send-chain-selector');
   sendChainBtn = document.getElementById('send-chain-btn');
@@ -123,7 +143,17 @@ export function initSend() {
   sendRetryBtn = document.getElementById('send-retry-btn');
 
   // Register screen hider
-  registerScreenHider(() => sendScreen?.classList.add('hidden'));
+  registerScreenHider(() => {
+    // An in-flight send signature owns the sidebar: the device prompt it
+    // produced cannot be recalled, so hiding "Confirm on your Ledger" here
+    // would leave the user answering another surface's screen while the
+    // device still shows this transaction — and the broadcast would land
+    // with no visible feedback. hideAllSubscreens() already refuses while
+    // a signature is in flight; this is the second line of defence for a
+    // direct hider call.
+    if (sendFlight) return;
+    sendScreen?.classList.add('hidden');
+  });
 
   setupSendScreen();
 }
@@ -131,7 +161,8 @@ export function initSend() {
 function setupSendScreen() {
   const sendBtn = document.getElementById('wallet-send-btn');
   if (sendBtn) {
-    sendBtn.addEventListener('click', openSend);
+    // Arrow wrapper so the click Event isn't passed as `options`.
+    sendBtn.addEventListener('click', () => openSend());
   }
 
   if (sendBackBtn) {
@@ -156,7 +187,11 @@ function setupSendScreen() {
   });
 
   if (sendRecipientInput) {
-    sendRecipientInput.addEventListener('input', () => clearSendError('recipient'));
+    sendRecipientInput.addEventListener('input', () => {
+      clearSendError('recipient');
+      // Edits invalidate any previously-resolved ENS address.
+      sendTxState.recipientResolution = null;
+    });
   }
 
   if (sendAmountInput) {
@@ -218,32 +253,108 @@ function setupSendScreen() {
   }
 }
 
-function openSend() {
+/** The active account's record when it is a Safe, else null. */
+function activeSafeWallet() {
+  const wallet = walletRecord();
+  return wallet?.type === 'safe' ? wallet : null;
+}
+
+/** Whether the active account can send at all (Safes need activation). */
+function sendBlockedReason() {
+  const safe = activeSafeWallet();
+  if (safe && !isSafeDeployed(safe)) {
+    return 'Activate this account on Gnosis before sending';
+  }
+  return null;
+}
+
+/**
+ * Send owns its button; the active-account refresh (safe-status.js)
+ * calls this whenever the account changes.
+ */
+export function updateSendAvailability() {
+  const sendBtn = document.getElementById('wallet-send-btn');
+  if (!sendBtn) return;
+  const reason = sendBlockedReason();
+  sendBtn.disabled = Boolean(reason);
+  sendBtn.title = reason || '';
+}
+
+export async function openSend(options = {}) {
   if (!walletState.fullAddresses.wallet) {
     console.error('[WalletUI] No wallet address available');
     return;
   }
+  // Guards the programmatic openers (x402 top-up links etc.) — the
+  // Send button itself is disabled via updateSendAvailability.
+  const blockedReason = sendBlockedReason();
+  if (blockedReason) {
+    console.warn('[WalletUI] Send is not available:', blockedReason);
+    return;
+  }
+
+  // One pending SafeTx per Safe: while one is waiting for signatures,
+  // Send routes to its board instead of starting a second one.
+  const safe = activeSafeWallet();
+  if (safe) {
+    const pending = await window.wallet.safeState(safe.index);
+    if (pending.success && pending.state) {
+      openSafeSigningBoard(safe.index);
+      return;
+    }
+  }
+
+  // The send screen takes over the sidebar directly (it predates
+  // hideAllSubscreens), so it needs its own check: while a device
+  // confirmation is live the screen that started it owns the sidebar and
+  // nothing may paint over it — see signature-flight.js. Entry points are
+  // page-reachable (an `ethereum:` tip link routes here via openSendFlow),
+  // so this is not merely belt-and-braces.
+  if (isSignatureInFlight()) {
+    console.warn('[WalletUI] Send screen not opened: a signature is already in flight');
+    return;
+  }
 
   resetSendState();
-  populateSendChainSelector();
+  applySendOpenOptions(options);
 
   walletState.identityView?.classList.add('hidden');
   sendScreen?.classList.remove('hidden');
 
   showSendInputView();
-  setTimeout(() => sendRecipientInput?.focus(), 100);
+  setTimeout(() => {
+    if (options.recipient) {
+      sendAmountInput?.focus();
+    } else {
+      sendRecipientInput?.focus();
+    }
+  }, 100);
 }
 
 export function closeSend() {
+  // Same ownership rule as the screen hider, on the other teardown path:
+  // Back, a sidebar close and the coordinator's closeAllSubscreens() all
+  // land here. Resetting state under a live device prompt would strand the
+  // broadcast with no UI to report into.
+  if (sendFlight) {
+    console.warn('[WalletUI] Send screen not closed: a signature is in flight on this transaction');
+    return;
+  }
   sendScreen?.classList.add('hidden');
   walletState.identityView?.classList.remove('hidden');
   resetSendState();
+  if (activeSafeWallet()) {
+    // A safe send may have left (or consumed) a half-signed transaction —
+    // let the status card re-evaluate without a module cycle.
+    window.dispatchEvent(new CustomEvent('wallet:send-closed'));
+  }
 }
 
 function resetSendState() {
   sendTxState = {
     selectedToken: null,
     recipient: '',
+    recipientResolution: null,
     amount: '',
     gasLimit: null,
     maxFeePerGas: null,
@@ -270,8 +381,6 @@ function resetSendState() {
   clearSendError('general');
   clearSendError('review');
   clearSendError('unlock');
-
-  sendResolvedAddress?.classList.add('hidden');
 
   if (sendContinueBtn) {
     sendContinueBtn.disabled = false;
@@ -301,6 +410,25 @@ function showSendPendingView() {
   sendPendingView?.classList.remove('hidden');
   sendSuccessView?.classList.add('hidden');
   sendErrorView?.classList.add('hidden');
+
+  // Device accounts wait on a confirmation elsewhere, not the network.
+  const pendingCopy = {
+    ledger: {
+      title: 'Confirm on your Ledger',
+      text: 'Review the transaction on your Ledger and approve it there.',
+    },
+    remote: {
+      title: 'Confirm on your phone',
+      text: 'Scan the QR code with your phone and approve the transaction there.',
+    },
+  }[accountType(walletState.activeWalletIndex)] || {
+    title: 'Sending Transaction',
+    text: 'Please wait while your transaction is being processed…',
+  };
+  const title = sendPendingView?.querySelector('.send-pending-title');
+  const text = sendPendingView?.querySelector('.send-pending-text');
+  if (title) title.textContent = pendingCopy.title;
+  if (text) text.textContent = pendingCopy.text;
 }
 
 function showSendSuccessView(explorerUrl) {
@@ -352,15 +480,83 @@ function closeSendChainDropdown() {
   if (sendChainDropdown) sendChainDropdown.classList.add('hidden');
 }
 
-function populateSendChainSelector() {
-  const chainsWithBalance = getChainsWithBalance();
+/**
+ * The chains this account can compose a send on. A Safe lives on exactly one
+ * chain, and the calldata composed for it is only meaningful there — offering
+ * the rest lets the user review a send labelled "Ethereum" that the executor
+ * can only ever run on Gnosis.
+ */
+function sendChainCandidates() {
+  const chains = getChainsWithBalance();
+  if (!activeSafeWallet()) return chains;
+  return chains.filter((chain) => chain.chainId === GNOSIS_CHAIN_ID);
+}
 
+function populateSendChainSelector() {
+  if (activeSafeWallet()) {
+    selectSendChain(GNOSIS_CHAIN_ID);
+    return;
+  }
+
+  // Carry over the chain the user has active on the main wallet view, even
+  // if it has no balance yet — their intent beats "pick the top chain with
+  // funds". selectedChainId is null only in the "All chains" view.
+  const selected = walletState.selectedChainId;
+  if (selected !== null && walletState.registeredChains[selected]) {
+    selectSendChain(selected);
+    return;
+  }
+
+  const chainsWithBalance = getChainsWithBalance();
   if (chainsWithBalance.length > 0) {
     selectSendChain(chainsWithBalance[0].chainId);
-  } else {
-    if (sendChainName) sendChainName.textContent = 'No funds';
-    if (sendAssetName) sendAssetName.textContent = 'No assets';
+    return;
   }
+
+  if (sendChainName) sendChainName.textContent = 'No funds';
+  if (sendAssetName) sendAssetName.textContent = 'No assets';
+}
+
+function applySendOpenOptions(options = {}) {
+  // A programmatic opener (an `ethereum:` tip link, an x402 top-up) may not
+  // know the account is a Safe; its chain hint never outranks the Safe's own.
+  if (options.chainId && !activeSafeWallet()) {
+    selectSendChain(options.chainId);
+  } else {
+    populateSendChainSelector();
+  }
+
+  if (options.tokenKey || options.tokenSymbol) {
+    const preferredToken = resolvePreferredSendToken(options);
+    if (preferredToken) {
+      selectSendAsset(preferredToken);
+    }
+  }
+
+  if (options.recipient && sendRecipientInput) {
+    sendRecipientInput.value = options.recipient;
+    sendTxState.recipient = options.recipient;
+  }
+
+  if (options.amount && sendAmountInput) {
+    sendAmountInput.value = options.amount;
+    sendTxState.amount = options.amount;
+  }
+}
+
+function resolvePreferredSendToken(options = {}) {
+  const candidateTokens = sortTokens(getTokensWithBalance(options.chainId || sendTxState.chainId));
+
+  if (options.tokenKey) {
+    const byKey = candidateTokens.find((token) => token.key === options.tokenKey);
+    if (byKey) return byKey;
+  }
+
+  if (options.tokenSymbol) {
+    return candidateTokens.find((token) => token.symbol === options.tokenSymbol) || null;
+  }
+
+  return null;
 }
 
 function renderSendChainList() {
@@ -368,7 +564,7 @@ function renderSendChainList() {
 
   sendChainList.innerHTML = '';
 
-  const chainsWithBalance = getChainsWithBalance();
+  const chainsWithBalance = sendChainCandidates();
 
   if (chainsWithBalance.length === 0) {
     const emptyEl = document.createElement('div');
@@ -573,7 +769,7 @@ async function handleSendMax() {
 
     try {
       if (sendMaxBtn) {
-        sendMaxBtn.textContent = '...';
+        sendMaxBtn.textContent = '…';
         sendMaxBtn.disabled = true;
       }
 
@@ -603,7 +799,7 @@ async function handleSendMax() {
   }
 }
 
-function formatWeiToDecimal(wei, decimals = 18) {
+export function formatWeiToDecimal(wei, decimals = 18) {
   if (wei === 0n) return '0';
 
   const weiStr = wei.toString().padStart(decimals + 1, '0');
@@ -619,33 +815,46 @@ function formatWeiToDecimal(wei, decimals = 18) {
   return `${integerPart}.${trimmed}`;
 }
 
-function validateRecipient() {
+// Supported Ethereum names (.eth/.box ENS, .wei WNS, .gwei GNS) are resolved on mainnet;
+// resolution decides whether the name actually has an addr record.
+function classifyRecipient() {
   const recipient = sendRecipientInput?.value?.trim() || '';
 
   if (!recipient) {
     showSendError('recipient', 'Recipient address is required');
-    return false;
+    return { ok: false };
   }
 
-  if (!isValidEthereumAddress(recipient)) {
-    if (recipient.endsWith('.eth')) {
-      showSendError('recipient', 'ENS names not supported yet. Please enter an address.');
-      return false;
-    }
-    showSendError('recipient', 'Invalid Ethereum address');
-    return false;
+  if (isValidEthereumAddress(recipient)) {
+    return { ok: true, type: 'address', value: recipient };
   }
 
-  sendTxState.recipient = recipient;
-  return true;
+  if (isEnsLikeName(recipient)) {
+    return { ok: true, type: 'ens', value: recipient };
+  }
+
+  showSendError('recipient', 'Invalid Ethereum address or supported Ethereum name');
+  return { ok: false };
 }
 
 function isValidEthereumAddress(address) {
   return /^0x[a-fA-F0-9]{40}$/.test(address);
 }
 
+function isEnsLikeName(value) {
+  return isPotentialEnsName(value);
+}
+
 function validateAmount() {
   const amount = sendAmountInput?.value?.trim() || '';
+
+  // Without a selected asset there is nothing to send. (Vault-account
+  // sends fail this later in gas estimation, but the Safe path skips
+  // that — enforce it where the validation belongs.)
+  if (!sendTxState.selectedToken) {
+    showSendError('amount', 'Select an asset to send');
+    return false;
+  }
 
   if (!amount) {
     showSendError('amount', 'Amount is required');
@@ -713,20 +922,79 @@ function clearSendError(field) {
 }
 
 async function handleSendContinue() {
-  if (!validateRecipient() || !validateAmount()) {
+  const recipientClass = classifyRecipient();
+  if (!recipientClass.ok || !validateAmount()) {
     return;
   }
 
   if (sendContinueBtn) {
     sendContinueBtn.disabled = true;
-    sendContinueBtn.textContent = 'Loading...';
+    sendContinueBtn.textContent = 'Loading…';
   }
 
+  const resolutionChainId = sendTxState.chainId;
+  // A previous review's primary name belongs to its resolution chain.
+  // Recompute it on every Continue, including after Edit + network change.
+  sendTxState.recipientResolution = null;
   try {
-    await estimateTransactionGas();
+    let reverseLookup = Promise.resolve(null);
+    if (recipientClass.type === 'ens') {
+      if (sendContinueBtn) sendContinueBtn.textContent = 'Resolving name…';
+      const resolved = await resolveRecipientEns(recipientClass.value);
+      if (resolutionChainId !== sendTxState.chainId) {
+        showSendError('recipient', 'Network changed. Resolve the recipient again.');
+        return;
+      }
+      if (!resolved) return; // error already surfaced on the recipient field
+      sendTxState.recipient = resolved.address;
+      sendTxState.recipientResolution = { name: resolved.name, trust: resolved.trust };
+    } else {
+      sendTxState.recipient = recipientClass.value;
+      // Best-effort reverse lookup so the review screen can show the
+      // recipient's primary Ethereum name alongside the address when one is
+      // verifiably set. Fire in parallel with gas estimation so it
+      // doesn't add latency to the Continue → Review transition; a
+      // failure here doesn't block the send. Pin it to the chain Continue
+      // was pressed on rather than letting it re-read the live selection.
+      reverseLookup = lookupPrimaryNameForAddress(recipientClass.value, resolutionChainId);
+    }
+
+    if (sendContinueBtn) sendContinueBtn.textContent = 'Loading…';
+    // Safe sends: the executor pays the (execTransaction) fee, quoted
+    // after signatures exist — there is no meaningful estimate here.
+    const gasEstimate = activeSafeWallet() ? Promise.resolve() : estimateTransactionGas();
+    const [, reverseResult] = await Promise.all([gasEstimate, reverseLookup]);
+    if (resolutionChainId !== sendTxState.chainId) {
+      showSendError('general', 'Network changed. Prepare the transaction again.');
+      return;
+    }
+    const autoUnlock = await configureSendUnlockUI();
+    // The network selector remains editable throughout gas and unlock
+    // preparation. Check again after the last await so a name's old-chain
+    // address cannot reach review under the newly selected network.
+    if (resolutionChainId !== sendTxState.chainId) {
+      showSendError('general', 'Network changed. Prepare the transaction again.');
+      return;
+    }
+    // Adopt a primary name only after the complete review has passed its
+    // network checks, together with its gas estimate and recipient address.
+    if (
+      reverseResult &&
+      !sendTxState.recipientResolution &&
+      resolutionChainId === sendTxState.chainId
+    ) {
+      sendTxState.recipientResolution = reverseResult;
+    }
     populateSendReview();
-    await configureSendUnlockUI();
     showSendReviewView();
+    if (autoUnlock) {
+      const reviewedState = sendTxState;
+      setTimeout(() => {
+        if (sendTxState === reviewedState && !sendReviewView?.classList.contains('hidden')) {
+          handleSendTouchIdUnlock();
+        }
+      }, 100);
+    }
   } catch (err) {
     console.error('[WalletUI] Failed to prepare transaction:', err);
     showSendError('general', err.message || 'Failed to estimate gas');
@@ -737,6 +1005,60 @@ async function handleSendContinue() {
     }
   }
 }
+
+// Ask main for the primary Ethereum name set for an address. Returns one of:
+//   { name, trust }                          forward-verified primary name
+//   { warning: 'unverified', claimedName }   primary claim doesn't forward-verify
+//   null                                     no reverse record / hard error
+// Never throws — the review flow isn't blocked by a reverse-lookup failure.
+async function lookupPrimaryNameForAddress(address, chainId = sendTxState.chainId || 1) {
+  const api = window.electronAPI;
+  if (!api?.resolveEnsReverse) return null;
+  try {
+    const result = await api.resolveEnsReverse(address, chainId);
+    if (result?.success && result.name) {
+      return { name: result.name, trust: result.trust || null };
+    }
+    if (result?.reason === 'UNVERIFIED') {
+      return { warning: 'unverified', claimedName: result.claimedName || null };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveRecipientEns(name) {
+  const api = window.electronAPI;
+  if (!api?.resolveEnsAddress) {
+    showSendError('recipient', 'Name resolution unavailable');
+    return null;
+  }
+
+  let result;
+  try {
+    result = await api.resolveEnsAddress(name, sendTxState.chainId || 1);
+  } catch (err) {
+    showSendError('recipient', err.message || 'Name resolution failed');
+    return null;
+  }
+
+  if (!result?.success || !result.address) {
+    const message =
+      result?.reason === 'NO_ADDRESS'
+        ? `No address set for ${name}`
+        : result?.error || 'Name resolution failed';
+    showSendError('recipient', message);
+    return null;
+  }
+
+  return {
+    name: result.name || name,
+    address: result.address,
+    trust: result.trust || null,
+  };
+}
+
 
 async function estimateTransactionGas() {
   const token = sendTxState.selectedToken;
@@ -799,7 +1121,11 @@ function populateSendReview() {
   const chain = walletState.registeredChains[sendTxState.chainId];
 
   if (sendReviewTo) {
-    sendReviewTo.textContent = sendTxState.recipient;
+    if (sendTxState.recipientResolution) {
+      renderRecipientReview(sendReviewTo, sendTxState.recipient, sendTxState.recipientResolution);
+    } else {
+      sendReviewTo.textContent = sendTxState.recipient;
+    }
   }
 
   if (sendReviewAmount) {
@@ -808,6 +1134,14 @@ function populateSendReview() {
 
   if (sendReviewNetwork) {
     sendReviewNetwork.textContent = chain?.name || `Chain ${sendTxState.chainId}`;
+  }
+
+  const safe = activeSafeWallet();
+  if (safe) {
+    // The executor EOA pays the execution fee, quoted after signing.
+    renderSafeFeePayer(sendReviewFee, safe.index);
+    if (sendReviewTotal) sendReviewTotal.textContent = `${sendTxState.amount} ${token?.symbol || ''}`;
+    return;
   }
 
   if (sendReviewFee && sendTxState.estimatedFee) {
@@ -827,8 +1161,83 @@ function populateSendReview() {
   }
 }
 
+function renderRecipientReview(container, address, resolution) {
+  if (resolution.warning === 'unverified') {
+    renderRecipientUnverified(container, address, resolution.claimedName);
+    return;
+  }
+
+  const { name, trust } = resolution;
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'send-review-name';
+  nameSpan.textContent = name;
+  const children = [nameSpan];
+
+  const badge = buildRecipientVerifiedBadge(trust);
+  if (badge) children.push(badge);
+  if (trust?.level === 'unverified') {
+    children.push(buildRecipientWarning(describeUnverifiedForward(name)));
+  }
+
+  const addressSpan = document.createElement('span');
+  addressSpan.className = 'send-review-recipient-address';
+  addressSpan.textContent = ` (${address})`;
+  children.push(addressSpan);
+
+  container.replaceChildren(...children);
+}
+
+// Render path for the rare case where the recipient address has a primary
+// Ethereum name set, but that name doesn't forward-resolve back to the address.
+// The claim is untrusted, so we don't display it as text — only as a
+// tooltip on the warning glyph, so a phisher can't slip a misleading
+// name onto the review screen.
+function renderRecipientUnverified(container, address, claimedName) {
+  // Address inherits monospace + 11px from the parent .send-review-address
+  // class on #send-review-to — no per-span styling needed for the bare case.
+  container.replaceChildren(
+    document.createTextNode(address),
+    buildRecipientWarning(describeUnverifiedReverse(claimedName)),
+  );
+}
+
+function buildRecipientWarning(detail) {
+  const warn = document.createElement('span');
+  warn.className = 'send-review-warning';
+  warn.textContent = '⚠';
+  warn.title = detail;
+  warn.setAttribute('aria-label', detail);
+  return warn;
+}
+
+// Verified checkmark for the recipient cell when trust is verifiable.
+// Tooltip copy is sourced from the address-bar popover's status table
+// so the two surfaces can't drift; for Colibri
+// the prover host is appended as the one inline detail this surface adds.
+function buildRecipientVerifiedBadge(trust) {
+  if (!trust) return null;
+  if (trust.level !== 'verified' && trust.level !== 'user-configured') return null;
+
+  const isColibri = trust.level === 'verified' && trust.method === 'colibri';
+  const key = isColibri ? 'verified-colibri' : trust.level;
+  let title = getTrustStatusSentence(key, trust);
+  if (!title) return null;
+  if (isColibri && trust.prover) title += ` (${trust.prover})`;
+
+  const badge = document.createElement('span');
+  badge.className = 'send-review-verified';
+  badge.textContent = '✓';
+  badge.title = title;
+  badge.setAttribute('aria-label', title);
+  return badge;
+}
+
 async function configureSendUnlockUI() {
   try {
+    if (bypassUnlockGateForDevice(walletState.activeWalletIndex, sendUnlockSection, sendConfirmBtn)) {
+      return;
+    }
+
     const status = await window.identity.getStatus();
 
     if (status.isUnlocked) {
@@ -863,9 +1272,7 @@ async function configureSendUnlockUI() {
       sendPasswordSection?.classList.add('hidden');
     }
 
-    if (hasTouchId) {
-      setTimeout(() => handleSendTouchIdUnlock(), 100);
-    }
+    return hasTouchId;
   } catch (err) {
     console.error('[WalletUI] Failed to configure send unlock UI:', err);
     sendTouchIdBtn?.classList.add('hidden');
@@ -922,6 +1329,20 @@ async function handleSendConfirm() {
   if (sendConfirmBtn) sendConfirmBtn.disabled = true;
 
   showSendPendingView();
+  const safe = activeSafeWallet();
+
+  // Claim the sidebar for the whole flight: wallet:send-transaction puts a
+  // prompt on the device that the renderer cannot recall, so no other
+  // approval surface may repaint over "Confirm on your Ledger" or tear it
+  // down. Back is the other way out of this screen and must go too — see
+  // signature-flight.js.
+  // Safe sends hand off to their own signing board, whose open path needs
+  // to replace this screen; it therefore does not take the device-flight
+  // lock here.
+  const flight = safe ? null : {};
+  sendFlight = flight;
+  if (flight) beginSignatureFlight(flight);
+  if (sendBackBtn) sendBackBtn.disabled = true;
 
   try {
     const token = sendTxState.selectedToken;
@@ -956,18 +1377,70 @@ async function handleSendConfirm() {
       txParams.data = dataResult.data;
     }
 
-    const result = await window.wallet.sendTransaction(txParams);
+    // History captures the *user-visible* counterparty + amount: the real
+    // recipient (not the ERC-20 contract address) and the atomic amount
+    // (not txParams.value which is 0 for token transfers).
+    const display = {
+      asset: token.address,
+      toAddress: sendTxState.recipient,
+      amount: amountResult.value,
+    };
+
+    if (safe) {
+      // Safe path: create the SafeTx (main silently adds the free vault
+      // signatures) and hand over to the signing board — collecting the
+      // remaining signatures is the user's task, at their pace.
+      const created = await window.wallet.safeSend(
+        safe.index,
+        { to: txParams.to, value: txParams.value, data: txParams.data },
+        {
+          ...display,
+          recipientName: sendTxState.recipientResolution?.name || null,
+          symbol: token.symbol,
+          decimals: token.decimals,
+          formattedAmount: sendTxState.amount,
+        },
+        // The chain the user actually composed on — main refuses anything
+        // the Safe does not live on rather than rebasing the calldata.
+        sendTxState.chainId
+      );
+      if (!created.success) {
+        throw new Error(created.error || 'Failed to create the transaction');
+      }
+      closeSend();
+      await openSafeSigningBoard(safe.index, created.state);
+      return;
+    }
+
+    const result = await window.wallet.sendTransaction(txParams, display);
 
     if (!result.success) {
       throw new Error(result.error || 'Transaction failed');
+    }
+    if (result.recorded === false) {
+      console.warn('[WalletUI] Transaction broadcast but payment history did not record:', result.recordError);
     }
 
     console.log('[WalletUI] Transaction sent:', result.hash);
     showSendSuccessView(result.explorerUrl);
 
+    window.dispatchEvent(new CustomEvent('wallet:tx-success', { detail: { hash: result.hash } }));
     setTimeout(() => refreshBalances(), 3000);
   } catch (err) {
     console.error('[WalletUI] Transaction failed:', err);
     showSendErrorView(err.message || 'Transaction failed');
+  } finally {
+    // The device prompt is answered (or the send never reached it), so the
+    // sidebar is free again. Guarded on identity so a superseded flight
+    // cannot release a lock a later send holds.
+    if (flight && sendFlight === flight) sendFlight = null;
+    if (flight) endSignatureFlight(flight);
+    if (sendBackBtn) sendBackBtn.disabled = false;
   }
 }
+
+export const __test__ = {
+  lookupPrimaryNameForAddress,
+  renderRecipientReview,
+  isEnsLikeName,
+};

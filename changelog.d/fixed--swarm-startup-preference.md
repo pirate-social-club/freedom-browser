@@ -1,0 +1,1 @@
+- Keep Swarm startup disabled when migrating an existing Bee preference to Ant, including the external-node prompt.

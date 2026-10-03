@@ -1,0 +1,120 @@
+name: Upstream integration validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/upstream-integration-validation.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-integration-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/integration/upstream-0.8.6-spaces') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.number == 39 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'integration/upstream-0.8.6-spaces')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up pinned Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24.14.0
+      - name: Reconcile lock and validate in a bounded disposable unit
+        shell: bash
+        env:
+          FREEDOM_SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
+          FREEDOM_OUTPUT: ${{ runner.temp }}/freedom-upstream-validation
+        run: |
+          set -euo pipefail
+          mkdir -m 700 "$FREEDOM_OUTPUT"
+          verifier_dir="/run/freedom-upstream-verifier-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo install -d -m 0755 "$verifier_dir"
+          sudo install -m 0644 ops/dependency-repair/verify-refresh-cleanup.py "$verifier_dir/verify-cleanup.py"
+          sha256sum "$verifier_dir/verify-cleanup.py" > "$FREEDOM_OUTPUT/verifier.sha256"
+          unit="freedom-upstream-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.service"
+          cleanup() {
+            printf "%s\n" "Cleanup observation before stop:" >> "$FREEDOM_OUTPUT/unit-before-cleanup.log"
+            timeout --kill-after=2s 10s sudo systemctl show "$unit" -p ActiveState -p SubState -p Result -p MainPID -p ControlPID >> "$FREEDOM_OUTPUT/unit-before-cleanup.log" 2>&1 || true
+            if timeout --kill-after=2s 10s sudo systemctl stop "$unit"; then stop_code=0; else stop_code=$?; fi
+            active_state=$(timeout --kill-after=2s 10s systemctl show "$unit" -p ActiveState --value) || active_state=unknown
+            if [ "$stop_code" -eq 0 ] && [ "$active_state" = failed ]; then
+              timeout --kill-after=2s 10s sudo systemctl reset-failed "$unit"
+            fi
+          }
+          trap cleanup EXIT
+          set +e
+          sudo systemd-run --unit="$unit" --wait --pipe \
+            --uid="$(id -u)" --gid="$(id -g)" --working-directory="$GITHUB_WORKSPACE" \
+            --property=CPUQuota=100% --property=AllowedCPUs=0 --property=CPUAffinity=0 \
+            --property=Nice=19 --property=MemoryMax=3221225472 --property=MemorySwapMax=0 \
+            --property=RuntimeMaxSec=1800 --property=TimeoutStopSec=5 --property=KillMode=control-group \
+            --setenv="PATH=$PATH" --setenv=CI=1 --setenv=NODE_OPTIONS=--max-old-space-size=1536 \
+            --setenv="FREEDOM_SOURCE=$FREEDOM_SOURCE" --setenv="FREEDOM_OUTPUT=$FREEDOM_OUTPUT" \
+            /bin/bash -euo pipefail -c '
+              test "$(git rev-parse HEAD)" = "$FREEDOM_SOURCE"
+              test -z "$(git status --porcelain)"
+              sha256sum package.json package-lock.json > "$FREEDOM_OUTPUT/source.sha256"
+              cp package.json "$FREEDOM_OUTPUT/package.json"
+              export npm_config_cache="$FREEDOM_OUTPUT/npm-cache"
+              export npm_config_fetch_retries=2 npm_config_fetch_timeout=60000
+              npm install --package-lock-only --ignore-scripts --no-audit > "$FREEDOM_OUTPUT/lock.log" 2>&1
+              cmp package.json "$FREEDOM_OUTPUT/package.json"
+              cp package-lock.json "$FREEDOM_OUTPUT/package-lock.json"
+              sha256sum package-lock.json > "$FREEDOM_OUTPUT/generated-lock.sha256"
+              npm audit --json > "$FREEDOM_OUTPUT/audit.json" 2> "$FREEDOM_OUTPUT/audit.stderr" && audit_code=0 || audit_code=$?
+              printf "%s\n" "$audit_code" > "$FREEDOM_OUTPUT/audit.exit"
+              npm ci --ignore-scripts --no-audit > "$FREEDOM_OUTPUT/install.log" 2>&1
+              npm run lint > "$FREEDOM_OUTPUT/lint.log" 2>&1 && lint_code=0 || lint_code=$?
+              printf "%s\n" "$lint_code" > "$FREEDOM_OUTPUT/lint.exit"
+              npm run test:unit -- --runInBand --forceExit --detectOpenHandles --json --outputFile="$FREEDOM_OUTPUT/tests.json" > "$FREEDOM_OUTPUT/tests.log" 2>&1 && test_code=0 || test_code=$?
+              printf "%s\n" "$test_code" > "$FREEDOM_OUTPUT/tests.exit"
+              test "$audit_code" -eq 0 && test "$lint_code" -eq 0 && test "$test_code" -eq 0
+            '
+          validation_code=$?
+          set -e
+          printf '%s\n' "$validation_code" > "$FREEDOM_OUTPUT/validation.exit"
+          cleanup
+          sha256sum --check "$FREEDOM_OUTPUT/verifier.sha256"
+          python3 "$verifier_dir/verify-cleanup.py" "$unit" "$FREEDOM_OUTPUT" "$stop_code"
+          exit "$validation_code"
+      - name: Confirm unit cleanup
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          unit="freedom-upstream-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.service"
+          if timeout --kill-after=2s 10s sudo systemctl stop "$unit"; then stop_code=0; else stop_code=$?; fi
+          active_state=$(timeout --kill-after=2s 10s systemctl show "$unit" -p ActiveState --value) || active_state=unknown
+          if [ "$stop_code" -eq 0 ] && [ "$active_state" = failed ]; then
+            timeout --kill-after=2s 10s sudo systemctl reset-failed "$unit"
+          fi
+          verifier_dir="/run/freedom-upstream-verifier-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sha256sum --check "${{ runner.temp }}/freedom-upstream-validation/verifier.sha256"
+          python3 "$verifier_dir/verify-cleanup.py" "$unit" "${{ runner.temp }}/freedom-upstream-validation" "$stop_code"
+      - name: Retain generated lock and verification results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: upstream-integration-validation
+          path: |
+            ${{ runner.temp }}/freedom-upstream-validation/*.json
+            ${{ runner.temp }}/freedom-upstream-validation/*.log
+            ${{ runner.temp }}/freedom-upstream-validation/*.stderr
+            ${{ runner.temp }}/freedom-upstream-validation/*.sha256
+            ${{ runner.temp }}/freedom-upstream-validation/*.exit
+            ${{ runner.temp }}/freedom-upstream-validation/public/cleanup.json
+          if-no-files-found: error
+          retention-days: 7

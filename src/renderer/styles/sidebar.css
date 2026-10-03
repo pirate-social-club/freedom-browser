@@ -40,6 +40,7 @@
   flex-direction: column;
   height: 100%;
   width: 320px; /* Fixed width to prevent content reflow */
+  position: relative; /* Anchor for .sidebar-modal absolute positioning */
 }
 
 /* ============================================
@@ -92,8 +93,15 @@
   transition: color 0.15s ease, border-color 0.15s ease;
 }
 
-.sidebar-tab:hover {
+.sidebar-tab:hover:not(:disabled) {
   color: var(--text);
+}
+
+/* A device confirmation owns the sidebar until it is answered, so the
+   header chrome that would tear it down goes dead with it. */
+.sidebar-tab:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .sidebar-tab.active {
@@ -211,9 +219,14 @@
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 
-.sidebar-close:hover {
+.sidebar-close:hover:not(:disabled) {
   background-color: rgba(255, 255, 255, 0.1);
   color: var(--text);
+}
+
+.sidebar-close:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .sidebar-close svg {
@@ -268,36 +281,40 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   padding: 0;
+  margin: 0 1px;
   background: transparent;
   border: none;
-  border-radius: 6px;
-  color: var(--muted);
-  cursor: default;
-  transition: background-color 0.15s ease, color 0.15s ease;
-}
-
-.wallet-toggle-btn:hover {
-  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
   color: var(--text);
+  cursor: default;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-.wallet-toggle-btn.active {
-  color: var(--accent);
-  background-color: rgba(138, 180, 248, 0.15);
+.wallet-toggle-btn:hover:not(:disabled),
+.wallet-toggle-btn[aria-expanded='true'] {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.wallet-toggle-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .wallet-toggle-btn svg {
-  width: 20px;
-  height: 20px;
+  width: 15px;
+  height: 15px;
 }
 
 /* ============================================
    Setup CTA (No vault state)
    ============================================ */
 
+/* Private-window state: same layout as the setup CTA, minus the call to
+   action — there is nothing to set up from a private window. */
+.sidebar-private-notice,
 .sidebar-setup-cta {
   display: flex;
   flex-direction: column;
@@ -477,7 +494,8 @@
   transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
 }
 
-.node-identity-row:hover .node-copy-btn {
+.node-identity-row:hover .node-copy-btn,
+.node-info-row:hover .node-copy-btn {
   opacity: 1;
 }
 
@@ -503,41 +521,6 @@
   gap: 8px;
 }
 
-.rpc-provider-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px;
-  background: rgba(255, 255, 255, 0.03);
-  border-radius: 6px;
-}
-
-.rpc-provider-info {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.rpc-provider-name {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-}
-
-.rpc-provider-status {
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.rpc-provider-status.configured {
-  color: #4caf50;
-}
-
-.rpc-provider-actions {
-  display: flex;
-  gap: 8px;
-}
-
 .rpc-provider-btn {
   padding: 4px 10px;
   font-size: 11px;
@@ -555,205 +538,7 @@
   border-color: var(--text);
 }
 
-.rpc-provider-btn.remove {
-  color: var(--danger);
-}
-
-.rpc-provider-btn.remove:hover {
-  background: rgba(244, 67, 54, 0.1);
-  border-color: var(--danger);
-}
-
-/* RPC API Key Subscreen */
-.rpc-apikey-description {
-  font-size: 13px;
-  color: var(--muted);
-  margin-bottom: 20px;
-  line-height: 1.5;
-}
-
-.rpc-apikey-link {
-  color: var(--accent);
-  text-decoration: none;
-}
-
-.rpc-apikey-link:hover {
-  text-decoration: underline;
-}
-
-.rpc-apikey-form {
-  margin-bottom: 24px;
-}
-
-.rpc-apikey-label {
-  display: block;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--muted);
-  margin-bottom: 8px;
-}
-
-.rpc-apikey-input-group {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.rpc-apikey-input {
-  flex: 1;
-  padding: 10px 12px;
-  font-size: 13px;
-  font-family: monospace;
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  outline: none;
-  transition: border-color 0.15s ease;
-}
-
-.rpc-apikey-input:focus {
-  border-color: var(--accent);
-}
-
-.rpc-apikey-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  padding: 0;
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease;
-}
-
-.rpc-apikey-toggle:hover {
-  color: var(--text);
-  border-color: var(--text);
-}
-
-.rpc-apikey-toggle svg {
-  width: 18px;
-  height: 18px;
-}
-
-.rpc-apikey-test-btn {
-  width: 100%;
-  padding: 10px 16px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
-}
-
-.rpc-apikey-test-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: var(--text);
-}
-
-.rpc-apikey-test-status {
-  margin-top: 12px;
-  padding: 10px 12px;
-  font-size: 12px;
-  border-radius: 6px;
-}
-
-.rpc-apikey-test-status.hidden {
-  display: none;
-}
-
-.rpc-apikey-test-status.success {
-  color: #4caf50;
-  background: rgba(76, 175, 80, 0.1);
-  border: 1px solid rgba(76, 175, 80, 0.3);
-}
-
-.rpc-apikey-test-status.error {
-  color: var(--danger);
-  background: rgba(244, 67, 54, 0.1);
-  border: 1px solid rgba(244, 67, 54, 0.3);
-}
-
-.rpc-apikey-test-status.testing {
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--border);
-}
-
-.rpc-apikey-actions {
-  display: flex;
-  gap: 12px;
-}
-
-.rpc-apikey-cancel-btn,
-.rpc-apikey-save-btn {
-  flex: 1;
-  padding: 12px 16px;
-  font-size: 13px;
-  font-weight: 500;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
-}
-
-.rpc-apikey-cancel-btn {
-  color: var(--text);
-  background: transparent;
-  border: 1px solid var(--border);
-}
-
-.rpc-apikey-cancel-btn:hover {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: var(--text);
-}
-
-.rpc-apikey-save-btn {
-  color: #fff;
-  background: var(--accent);
-  border: 1px solid var(--accent);
-}
-
-.rpc-apikey-save-btn:hover {
-  background: var(--accent-hover, var(--accent));
-  filter: brightness(1.1);
-}
-
-.rpc-apikey-save-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* Light theme - RPC API Key */
-[data-theme="light"] .rpc-apikey-input {
-  background: rgba(0, 0, 0, 0.03);
-}
-
-[data-theme="light"] .rpc-apikey-toggle {
-  background: rgba(0, 0, 0, 0.03);
-}
-
-[data-theme="light"] .rpc-apikey-test-btn {
-  background: rgba(0, 0, 0, 0.05);
-}
-
-[data-theme="light"] .rpc-apikey-cancel-btn:hover {
-  background: rgba(0, 0, 0, 0.03);
-}
-
 /* Light theme - Settings sections */
-[data-theme="light"] .rpc-provider-item {
-  background: rgba(0, 0, 0, 0.03);
-}
-
 [data-theme="light"] .rpc-provider-btn {
   background: rgba(0, 0, 0, 0.05);
 }
@@ -863,16 +648,13 @@
   background-color: var(--toolbar);
 }
 
-[data-theme="light"] .sidebar-close:hover {
+[data-theme="light"] .sidebar-close:hover:not(:disabled) {
   background-color: rgba(0, 0, 0, 0.05);
 }
 
-[data-theme="light"] .wallet-toggle-btn:hover {
-  background-color: rgba(0, 0, 0, 0.05);
-}
-
-[data-theme="light"] .wallet-toggle-btn.active {
-  background-color: rgba(26, 115, 232, 0.1);
+[data-theme="light"] .wallet-toggle-btn:hover:not(:disabled),
+[data-theme="light"] .wallet-toggle-btn[aria-expanded='true'] {
+  background-color: rgba(0, 0, 0, 0.1);
 }
 
 /* ============================================
@@ -914,6 +696,23 @@
   height: 100%;
 }
 
+/* Modal subscreens overlay the entire sidebar content area, covering
+   the tab bar. Used for externally-triggered prompts (dApp/Swarm
+   permission requests) that need an answer before the user can
+   interact with anything else in the sidebar. */
+.sidebar-subscreen.sidebar-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  background: var(--toolbar);
+}
+
+/* The remote-signing QR panel overlays the approval modals themselves
+   (it appears after the user already confirmed in one of them). */
+.sidebar-subscreen.remote-signing-panel {
+  z-index: 60;
+}
+
 .subscreen-header {
   display: flex;
   align-items: center;
@@ -936,8 +735,13 @@
   transition: background-color 0.15s ease;
 }
 
-.subscreen-back-btn:hover {
+.subscreen-back-btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.05);
+}
+
+.subscreen-back-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .subscreen-back-btn svg {
@@ -1035,10 +839,6 @@
   border-radius: 8px;
   outline: none;
   transition: border-color 0.15s ease;
-}
-
-.password-input:focus {
-  border-color: var(--accent);
 }
 
 .password-input::placeholder {
@@ -1549,6 +1349,132 @@
   color: var(--text-inverse);
 }
 
+/* Recent payments mini-section (5 rows; "View all" opens freedom://payments) */
+.recent-payments {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.recent-payments-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.recent-payments-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.recent-payments-link {
+  font-size: 12px;
+  color: #2775ca;
+  text-decoration: none;
+}
+
+.recent-payments-link:hover {
+  text-decoration: underline;
+}
+
+.recent-payments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.recent-payment-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.recent-payment-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.recent-payment-amount {
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.recent-payment-counterparty {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-payment-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.recent-payment-when {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.recent-payment-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.recent-payment-status::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.recent-payment-status.settled,
+.recent-payment-status.confirmed { color: #56d364; }
+.recent-payment-status.pending   { color: #d29922; }
+.recent-payment-status.failed    { color: #f85149; }
+.recent-payment-status.no-receipt { color: #8b949e; }
+
+.recent-payments-empty {
+  padding: 16px 10px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+[data-theme="light"] .recent-payment-row {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .recent-payment-status.settled,
+[data-theme="light"] .recent-payment-status.confirmed { color: #1f7a34; }
+[data-theme="light"] .recent-payment-status.pending   { color: #8a5a07; }
+[data-theme="light"] .recent-payment-status.failed    { color: #b3261e; }
+
 /* ============================================
    Node Cards (Collapsible)
    ============================================ */
@@ -1711,6 +1637,74 @@
   font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
 }
 
+.node-section-header {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.node-section-address {
+  font-size: 11px;
+  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+  color: var(--muted);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-copy-btn-inline {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--muted);
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.node-copy-btn-inline:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.node-copy-btn-inline svg {
+  width: 12px;
+  height: 12px;
+}
+
+.node-copy-btn-inline.copied {
+  color: #4caf50;
+}
+
+[data-theme="light"] .node-copy-btn-inline:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.node-balance-clickable {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  transition: background-color 0.15s ease;
+}
+
+.node-balance-clickable:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="light"] .node-balance-clickable:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
 /* Node balance rows */
 .node-balance-row {
   display: flex;
@@ -1729,6 +1723,550 @@
   font-weight: 600;
   font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
   color: var(--text);
+}
+
+/* ============================================
+   Publish Setup Checklist
+   ============================================ */
+
+.publish-setup-intro {
+  margin: 0 0 20px 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.publish-setup-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.publish-step {
+  display: flex;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.publish-step:last-child {
+  border-bottom: none;
+}
+
+.publish-step-indicator {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.publish-step-number {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.publish-step-check {
+  display: none;
+  width: 14px;
+  height: 14px;
+}
+
+/* Step states */
+.publish-step[data-status="pending"] {
+  opacity: 0.45;
+}
+
+.publish-step[data-status="active"] .publish-step-indicator {
+  background: rgba(26, 115, 232, 0.15);
+}
+
+.publish-step[data-status="active"] .publish-step-number {
+  color: var(--accent);
+}
+
+.publish-step[data-status="waiting"] .publish-step-indicator {
+  background: rgba(255, 152, 0, 0.15);
+}
+
+.publish-step[data-status="waiting"] .publish-step-number {
+  color: #ff9800;
+}
+
+.publish-step[data-status="complete"] .publish-step-indicator {
+  background: rgba(76, 175, 80, 0.15);
+}
+
+.publish-step[data-status="complete"] .publish-step-number {
+  display: none;
+}
+
+.publish-step[data-status="complete"] .publish-step-check {
+  display: block;
+  color: #4caf50;
+}
+
+.publish-step-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.publish-step-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.publish-step-detail {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.publish-step-meta {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-mono, monospace);
+}
+
+/* ============================================
+   Stamp Manager
+   ============================================ */
+
+/* Batch list */
+.stamp-batch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.stamp-batch-card {
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+
+.stamp-batch-card.unusable {
+  opacity: 0.6;
+}
+
+.stamp-batch-status {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+.stamp-batch-status[data-status="usable"] {
+  background: rgba(76, 175, 80, 0.15);
+  color: #4caf50;
+}
+
+.stamp-batch-status[data-status="unusable"] {
+  background: rgba(255, 152, 0, 0.15);
+  color: #ff9800;
+}
+
+.stamp-batch-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 0;
+}
+
+.stamp-batch-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.stamp-batch-value {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.stamp-batch-id {
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--font-mono, monospace);
+  cursor: default;
+}
+
+.stamp-buy-another-btn {
+  width: 100%;
+  padding: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  background: rgba(26, 115, 232, 0.08);
+  border: 1px solid rgba(26, 115, 232, 0.25);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.stamp-buy-another-btn:hover {
+  background: rgba(26, 115, 232, 0.15);
+}
+
+/* TTL expiry warnings */
+.stamp-batch-value.ttl-warn {
+  color: #ff9800;
+}
+
+.stamp-batch-value.ttl-critical {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* Batch card actions */
+.stamp-batch-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.stamp-batch-action-btn {
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  background: rgba(26, 115, 232, 0.08);
+  border: 1px solid rgba(26, 115, 232, 0.2);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.stamp-batch-action-btn:hover {
+  background: rgba(26, 115, 232, 0.15);
+}
+
+/* Extension form (inline) */
+.stamp-extend-form {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.stamp-extend-heading {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.stamp-extend-presets {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.stamp-extend-preset-btn {
+  flex: 1;
+  padding: 5px 4px;
+  font-size: 11px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.stamp-extend-preset-btn:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.stamp-extend-preset-btn.selected {
+  color: var(--accent);
+  background: rgba(26, 115, 232, 0.1);
+  border-color: rgba(26, 115, 232, 0.35);
+}
+
+.stamp-extend-cost {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.stamp-extend-confirm-btn {
+  width: 100%;
+  padding: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.stamp-extend-confirm-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.stamp-extend-confirm-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.stamp-extend-status {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #ff9800;
+}
+
+.stamp-extend-status.success {
+  color: #4caf50;
+}
+
+.stamp-extend-status.error {
+  color: var(--danger);
+}
+
+.stamp-extend-cancel-btn {
+  margin-top: 6px;
+  padding: 5px 12px;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.stamp-extend-cancel-btn:hover {
+  color: var(--text);
+}
+
+[data-theme="light"] .stamp-batch-card {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="light"] .stamp-extend-form {
+  border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .stamp-extend-preset-btn {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+/* Purchase form */
+.stamp-manager-intro {
+  margin: 0 0 16px 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.stamp-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.stamp-preset-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.stamp-preset-btn:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.stamp-preset-btn.selected {
+  background: rgba(26, 115, 232, 0.1);
+  border-color: rgba(26, 115, 232, 0.4);
+}
+
+.stamp-preset-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.stamp-preset-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.stamp-preset-desc {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.stamp-cost-section {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+}
+
+.stamp-cost-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.stamp-cost-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.stamp-cost-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.stamp-cost-spinner {
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.stamp-balance-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.stamp-balance {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.stamp-purchase-btn {
+  width: 100%;
+  padding: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.stamp-purchase-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.stamp-purchase-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.stamp-purchase-status {
+  margin-top: 12px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: #ff9800;
+  background: rgba(255, 152, 0, 0.08);
+  border-radius: 6px;
+  line-height: 1.4;
+}
+
+.stamp-purchase-error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--danger);
+  background: rgba(244, 67, 54, 0.08);
+  border-radius: 6px;
+  line-height: 1.4;
+}
+
+.stamp-retry-btn {
+  margin-top: 8px;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+  background: rgba(26, 115, 232, 0.1);
+  border: 1px solid rgba(26, 115, 232, 0.25);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.stamp-retry-btn:hover {
+  background: rgba(26, 115, 232, 0.18);
+}
+
+[data-theme="light"] .stamp-preset-btn {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="light"] .stamp-preset-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .stamp-cost-section {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.publish-step-btn {
+  margin-top: 8px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+  background: rgba(26, 115, 232, 0.1);
+  border: 1px solid rgba(26, 115, 232, 0.25);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.publish-step-btn:hover {
+  background: rgba(26, 115, 232, 0.18);
+}
+
+.publish-step-waiting {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #ff9800;
+  font-style: italic;
+}
+
+[data-theme="light"] .publish-step {
+  border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .publish-step-indicator {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="light"] .publish-step[data-status="active"] .publish-step-indicator {
+  background: rgba(26, 115, 232, 0.1);
 }
 
 /* Node stamps */
@@ -1820,6 +2358,7 @@
 [data-theme="light"] .node-stamps-count {
   background: rgba(0, 0, 0, 0.08);
 }
+
 
 [data-theme="light"] .node-upgrade-btn {
   background: rgba(26, 115, 232, 0.08);
@@ -1920,6 +2459,1082 @@
 [data-theme="light"] .dapp-connection-banner {
   background: rgba(34, 197, 94, 0.08);
   border-color: rgba(34, 197, 94, 0.25);
+}
+
+/* ============================================
+   Swarm Connection Banner
+   ============================================ */
+
+.swarm-connection-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 8px;
+}
+
+.swarm-connection-banner.hidden {
+  display: none;
+}
+
+.swarm-connection-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.swarm-connection-indicator {
+  width: 8px;
+  height: 8px;
+  background: #f59e0b;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.swarm-connection-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.swarm-connection-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.swarm-connection-site {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.swarm-connection-disconnect {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.swarm-connection-disconnect:hover {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.swarm-connection-disconnect svg {
+  width: 14px;
+  height: 14px;
+}
+
+[data-theme="light"] .swarm-connection-banner {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.25);
+}
+
+/* ============================================
+   x402 Auto-Pay Banner
+   ============================================ */
+
+.x402-connection-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: rgba(39, 117, 202, 0.1);
+  border: 1px solid rgba(39, 117, 202, 0.3);
+  border-radius: 8px;
+}
+
+.x402-connection-banner.hidden {
+  display: none;
+}
+
+.x402-connection-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+  cursor: pointer;
+}
+
+.x402-connection-indicator {
+  width: 8px;
+  height: 8px;
+  background: #2775ca;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.x402-connection-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.x402-connection-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.x402-connection-site {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.x402-connection-remaining {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.x402-connection-disconnect {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.x402-connection-disconnect:hover {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.x402-connection-disconnect svg {
+  width: 14px;
+  height: 14px;
+}
+
+[data-theme="light"] .x402-connection-banner {
+  background: rgba(39, 117, 202, 0.08);
+  border-color: rgba(39, 117, 202, 0.25);
+}
+
+.x402-perms-error {
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  border-radius: 6px;
+  background: rgba(239, 68, 68, 0.1);
+  color: #f87171;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* x402 permissions subscreen — per-allowance card */
+.x402-perm-block {
+  padding: 14px;
+  margin-bottom: 12px;
+  background: rgba(39, 117, 202, 0.05);
+  border: 1px solid rgba(39, 117, 202, 0.18);
+  border-radius: 10px;
+}
+
+.x402-perm-block:last-child {
+  margin-bottom: 0;
+}
+
+.x402-perm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.x402-perm-asset-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--foreground);
+  letter-spacing: 0.01em;
+}
+
+.x402-perm-chain-badge {
+  font-size: 11px;
+  font-weight: 500;
+  color: #2775ca;
+  background: rgba(39, 117, 202, 0.12);
+  padding: 3px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.x402-perm-usage {
+  margin-bottom: 8px;
+}
+
+.x402-perm-usage-summary {
+  font-size: 12px;
+  color: var(--foreground);
+  margin-bottom: 6px;
+}
+
+.x402-perm-bar {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.x402-perm-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2775ca, #5a9eee);
+  border-radius: 4px;
+  transition: width 0.2s ease;
+}
+
+.x402-perm-expiry {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+.x402-perm-divider {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  padding: 8px 0 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  margin-top: 4px;
+}
+
+.x402-perm-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.x402-perm-field label {
+  font-size: 12px;
+  color: var(--muted);
+  flex: 1;
+}
+
+.x402-perm-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.x402-perm-input,
+.x402-perm-select {
+  background: rgba(127, 127, 127, 0.08);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font-size: 13px;
+  color: var(--foreground);
+  font-family: inherit;
+  min-width: 0;
+}
+
+.x402-perm-input {
+  width: 90px;
+  padding-right: 50px;
+  text-align: right;
+}
+
+.x402-perm-select {
+  width: 130px;
+}
+
+.x402-perm-input::-webkit-outer-spin-button,
+.x402-perm-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.x402-perm-input-suffix {
+  position: absolute;
+  right: 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+/* --- x402 grant editor on the approval card ----------------------- */
+/* Checkbox + inline editors for cap amount + reset window. Shares
+   visual language with the perm-manage subscreen so users see the
+   same controls in both surfaces. Inputs stay enabled when the
+   toggle is off — the user can pre-tune before opting in. */
+.x402-grant {
+  background: var(--toolbar);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 16px;
+}
+
+.x402-grant-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--foreground);
+}
+
+.x402-grant-toggle input[type="checkbox"] {
+  flex-shrink: 0;
+}
+
+.x402-grant-toggle-label {
+  font-weight: 500;
+}
+
+.x402-grant-ledger-note {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.x402-grant-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.x402-grant-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.x402-grant-field-label {
+  font-size: 12px;
+  color: var(--foreground-muted);
+  flex: 1;
+}
+
+.x402-grant-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.x402-grant input[type="number"],
+.x402-grant-select {
+  background: rgba(127, 127, 127, 0.08);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font-size: 13px;
+  color: var(--foreground);
+  font-family: inherit;
+}
+
+.x402-grant input[type="number"] {
+  width: 100px;
+  padding-right: 56px;
+  text-align: right;
+}
+
+.x402-grant-select {
+  width: 130px;
+}
+
+.x402-grant input[type="number"]::-webkit-outer-spin-button,
+.x402-grant input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.x402-grant-input-suffix {
+  position: absolute;
+  right: 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--foreground-muted);
+  pointer-events: none;
+}
+
+/* Visual hint that the inputs are inert when the toggle is off —
+   keep them clickable (`:has` works fine on Electron Chromium) so
+   the user can pre-tune values before deciding to opt in. */
+.x402-grant:not(:has(input[type="checkbox"]:checked)) .x402-grant-fields {
+  opacity: 0.6;
+}
+
+.x402-perm-meta {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+[data-theme="light"] .x402-perm-block {
+  background: rgba(39, 117, 202, 0.04);
+  border-color: rgba(39, 117, 202, 0.18);
+}
+
+[data-theme="light"] .x402-perm-bar {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .x402-perm-divider {
+  border-top-color: rgba(0, 0, 0, 0.06);
+}
+
+/* ============================================
+   Swarm Connect Screen
+   ============================================ */
+
+.swarm-connect-origin {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 24px 0;
+  margin-bottom: 20px;
+}
+
+.swarm-connect-site {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--foreground);
+  word-break: break-all;
+}
+
+.swarm-connect-wants {
+  font-size: 14px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+.swarm-connect-permissions,
+.swarm-connect-cannot {
+  background: var(--toolbar);
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 16px;
+}
+
+.swarm-connect-permissions-title,
+.swarm-connect-cannot-title {
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.swarm-connect-permissions-list,
+.swarm-connect-cannot-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.swarm-connect-permissions-list li,
+.swarm-connect-cannot-list li {
+  font-size: 13px;
+  color: var(--foreground);
+  padding: 4px 0;
+  padding-left: 16px;
+  position: relative;
+}
+
+.swarm-connect-permissions-list li::before {
+  content: "\2713";
+  position: absolute;
+  left: 0;
+  color: #22c55e;
+  font-weight: 700;
+}
+
+.swarm-connect-cannot-list li::before {
+  content: "\2717";
+  position: absolute;
+  left: 0;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+/* Callouts on the Swarm/Radicle approval screens. Two kinds, the same pair the
+   dApp screens already use (#239): amber + triangle glyph warns about the
+   consequence of the action being confirmed (`.dapp-tx-warning`), blue + "i"
+   glyph explains what the access being granted means (`.dapp-sign-warning`).
+   The icon lives in the markup, so a callout that changes kind changes both. */
+.swarm-connect-warning,
+.swarm-connect-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  margin-bottom: 16px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--foreground);
+  line-height: 1.4;
+}
+
+.swarm-connect-warning svg,
+.swarm-connect-note svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: #f59e0b;
+  margin-top: 1px;
+}
+
+.swarm-connect-note {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.3);
+}
+
+.swarm-connect-note svg {
+  color: rgb(59, 130, 246);
+}
+
+.auto-approve-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-radius: 4px;
+  background: rgba(99, 102, 241, 0.15);
+  color: var(--accent, #6366f1);
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+
+.dapp-connection-info,
+.swarm-connection-info {
+  cursor: pointer;
+}
+
+/* Manage-permissions screens (Wallet / Auto-pay / Swarm). These paint from the
+   palette in styles/variables.css — `--text`, `--muted`, `--border` — like the
+   rest of the sidebar. They used to quote `--text-primary`/`--text-secondary`/
+   `--text-tertiary`/`--bg-elevated`, which are defined nowhere, so the dark
+   literal fallback won in both themes and the site origin rendered white on
+   the light theme's white sidebar (#249). See styles/theme-tokens.test.js. */
+.perms-site {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 8px 0 16px;
+  word-break: break-all;
+}
+
+.perms-section {
+  margin-bottom: 16px;
+}
+
+.perms-section-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.perms-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border, rgba(255,255,255,0.06));
+}
+
+.perms-label {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.perms-tx-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.perms-empty {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 8px 0;
+}
+
+.perms-tx-rule {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(127, 127, 127, 0.12);
+}
+
+.perms-tx-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.perms-tx-addr,
+.perms-tx-selector {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  color: var(--muted);
+}
+
+.perms-tx-chain {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.perms-tx-remove {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  font-size: 11px;
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.perms-tx-remove:hover {
+  border-color: var(--danger, #ef4444);
+  color: var(--danger, #ef4444);
+}
+
+.perms-disconnect-btn {
+  width: 100%;
+  padding: 10px;
+  margin-top: 24px;
+  border: 1px solid var(--danger, #ef4444);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--danger, #ef4444);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.perms-disconnect-btn:hover {
+  background: var(--danger, #ef4444);
+  color: #fff;
+}
+
+.perms-actions {
+  margin-top: auto;
+}
+
+.auto-approve-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 16px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.auto-approve-checkbox input[type="checkbox"] {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.swarm-connect-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.swarm-manifest-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.swarm-manifest-row {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.swarm-manifest-row-title {
+  font-weight: 600;
+}
+
+.swarm-manifest-row-detail,
+.swarm-manifest-description,
+.swarm-manifest-choice-note {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.swarm-manifest-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.swarm-connect-reject-btn,
+.swarm-connect-approve-btn {
+  flex: 1;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+}
+
+.swarm-connect-reject-btn {
+  background: var(--toolbar);
+  color: var(--foreground);
+  border-color: var(--border);
+}
+
+.swarm-connect-reject-btn:hover {
+  background: var(--hover);
+}
+
+/* The one approval primary: filled `--accent`, like `.dapp-tx-approve-btn`,
+   `.dapp-connect-approve-btn` and the wallet's own Confirm. These screens used
+   to fill themselves `#f59e0b` (orange), which read as a different, more
+   alarming class of action than the blue Confirm/Sign/Connect sitting next to
+   them in the same sidebar (#239). */
+.swarm-connect-approve-btn {
+  background: var(--accent);
+  color: #fff;
+}
+
+.swarm-connect-approve-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.swarm-connect-approve-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ============================================
+   Swarm Publish Approval Details
+   ============================================ */
+
+.swarm-publish-details {
+  background: var(--toolbar);
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 16px;
+}
+
+.swarm-publish-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+}
+
+.swarm-publish-row + .swarm-publish-row {
+  border-top: 1px solid var(--border);
+}
+
+.swarm-publish-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.swarm-publish-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--foreground);
+  text-align: right;
+  word-break: break-all;
+}
+
+/* ============================================
+   Swarm Feed Identity Choice
+   ============================================ */
+
+.swarm-feed-identity-choice {
+  margin-bottom: 16px;
+}
+
+.swarm-feed-identity-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--foreground);
+  margin-bottom: 10px;
+}
+
+/* Feed Access renders its picker into `#swarm-feed-identity-selector` through
+   `publisher-identity-selector.js`, which brings its own `.wallet-selector-*`
+   classes. The hand-rolled radio list and "current identity" card this section
+   used to style are gone from the markup; their rules were removed with #239's
+   amber sweep, since two of them (the radio `accent-color` / checked border and
+   the manage button's text colour) were the last `#f59e0b` left on this screen
+   and would have put orange back next to the blue primary if the markup ever
+   came back. The two rules above are the section's only live ones. */
+
+/* ============================================
+   Publisher Identities List
+   ============================================ */
+
+.publisher-identity-search {
+  margin-bottom: 12px;
+}
+
+.publisher-identity-search input {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--toolbar);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--foreground);
+  font-size: 13px;
+}
+
+.publisher-identity-search input::placeholder {
+  color: var(--muted);
+}
+
+.publisher-identity-item {
+  display: block;
+  width: 100%;
+  background: var(--toolbar);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.publisher-identity-item:hover {
+  background: var(--hover);
+}
+
+.publisher-identity-item.is-active {
+  border-color: #f59e0b;
+}
+
+.publisher-identity-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.publisher-identity-origin {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.publisher-identity-grant-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  flex-shrink: 0;
+}
+
+.publisher-identity-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.publisher-identity-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.badge-app-scoped {
+  background: #f59e0b20;
+  color: #f59e0b;
+}
+
+.badge-bee-wallet {
+  background: #3b82f620;
+  color: #3b82f6;
+}
+
+.badge-ethereum-wallet {
+  background: #22c55e20;
+  color: #22c55e;
+}
+
+.publisher-identity-feeds {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.publisher-identity-detail,
+.publisher-identity-current {
+  margin-bottom: 12px;
+}
+
+.publisher-identity-current {
+  padding: 12px;
+  background: var(--toolbar);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.publisher-identity-current-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--foreground);
+  margin-bottom: 4px;
+}
+
+.publisher-identity-current-desc,
+.publisher-identity-note,
+.publisher-identity-address {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.publisher-identity-detail-list {
+  margin-bottom: 12px;
+}
+
+.publisher-identity-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.publisher-identity-action-btn,
+.publisher-identity-manage-btn,
+.publisher-identity-use-btn {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--toolbar);
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.publisher-identity-manage-btn,
+.publisher-identity-use-btn {
+  margin-top: 8px;
+}
+
+.publisher-identity-use-btn:disabled {
+  color: var(--muted);
+  cursor: default;
+  opacity: 0.7;
+}
+
+.publisher-identity-note {
+  margin-top: 10px;
+}
+
+.publisher-identity-empty {
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 24px 0;
+}
+
+.publisher-identity-selector {
+  margin-bottom: 10px;
+}
+
+.publisher-identity-selector .wallet-selector-dropdown {
+  z-index: 200;
+}
+
+.publisher-identity-selector-item .wallet-selector-item-info {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.publisher-identity-mode {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.publisher-identity-unavailable {
+  font-size: 11px;
+  color: var(--danger);
+}
+
+.publisher-identity-selector-item.unavailable {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.publisher-identity-create-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.publisher-identity-create-actions > button {
+  flex: 1;
+  margin-top: 0;
+  min-height: 40px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 /* ============================================
@@ -2168,10 +3783,6 @@
   box-sizing: border-box;
 }
 
-.create-wallet-input:focus {
-  border-color: var(--accent);
-}
-
 .create-wallet-input::placeholder {
   color: var(--muted);
 }
@@ -2266,6 +3877,193 @@
 
 .create-wallet-done-btn:hover {
   opacity: 0.9;
+}
+
+/* Connect Ledger sub-screen */
+/* Same pill recipe as .auto-approve-badge, sized for the selector rows */
+.wallet-selector-item-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--accent, #6366f1);
+  background: rgba(99, 102, 241, 0.15);
+  border-radius: 4px;
+  vertical-align: 1px;
+}
+
+.connect-ledger-illustration {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 8px auto 16px;
+  width: 72px;
+  height: 72px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+}
+
+.connect-ledger-illustration svg {
+  width: 40px;
+  height: 40px;
+}
+
+.connect-ledger-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.connect-ledger-status-spinner {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+/* Detection failed: the spinner is hidden from JS, so the line is text only. */
+.connect-ledger-status-failed {
+  color: var(--danger);
+}
+
+.connect-ledger-scheme-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.connect-ledger-scheme-select {
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+}
+
+.connect-ledger-account-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.connect-ledger-loading {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.connect-ledger-account {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.connect-ledger-account:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.connect-ledger-account.selected {
+  border-color: var(--accent);
+  background: rgba(138, 180, 248, 0.1);
+}
+
+.connect-ledger-account.added {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.connect-ledger-account-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.connect-ledger-account-address {
+  font-size: 12px;
+  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+  color: var(--text);
+}
+
+.connect-ledger-account-path {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.connect-ledger-account-added {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.connect-ledger-load-more {
+  display: block;
+  width: 100%;
+  margin: 8px 0 12px;
+  padding: 8px;
+  font-size: 12px;
+  color: var(--accent);
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.connect-ledger-load-more:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.connect-ledger-load-more:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+[data-theme="light"] .connect-ledger-illustration,
+[data-theme="light"] .connect-ledger-account {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+[data-theme="light"] .connect-ledger-account:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="light"] .connect-ledger-account.selected {
+  background: rgba(26, 115, 232, 0.08);
+}
+
+[data-theme="light"] .connect-ledger-scheme-select {
+  background: rgba(0, 0, 0, 0.05);
 }
 
 /* Light theme wallet selector */
@@ -2428,6 +4226,29 @@
   height: 20px;
   border-radius: 50%;
   object-fit: contain;
+}
+
+/* Placeholder for chains with no logo asset (user-added custom chains):
+   an initial-letter circle, mirroring the token .asset-logo-placeholder
+   treatment at the chain-icon size. Used by the switcher button and the
+   dropdown rows. */
+.chain-switcher-logo-fallback {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--muted);
+  color: var(--bg);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+[data-theme="light"] .chain-switcher-logo-fallback {
+  color: var(--text-inverse);
 }
 
 .chain-switcher-item-name {
@@ -2623,21 +4444,31 @@
   margin: 0 0 16px 0;
 }
 
+/* Destructive actions are outlined `--danger`, never filled (#259) — the same
+   treatment as `.perms-disconnect-btn` above and `.btn.danger` on the internal
+   pages, so deleting a wallet does not read as the screen's primary action. */
 .wallet-settings-delete-btn {
   width: 100%;
   padding: 10px 16px;
   font-size: 13px;
   font-weight: 500;
-  color: #fff;
-  background: var(--danger);
-  border: none;
+  color: var(--danger);
+  background: transparent;
+  border: 1px solid var(--danger);
   border-radius: 6px;
   cursor: pointer;
-  transition: opacity 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease;
 }
 
-.wallet-settings-delete-btn:hover {
-  opacity: 0.9;
+/* `:not(:disabled)` like every other hover in this sheet: the main wallet
+   cannot be deleted (wallet-settings.js), and an inverted fill would read as
+   an enabled primary action through the disabled state's 0.5 opacity. */
+.wallet-settings-delete-btn:hover:not(:disabled) {
+  background: var(--danger);
+  color: #fff;
 }
 
 .wallet-settings-delete-btn:disabled {
@@ -2862,7 +4693,6 @@
 }
 
 .send-input:focus {
-  border-color: var(--accent);
   background: rgba(255, 255, 255, 0.08);
 }
 
@@ -3074,15 +4904,6 @@
   margin-top: 6px;
 }
 
-/* Resolved address display */
-.send-resolved-address {
-  font-size: 12px;
-  color: var(--accent);
-  margin-top: 6px;
-  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
-  word-break: break-all;
-}
-
 /* Field errors */
 .send-field-error {
   font-size: 12px;
@@ -3157,6 +4978,34 @@
   font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
   font-size: 11px;
   word-break: break-all;
+}
+
+/* When the recipient was ENS-resolved we render the name in normal type
+   followed by the address in parens-monospace, with an optional
+   verified-via-Colibri (or quorum/user-RPC) checkmark between them.
+   Parent .send-review-address sets a monospace baseline; the name span
+   opts out, the address span re-asserts. */
+.send-review-name {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+}
+.send-review-recipient-address {
+  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+.send-review-verified {
+  color: var(--secure-fg);
+  font-size: 13px;
+  margin: 0 4px;
+  cursor: help;
+}
+
+.send-review-warning {
+  color: var(--warning-fg);
+  font-size: 13px;
+  margin-left: 4px;
+  cursor: help;
 }
 
 .send-review-amount {
@@ -3312,10 +5161,6 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   outline: none;
-}
-
-.send-password-row .password-input:focus {
-  border-color: var(--accent);
 }
 
 .send-password-submit {
@@ -3703,7 +5548,7 @@
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  background: var(--background);
+  background: var(--toolbar);
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
@@ -3945,6 +5790,198 @@
   white-space: nowrap;
 }
 
+/* --- x402 approval card locked state ----------------------------- */
+/* When the vault is locked, collapse the card to: site origin +
+   unlock block + Reject. Hide payment details, chooser, warnings,
+   grant editor, Pay button — none of it is actionable yet, and
+   biometric-unlock isn't the authorisation moment (the Pay click
+   post-unlock is). The user reviews + decides AFTER unlock; the
+   locked screen just gets them past the gate. Toggled from
+   `checkUnlockState` in dapp-x402.js. */
+#sidebar-x402-approval.is-locked .x402-chooser,
+#sidebar-x402-approval.is-locked .dapp-tx-details,
+#sidebar-x402-approval.is-locked .x402-insufficient,
+#sidebar-x402-approval.is-locked .dapp-tx-warning,
+#sidebar-x402-approval.is-locked .x402-grant,
+#sidebar-x402-approval.is-locked #x402-approval-approve {
+  display: none;
+}
+
+/* --- x402 multi-accept chooser ------------------------------------ */
+/* Visible only when 2+ accepts[] entries are fundable from the
+   active wallet. Sits above the standard detail rows; selecting a
+   row updates pending.selectedAcceptIndex and re-renders the rows
+   below to show the chosen entry's amount / payTo / network. */
+.x402-chooser {
+  background: var(--toolbar);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.x402-chooser-label {
+  font-size: 13px;
+  color: var(--foreground-muted);
+  margin-bottom: 8px;
+}
+
+.x402-chooser-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.x402-chooser-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.x402-chooser-row:hover:not(.is-unfundable) {
+  background: var(--toolbar);
+}
+
+/* Selected-row treatment. `:has(input:checked)` works on Chromium 105+;
+   Electron Chromium is always newer. `.is-selected` is a redundant
+   class kept as a fallback for tooling that strips :has. */
+.x402-chooser-row:has(input:checked),
+.x402-chooser-row.is-selected {
+  background: var(--toolbar);
+  border-color: var(--accent, var(--foreground));
+}
+
+.x402-chooser-row input[type="radio"] {
+  accent-color: var(--accent, currentColor);
+  flex-shrink: 0;
+}
+
+.x402-chooser-row-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.x402-chooser-row-amount {
+  font-size: 13px;
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.x402-chooser-row-network {
+  font-size: 11px;
+  color: var(--foreground-muted);
+}
+
+.x402-chooser-row-balance {
+  font-size: 11px;
+  color: var(--foreground-muted);
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.x402-chooser-row-balance.is-low {
+  color: rgb(245, 158, 11);
+}
+
+.x402-chooser-row.is-unfundable {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* --- x402 insufficient-funds state -------------------------------- */
+/* Replaces the detail rows when no accepts[] entry is fundable. Pay
+   button stays disabled (locked decision §2 — no "Pay anyway"). */
+.x402-insufficient {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--foreground);
+}
+
+.x402-insufficient-title {
+  margin: 0 0 6px 0;
+  font-weight: 600;
+  color: rgb(245, 158, 11);
+}
+
+.x402-insufficient-help,
+.x402-insufficient-footer {
+  margin: 0 0 6px 0;
+  color: var(--foreground-muted);
+  font-size: 12px;
+}
+
+.x402-insufficient-footer {
+  margin: 6px 0 0 0;
+}
+
+.x402-insufficient-list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+}
+
+.x402-insufficient-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.x402-insufficient-need {
+  color: var(--foreground);
+}
+
+.x402-insufficient-have {
+  color: var(--foreground-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.x402-insufficient-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease, opacity 0.12s ease;
+}
+
+.x402-insufficient-refresh:hover:not(:disabled) {
+  background: var(--toolbar);
+}
+
+.x402-insufficient-refresh:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.x402-insufficient-refresh svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
 .dapp-tx-warning {
   display: flex;
   align-items: flex-start;
@@ -4067,6 +6104,10 @@
 .dapp-tx-actions {
   display: flex;
   gap: 12px;
+  /* Breathing room above the Reject/Confirm buttons — without this
+     they sit flush against whatever was rendered above (auto-approve
+     checkbox, x402 grant editor, etc.) and read as a layout bug. */
+  margin-top: 16px;
 }
 
 .dapp-tx-reject-btn {
@@ -4082,8 +6123,15 @@
   transition: background-color 0.15s;
 }
 
-.dapp-tx-reject-btn:hover {
+.dapp-tx-reject-btn:hover:not(:disabled) {
   background: var(--toolbar-hover);
+}
+
+/* Disabled while a signature is in flight (see dapp-tx.js): the request
+   can no longer be recalled, so the way out has to read as unavailable. */
+.dapp-tx-reject-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .dapp-tx-approve-btn {
@@ -4121,7 +6169,7 @@
   background: rgba(0, 0, 0, 0.03);
 }
 
-[data-theme="light"] .dapp-tx-reject-btn:hover {
+[data-theme="light"] .dapp-tx-reject-btn:hover:not(:disabled) {
   background: rgba(0, 0, 0, 0.06);
 }
 
@@ -4317,8 +6365,13 @@
   transition: background-color 0.15s;
 }
 
-.dapp-sign-reject-btn:hover {
+.dapp-sign-reject-btn:hover:not(:disabled) {
   background: var(--toolbar-hover);
+}
+
+.dapp-sign-reject-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .dapp-sign-approve-btn {
@@ -4360,6 +6413,340 @@
   background: rgba(0, 0, 0, 0.03);
 }
 
-[data-theme="light"] .dapp-sign-reject-btn:hover {
+[data-theme="light"] .dapp-sign-reject-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+/* ============================================
+   Safe (multi-owner) accounts
+   ============================================ */
+
+/* Preset choice: backup 1/2 · resilient 2/3 */
+.safe-preset-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.safe-preset {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+}
+
+.safe-preset:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.safe-preset.selected {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.safe-preset-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.safe-preset-detail {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+[data-theme="light"] .safe-preset {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .safe-preset:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .safe-preset.selected {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+/* Status card: activation / needs-funds blocking states */
+.safe-status-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.safe-status-text {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.safe-status-text strong {
+  color: var(--text);
+}
+
+.safe-status-text code {
+  font-size: 11px;
+}
+
+.safe-status-btn {
+  align-self: flex-start;
+  padding: 6px 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.safe-status-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.safe-status-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.safe-status-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.safe-status-btn.primary:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+[data-theme="light"] .safe-status-card {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .safe-status-btn {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .safe-status-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.wallet-action-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.safe-status-btn-row {
+  display: flex;
+  gap: 8px;
+}
+
+/* Safe signing board: per-owner rows with actions the user drives */
+.safe-signing-summary {
+  margin-bottom: 12px;
+}
+
+.safe-signing-what {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.safe-signing-meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.safe-signing-counter {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+.safe-signing-counter strong {
+  color: var(--text);
+}
+
+.safe-signing-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.safe-signing-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.safe-signing-row.signing {
+  border-color: var(--accent);
+}
+
+.safe-signing-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.safe-signing-row-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.safe-signing-row-type {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.safe-signing-row-note {
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.safe-signing-row-note.error {
+  color: var(--danger);
+}
+
+.safe-signing-row-note.info {
+  color: var(--muted);
+}
+
+.safe-signing-row-state {
+  font-size: 12px;
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.safe-signing-row-state.signed {
+  color: var(--secure-fg);
+  font-weight: 600;
+}
+
+.safe-signing-row-state.muted {
+  color: var(--muted);
+}
+
+.safe-signing-executing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  padding: 12px 0;
+}
+
+.safe-signing-note {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.safe-signing-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: rgba(229, 83, 75, 0.08);
+  border: 1px solid rgba(229, 83, 75, 0.35);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.safe-signing-banner-hint {
+  color: var(--muted);
+}
+
+.safe-signing-discard {
+  align-self: flex-start;
+  color: var(--danger);
+}
+
+[data-theme="light"] .safe-signing-row {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+/* Unfinished Safe transactions: entry row above Recent payments */
+.safe-pending-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.safe-pending-row:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.safe-pending-row-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.safe-pending-row-label svg {
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+
+.safe-pending-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  border-radius: 9px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.safe-pending-item-chevron {
+  color: var(--muted);
+  font-size: 16px;
+}
+
+[data-theme="light"] .safe-pending-row {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .safe-pending-row:hover {
   background: rgba(0, 0, 0, 0.06);
 }

@@ -9,6 +9,13 @@
   --modal-bg: #1a1a1a;
   --menu-bg: #1a1a1a;
   --danger: #f28b82;
+  /* "This is safe" green — HTTPS globe, address-bar trust shield's
+     verified state, autocomplete row verified badge, wallet review
+     verified checkmark. One token, all surfaces. */
+  --secure-fg: #6b9e7a;
+  /* "Be careful" amber — address-bar trust shield's unverified state,
+     wallet review warning glyph (e.g. spoofed/stale ENS reverse claim). */
+  --warning-fg: #d29922;
 }
 
 /* Light theme */

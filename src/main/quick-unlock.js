@@ -5,22 +5,117 @@
  * Stores the vault password in OS secure storage, protected by biometrics.
  */
 
-const { ipcMain, systemPreferences, safeStorage } = require('electron');
+const { app, ipcMain, systemPreferences, safeStorage } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const { app } = require('electron');
+const crypto = require('crypto');
+const { getIdentityDataDir, getQuickUnlockCredentialPath } = require('./profile-paths');
+const { getActiveProfile } = require('./profile-resolver');
+const vault = require('./identity/vault');
 
-// Storage key for the encrypted credential
-const CREDENTIAL_FILE = 'quick-unlock.dat';
+const CREDENTIAL_VERSION = 2;
+
+function sha256Hex(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function realpathOrResolve(dirPath) {
+  try {
+    return fs.realpathSync(dirPath);
+  } catch {
+    return path.resolve(dirPath);
+  }
+}
+
+function getCurrentBinding() {
+  const profile = getActiveProfile();
+  const userDataDir = profile?.userDataDir || app.getPath('userData');
+  return {
+    profileId: profile?.id || 'default',
+    userDataDirHash: sha256Hex(realpathOrResolve(userDataDir)),
+  };
+}
+
+function getVaultFingerprint() {
+  const vaultPath = vault.getVaultPath(getIdentityDataDir());
+  if (!fs.existsSync(vaultPath)) {
+    return null;
+  }
+  return sha256Hex(fs.readFileSync(vaultPath));
+}
+
+function createCredentialPayload(password) {
+  const encrypted = safeStorage.encryptString(password);
+  const binding = getCurrentBinding();
+  const payload = {
+    version: CREDENTIAL_VERSION,
+    profileId: binding.profileId,
+    userDataDirHash: binding.userDataDirHash,
+    vaultFingerprint: getVaultFingerprint(),
+    encrypted: encrypted.toString('base64'),
+    createdAt: new Date().toISOString(),
+  };
+  return Buffer.from(JSON.stringify(payload, null, 2), 'utf-8');
+}
+
+function parseCredential(buffer) {
+  try {
+    const payload = JSON.parse(buffer.toString('utf-8'));
+    if (
+      payload?.version === CREDENTIAL_VERSION &&
+      typeof payload.encrypted === 'string'
+    ) {
+      return {
+        type: 'bound',
+        payload,
+        encrypted: Buffer.from(payload.encrypted, 'base64'),
+      };
+    }
+  } catch {
+    // Legacy quick-unlock files are raw safeStorage ciphertext buffers.
+  }
+
+  return { type: 'legacy', encrypted: buffer };
+}
+
+function validateCredentialBinding(payload) {
+  const binding = getCurrentBinding();
+  if (payload.profileId !== binding.profileId || payload.userDataDirHash !== binding.userDataDirHash) {
+    return 'Quick unlock belongs to a different profile';
+  }
+
+  const vaultFingerprint = getVaultFingerprint();
+  if (!vaultFingerprint || payload.vaultFingerprint !== vaultFingerprint) {
+    return 'Quick unlock does not match this vault';
+  }
+
+  return null;
+}
+
+function writeCredential(password) {
+  const credPath = getCredentialPath();
+  const dir = path.dirname(credPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  fs.writeFileSync(credPath, createCredentialPayload(password), { mode: 0o600 });
+  try {
+    fs.chmodSync(credPath, 0o600);
+  } catch {
+    // Best-effort permissions hardening; Windows may ignore POSIX modes.
+  }
+}
+
+async function verifyCredentialPassword(password) {
+  await vault.verifyPassword(getIdentityDataDir(), password);
+}
 
 /**
  * Get the path to the credential file
  */
 function getCredentialPath() {
-  if (!app.isPackaged) {
-    return path.join(__dirname, '..', '..', 'identity-data', CREDENTIAL_FILE);
-  }
-  return path.join(app.getPath('userData'), 'identity', CREDENTIAL_FILE);
+  return getQuickUnlockCredentialPath();
 }
 
 /**
@@ -48,7 +143,16 @@ function isSecureStorageAvailable() {
  */
 function isQuickUnlockEnabled() {
   const credPath = getCredentialPath();
-  return fs.existsSync(credPath);
+  if (!fs.existsSync(credPath)) {
+    return false;
+  }
+
+  const credential = parseCredential(fs.readFileSync(credPath));
+  if (credential.type === 'legacy') {
+    return true;
+  }
+
+  return validateCredentialBinding(credential.payload) === null;
 }
 
 /**
@@ -67,21 +171,12 @@ async function enableQuickUnlock(password) {
   }
 
   try {
+    await verifyCredentialPassword(password);
+
     // Prompt Touch ID to authorize storing the credential
     await systemPreferences.promptTouchID('enable Touch ID unlock for Freedom Browser');
 
-    // Encrypt the password using OS secure storage
-    const encrypted = safeStorage.encryptString(password);
-
-    // Ensure directory exists
-    const credPath = getCredentialPath();
-    const dir = path.dirname(credPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
-    // Store encrypted credential
-    fs.writeFileSync(credPath, encrypted);
+    writeCredential(password);
 
     console.log('[QuickUnlock] Touch ID unlock enabled');
     return { success: true };
@@ -105,13 +200,24 @@ async function unlockWithTouchId() {
   }
 
   try {
+    const credPath = getCredentialPath();
+    const credential = parseCredential(fs.readFileSync(credPath));
+    if (credential.type === 'bound') {
+      const bindingError = validateCredentialBinding(credential.payload);
+      if (bindingError) {
+        return { success: false, error: bindingError };
+      }
+    }
+
     // Prompt for Touch ID
     await systemPreferences.promptTouchID('unlock Freedom Browser');
 
-    // Read and decrypt the credential
-    const credPath = getCredentialPath();
-    const encrypted = fs.readFileSync(credPath);
-    const password = safeStorage.decryptString(encrypted);
+    const password = safeStorage.decryptString(credential.encrypted);
+    await verifyCredentialPassword(password);
+
+    if (credential.type === 'legacy') {
+      writeCredential(password);
+    }
 
     console.log('[QuickUnlock] Unlocked with Touch ID');
     return { success: true, password };
@@ -172,6 +278,7 @@ function registerQuickUnlockIpc() {
 }
 
 module.exports = {
+  CREDENTIAL_VERSION,
   canUseTouchId,
   isSecureStorageAvailable,
   isQuickUnlockEnabled,

@@ -13,8 +13,8 @@ describe('release artifact names', () => {
     const template = packageJson.build.nsis.artifactName;
     const installerName = renderArtifactName(template, 'exe');
 
-    expect(template).toBe('${productName}.Setup.${version}.${ext}');
-    expect(installerName).toBe(`Freedom.Setup.${packageJson.version}.exe`);
+    expect(template).toBe('${productName}-Setup-${version}.${ext}');
+    expect(installerName).toBe(`Freedom-Setup-${packageJson.version}.exe`);
     expect(installerName).not.toMatch(/\s/);
   });
 
@@ -23,10 +23,15 @@ describe('release artifact names', () => {
     const linuxBuild = packageJson.scripts['dist:linux:x64:docker'];
 
     expect(workflow).toContain('binary_target: linux-x64');
-    expect(workflow).toContain('bee:download -- --target ${{ matrix.binary_target }}');
+    expect(workflow).toContain('ant:download -- --target ${{ matrix.binary_target }}');
     expect(workflow).not.toContain('radicle:download -- --all');
-    expect(linuxBuild).toContain('bee:download -- --target linux-x64');
+    expect(linuxBuild).toContain('ant:download -- --target linux-x64');
     expect(linuxBuild).toContain('ipfs:download -- --target linux-x64');
-    expect(linuxBuild).toContain('radicle:download -- --target linux-x64');
+    expect(linuxBuild).toContain('radicle:download -- --linux --x64');
+    expect(linuxBuild).toContain('MYOTIS_DOWNLOAD_TARGET=linux-x64');
+    expect(workflow).toContain('ipfs_target: darwin-x64');
+    expect(workflow).toContain('ipfs_target: win32-x64');
+    expect(workflow).toContain('npm run ipfs:download -- --target ${{ matrix.ipfs_target }}');
+    expect(workflow).toContain('npm run radicle:download -- ${{ matrix.radicle_flags }}');
   });
 });

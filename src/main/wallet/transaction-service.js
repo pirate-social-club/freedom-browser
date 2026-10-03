@@ -1,13 +1,15 @@
 /**
  * Transaction Service
  *
- * Handles gas estimation, transaction building, signing, and broadcasting.
- * Uses the vault's derived keys for signing.
+ * Handles gas estimation, transaction building, and broadcasting.
+ * Signing is delegated to a Signer (see ./signers.js), so this module
+ * never touches key material.
  */
 
-const { parseUnits, formatUnits, Interface, Wallet } = require('ethers');
-const { getProvider, withRetry } = require('./provider-manager');
+const { parseUnits, formatUnits, Interface, Transaction } = require('ethers');
+const chainData = require('../networks/chain-data-router');
 const { getTxExplorerUrl } = require('./chains');
+const { REMOTE_ERROR_CODES, createRemoteError } = require('./remote/errors');
 
 // ERC-20 transfer function interface
 const ERC20_INTERFACE = new Interface([
@@ -25,11 +27,6 @@ const ERC20_INTERFACE = new Interface([
  * @returns {Promise<{gasLimit: string, error?: string}>}
  */
 async function estimateGas({ from, to, value, data, chainId }) {
-  const provider = getProvider(chainId);
-  if (!provider) {
-    throw new Error(`No provider available for chain ${chainId}`);
-  }
-
   try {
     const tx = {
       from,
@@ -41,7 +38,8 @@ async function estimateGas({ from, to, value, data, chainId }) {
       tx.data = data;
     }
 
-    const gasLimit = await withRetry(() => provider.estimateGas(tx), 2, chainId);
+    const { result } = await chainData.request(chainId, 'eth_estimateGas', [tx]);
+    const gasLimit = BigInt(result);
 
     // Add 20% buffer for safety
     const bufferedGas = (gasLimit * 120n) / 100n;
@@ -62,45 +60,36 @@ async function estimateGas({ from, to, value, data, chainId }) {
  * @returns {Promise<Object>} Gas price data
  */
 async function getGasPrices(chainId) {
-  const provider = getProvider(chainId);
-  if (!provider) {
-    throw new Error(`No provider available for chain ${chainId}`);
-  }
-
   try {
-    const [feeData, block] = await withRetry(
-      () => Promise.all([provider.getFeeData(), provider.getBlock('latest')]),
-      2,
-      chainId
-    );
-
-    // For EIP-1559 chains (Ethereum, Gnosis)
-    if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
-      const baseFee = block?.baseFeePerGas || feeData.gasPrice || 0n;
-
-      // Market: 2x base fee + priority fee (covers 2 blocks of full blocks)
-      const marketMaxFee = baseFee * 2n + feeData.maxPriorityFeePerGas;
-
-      return {
-        type: 'eip1559',
-        baseFee: baseFee.toString(),
-        maxPriorityFeePerGas: feeData.maxPriorityFeePerGas.toString(),
-        maxFeePerGas: marketMaxFee.toString(),
-        // For display: estimated fee per gas
-        effectiveGasPrice: ((baseFee + feeData.maxPriorityFeePerGas)).toString(),
-      };
-    }
-
-    // Legacy gas price (fallback)
-    return {
-      type: 'legacy',
-      gasPrice: (feeData.gasPrice || 0n).toString(),
-      effectiveGasPrice: (feeData.gasPrice || 0n).toString(),
-    };
+    const quote = await chainData.getFeeQuote(chainId);
+    console.log('[TransactionService] Fee quote:', {
+      chainId,
+      type: quote.type,
+      source: quote.source,
+      maxFeePerGas: quote.maxFeePerGas,
+      maxPriorityFeePerGas: quote.maxPriorityFeePerGas,
+      gasPrice: quote.gasPrice,
+    });
+    return quote;
   } catch (err) {
     console.error('[TransactionService] Failed to get gas prices:', err);
     throw new Error(`Failed to get gas prices: ${err.message}`, { cause: err });
   }
+}
+
+/**
+ * getGasPrices result → the fee fields buildTransaction / send params
+ * expect, so callers don't re-derive the eip1559-vs-legacy branch.
+ * @param {Object} gasPrices - Result of getGasPrices
+ * @returns {{maxFeePerGas: string, maxPriorityFeePerGas: string}|{gasPrice: string}}
+ */
+function toFeeFields(gasPrices) {
+  return gasPrices.type === 'eip1559'
+    ? {
+        maxFeePerGas: gasPrices.maxFeePerGas,
+        maxPriorityFeePerGas: gasPrices.maxPriorityFeePerGas,
+      }
+    : { gasPrice: gasPrices.gasPrice };
 }
 
 /**
@@ -165,7 +154,10 @@ function buildTransaction({
   }
 
   // EIP-1559 or legacy
-  if (maxFeePerGas && maxPriorityFeePerGas) {
+  if (maxFeePerGas != null && maxPriorityFeePerGas != null) {
+    if (BigInt(maxPriorityFeePerGas) > BigInt(maxFeePerGas)) {
+      throw new Error('Invalid transaction fees: priority fee exceeds maximum fee');
+    }
     tx.maxFeePerGas = maxFeePerGas;
     tx.maxPriorityFeePerGas = maxPriorityFeePerGas;
     tx.type = 2; // EIP-1559
@@ -178,7 +170,78 @@ function buildTransaction({
 }
 
 /**
- * Sign and broadcast a transaction
+ * Best-effort check that a device-broadcast tx really came from the
+ * signer's account: a compromised responder could report the hash of
+ * someone else's transaction. The tx usually reaches our RPC a beat
+ * after the device's, so "not visible yet" is not an error — only a
+ * visible mismatch is.
+ */
+async function verifyDeviceBroadcastFrom(hash, expectedFrom, chainId) {
+  let tx;
+  try {
+    ({ result: tx } = await chainData.request(chainId, 'eth_getTransactionByHash', [hash]));
+  } catch (err) {
+    console.warn('[TransactionService] Device-broadcast lookup failed:', err.message);
+    return;
+  }
+  if (!tx) {
+    console.warn('[TransactionService] Device-broadcast tx not visible on our RPC yet:', hash);
+    return;
+  }
+  if (tx.from.toLowerCase() !== expectedFrom.toLowerCase()) {
+    throw createRemoteError(REMOTE_ERROR_CODES.WRONG_ACCOUNT);
+  }
+}
+
+/**
+ * Fill in fee parameters the caller didn't supply.
+ *
+ * ethers' Wallet.sendTransaction used to populate missing fees from the
+ * network before signing. Now that signing and broadcasting are separate
+ * steps nothing does, so an unpriced tx would be signed with
+ * maxFeePerGas = 0 and rejected by every node as underpriced — on a
+ * hardware wallet, only after the user confirmed it on-device. Populate
+ * (or refuse) here, before the signer is ever asked to sign.
+ *
+ * @param {Object} params
+ * @returns {Promise<{maxFeePerGas?: string, maxPriorityFeePerGas?: string, gasPrice?: string}>}
+ */
+async function resolveFeeParams({ maxFeePerGas, maxPriorityFeePerGas, gasPrice, chainId }) {
+  if ((maxFeePerGas && maxPriorityFeePerGas) || gasPrice) {
+    return { maxFeePerGas, maxPriorityFeePerGas, gasPrice };
+  }
+
+  const fees = await getGasPrices(chainId);
+
+  if (fees.type === 'eip1559' && isPositiveFee(fees.maxFeePerGas) && isPositiveFee(fees.maxPriorityFeePerGas)) {
+    return { maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas };
+  }
+  if (isPositiveFee(fees.gasPrice)) {
+    return { gasPrice: fees.gasPrice };
+  }
+
+  throw new Error('Unable to determine a gas price for this transaction. Please try again.');
+}
+
+function isPositiveFee(value) {
+  try {
+    return value !== undefined && value !== null && BigInt(value) > 0n;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Sign and broadcast a transaction.
+ *
+ * Signing and broadcasting are separate steps so the signer can be
+ * anything implementing the signer interface (vault key, hardware
+ * device) — the provider only ever sees the serialized signed tx.
+ *
+ * Fee parameters are optional: when the caller supplies none they are
+ * fetched from the network (see resolveFeeParams) rather than signed as
+ * zero.
+ *
  * @param {Object} params - Transaction parameters
  * @param {string} params.to - Recipient (or token contract for ERC-20)
  * @param {string} params.value - Value in wei
@@ -188,23 +251,46 @@ function buildTransaction({
  * @param {string} [params.maxPriorityFeePerGas] - Max priority fee (EIP-1559)
  * @param {string} [params.gasPrice] - Gas price (legacy)
  * @param {number} params.chainId - Chain ID
- * @param {string} privateKey - Private key for signing (0x-prefixed)
+ * @param {import('./signers').Signer} signer - Signer for the sending account
  * @returns {Promise<Object>} Transaction result
  */
-async function signAndSendTransaction(params, privateKey) {
+async function signAndSendTransaction(params, signer) {
   const { to, value, data, gasLimit, maxFeePerGas, maxPriorityFeePerGas, gasPrice, chainId } = params;
 
-  const provider = getProvider(chainId);
-  if (!provider) {
-    throw new Error(`No provider available for chain ${chainId}`);
-  }
+  // Phone wallets populate fees and broadcast through their own RPC. All
+  // raw-signing backends need complete fee data before device approval.
+  const fees = typeof signer.sendTransaction === 'function'
+    ? null
+    : await resolveFeeParams({ maxFeePerGas, maxPriorityFeePerGas, gasPrice, chainId });
 
   try {
-    // Create wallet from private key
-    const wallet = new Wallet(privateKey, provider);
+    const from = await signer.getAddress();
+
+    // Backends that can only sign-and-broadcast through their own channel
+    // (phone wallets) expose the optional sendTransaction capability: the
+    // remote wallet picks the nonce, estimates gas, and broadcasts via its
+    // own RPC — our gas parameters would be stale guesses by the time the
+    // user confirms on the device, so only the intent fields go over.
+    if (typeof signer.sendTransaction === 'function') {
+      const hash = await signer.sendTransaction({ to, value, data, chainId });
+      await verifyDeviceBroadcastFrom(hash, from, chainId);
+      console.log('[TransactionService] Transaction broadcast by signer:', hash);
+      return {
+        hash,
+        from,
+        to,
+        value,
+        chainId,
+        explorerUrl: getTxExplorerUrl(chainId, hash),
+      };
+    }
 
     // Get nonce
-    const nonce = await withRetry(() => provider.getTransactionCount(wallet.address, 'pending'), 2, chainId);
+    const nonceResponse = await chainData.request(chainId, 'eth_getTransactionCount', [
+      from,
+      'pending',
+    ]);
+    const nonce = Number(BigInt(nonceResponse.result));
 
     // Build transaction
     const tx = buildTransaction({
@@ -212,9 +298,9 @@ async function signAndSendTransaction(params, privateKey) {
       value,
       data,
       gasLimit,
-      maxFeePerGas,
-      maxPriorityFeePerGas,
-      gasPrice,
+      maxFeePerGas: fees.maxFeePerGas,
+      maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+      gasPrice: fees.gasPrice,
       nonce,
       chainId,
     });
@@ -225,42 +311,83 @@ async function signAndSendTransaction(params, privateKey) {
       gasLimit: tx.gasLimit,
       chainId: tx.chainId,
       nonce: tx.nonce,
+      nonceSource: nonceResponse.source,
     });
 
-    // Sign and send
-    const txResponse = await wallet.sendTransaction(tx);
+    const signedTransaction = await signer.signTransaction(tx);
+    const parsedTransaction = Transaction.from(signedTransaction);
+    const broadcast = await chainData.broadcastRawTransaction(chainId, signedTransaction);
+    if (
+      parsedTransaction.hash &&
+      String(broadcast.result).toLowerCase() !== parsedTransaction.hash.toLowerCase()
+    ) {
+      throw new Error(
+        `Transaction may have been broadcast as ${parsedTransaction.hash}, ` +
+        `but the broadcaster returned ${broadcast.result}`
+      );
+    }
 
-    console.log('[TransactionService] Transaction sent:', txResponse.hash);
+    console.log('[TransactionService] Transaction sent:', broadcast.result);
 
     return {
-      hash: txResponse.hash,
-      nonce: txResponse.nonce,
-      from: txResponse.from,
-      to: txResponse.to,
-      value: txResponse.value?.toString(),
+      hash: broadcast.result,
+      nonce: parsedTransaction.nonce,
+      from: parsedTransaction.from || from,
+      to: parsedTransaction.to,
+      value: parsedTransaction.value?.toString(),
       chainId,
-      explorerUrl: getTxExplorerUrl(chainId, txResponse.hash),
+      broadcastSource: broadcast.source,
+      explorerUrl: getTxExplorerUrl(chainId, broadcast.result),
     };
   } catch (err) {
     console.error('[TransactionService] Transaction failed:', err);
 
+    // Device-backend errors (LEDGER_*/REMOTE_*) carry a stable code and a
+    // user-facing message; rewrapping them here would strip the code and
+    // let the local-provider heuristics below mislabel them.
+    if (typeof err.code === 'string' && /^(LEDGER|REMOTE)_/.test(err.code)) {
+      throw err;
+    }
+
     // Parse common error messages
-    if (err.message.includes('insufficient funds')) {
+    const message = String(err?.message || '');
+    const normalizedMessage = message.toLowerCase();
+    if (normalizedMessage.includes('insufficient funds')) {
       throw new Error('Insufficient funds for transaction', { cause: err });
     }
-    if (err.message.includes('nonce')) {
+    if (
+      [
+        'nonce too low',
+        'nonce too high',
+        'invalid nonce',
+        'nonce has already been used',
+        'replacement transaction underpriced',
+      ].some((pattern) => normalizedMessage.includes(pattern))
+    ) {
       throw new Error('Transaction nonce error. Please try again.', { cause: err });
     }
-    if (err.message.includes('gas')) {
+    if (
+      normalizedMessage.includes('priority fee') ||
+      normalizedMessage.includes('priorityfee') ||
+      normalizedMessage.includes('maxfeepergas') ||
+      normalizedMessage.includes('maxpriorityfeepergas') ||
+      normalizedMessage.includes('fee cap') ||
+      normalizedMessage.includes('base fee')
+    ) {
+      throw new Error('Transaction fee data is invalid. Please refresh and try again.', {
+        cause: err,
+      });
+    }
+    if (normalizedMessage.includes('gas')) {
       throw new Error('Gas estimation error. The transaction may fail.', { cause: err });
     }
     // Server errors (rate limiting, blocked, etc.)
     if (
       err.code === 'SERVER_ERROR' ||
-      err.message.includes('SERVER_ERROR') ||
-      err.message.includes('403') ||
-      err.message.includes('429') ||
-      err.message.includes('invalid numeric value')
+      message.includes('SERVER_ERROR') ||
+      message.includes('403') ||
+      message.includes('429') ||
+      normalizedMessage.includes('invalid numeric value')
     ) {
       throw new Error('RPC provider temporarily unavailable. Please try again.', { cause: err });
     }
@@ -276,13 +403,8 @@ async function signAndSendTransaction(params, privateKey) {
  * @returns {Promise<Object>} Transaction status
  */
 async function getTransactionStatus(txHash, chainId) {
-  const provider = getProvider(chainId);
-  if (!provider) {
-    throw new Error(`No provider available for chain ${chainId}`);
-  }
-
   try {
-    const receipt = await withRetry(() => provider.getTransactionReceipt(txHash), 2, chainId);
+    const { result: receipt } = await chainData.request(chainId, 'eth_getTransactionReceipt', [txHash]);
 
     if (!receipt) {
       return {
@@ -292,11 +414,13 @@ async function getTransactionStatus(txHash, chainId) {
     }
 
     return {
-      status: receipt.status === 1 ? 'confirmed' : 'failed',
+      status: BigInt(receipt.status || 0) === 1n ? 'confirmed' : 'failed',
       hash: txHash,
-      blockNumber: receipt.blockNumber,
-      gasUsed: receipt.gasUsed?.toString(),
-      effectiveGasPrice: receipt.gasPrice?.toString(),
+      blockNumber: receipt.blockNumber ? Number(BigInt(receipt.blockNumber)) : null,
+      gasUsed: receipt.gasUsed ? BigInt(receipt.gasUsed).toString() : null,
+      effectiveGasPrice: receipt.effectiveGasPrice
+        ? BigInt(receipt.effectiveGasPrice).toString()
+        : null,
       explorerUrl: getTxExplorerUrl(chainId, txHash),
     };
   } catch (err) {
@@ -317,89 +441,36 @@ async function getTransactionStatus(txHash, chainId) {
  * @returns {Promise<Object>} Transaction receipt
  */
 async function waitForTransaction(txHash, chainId, confirmations = 1) {
-  const provider = getProvider(chainId);
-  if (!provider) {
-    throw new Error(`No provider available for chain ${chainId}`);
-  }
-
   try {
-    const receipt = await provider.waitForTransaction(txHash, confirmations, 60000); // 60s timeout
-
-    return {
-      status: receipt.status === 1 ? 'confirmed' : 'failed',
-      hash: txHash,
-      blockNumber: receipt.blockNumber,
-      gasUsed: receipt.gasUsed?.toString(),
-      effectiveGasPrice: receipt.gasPrice?.toString(),
-      explorerUrl: getTxExplorerUrl(chainId, txHash),
-    };
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
+      const status = await getTransactionStatus(txHash, chainId);
+      if (status.status === 'failed') return status;
+      if (status.status === 'confirmed') {
+        if (confirmations <= 1) return status;
+        try {
+          const { result: head } = await chainData.request(chainId, 'eth_blockNumber');
+          if (Number(BigInt(head)) - status.blockNumber + 1 >= confirmations) return status;
+        } catch (err) {
+          // Receipt confirmation is already known. A transient head lookup
+          // must not turn that into a false timeout; keep polling until the
+          // requested confirmation depth can be established.
+          console.warn('[TransactionService] Confirmation head lookup failed:', err.message);
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    throw new Error('Timed out waiting for transaction confirmation');
   } catch (err) {
     console.error('[TransactionService] Wait for transaction failed:', err);
     throw new Error(`Transaction confirmation timeout: ${err.message}`, { cause: err });
   }
 }
 
-/**
- * Sign a personal message (EIP-191)
- * @param {string} message - Message to sign (hex string or UTF-8)
- * @param {string} privateKey - Private key for signing
- * @returns {Promise<string>} Signature (hex string)
- */
-async function signPersonalMessage(message, privateKey) {
-  try {
-    const wallet = new Wallet(privateKey);
-
-    // If message is hex-encoded, convert to raw bytes (not UTF-8 string)
-    let messageToSign = message;
-    if (message.startsWith('0x')) {
-      messageToSign = Buffer.from(message.slice(2), 'hex');
-    }
-
-    // signMessage automatically applies EIP-191 prefix
-    const signature = await wallet.signMessage(messageToSign);
-
-    console.log('[TransactionService] Message signed');
-    return signature;
-  } catch (err) {
-    console.error('[TransactionService] Message signing failed:', err);
-    throw new Error(`Message signing failed: ${err.message}`, { cause: err });
-  }
-}
-
-/**
- * Sign typed data (EIP-712)
- * @param {Object} typedData - EIP-712 typed data object
- * @param {string} privateKey - Private key for signing
- * @returns {Promise<string>} Signature (hex string)
- */
-async function signTypedData(typedData, privateKey) {
-  try {
-    const wallet = new Wallet(privateKey);
-
-    // Parse if string
-    const data = typeof typedData === 'string' ? JSON.parse(typedData) : typedData;
-
-    // Extract domain, types, and message from EIP-712 structure
-    const { domain, types, message } = data;
-
-    // Remove EIP712Domain from types (ethers handles it internally)
-    const typesWithoutDomain = { ...types };
-    delete typesWithoutDomain.EIP712Domain;
-
-    // Sign using ethers' signTypedData
-    const signature = await wallet.signTypedData(domain, typesWithoutDomain, message);
-
-    console.log('[TransactionService] Typed data signed');
-    return signature;
-  } catch (err) {
-    console.error('[TransactionService] Typed data signing failed:', err);
-    throw new Error(`Typed data signing failed: ${err.message}`, { cause: err });
-  }
-}
-
 module.exports = {
   estimateGas,
   getGasPrices,
+  toFeeFields,
   buildErc20TransferData,
   parseAmount,
   formatAmount,
@@ -407,6 +478,4 @@ module.exports = {
   signAndSendTransaction,
   getTransactionStatus,
   waitForTransaction,
-  signPersonalMessage,
-  signTypedData,
 };

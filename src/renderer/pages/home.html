@@ -4,8 +4,9 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; script-src 'self'; connect-src 'self';"
+      content="default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self'; script-src 'self'; connect-src 'self';"
     />
+    <link rel="stylesheet" href="styles/theme.css" />
     <style>
       html,
       body {
@@ -19,10 +20,9 @@
         position: relative;
       }
 
-      /* Dark theme (default) */
       body {
-        background: #1f2020;
-        color: #c7c7c7;
+        background: var(--shell-bg);
+        color: var(--shell-text);
       }
       body::before {
         content: '';
@@ -45,53 +45,14 @@
         line-height: 1.6;
         margin-bottom: 12px;
       }
-      .status-card {
-        margin-top: 28px;
-        display: inline-flex;
-        flex-direction: column;
-        gap: 10px;
-        min-width: 320px;
-        padding: 18px 20px;
-        border-radius: 14px;
-        background: rgba(19, 20, 20, 0.76);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        backdrop-filter: blur(8px);
-      }
-      .status-row {
-        display: flex;
-        justify-content: space-between;
-        gap: 24px;
-      }
-      .status-label {
-        color: #999;
-      }
-      .status-value {
-        color: #f2f2f2;
-      }
-      .status-actions {
-        display: flex;
-        gap: 12px;
-        margin-top: 8px;
-      }
-      .status-link {
-        color: #f2f2f2;
-        text-decoration: none;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.25);
-      }
-      .status-link:hover {
-        border-bottom-color: rgba(255, 255, 255, 0.65);
-      }
-      .muted {
-        color: #999;
-      }
       h2 {
         font-size: 18px;
         margin-top: 32px;
         margin-bottom: 12px;
-        color: #999;
+        color: var(--shell-subtle);
       }
       code {
-        background: #2a2a2a;
+        background: var(--shell-code);
         padding: 2px 6px;
         border-radius: 4px;
         font-family: 'SF Mono', Menlo, monospace;
@@ -106,9 +67,9 @@
         margin-bottom: 4px;
       }
       a.protocol-link {
-        color: #6eb5ff;
+        color: var(--shell-link-home);
         text-decoration: none;
-        background: #2a2a2a;
+        background: var(--shell-code);
         padding: 2px 6px;
         border-radius: 4px;
         font-family: 'SF Mono', Menlo, monospace;
@@ -119,54 +80,24 @@
           color 0.15s ease;
       }
       a.protocol-link:hover {
-        background: #3a3a4a;
-        color: #8ecfff;
+        background: var(--shell-link-home-bg-hover);
+        color: var(--shell-link-home-hover);
       }
       .logo-dark {
-        display: block;
+        display: var(--dark-only-display);
       }
       .logo-light {
-        display: none;
+        display: var(--light-only-display);
       }
 
-      /* Light theme */
-      @media (prefers-color-scheme: light) {
-        body {
-          background: #ffffff;
-          color: #202124;
-        }
-        .status-card {
-          background: rgba(255, 255, 255, 0.92);
-          border-color: rgba(0, 0, 0, 0.08);
-        }
-        .status-value {
-          color: #202124;
-        }
-        .muted {
-          color: #5f6368;
-        }
-        h2 {
-          color: #5f6368;
-        }
-        code {
-          background: #f1f3f4;
-        }
-        a.protocol-link {
-          color: #1a73e8;
-          background: #f1f3f4;
-        }
-        a.protocol-link:hover {
-          background: #e8eaed;
-          color: #1558b0;
-        }
-        .logo-dark {
-          display: none;
-        }
-        .logo-light {
-          display: block;
-        }
-      }
-    </style>
+      .status-card { margin-top: 28px; display: inline-flex; flex-direction: column; gap: 10px; min-width: 320px; padding: 18px 20px; border-radius: 14px; background: var(--shell-surface); border: 1px solid var(--shell-border-soft); }
+      .status-row { display: flex; justify-content: space-between; gap: 24px; }
+      .status-label, .muted { color: var(--shell-muted); }
+      .status-value { color: var(--shell-heading); }
+      .status-actions { display: flex; gap: 12px; margin-top: 8px; }
+      .status-link { color: var(--shell-link); text-decoration: none; border-bottom: 1px solid var(--shell-border); }
+      .status-link:hover { border-bottom-color: var(--shell-link); }
+</style>
   </head>
   <body>
     <img

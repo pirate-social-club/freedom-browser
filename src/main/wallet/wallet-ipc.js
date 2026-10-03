@@ -1,3 +1,10 @@
+function hasDappPermissionForWallet(permissionKey, walletIndex) {
+  if (typeof permissionKey !== 'string' || !Number.isSafeInteger(walletIndex) || walletIndex < 0) return false;
+  return getPermission(permissionKey)?.walletIndex === walletIndex;
+}
+
+const { getPermission } = require('./dapp-permissions');
+
 /**
  * Wallet IPC Handlers
  *
@@ -14,17 +21,15 @@ const {
   getGasPrices,
   buildErc20TransferData,
   parseAmount,
-  signAndSendTransaction,
   getTransactionStatus,
   waitForTransaction,
-  signPersonalMessage,
-  signTypedData,
 } = require('./transaction-service');
-const { loadIdentityModule, getActiveWalletIndex } = require('../identity-manager');
+const { signAndRecord, KINDS: PAYMENT_KINDS } = require('./tx-recorder');
+const { getActiveWalletIndex } = require('../identity-manager');
 const { getEffectiveRpcUrls } = require('./rpc-manager');
-const { getPermission } = require('./dapp-permissions');
-
-let rpcRequestId = 0;
+const chainData = require('../networks/chain-data-router');
+const { getSigner } = require('./signers');
+const { isVaultLockedError } = require('./vault-errors');
 
 /**
  * Validate that an RPC URL is a known, trusted endpoint.
@@ -40,16 +45,9 @@ function isAllowedRpcUrl(rpcUrl) {
     return false;
   }
 
-  // Build allowlist from all known chains
+  // Allowlist = the registry's resolved rpc pool for every known chain.
   const chains = getAllChains();
   for (const chain of Object.values(chains)) {
-    // Check builtin public RPCs
-    if (chain.rpcUrls) {
-      for (const url of chain.rpcUrls) {
-        if (url === rpcUrl) return true;
-      }
-    }
-    // Check configured provider URLs for this chain
     const providerUrls = getEffectiveRpcUrls(chain.chainId);
     for (const url of providerUrls) {
       if (url === rpcUrl) return true;
@@ -59,20 +57,29 @@ function isAllowedRpcUrl(rpcUrl) {
   return false;
 }
 
-/**
- * Validate walletIndex parameter from renderer.
- * Must be a non-negative integer.
- */
-function isValidWalletIndex(walletIndex) {
-  return typeof walletIndex === 'number' && Number.isInteger(walletIndex) && walletIndex >= 0;
+// Shared body of the two send-transaction IPC handlers. They differ only
+// in which wallet index signs and which payment-history kind tags the
+// resulting row.
+function buildTxRecordContext(kind, context = {}) {
+  return { ...context, kind };
 }
 
-function hasDappPermissionForWallet(permissionKey, walletIndex) {
-  if (!permissionKey || !isValidWalletIndex(walletIndex)) {
-    return false;
+async function handleSendTransaction(walletIndex, params, kind, context = {}) {
+  try {
+    const { to, value, data, gasLimit, maxFeePerGas, maxPriorityFeePerGas, gasPrice, chainId } = params;
+    if (!to || chainId === undefined || !gasLimit) {
+      return { success: false, error: 'Missing required parameters: to, chainId, gasLimit' };
+    }
+    const result = await signAndRecord(
+      { to, value, data, gasLimit, maxFeePerGas, maxPriorityFeePerGas, gasPrice, chainId },
+      getSigner(walletIndex),
+      buildTxRecordContext(kind, context),
+    );
+    return { success: true, ...result };
+  } catch (err) {
+    console.error(`[WalletIPC] ${kind} transaction failed:`, err);
+    return { success: false, error: err.message };
   }
-  const permission = getPermission(permissionKey);
-  return permission?.walletIndex === walletIndex;
 }
 
 /**
@@ -93,13 +100,13 @@ function registerWalletIpc() {
     }
   });
 
-  // Get balances with cache-first strategy
+  // Startup display reads cached data only; visible wallet refresh owns fetching.
   ipcMain.handle('wallet:get-balances-cached', async (_event, address) => {
     try {
       if (!address) {
         return { success: false, error: 'Address is required' };
       }
-      const { balances, fromCache } = await getBalancesWithCache(address, true);
+      const { balances, fromCache } = await getBalancesWithCache(address, false);
       return { success: true, balances, fromCache };
     } catch (err) {
       console.error('[WalletIPC] Failed to get cached balances:', err);
@@ -233,36 +240,8 @@ function registerWalletIpc() {
     }
   });
 
-  // Sign and send a transaction
-  ipcMain.handle('wallet:send-transaction', async (_event, params) => {
-    try {
-      const { to, value, data, gasLimit, maxFeePerGas, maxPriorityFeePerGas, gasPrice, chainId } = params;
-
-      if (!to || chainId === undefined || !gasLimit) {
-        return { success: false, error: 'Missing required parameters: to, chainId, gasLimit' };
-      }
-
-      // Get the private key from the vault for the active wallet
-      const identity = await loadIdentityModule();
-      if (!identity.isUnlocked()) {
-        return { success: false, error: 'Vault is locked. Please unlock first.' };
-      }
-
-      const activeIndex = getActiveWalletIndex();
-      const privateKey = identity.exportPrivateKey(activeIndex);
-
-      // Sign and send
-      const result = await signAndSendTransaction(
-        { to, value, data, gasLimit, maxFeePerGas, maxPriorityFeePerGas, gasPrice, chainId },
-        privateKey
-      );
-
-      return { success: true, ...result };
-    } catch (err) {
-      console.error('[WalletIPC] Transaction failed:', err);
-      return { success: false, error: err.message };
-    }
-  });
+  ipcMain.handle('wallet:send-transaction', (_event, params, context) =>
+    handleSendTransaction(getActiveWalletIndex(), params, PAYMENT_KINDS.WALLET_SEND, context));
 
   // Get transaction status
   ipcMain.handle('wallet:get-transaction-status', async (_event, txHash, chainId) => {
@@ -296,65 +275,26 @@ function registerWalletIpc() {
   // dApp-specific handlers (use specific wallet index)
   // ============================================
 
-  // Sign and send transaction for a dApp (uses specified wallet index)
-  ipcMain.handle('wallet:dapp-send-transaction', async (_event, params, walletIndex, permissionKey) => {
-    try {
-      if (!isValidWalletIndex(walletIndex)) {
-        return { success: false, error: 'Invalid wallet index' };
-      }
-      if (!hasDappPermissionForWallet(permissionKey, walletIndex)) {
-        return { success: false, error: 'Unauthorized dApp wallet access' };
-      }
-
-      const { to, value, data, gasLimit, maxFeePerGas, maxPriorityFeePerGas, gasPrice, chainId } = params;
-
-      if (!to || chainId === undefined || !gasLimit) {
-        return { success: false, error: 'Missing required parameters: to, chainId, gasLimit' };
-      }
-
-      // Get the private key from the vault for the specified wallet
-      const identity = await loadIdentityModule();
-      if (!identity.isUnlocked()) {
-        return { success: false, error: 'Vault is locked. Please unlock first.' };
-      }
-
-      const privateKey = identity.exportPrivateKey(walletIndex);
-
-      // Sign and send
-      const result = await signAndSendTransaction(
-        { to, value, data, gasLimit, maxFeePerGas, maxPriorityFeePerGas, gasPrice, chainId },
-        privateKey
-      );
-
-      return { success: true, ...result };
-    } catch (err) {
-      console.error('[WalletIPC] dApp transaction failed:', err);
-      return { success: false, error: err.message };
+  // Renderer threads the dapp's permissionKey through as context.origin
+  // so payment-history rows match the x402 permission store's keying.
+  ipcMain.handle('wallet:dapp-send-transaction', (_event, params, walletIndex, context) => {
+    if (!hasDappPermissionForWallet(context?.origin, walletIndex)) {
+      return { success: false, error: 'Unauthorized dApp wallet access' };
     }
+    return handleSendTransaction(walletIndex, params, PAYMENT_KINDS.DAPP_SEND, context);
   });
 
   // Sign a personal message (EIP-191) for a dApp
   ipcMain.handle('wallet:sign-message', async (_event, message, walletIndex, permissionKey) => {
     try {
-      if (!isValidWalletIndex(walletIndex)) {
-        return { success: false, error: 'Invalid wallet index' };
-      }
       if (!hasDappPermissionForWallet(permissionKey, walletIndex)) {
         return { success: false, error: 'Unauthorized dApp wallet access' };
       }
-
       if (!message) {
         return { success: false, error: 'Message is required' };
       }
 
-      // Get the private key from the vault
-      const identity = await loadIdentityModule();
-      if (!identity.isUnlocked()) {
-        return { success: false, error: 'Vault is locked. Please unlock first.' };
-      }
-
-      const privateKey = identity.exportPrivateKey(walletIndex);
-      const signature = await signPersonalMessage(message, privateKey);
+      const signature = await getSigner(walletIndex).signMessage(message);
 
       return { success: true, signature };
     } catch (err) {
@@ -366,25 +306,14 @@ function registerWalletIpc() {
   // Sign typed data (EIP-712) for a dApp
   ipcMain.handle('wallet:sign-typed-data', async (_event, typedData, walletIndex, permissionKey) => {
     try {
-      if (!isValidWalletIndex(walletIndex)) {
-        return { success: false, error: 'Invalid wallet index' };
-      }
       if (!hasDappPermissionForWallet(permissionKey, walletIndex)) {
         return { success: false, error: 'Unauthorized dApp wallet access' };
       }
-
       if (!typedData) {
         return { success: false, error: 'Typed data is required' };
       }
 
-      // Get the private key from the vault
-      const identity = await loadIdentityModule();
-      if (!identity.isUnlocked()) {
-        return { success: false, error: 'Vault is locked. Please unlock first.' };
-      }
-
-      const privateKey = identity.exportPrivateKey(walletIndex);
-      const signature = await signTypedData(typedData, privateKey);
+      const signature = await getSigner(walletIndex).signTypedData(typedData);
 
       return { success: true, signature };
     } catch (err) {
@@ -393,7 +322,175 @@ function registerWalletIpc() {
     }
   });
 
-  // Proxy JSON-RPC calls to external endpoints (renderer CSP blocks direct fetch)
+  // Safe account lifecycle (chain-touching — see safe/safe-service.js).
+  // Lazily required so wallet-ipc doesn't load protocol-kit at startup.
+  ipcMain.handle('wallet:create-safe', async (_event, name, ownerIndexes, threshold) => {
+    try {
+      const { createSafeAccount } = require('./safe/safe-service');
+      const wallet = await createSafeAccount({ name, ownerIndexes, threshold });
+      return { success: true, wallet };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('wallet:get-safe-status', async (_event, index) => {
+    try {
+      const { getSafeStatus } = require('./safe/safe-service');
+      const status = await getSafeStatus(index);
+      return { success: true, status };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('wallet:activate-safe', async (_event, index) => {
+    try {
+      const { activateSafe } = require('./safe/safe-service');
+      const result = await activateSafe(index);
+      return { success: true, ...result };
+    } catch (err) {
+      const code = err.code ?? (isVaultLockedError(err) ? 'VAULT_LOCKED' : undefined);
+      return { success: false, error: err.message, code };
+    }
+  });
+
+  // Safe sends — the signing board's granular API: build (+ silent free
+  // signatures), sign one owner per user action, execute as its own
+  // idempotent step, render from state. Half-signed transactions are
+  // persisted main-side; signature failures never destroy them.
+  const safeStateHandler = (fn) => async (_event, ...args) => {
+    try {
+      const state = await fn(...args);
+      return { success: true, state };
+    } catch (err) {
+      // A locked vault is recoverable — the renderer walks the user
+      // through the standard unlock and retries.
+      const code = err.code ?? (isVaultLockedError(err) ? 'VAULT_LOCKED' : undefined);
+      return { success: false, error: err.message, code };
+    }
+  };
+
+  ipcMain.handle(
+    'wallet:safe-send',
+    safeStateHandler((safeIndex, tx, display, chainId) => {
+      const { startSafeSend } = require('./safe/safe-transactions');
+      return startSafeSend({ safeIndex, tx, display, chainId });
+    })
+  );
+
+  ipcMain.handle(
+    'wallet:safe-sign',
+    safeStateHandler((safeIndex, ownerIndex) => {
+      const { signSafePending } = require('./safe/safe-transactions');
+      return signSafePending(safeIndex, ownerIndex);
+    })
+  );
+
+  ipcMain.handle(
+    'wallet:safe-execute',
+    safeStateHandler((safeIndex) => {
+      const { executeSafePending } = require('./safe/safe-transactions');
+      return executeSafePending(safeIndex);
+    })
+  );
+
+  ipcMain.handle(
+    'wallet:safe-state',
+    safeStateHandler((safeIndex) => {
+      const { getSafeSendState } = require('./safe/safe-transactions');
+      return getSafeSendState(safeIndex);
+    })
+  );
+
+  ipcMain.handle(
+    'wallet:safe-cancel-pending',
+    safeStateHandler((safeIndex) => {
+      const { cancelSafeSend } = require('./safe/safe-transactions');
+      cancelSafeSend(safeIndex);
+    })
+  );
+
+  ipcMain.handle('wallet:safe-pending-list', async () => {
+    try {
+      const { getAllSafeSendStates } = require('./safe/safe-transactions');
+      return { success: true, states: getAllSafeSendStates() };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // SafeMessage sessions — dApp message signing via EIP-1271 (see
+  // safe/safe-messages.js). Same granular board API as sends; complete
+  // returns the concatenated owner signatures instead of a state. Each
+  // session is bound to its requesting page: start takes the requester
+  // identity and returns a per-session token that every other call must
+  // present.
+  ipcMain.handle(
+    'wallet:safe-message-start',
+    safeStateHandler((safeIndex, request, display, requester) => {
+      const { startSafeMessage } = require('./safe/safe-messages');
+      return startSafeMessage({ safeIndex, request, display, requester });
+    })
+  );
+
+  ipcMain.handle(
+    'wallet:safe-message-sign',
+    safeStateHandler((safeIndex, ownerIndex, token) => {
+      const { signSafeMessage } = require('./safe/safe-messages');
+      return signSafeMessage(safeIndex, ownerIndex, token);
+    })
+  );
+
+  ipcMain.handle(
+    'wallet:safe-message-state',
+    safeStateHandler((safeIndex, token) => {
+      const { getSafeMessageState } = require('./safe/safe-messages');
+      return getSafeMessageState(safeIndex, token);
+    })
+  );
+
+  ipcMain.handle(
+    'wallet:safe-message-cancel',
+    safeStateHandler((safeIndex, token) => {
+      const { cancelSafeMessage } = require('./safe/safe-messages');
+      cancelSafeMessage(safeIndex, token);
+    })
+  );
+
+  ipcMain.handle('wallet:safe-message-complete', async (_event, safeIndex, token) => {
+    try {
+      const { completeSafeMessage } = require('./safe/safe-messages');
+      const { signature } = completeSafeMessage(safeIndex, token);
+      return { success: true, signature };
+    } catch (err) {
+      return { success: false, error: err.message, code: err.code };
+    }
+  });
+
+  // Capability-aware chain request. Myotis and Colibri are attempted before
+  // quorum/direct RPC according to the selected chain's access policy.
+  ipcMain.handle(
+    'wallet:chain-request',
+    async (_event, { chainId, method, params, routingContext }) => {
+      try {
+        if (!chainData.isReadMethod(method)) {
+          return { success: false, error: { code: 4200, message: 'Method not supported' } };
+        }
+        const response = await chainData.request(chainId, method, params || [], {
+          routingContext,
+        });
+        return { success: true, ...response };
+      } catch (err) {
+        return {
+          success: false,
+          error: { code: err.code || -32603, message: err.message, data: err.data },
+        };
+      }
+    }
+  );
+
+  // Legacy endpoint-specific proxy retained for existing internal callers.
   ipcMain.handle('wallet:proxy-rpc', async (_event, { rpcUrl, method, params }) => {
     try {
       if (!isAllowedRpcUrl(rpcUrl)) {
@@ -405,7 +502,7 @@ function registerWalletIpc() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           jsonrpc: '2.0',
-          id: ++rpcRequestId,
+          id: Date.now(),
           method,
           params: params || [],
         }),
@@ -431,5 +528,6 @@ function registerWalletIpc() {
 }
 
 module.exports = {
+  buildTxRecordContext,
   registerWalletIpc,
 };

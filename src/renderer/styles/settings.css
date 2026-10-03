@@ -3,8 +3,8 @@
    ======================================== */
 
 .settings-modal {
-  --settings-section-bg: rgba(255, 255, 255, 0.02);
-  --settings-divider: rgba(255, 255, 255, 0.06);
+  --settings-section-bg: var(--toolbar);
+  --settings-divider: var(--border);
 }
 
 .settings-panel {
@@ -13,6 +13,7 @@
   border-radius: 12px;
   width: min(408px, calc(100vw - 32px));
   box-sizing: border-box;
+  /* theme-literal: translucent black is the panel drop shadow, not its fill. */
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
@@ -84,7 +85,7 @@
   padding: 10px 12px;
   border-radius: 6px;
   border: 1px solid var(--border);
-  background: #0d0d0d;
+  background: var(--modal-bg);
   color: var(--text);
   font-size: 13px;
   transition:
@@ -103,15 +104,9 @@
   opacity: 0.6;
 }
 
-.settings-input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(94, 193, 255, 0.15);
-}
-
 .settings-input.error {
   border-color: var(--danger);
-  box-shadow: 0 0 0 2px rgba(255, 94, 94, 0.15);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 15%, transparent);
 }
 
 .field-error {
@@ -203,11 +198,6 @@
   background-position: right 10px center;
 }
 
-.settings-select:focus {
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(94, 193, 255, 0.3);
-}
-
 /* Modern Toggle Switch */
 .toggle-switch {
   position: relative;
@@ -245,7 +235,7 @@
 }
 
 .toggle-switch input:checked + .toggle-slider {
-  background: #4caf50;
+  background: var(--accent);
 }
 
 .toggle-switch input:checked + .toggle-slider::before {
@@ -253,7 +243,7 @@
 }
 
 .toggle-switch input:focus + .toggle-slider {
-  box-shadow: 0 0 0 2px rgba(94, 193, 255, 0.3);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 /* Settings Footer */
@@ -385,6 +375,7 @@
   width: 96px;
   height: 96px;
   border-radius: 8px;
+  /* theme-literal: QR codes require a fixed light background for scanner contrast. */
   background: #fff;
   flex: 0 0 auto;
 }

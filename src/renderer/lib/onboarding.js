@@ -10,6 +10,10 @@ let currentPassword = null;
 let touchIdAvailable = false;
 let isImportFlow = false; // Track if user is importing vs creating
 
+const IPFS_EPHEMERAL_LABEL = 'Ephemeral';
+const IPFS_EPHEMERAL_TITLE =
+  'freedom-ipfs uses ephemeral peer identities for read-only retrieval in this release.';
+
 // DOM references
 let modal;
 let steps = {};
@@ -81,42 +85,9 @@ async function checkTouchIdAvailability() {
 }
 
 /**
- * Check if onboarding is needed and show modal
- * Shows onboarding only if: no vault AND no node keys exist (true first run)
- * If user skipped before (no vault but keys exist), don't show again
- */
-export async function checkAndShowOnboarding() {
-  try {
-    const settings = await window.electronAPI.getSettings();
-    if (!settings?.enableIdentityWallet) {
-      return false;
-    }
-
-    const status = await window.identity.getStatus();
-
-    // If vault exists, user completed onboarding
-    if (status.hasVault) {
-      return false;
-    }
-
-    // No vault - check if any keys exist (user skipped before, or migrating from old version)
-    const keysExist = status.beeInjected || status.ipfsInjected || status.radicleInjected;
-    if (keysExist) {
-      console.log('[Onboarding] No vault but keys exist - user previously skipped');
-      return false;
-    }
-
-    // True first run - show onboarding
-    showOnboarding();
-    return true;
-  } catch (err) {
-    console.error('[Onboarding] Failed to check vault status:', err);
-  }
-  return false;
-}
-
-/**
- * Show the onboarding modal
+ * Show the onboarding modal. The sidebar's "Get Started" button is the
+ * only entry point — we no longer auto-show on first launch to avoid
+ * forcing new users through identity setup before they can use the browser.
  */
 export function showOnboarding() {
   showStep('welcome');
@@ -164,7 +135,7 @@ function showStep(stepName) {
 /**
  * Show loading overlay
  */
-function showLoading(text = 'Setting up your identity...') {
+function showLoading(text = 'Setting up your identity…') {
   loadingText.textContent = text;
   loading.classList.remove('hidden');
 }
@@ -229,7 +200,7 @@ function setupWelcomeStep() {
  * Quick Setup flow - create identity with Touch ID in one step
  */
 async function performQuickSetup() {
-  showLoading('Setting up with Touch ID...');
+  showLoading('Setting up with Touch ID…');
 
   try {
     // Step 1: Prompt Touch ID first (to confirm user intent)
@@ -245,7 +216,7 @@ async function performQuickSetup() {
     currentPassword = randomPassword;
 
     // Step 3: Generate mnemonic
-    showLoading('Generating identity...');
+    showLoading('Generating identity…');
     const mnemonicResult = await window.identity.generateMnemonic(256);
     if (!mnemonicResult.success) {
       hideLoading();
@@ -255,7 +226,7 @@ async function performQuickSetup() {
     currentMnemonic = mnemonicResult.mnemonic;
 
     // Step 4: Create vault with the random password (user does NOT know this password)
-    showLoading('Securing your identity...');
+    showLoading('Securing your identity…');
     const vaultResult = await window.identity.importMnemonic(randomPassword, currentMnemonic, false);
     if (!vaultResult.success) {
       hideLoading();
@@ -264,7 +235,7 @@ async function performQuickSetup() {
     }
 
     // Step 5: Enable Touch ID (store random password in Keychain)
-    showLoading('Enabling Touch ID...');
+    showLoading('Enabling Touch ID…');
     const quickUnlockResult = await window.quickUnlock.enable(randomPassword);
     if (!quickUnlockResult.success) {
       hideLoading();
@@ -278,7 +249,7 @@ async function performQuickSetup() {
 
     // Step 6: Inject identities into nodes
     // Check if nodes already have identities (user may have skipped setup initially)
-    showLoading('Finalizing setup...');
+    showLoading('Finalizing setup…');
     const status = await window.identity.getStatus();
     const nodesHaveIdentities = status.beeInjected || status.ipfsInjected || status.radicleInjected;
 
@@ -291,7 +262,7 @@ async function performQuickSetup() {
 
     // Restart nodes that were reinjected
     if (injectResult.needsRestart && injectResult.needsRestart.length > 0) {
-      showLoading('Restarting nodes with new identity...');
+      showLoading('Restarting nodes with new identity…');
       await restartNodes(injectResult.needsRestart);
     }
 
@@ -318,27 +289,21 @@ function generateRandomPassword() {
 }
 
 /**
- * Restart nodes that were reinjected with new identity
- * @param {string[]} nodeNames - Array of node names to restart ('bee', 'ipfs', 'radicle')
+ * Restart nodes that were reinjected with new identity. Ant is never in this
+ * list — its restart is owned by the identity lifecycle hook in the main
+ * process (stop → wipe → reinject → start).
+ * @param {string[]} nodeNames - Array of node names to restart ('ipfs', 'radicle')
  */
 async function restartNodes(nodeNames) {
   console.log('[Onboarding] Restarting nodes:', nodeNames);
 
   for (const nodeName of nodeNames) {
     try {
-      if (nodeName === 'bee') {
-        // Check if Bee is running
-        const beeStatus = await window.bee.getStatus();
-        if (beeStatus.status === 'running') {
-          console.log('[Onboarding] Restarting Bee node...');
-          await window.bee.stop();
-          await window.bee.start();
-        }
-      } else if (nodeName === 'ipfs') {
+      if (nodeName === 'ipfs') {
         // Check if IPFS is running
         const ipfsStatus = await window.ipfs.getStatus();
         if (ipfsStatus.status === 'running') {
-          console.log('[Onboarding] Restarting IPFS node...');
+          console.log('[Onboarding] Restarting IPFS node…');
           await window.ipfs.stop();
           await window.ipfs.start();
         }
@@ -346,7 +311,7 @@ async function restartNodes(nodeNames) {
         // Check if Radicle is running
         const radicleStatus = await window.radicle.getStatus();
         if (radicleStatus.status === 'running') {
-          console.log('[Onboarding] Restarting Radicle node...');
+          console.log('[Onboarding] Restarting Radicle node…');
           await window.radicle.stop();
           await window.radicle.start();
         }
@@ -457,7 +422,7 @@ function setupCreatePasswordStep() {
     if (!validateForm()) return;
 
     currentPassword = passwordInput.value;
-    showLoading('Generating recovery phrase...');
+    showLoading('Generating recovery phrase…');
 
     try {
       // Only generate mnemonic - don't save vault yet
@@ -503,7 +468,7 @@ function setupTouchIdStep() {
   };
 
   enableBtn.addEventListener('click', async () => {
-    showLoading('Enabling Touch ID...');
+    showLoading('Enabling Touch ID…');
 
     try {
       const result = await window.quickUnlock.enable(currentPassword);
@@ -701,7 +666,7 @@ function setupImportStep() {
     currentPassword = password;
     isImportFlow = true;
 
-    showLoading('Importing your identity...');
+    showLoading('Importing your identity…');
 
     try {
       // Import flow - user provides their own password, so they know it
@@ -745,7 +710,7 @@ async function finishOnboarding() {
   try {
     // Only save vault if not already saved (import flow saves it earlier)
     if (!isImportFlow) {
-      showLoading('Saving your identity vault...');
+      showLoading('Saving your identity vault…');
       // Save the vault with the mnemonic (user knows this password)
       const vaultResult = await window.identity.importMnemonic(currentPassword, currentMnemonic, true);
       if (!vaultResult.success) {
@@ -757,7 +722,7 @@ async function finishOnboarding() {
 
     // Inject identities into nodes
     // Check if nodes already have identities (user may have skipped setup initially)
-    showLoading('Setting up node identities...');
+    showLoading('Setting up node identities…');
     const status = await window.identity.getStatus();
     const nodesHaveIdentities = status.beeInjected || status.ipfsInjected || status.radicleInjected;
 
@@ -766,7 +731,7 @@ async function finishOnboarding() {
     if (result.success) {
       // Restart nodes that were reinjected
       if (result.needsRestart && result.needsRestart.length > 0) {
-        showLoading('Restarting nodes with new identity...');
+        showLoading('Restarting nodes with new identity…');
         await restartNodes(result.needsRestart);
       }
       hideLoading();
@@ -797,21 +762,27 @@ function displayIdentitySummary(result) {
   // Node identities (truncated)
   if (result.bee?.address) {
     const addr = result.bee.address;
-    ethEl.textContent = addr.slice(0, 10) + '...' + addr.slice(-8);
+    ethEl.textContent = addr.slice(0, 10) + '…' + addr.slice(-8);
     ethEl.title = addr;
   }
 
   if (result.ipfs?.peerId) {
     const peerId = result.ipfs.peerId;
-    ipfsEl.textContent = peerId.slice(0, 12) + '...' + peerId.slice(-8);
+    ipfsEl.textContent = peerId.slice(0, 12) + '…' + peerId.slice(-8);
     ipfsEl.title = peerId;
+  } else if (result.ipfs?.mode === 'ephemeral' || result.ipfs?.stableIdentitySupported === false) {
+    ipfsEl.textContent = IPFS_EPHEMERAL_LABEL;
+    ipfsEl.title = IPFS_EPHEMERAL_TITLE;
+  } else {
+    ipfsEl.textContent = '--';
+    ipfsEl.title = '';
   }
 
   if (result.radicle?.did) {
     const did = result.radicle.did;
     // Extract just the key part after did:key:
     const keyPart = did.replace('did:key:', '');
-    radicleEl.textContent = keyPart.slice(0, 12) + '...' + keyPart.slice(-8);
+    radicleEl.textContent = keyPart.slice(0, 12) + '…' + keyPart.slice(-8);
     radicleEl.title = did;
   }
 }
@@ -820,8 +791,8 @@ async function startNodesFromSettings() {
   try {
     const settings = await window.electronAPI.getSettings();
 
-    if (settings.startBeeAtLaunch) {
-      window.bee.start();
+    if (settings.startAntAtLaunch) {
+      window.ant.start();
     }
     if (settings.startIpfsAtLaunch) {
       window.ipfs.start();

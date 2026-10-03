@@ -1,109 +1,153 @@
+jest.mock('fs', () => ({
+  existsSync: jest.fn(),
+  mkdirSync: jest.fn(),
+  statSync: jest.fn(() => ({ mode: 0o755 })),
+  readFileSync: jest.fn(() => Buffer.from('verified fixture artifact')),
+}));
+
+jest.mock('./fetch-myotis', () => ({ validateInstalledAddon: jest.fn(() => null) }));
+const { validateInstalledAddon } = require('./fetch-myotis');
+const fs = require('fs');
 const path = require('path');
-const { checkCapabilityBinaries } = require('./check-binaries');
+const packageJson = require('../package.json');
+const { checkBinaries, ensureOptionalArti } = require('./check-binaries');
+const { platformKey } = require('./fetch-radicle-addon');
 
-function createFsMock(files = {}) {
-  return {
-    existsSync: jest.fn((target) => Object.prototype.hasOwnProperty.call(files, target)),
-    readFileSync: jest.fn((target) => Buffer.from(files[target]?.contents || 'current helper')),
-    statSync: jest.fn((target) => ({ mode: files[target]?.mode ?? 0o755 })),
-  };
-}
-
-function capabilityFiles(rootDir, directory, target, names) {
-  return Object.fromEntries(names.map((name) => [
-    path.join(rootDir, directory, target, name),
-    { mode: name.endsWith('.dat') || name.endsWith('.md') ? 0o644 : 0o755 },
-  ]));
-}
-
-describe('capability binary checks', () => {
-  const rootDir = '/release-source';
+describe('Radicle build inputs', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
 
   test.each([
-    ['hns', 'mac', 'x64'],
-    ['hns', 'mac', 'arm64'],
-    ['hns', 'linux', 'arm64'],
-    ['hns', 'win', 'x64'],
-    ['dvpn', 'mac', 'x64'],
-    ['dvpn', 'mac', 'arm64'],
-    ['dvpn', 'linux', 'arm64'],
-    ['dvpn', 'win', 'x64'],
-  ])('records %s as intentionally unsupported on %s-%s', (capability, os, arch) => {
-    const onUnsupported = jest.fn();
-    expect(checkCapabilityBinaries(capability, { os, arch }, {
-      rootDir,
-      fsImpl: createFsMock(),
-      onUnsupported,
-    })).toEqual([]);
-    expect(onUnsupported).toHaveBeenCalledWith(expect.stringContaining(`${os}-${arch}`));
+    ['mac', 'arm64'],
+    ['linux', 'x64'],
+    ['win', 'x64'],
+    ['win', 'arm64'],
+  ])('requires the embedded addon for %s-%s', (os, arch) => {
+    fs.existsSync.mockImplementation((target) => !target.endsWith('libradicle.node'));
+
+    expect(checkBinaries([{ os, arch }])).toEqual([
+      expect.stringContaining(`libradicle embedded addon for ${os}-${arch}`),
+    ]);
   });
 
-  test('requires every declared HNS artifact on Linux x64', () => {
-    const files = capabilityFiles(rootDir, 'hns-bin', 'linux-x64', [
-      'fingertipd',
-      'hnsd',
-    ]);
-    const missing = checkCapabilityBinaries('hns', { os: 'linux', arch: 'x64' }, {
-      rootDir,
-      fsImpl: createFsMock(files),
+  test('the standard download installs the addon only', () => {
+    expect(packageJson.scripts['radicle:download']).toBe('node scripts/fetch-radicle-addon.js');
+    expect(packageJson.scripts['radicle:download-addon']).toBeUndefined();
+  });
+
+  test.each(['mac', 'linux', 'win'])('packages only the embedded addon on %s', (target) => {
+    const resource = packageJson.build[target].extraResources.find(
+      ({ to }) => to === 'radicle-bin'
+    );
+
+    expect(resource).toMatchObject({
+      from: 'radicle-bin/${os}-${arch}/',
+      filter: ['libradicle.node'],
     });
-    expect(missing).toHaveLength(1);
-    expect(missing[0]).toContain('PROVENANCE.md');
   });
 
-  test('requires every declared dVPN artifact on Linux x64', () => {
-    const files = capabilityFiles(rootDir, 'dvpn-bin', 'linux-x64', ['v2ray']);
-    const missing = checkCapabilityBinaries('dvpn', { os: 'linux', arch: 'x64' }, {
-      rootDir,
-      fsImpl: createFsMock(files),
+  test('can download the Windows x64 addon while cross-building from macOS', () => {
+    expect(platformKey(['--win', '--x64'], 'darwin', 'arm64')).toBe('win-x64');
+  });
+
+  test('defaults Windows downloads to the published x64 artifact', () => {
+    expect(platformKey(['--win'], 'darwin', 'arm64')).toBe('win-x64');
+    expect(platformKey([], 'win32', 'x64')).toBe('win-x64');
+  });
+
+  test('selects the native Windows ARM64 addon', () => {
+    expect(platformKey(['--win', '--arm64'], 'darwin', 'arm64')).toBe('win-arm64');
+    expect(platformKey([], 'win32', 'arm64')).toBe('win-arm64');
+  });
+});
+
+
+describe('Myotis supervisor build inputs', () => {
+  test.each([['mac', 'arm64'], ['linux', 'x64'], ['win', 'x64']])(
+    'requires a source-built helper on %s-%s', (os, arch) => {
+      fs.existsSync.mockImplementation((target) => !target.includes('myotis-supervisor'));
+      expect(checkBinaries([{ os, arch }])).toEqual([
+        expect.stringContaining(`myotis supervisor for ${os}-${arch}`),
+      ]);
+    }
+  );
+  test('refuses a vanilla or modified addon without valid checkpoint provenance', () => {
+    fs.existsSync.mockReturnValue(true);
+    validateInstalledAddon.mockReturnValueOnce('checkpoint-addon checksum mismatch');
+    expect(checkBinaries([{ os: 'mac', arch: 'arm64' }])).toEqual([
+      expect.stringContaining('myotis checkpoint addon for mac-arm64: checkpoint-addon checksum mismatch'),
+    ]);
+  });
+  test('packages both helper names and only adds the mac helper to explicit signing', () => {
+    const resource = packageJson.build.extraResources.find(({ to }) => to === 'myotis-node');
+    expect(resource.filter).toEqual(['myotis-node.node', 'myotis-supervisor', 'myotis-supervisor.exe']);
+    expect(packageJson.build.mac.binaries).toEqual(['Contents/Resources/myotis-node/myotis-supervisor']);
+  });
+});
+
+// Arti is optional everywhere (it is compiled, not downloaded), but every
+// target we ship packages it the same way — including Windows since #337.
+describe('Arti (Tor) build inputs', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test.each(['mac', 'linux', 'win'])('packages the built binary on %s', (target) => {
+    const resource = packageJson.build[target].extraResources.find(({ to }) => to === 'arti-bin');
+
+    expect(resource).toMatchObject({
+      from: 'arti-bin/${os}-${arch}/',
+      filter: ['**/*'],
     });
-    expect(missing).toHaveLength(2);
-    expect(missing.join('\n')).toContain('geoip.dat');
-    expect(missing.join('\n')).toContain('geosite.dat');
   });
 
-  test('rejects non-executable supported binaries', () => {
-    const files = capabilityFiles(rootDir, 'dvpn-bin', 'linux-x64', [
-      'v2ray',
-      'geoip.dat',
-      'geosite.dat',
-    ]);
-    files[path.join(rootDir, 'dvpn-bin', 'linux-x64', 'v2ray')].mode = 0o644;
-    const missing = checkCapabilityBinaries('dvpn', { os: 'linux', arch: 'x64' }, {
-      rootDir,
-      fsImpl: createFsMock(files),
+  test('never blocks a build when the binary is missing', () => {
+    fs.existsSync.mockReturnValue(false);
+
+    expect(checkBinaries([{ os: 'win', arch: 'x64' }])).not.toContainEqual(
+      expect.stringContaining('arti')
+    );
+  });
+
+  // electron-builder resolves `from` before it copies, so the per-platform
+  // directory has to exist even for a build that bundles no Tor. Windows was
+  // skipped here while it shipped no Arti at all.
+  test.each([
+    ['mac', 'arm64', 'arti'],
+    ['linux', 'x64', 'arti'],
+    ['win', 'x64', 'arti.exe'],
+  ])('creates the %s-%s resource dir and looks for %s', (os, arch, binName) => {
+    fs.existsSync.mockReturnValue(false);
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    ensureOptionalArti([{ os, arch }]);
+
+    expect(fs.existsSync).toHaveBeenCalledWith(expect.stringContaining(`${os}-${arch}`));
+    const probed = fs.existsSync.mock.calls.flat();
+    // ensureOptionalArti builds the probe with path.join, so the separator is
+    // the *host's* — `\` on a Windows contributor's machine. Join the expected
+    // tail the same way rather than hard-coding `/`, the way
+    // tor-manager.test.js already does with path.sep.
+    const expectedTail = path.join(`${os}-${arch}`, binName);
+    expect(probed.some((target) => target.endsWith(expectedTail))).toBe(true);
+    expect(fs.mkdirSync).toHaveBeenCalledWith(expect.stringContaining(`${os}-${arch}`), {
+      recursive: true,
     });
-    expect(missing).toEqual([expect.stringContaining('not executable')]);
+    expect(warn).toHaveBeenCalled();
+
+    warn.mockRestore();
   });
 
-  test('rejects an HNS daemon with an unbundled libunbound dependency', () => {
-    const files = capabilityFiles(rootDir, 'hns-bin', 'linux-x64', [
-      'fingertipd',
-      'hnsd',
-      'PROVENANCE.md',
-    ]);
-    files[path.join(rootDir, 'hns-bin', 'linux-x64', 'hnsd')].contents =
-      'ELF metadata libunbound.so.8';
-    const missing = checkCapabilityBinaries('hns', { os: 'linux', arch: 'x64' }, {
-      rootDir,
-      fsImpl: createFsMock(files),
-    });
-    expect(missing).toEqual([expect.stringContaining('not self-contained')]);
-  });
+  test('leaves an already built binary alone', () => {
+    fs.existsSync.mockReturnValue(true);
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
-  test('accepts complete supported capability bundles', () => {
-    const hnsFiles = capabilityFiles(rootDir, 'hns-bin', 'linux-x64', [
-      'fingertipd',
-      'hnsd',
-      'PROVENANCE.md',
-    ]);
-    const dvpnFiles = capabilityFiles(rootDir, 'dvpn-bin', 'linux-x64', [
-      'v2ray',
-      'geoip.dat',
-      'geosite.dat',
-    ]);
-    const fsImpl = createFsMock({ ...hnsFiles, ...dvpnFiles });
-    expect(checkCapabilityBinaries('hns', { os: 'linux', arch: 'x64' }, { rootDir, fsImpl })).toEqual([]);
-    expect(checkCapabilityBinaries('dvpn', { os: 'linux', arch: 'x64' }, { rootDir, fsImpl })).toEqual([]);
+    ensureOptionalArti([{ os: 'win', arch: 'x64' }]);
+
+    expect(fs.mkdirSync).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+
+    warn.mockRestore();
   });
 });

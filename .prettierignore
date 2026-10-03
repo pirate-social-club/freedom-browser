@@ -2,8 +2,8 @@ dist/
 out/
 coverage/
 node_modules/
-bee-bin/
+ant-bin/
 ipfs-bin/
-bee-data/
+ant-data/
 ipfs-data/
 package-lock.json

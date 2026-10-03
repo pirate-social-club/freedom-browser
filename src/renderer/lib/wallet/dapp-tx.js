@@ -5,7 +5,24 @@
  */
 
 import { walletState, registerScreenHider, hideAllSubscreens } from './wallet-state.js';
+import {
+  assertNoSignatureInFlight,
+  isSignatureInFlight,
+  signatureInFlightError,
+  beginSignatureFlight,
+  endSignatureFlight,
+} from './signature-flight.js';
 import { open as openSidebarPanel } from '../sidebar.js';
+import {
+  bypassUnlockGateForDevice,
+  bypassUnlockGateForSafe,
+  signingButtonLabel,
+  isSafeAccount,
+  renderSafeFeePayer,
+  truncateAddress,
+} from './wallet-utils.js';
+import { openSafeSigningBoard, isSafeSigningBoardOpen } from './safe-signing.js';
+import { parseOnchainAppUrl } from '../url-utils.js';
 
 // DOM references
 let dappTxScreen;
@@ -27,9 +44,31 @@ let dappTxPasswordSubmit;
 let dappTxError;
 let dappTxRejectBtn;
 let dappTxApproveBtn;
+let dappTxAutoApproveRow;
+let dappTxAutoApproveCheckbox;
 
-// Local state
+// Local state. `dappTxPending.signing` is true while the signature and
+// broadcast are in flight: a hardware signature is a device prompt we
+// cannot recall, so there is no cancellation path once it starts —
+// rejecting behind it would settle the dApp promise with 4001 while the
+// transaction still broadcasts.
 let dappTxPending = null;
+
+const ERC20_TRANSFER_SELECTOR = '0xa9059cbb';
+
+/**
+ * The chain a contract-hosted app's origin is pinned to, or null for any
+ * other page. A second line of defence behind the provider's resolved chain:
+ * it is derived from the document actually making the request, so it cannot
+ * go stale the way a stored grant can.
+ */
+function pinnedOnchainAppChainId(webview) {
+  try {
+    return parseOnchainAppUrl(webview?.getURL?.())?.chainId || null;
+  } catch {
+    return null;
+  }
+}
 
 export function initDappTx() {
   dappTxScreen = document.getElementById('sidebar-dapp-tx');
@@ -52,6 +91,8 @@ export function initDappTx() {
   dappTxError = document.getElementById('dapp-tx-error');
   dappTxRejectBtn = document.getElementById('dapp-tx-reject');
   dappTxApproveBtn = document.getElementById('dapp-tx-approve');
+  dappTxAutoApproveRow = document.getElementById('dapp-tx-auto-approve-row');
+  dappTxAutoApproveCheckbox = document.getElementById('dapp-tx-auto-approve');
 
   // Register screen hider
   registerScreenHider(() => dappTxScreen?.classList.add('hidden'));
@@ -62,6 +103,7 @@ export function initDappTx() {
 function setupDappTxScreen() {
   if (dappTxBackBtn) {
     dappTxBackBtn.addEventListener('click', () => {
+      if (dappTxPending?.signing) return;
       rejectDappTx();
       closeDappTx();
     });
@@ -69,6 +111,7 @@ function setupDappTxScreen() {
 
   if (dappTxRejectBtn) {
     dappTxRejectBtn.addEventListener('click', () => {
+      if (dappTxPending?.signing) return;
       rejectDappTx();
       closeDappTx();
     });
@@ -103,24 +146,70 @@ function setupDappTxScreen() {
 
 /**
  * Show dApp transaction approval screen
+ *
+ * The sidebar is a single shared surface, and an in-flight signature owns
+ * it: the device prompt it produced cannot be recalled, so a later request
+ * must not repaint the screen, reset `dappTxPending` and re-enable
+ * Reject/Back/Confirm underneath it — the user would then be cancelling
+ * (or confirming) request B while the device is still showing request A.
+ * The lock is global (see signature-flight.js), so this refuses the
+ * newcomer whichever surface is holding the device: a sibling transaction,
+ * a dapp-sign request, or an x402 payment. The dApp can retry once the
+ * device is done.
+ *
+ * `requestChainId` is the chain the provider already resolved for this
+ * request — for a contract-hosted app that is the chain its origin is pinned
+ * to, which outranks both the stored grant and the wallet's current
+ * selection. Re-deriving it here would let a chain switch between the connect
+ * prompt and this approval quote, sign, broadcast and record the transaction
+ * on a chain the app never asked for (and file its auto-approve rule under a
+ * chain the next request never checks).
  */
-export async function showDappTxApproval(webview, permissionKey, txParams) {
+export async function showDappTxApproval(webview, permissionKey, txParams, requestChainId = null) {
+  assertNoSignatureInFlight();
+
   const permission = await window.dappPermissions.getPermission(permissionKey);
   if (!permission) {
     throw Object.assign(new Error('Unauthorized - not connected'), { code: 4100 });
   }
 
+  const chainId = requestChainId
+    || pinnedOnchainAppChainId(webview)
+    || permission.chainId
+    || walletState.selectedChainId;
+  const selector = extractSelector(txParams.data);
+
   return new Promise((resolve, reject) => {
-    dappTxPending = { permissionKey, walletIndex: permission.walletIndex, txParams, resolve, reject, webview };
+    // Re-checked after the awaits above: the screen must still be free at
+    // the moment we take it over.
+    assertNoSignatureInFlight();
+    const request = { permissionKey, walletIndex: permission.walletIndex, txParams, resolve, reject, webview, chainId, selector };
+    dappTxPending = request;
 
     if (dappTxSite) {
       dappTxSite.textContent = permissionKey;
     }
 
+    // Show auto-approve checkbox only for contract calls (has function selector)
+    if (dappTxAutoApproveCheckbox) dappTxAutoApproveCheckbox.checked = false;
+    setDappTxCancelEnabled(true);
+    if (dappTxAutoApproveRow) {
+      dappTxAutoApproveRow.classList.toggle('hidden', !selector);
+    }
+
     Promise.all([
-      populateDappTxDetails(txParams, permission.chainId || walletState.selectedChainId),
+      populateDappTxDetails(txParams, chainId),
       checkDappTxUnlockStatus(),
     ]).then(() => {
+      // Another surface may have started a device signature while we were
+      // estimating fees / checking vault status (the user could still
+      // click Pay on an x402 card, say). It owns the sidebar now — refuse
+      // rather than paint over a live confirmation.
+      if (isSignatureInFlight()) {
+        if (dappTxPending === request) dappTxPending = null;
+        reject(signatureInFlightError());
+        return;
+      }
       hideAllSubscreens();
       walletState.identityView?.classList.add('hidden');
       dappTxScreen?.classList.remove('hidden');
@@ -131,13 +220,13 @@ export async function showDappTxApproval(webview, permissionKey, txParams) {
 }
 
 async function populateDappTxDetails(txParams, chainId) {
-  const chainsResult = await window.chainRegistry.getChains();
+  const chainsResult = await window.networks.getChains();
   const chains = chainsResult.success ? chainsResult.chains : {};
   const chain = chains[chainId];
 
   if (dappTxTo) {
     const to = txParams.to || '';
-    dappTxTo.textContent = to ? `${to.slice(0, 10)}...${to.slice(-8)}` : 'Contract Creation';
+    dappTxTo.textContent = to ? `${to.slice(0, 10)}…${to.slice(-8)}` : 'Contract Creation';
     dappTxTo.title = to;
   }
 
@@ -151,7 +240,7 @@ async function populateDappTxDetails(txParams, chainId) {
   if (dappTxData) {
     const data = txParams.data || '';
     if (data && data !== '0x') {
-      dappTxData.textContent = `${data.slice(0, 20)}...`;
+      dappTxData.textContent = `${data.slice(0, 20)}…`;
       dappTxData.title = data;
       dappTxDataRow?.classList.remove('hidden');
       dappTxWarning?.classList.remove('hidden');
@@ -164,6 +253,12 @@ async function populateDappTxDetails(txParams, chainId) {
 
   if (dappTxNetwork) {
     dappTxNetwork.textContent = chain?.name || `Chain ${chainId}`;
+  }
+
+  if (dappTxFee && isSafeAccount(dappTxPending?.walletIndex)) {
+    // The executor EOA pays the execution fee, quoted after signing.
+    renderSafeFeePayer(dappTxFee, dappTxPending.walletIndex);
+    return;
   }
 
   if (dappTxFee) {
@@ -209,6 +304,13 @@ async function populateDappTxDetails(txParams, chainId) {
 
 async function checkDappTxUnlockStatus() {
   try {
+    if (
+      bypassUnlockGateForDevice(dappTxPending?.walletIndex, dappTxUnlock, dappTxApproveBtn) ||
+      bypassUnlockGateForSafe(dappTxPending?.walletIndex, dappTxUnlock, dappTxApproveBtn)
+    ) {
+      return;
+    }
+
     const status = await window.identity.getStatus();
 
     if (status.isUnlocked) {
@@ -294,14 +396,32 @@ async function handleDappTxPasswordUnlock() {
 }
 
 async function approveDappTx() {
-  if (!dappTxPending) return;
+  if (!dappTxPending || dappTxPending.signing) return;
 
-  const { permissionKey, walletIndex, txParams, resolve, gasLimit, gasPrice, chainId } = dappTxPending;
+  const request = dappTxPending;
+  const { permissionKey, walletIndex, txParams, resolve, gasLimit, gasPrice, chainId, selector } = request;
+  // Snapshot the auto-approve intent now: the checkbox is shared DOM that
+  // a later request can repopulate while this send is still in flight.
+  const autoApprove = Boolean(dappTxAutoApproveCheckbox?.checked);
+  const safeAccount = isSafeAccount(walletIndex);
 
   try {
+    request.signing = true;
+    // Claim the sidebar for the whole flight: no other approval surface
+    // may repaint over or tear down a live device confirmation.
+    if (!safeAccount) beginSignatureFlight(request);
     if (dappTxApproveBtn) {
       dappTxApproveBtn.disabled = true;
-      dappTxApproveBtn.textContent = 'Signing...';
+      dappTxApproveBtn.textContent = signingButtonLabel(walletIndex);
+    }
+    setDappTxCancelEnabled(false);
+
+    if (safeAccount) {
+      const hash = await sendViaSafeAccount(walletIndex, txParams, permissionKey, chainId);
+      console.log('[WalletUI] dApp Safe transaction executed:', hash);
+      resolve(hash);
+      closeDappTx();
+      return;
     }
 
     const tx = {
@@ -321,23 +441,143 @@ async function approveDappTx() {
       }
     }
 
-    const result = await window.wallet.dappSendTransaction(tx, walletIndex, permissionKey);
+    const result = await window.wallet.dappSendTransaction(
+      tx,
+      walletIndex,
+      buildDappTxContext(permissionKey, txParams)
+    );
 
     if (!result.success) {
       throw new Error(result.error || 'Transaction failed');
     }
+    if (result.recorded === false) {
+      console.warn('[WalletUI] dApp transaction broadcast but payment history did not record:', result.recordError);
+    }
+
+    if (autoApprove && permissionKey && selector && txParams.to) {
+      await window.dappPermissions.addTransactionAutoApprove(permissionKey, txParams.to, selector, chainId);
+      console.log('[WalletUI] Transaction auto-approve added:', txParams.to, selector, 'chain', chainId);
+    }
 
     console.log('[WalletUI] dApp transaction sent:', result.hash);
     resolve(result.hash);
-    closeDappTx();
+    // Only tear down the screen if it is still showing *this* request.
+    if (dappTxPending === request) {
+      closeDappTx();
+    }
   } catch (err) {
+    if (err?.code === 4001) {
+      // The user discarded the Safe transaction — that IS the rejection.
+      rejectDappTx();
+      closeDappTx();
+      return;
+    }
     console.error('[WalletUI] dApp transaction failed:', err);
     showDappTxError(err.message || 'Transaction failed');
     if (dappTxApproveBtn) {
       dappTxApproveBtn.disabled = false;
       dappTxApproveBtn.textContent = 'Confirm';
     }
+    setDappTxCancelEnabled(true);
+    // The signing board may have replaced this screen — bring the
+    // approval back so the error is actually visible.
+    if (safeAccount) {
+      walletState.identityView?.classList.add('hidden');
+      dappTxScreen?.classList.remove('hidden');
+    }
+  } finally {
+    request.signing = false;
+    endSignatureFlight(request);
   }
+}
+
+/**
+ * Enable/disable the two ways out of the approval screen (Reject, Back).
+ * Both are disabled while a signature is in flight.
+ */
+function setDappTxCancelEnabled(enabled) {
+  if (dappTxRejectBtn) dappTxRejectBtn.disabled = !enabled;
+  if (dappTxBackBtn) dappTxBackBtn.disabled = !enabled;
+}
+
+/**
+ * Route a dApp transaction through the Safe signing board: start the
+ * pending SafeTx (free vault signatures collected silently), open the
+ * board for the rest, and resolve with the execution hash once the
+ * threshold is met and the executor broadcast lands. The user parking
+ * the board keeps the dApp waiting (its transaction is still pending);
+ * discarding rejects with EIP-1193 code 4001.
+ */
+async function sendViaSafeAccount(walletIndex, txParams, site, chainId) {
+  const value = txParams.value ? BigInt(txParams.value).toString() : '0';
+  const started = await window.wallet.safeSend(
+    walletIndex,
+    { to: txParams.to, value, data: txParams.data || '0x' },
+    buildSafeDappDisplay(txParams, value, site),
+    // The app's chain, resolved by the provider — main refuses a chain the
+    // Safe does not live on rather than executing the calldata elsewhere.
+    chainId
+  );
+  if (!started.success) {
+    throw new Error(started.error || 'Transaction failed');
+  }
+
+  const execution = awaitSafeExecution(walletIndex, started.state.safeTxHash);
+  openSafeSigningBoard(walletIndex, started.state);
+  return execution;
+}
+
+/** Resolve with the exec-tx hash / reject 4001 on discard, by board events. */
+function awaitSafeExecution(safeIndex, safeTxHash) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      window.removeEventListener('wallet:safe-executed', onExecuted);
+      window.removeEventListener('wallet:safe-discarded', onDiscarded);
+    };
+    const onExecuted = (event) => {
+      if (event.detail?.safeTxHash !== safeTxHash) return;
+      cleanup();
+      resolve(event.detail.hash);
+    };
+    const onDiscarded = (event) => {
+      if (event.detail?.safeIndex !== safeIndex) return;
+      cleanup();
+      reject({ code: 4001, message: 'User rejected the request' });
+    };
+    window.addEventListener('wallet:safe-executed', onExecuted);
+    window.addEventListener('wallet:safe-discarded', onDiscarded);
+  });
+}
+
+/**
+ * Presentation facts for the signing board / pending row. Native
+ * transfers reuse the board's own amount/recipient formatting; token
+ * transfers and arbitrary calldata carry a pre-composed `label` line.
+ * The raw to/asset/amount still feed the payment-history row, and
+ * `site` makes the board say who asked ("— requested by <site>").
+ */
+function buildSafeDappDisplay(txParams, value, site) {
+  const decoded = decodeErc20Transfer(txParams.data);
+  if (decoded) {
+    return {
+      site,
+      asset: String(txParams.to).toLowerCase(),
+      toAddress: decoded.toAddress,
+      amount: decoded.amount,
+      // unknown token decimals/symbol — don't pretend to format them
+      label: `sending tokens to ${truncateAddress(decoded.toAddress)}`,
+    };
+  }
+  if (!txParams.data || txParams.data === '0x') {
+    return { site, asset: null, toAddress: txParams.to, amount: value };
+  }
+  return {
+    site,
+    asset: null,
+    toAddress: txParams.to,
+    amount: value,
+    label: `a contract call to ${truncateAddress(txParams.to)}`,
+  };
 }
 
 function rejectDappTx() {
@@ -348,14 +588,20 @@ function rejectDappTx() {
 
 function closeDappTx() {
   dappTxScreen?.classList.add('hidden');
-  walletState.identityView?.classList.remove('hidden');
+  // A Safe flow may still be showing the signing board (in-flow, not a
+  // modal) — restoring the identity view under it would double-render.
+  if (!isSafeSigningBoardOpen()) {
+    walletState.identityView?.classList.remove('hidden');
+  }
   dappTxPending = null;
   hideDappTxError();
   if (dappTxPasswordInput) dappTxPasswordInput.value = '';
+  if (dappTxAutoApproveCheckbox) dappTxAutoApproveCheckbox.checked = false;
   if (dappTxApproveBtn) {
     dappTxApproveBtn.disabled = false;
     dappTxApproveBtn.textContent = 'Confirm';
   }
+  setDappTxCancelEnabled(true);
 }
 
 function showDappTxError(message) {
@@ -367,4 +613,46 @@ function showDappTxError(message) {
 
 function hideDappTxError() {
   dappTxError?.classList.add('hidden');
+}
+
+/**
+ * Extract the 4-byte function selector from transaction data.
+ * Returns null for plain ETH transfers (no data or data < 4 bytes).
+ * @param {string} data - Hex-encoded transaction data (0x prefixed)
+ * @returns {string|null} e.g. "0xabcd1234" or null
+ */
+export function extractSelector(data) {
+  if (!data || typeof data !== 'string') return null;
+  const hex = data.startsWith('0x') ? data.slice(2) : data;
+  if (hex.length < 8) return null;
+  return '0x' + hex.slice(0, 8).toLowerCase();
+}
+
+export function decodeErc20Transfer(data) {
+  if (!data || typeof data !== 'string') return null;
+  const hex = data.toLowerCase();
+  if (!hex.startsWith(ERC20_TRANSFER_SELECTOR) || hex.length < 138) return null;
+  const recipientSlot = hex.slice(10, 74);
+  const amountSlot = hex.slice(74, 138);
+  if (!/^[0-9a-f]{64}$/.test(recipientSlot) || !/^[0-9a-f]{64}$/.test(amountSlot)) {
+    return null;
+  }
+  return {
+    toAddress: `0x${recipientSlot.slice(24)}`,
+    amount: BigInt(`0x${amountSlot}`).toString(10),
+  };
+}
+
+export function buildDappTxContext(origin, txParams = {}) {
+  const decoded = decodeErc20Transfer(txParams.data);
+  if (!decoded || !txParams.to) {
+    return { origin };
+  }
+  return {
+    origin,
+    asset: String(txParams.to).toLowerCase(),
+    toAddress: decoded.toAddress,
+    amount: decoded.amount,
+    metadata: { erc20Method: 'transfer' },
+  };
 }
