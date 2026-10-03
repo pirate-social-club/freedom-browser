@@ -12,8 +12,19 @@ subprocess.run(['ip','link','set','lo','up'],check=True)
 (p/'namespace-pid').write_text(str(os.getpid()))
 while not (p/'network.ready').exists() and time.time()<end:time.sleep(.1)
 assert (p/'network.ready').exists(),'slirp never ready'
-subprocess.run(['nft','-f',str(p/'namespace-dns.nft')],check=True)
-servers=[subprocess.Popen(['python3',str(p/n)]) for n in ['dns-copy.py','wrong-tls.py','os-dns.py']]
+journey=os.environ.get('FREEDOM_ACCEPTANCE_JOURNEY','fixtures');assert journey in ['fixtures','a18n']
+servers=[]
+if journey=='fixtures':
+ subprocess.run(['nft','-f',str(p/'namespace-dns.nft')],check=True)
+ servers=[subprocess.Popen(['python3',str(p/n)]) for n in ['dns-copy.py','wrong-tls.py','os-dns.py']]
+else:
+ # Normal namespace DNS uses slirp's public forwarding, without fixture
+ # redirection or replacement of the browser's authenticated HNS answers.
+ resolver=p/'public-resolv.conf';resolver.write_text('nameserver 10.0.2.3\n')
+ subprocess.run(['mount','--bind',str(resolver),'/etc/resolv.conf'],check=True)
+ rules=json.loads(subprocess.check_output(['nft','-j','list','ruleset'],text=True))
+ assert not any('table' in entry or 'rule' in entry for entry in rules.get('nftables',[])),'unexpected network interception'
+ (p/'public-network.json').write_text(json.dumps({'journey':'a18n','fixture_dns_interception':False,'fixture_servers_started':False,'os_dns_forwarder':'10.0.2.3','empty_network_ruleset':True})+'\n')
 def browser_socket_preflight(directory):
  assert directory.is_absolute() and directory==p/'ab','socket directory outside private work'
  size=len(os.fsencode(str(directory/'freedom-hosted-package-acceptance.sock')))
@@ -84,12 +95,13 @@ try:
    os.chown(path,uid,gid)
    path.chmod(0o700 if path.is_dir() else 0o600)
  browser_env={**env,'HOME':pwd.getpwuid(uid).pw_dir,'USER':pwd.getpwuid(uid).pw_name,'LOGNAME':pwd.getpwuid(uid).pw_name,'XDG_CONFIG_HOME':str(p/'browser-config'),'XDG_CACHE_HOME':str(p/'browser-cache'),'XDG_DATA_HOME':str(p/'browser-data'),'TMPDIR':str(p/'browser-tmp')}
- assert (p/'private-test-material').stat().st_uid==0 and (p/'private-test-material').stat().st_mode&0o777==0o700
+ if journey=='fixtures':assert (p/'private-test-material').stat().st_uid==0 and (p/'private-test-material').stat().st_mode&0o777==0o700
  log=(p/'warm-browser.log').open('wb')
  browser=subprocess.Popen(['setpriv','--reuid='+str(uid),'--regid='+str(gid),'--clear-groups','--inh-caps=-all','--ambient-caps=-all','--bounding-set=-all','/opt/Freedom/freedom','--remote-debugging-port=9244','--user-data-dir='+str(p/'profile-candidate')],env=browser_env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
  (p/'browser-launch.json').write_text(json.dumps({'pid':browser.pid,'start_ticks':(Path('/proc')/str(browser.pid)/'stat').read_text().rsplit(')',1)[1].split()[19],'epoch':time.time(),'network_namespace':Path('/proc/self/ns/net').readlink().as_posix(),'host_uid':uid,'host_gid':gid,'executable':'/opt/Freedom/freedom'}))
  browser_diagnostic('browser_launched')
- driver=subprocess.Popen(['python3',str(p/'drive-acceptance.py')],env=env,stdout=log,stderr=subprocess.STDOUT)
+ driver_name='drive-acceptance.py' if journey=='fixtures' else 'drive-public-a18n.py'
+ driver=subprocess.Popen(['python3',str(p/driver_name)],env=env,stdout=log,stderr=subprocess.STDOUT)
  next_diagnostic=0
  while time.time()<end and driver.poll() is None:
   if time.time()>=next_diagnostic:browser_diagnostic('driver_running');next_diagnostic=time.time()+1

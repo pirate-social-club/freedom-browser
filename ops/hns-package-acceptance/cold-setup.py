@@ -11,7 +11,21 @@ for name,digest in json.loads((base/'runtime-source-pins.json').read_text()).ite
 assert sys.version_info[:2]==(3,12),'pinned wheels require Ubuntu24 Python3.12'
 assert subprocess.check_output(['node','--version'],text=True,timeout=5).strip()=='v24.14.0'
 lock=json.loads((repo/'package-lock.json').read_text());assert lock['packages']['node_modules/axios']['version']=='1.20.0';assert lock['packages']['node_modules/electron']['version']=='42.10.0'
-run(['npm','ci']);run(['npm','audit','--audit-level=high'])
+run(['npm','ci'])
+journey=os.environ.get('FREEDOM_ACCEPTANCE_JOURNEY','fixtures');assert journey in ('fixtures','a18n')
+audit_proof=None
+if journey=='fixtures':
+ run(['npm','audit','--audit-level=high'])
+else:
+ def diagnostic_audit(arguments,filename):
+  remaining=deadline-time.monotonic();assert remaining>0
+  result=subprocess.run(['npm','audit','--json','--audit-level=high',*arguments],cwd=repo,timeout=remaining,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+  (root/filename).write_bytes(result.stdout)
+  return result.stdout,result.returncode
+ full,full_code=diagnostic_audit([],'audit-full.json')
+ runtime,runtime_code=diagnostic_audit(['--omit=dev'],'audit-runtime.json')
+ audit_proof=runpy.run_path(str(base/'public-diagnostic-audit.py'))['admit_public_diagnostic'](full,full_code,runtime,runtime_code,lock)
+ (root/'public-diagnostic-audit.json').write_text(json.dumps(audit_proof,indent=2)+'\n')
 # Electron42 has no npm postinstall downloader. Explicitly prepare its locked binary during cold setup.
 electron_dir=repo/'node_modules/electron';electron=electron_dir/'dist/electron';addon=repo/'node_modules/better-sqlite3/build/Release/better_sqlite3.node'
 assert json.loads((electron_dir/'package.json').read_text())['version']=='42.10.0'
@@ -45,7 +59,35 @@ def file_sha(path):
  return h.hexdigest()
 fpm_files={str(path.relative_to(fpm.parent)):file_sha(path) for path in sorted(fpm.parent.rglob('*')) if path.is_file()}
 (root/'fpm-cache.json').write_text(json.dumps({'archive':fpm_archive,'archive_sha256':fpm_archive_sha,'builder_version':'26.15.3','toolset_module_sha256':fpm_module_sha,'executable':str(fpm),'directory':str(fpm.parent),'files':fpm_files},indent=2)+'\n')
-for script in ['bee:download','ipfs:download','radicle:download']:run(['npm','run',script,'--','--target','linux-x64'])
+run(['npm','run','bee:download','--','--target','linux-x64'])
+kubo_proof=None
+if journey=='fixtures':
+ run(['npm','run','ipfs:download','--','--target','linux-x64'])
+else:
+ # The original endpoint failed in run37105756502. Use the official release's
+ # identical archive for this diagnostic, retaining the original SHA512 pin.
+ kubo_mirror=r"""
+ const fs=require('fs'),path=require('path'),crypto=require('crypto'),assert=require('assert');
+ const locked=require('./scripts/binary-artifacts.lock.json').ipfs;
+ const artifact=locked.targets['linux-x64'];
+ const original='https://dist.ipfs.tech/kubo/v0.43.0/kubo_v0.43.0_linux-amd64.tar.gz';
+ const mirror='https://github.com/ipfs/kubo/releases/download/v0.43.0/kubo_v0.43.0_linux-amd64.tar.gz';
+ const pin='6af21cd24a307d94326807b3d3827064c74fb7122f83b6940af250e6ae40da250e0ec0e1f3551256b78cd204623ed56c32ce735bbe28bdcc787b36943c52458a';
+ (async()=>{
+  assert(locked.version==='v0.43.0'&&artifact.url===original&&artifact.sha512===pin&&artifact.archive==='tar.gz');
+  const target=path.resolve('ipfs-bin/linux-x64');assert(!fs.existsSync(target),'fresh Kubo destination required');
+  fs.mkdirSync(target,{recursive:true});const archive=path.join(target,'kubo_v0.43.0_linux-amd64.tar.gz');
+  await require('./scripts/download-verified').downloadVerified(mirror,archive,'sha512',pin);
+  require('./scripts/extract-archive').extractArchive(archive,target,artifact.archive);
+  const extracted=path.join(target,'kubo/ipfs');assert(fs.lstatSync(extracted).isFile(),'Kubo executable missing');
+  const binary=path.join(target,'ipfs');fs.renameSync(extracted,binary);fs.chmodSync(binary,0o755);
+  fs.rmSync(archive);fs.rmSync(path.join(target,'kubo'),{recursive:true});
+  fs.writeFileSync(process.argv[1],JSON.stringify({original_url:original,original_failed_run:37105756502,original_failure:'Kubo_download_failed_empty_error',official_release_url:mirror,archive_sha512:pin,executable_sha256:crypto.createHash('sha256').update(fs.readFileSync(binary)).digest('hex'),original_pin_verified:true,scope:'credential_free_public_diagnostic',merge_or_release_acceptance:false}));
+ })().catch(()=>{console.error('Pinned Kubo diagnostic mirror failed');process.exitCode=1});
+ """
+ run(['node','-e',kubo_mirror,str(root/'kubo-distribution.json')])
+ kubo_proof=json.loads((root/'kubo-distribution.json').read_text())
+run(['npm','run','radicle:download','--','--target','linux-x64'])
 venv=root/'python';run(['/usr/bin/python3','-m','venv',str(venv)])
 run([str(venv/'bin/pip'),'install','--require-hashes','--only-binary=:all:','--disable-pip-version-check','-r',str(base/'requirements.txt')])
 browser=root/'browser';browser.mkdir();pin=json.loads((base/'agent-browser-pin.json').read_text());(browser/'package.json').write_text(json.dumps({'name':'freedom-hosted-cdp-tools','private':True,'version':'1.0.0','dependencies':{'agent-browser':pin['tarball']}}))
@@ -61,4 +103,6 @@ for flags in [['-l'],['-d']]:
  output=subprocess.check_output(['readelf',*flags,str(repo/'hns-bin/linux-x64/hnsd')],text=True,timeout=5)
  assert ('INTERP' not in output) if flags==['-l'] else ('There is no dynamic section' in output),'hnsd unexpectedly dynamically linked'
 receipt={'electron_version_provenance':version_proof,'source':os.environ['FREEDOM_SOURCE_SHA'],'cold_setup_seconds':time.monotonic()-start,'Node':'24.14.0','Electron':'42.10.0','Axios':'1.20.0','agent_browser':pin,'libunbound_runtime_package_required':False,'Electron_download_archive':electron_archive,'Electron_download_sha256':electron_checksum,'Electron_installer_sha256':hashlib.sha256((electron_dir/'install.js').read_bytes()).hexdigest(),'Electron_executable_sha256':hashlib.sha256(electron.read_bytes()).hexdigest(),'cold_native_sqlite_SELECT42':True,'cold_Axios_version':'1.20.0','native_module_sha256':hashlib.sha256((repo/'node_modules/better-sqlite3/build/Release/better_sqlite3.node').read_bytes()).hexdigest(),'ImageOS':os.environ.get('ImageOS'),'ImageVersion':os.environ.get('ImageVersion'),'apt_packages':subprocess.check_output(['dpkg-query','-W','-f=${Package} ${Version}\n','xvfb','slirp4netns','nftables','python3','python3-venv','util-linux','binutils'],text=True,timeout=5).splitlines()}
+if audit_proof is not None:receipt['public_diagnostic_audit']=audit_proof
+if kubo_proof is not None:receipt['kubo_distribution']=kubo_proof
 (root/'cold-setup.json').write_text(json.dumps(receipt,indent=2)+'\n')
