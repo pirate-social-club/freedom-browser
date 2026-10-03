@@ -1,8 +1,8 @@
 {
-  "project_license": "MPL-2.0",
-  "generated_at": "2026-09-23T00:00:00.000Z",
-  "audit_baseline": "0.8.6",
-  "notes": "Regenerated for the 0.8.5 release. The 2026-08-19 revision of this file described a pre-0.8.5 tree (electron 39.2.7, ant v0.5.21, libradicle 0.3.0, no Myotis, no Arti) and reported zero copyleft dependencies, which was already untrue. Bundled-component inventory is derived from package.json build.extraResources and src/renderer/vendor/; licenses-audit.test.js fails if this file drifts from either.",
+  "project_license": "AGPL-3.0-or-later",
+  "generated_at": "2026-10-03T12:25:00.854107+00:00",
+  "audit_baseline": "0.7.15",
+  "notes": "Integration inventory from upstream v0.8.6, carried into the AGPL-3.0-or-later Freedom fork. Upstream component records are retained pending candidate artifact review. HNS and dVPN resources are not yet completely classified; a server or source-project license alone does not establish a bundled binary license closure.",
   "distribution_model": {
     "packaging": "electron-builder",
     "bundles_node_modules": true,
@@ -21,7 +21,7 @@
       "src/renderer/vendor/marked.min.js",
       "src/renderer/vendor/purify.min.js"
     ],
-    "notes": "Electron desktop app bundled as DMG/DEB/AppImage/pacman/NSIS. Node modules bundled in app.asar. Native addons better-sqlite3, freedom_ipfs_native.node, libradicle.node and myotis-node.node ship under resources/. Ant (antd) and, on macOS, Linux and Windows x64, Arti ship as external binaries in resources/. myotis-supervisor is compiled from Freedom's own C sources (src/main/myotis/native/) and is not third-party. Pre-built third-party renderer libraries are committed under src/renderer/vendor/ and ship inside app.asar via the src/**/* files pattern, which also ships every other committed file under src/ — see the assets array for the media it carries."
+    "notes": "Linux packaging targets deb only. Existing macOS and Windows packaging settings are retained for integration review. Declared resources are not proof of installed artifact contents. Native addons and upstream renderer bundles require their existing notices; retained HNS/dVPN helpers require additional artifact attribution."
   },
   "dependencies": [
     {
@@ -867,7 +867,20 @@
     }
   ],
   "summary": { "green": 266, "yellow": 2, "orange": 5, "red": 0, "unknown": 0 },
-  "blockers": [],
+  "blockers": [
+    {
+      "component": "HNS helpers",
+      "details": "Classify the retained artifacts, reproduce required upstream notices, and establish the static system-library closure and corresponding-source/relinking obligations."
+    },
+    {
+      "component": "dVPN runtime and datasets",
+      "details": "Reproduce V2Ray dependency notices and GeoIP/GeoSite data attribution, tied to the exact retained bytes."
+    },
+    {
+      "component": "Integrated artifact inventory",
+      "details": "Reconcile LICENSE_AUDIT.md, extraResources classification and installed package contents against this AGPL fork before release."
+    }
+  ],
   "resolved_since_last_audit": [
     {
       "kind": "copyleft",
@@ -877,8 +890,8 @@
     }
   ],
   "verdict": {
-    "status": "OK_TO_SHIP",
-    "message": "Compatible with distributing Freedom under MPL-2.0, provided NOTICES stays as written. No GPL/AGPL code remains after removing the unreferenced qrious bundle. The weak copyleft that does ship is handled: MPL-2.0 packages are consumed unmodified and MPL-2.0 is Freedom's own license; the LGPL-3.0 OpenLV stack ships as one standalone, regenerable vendor bundle containing no Freedom code, which is what makes LGPL section 4 relinking possible."
+    "status": "REVIEW_REQUIRED",
+    "message": "Integration candidate is not cleared for distribution. Freedom retains AGPL-3.0-or-later; upstream source and third-party components retain their own notices. Resolve recorded artifact obligations and rerun the complete licensing gate before release."
   },
   "required_actions": [
     {
