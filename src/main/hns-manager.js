@@ -61,6 +61,7 @@ let proxyAddr = null;
 let caPemPath = null;
 let caCertFingerprint = null;
 const certificateSessions = new Map();
+let readyTicket = null;
 let synced = false;
 let canaryReady = false;
 let localResolverReady = false;
@@ -659,6 +660,20 @@ function loadCaFingerprint(pemPath) {
 async function handleReady(event) {
   if (currentState !== STATUS.STARTING && currentState !== STATUS.RUNNING) return;
   const generation = helperGeneration;
+  const ticket = {};
+  readyTicket = ticket;
+  const isCurrent = () => generation === helperGeneration && readyTicket === ticket;
+  try {
+    await networkManager.beginHnsCertificateUpdate();
+  } catch (error) {
+    if (isCurrent()) {
+      updateState(STATUS.ERROR, 'HNS certificate transition failed');
+      setErrorState('hns', 'HNS certificate transition failed');
+      log.error('[HNS] Certificate transition failed:', error.message);
+    }
+    return;
+  }
+  if (!isCurrent()) return;
   proxyAddr = event.proxyAddr || null;
   caPemPath = event.caPath || null;
   lastProcessError = null;
@@ -676,11 +691,11 @@ async function handleReady(event) {
     networkManager.setHnsProxy(proxyAddr, { generation, caFingerprint: caCertFingerprint });
     networkManager.setHnsResolverAddrs?.({ rootAddr, recursiveAddr });
     await networkManager.rebuild();
-    if (generation !== helperGeneration) return;
+    if (!isCurrent()) return;
     publishedProxyAddr = networkManager.getHnsProxyAddr() || null;
     networkManager.refreshImportedHnsSuffixes()
       .then((suffixes) => {
-        if (generation !== helperGeneration) return;
+        if (!isCurrent()) return;
         updateService('hns', { publicSuffixes: suffixes });
         if (suffixes.length > 1) {
           pruneUnknownSingleLabelHistory();
@@ -691,7 +706,7 @@ async function handleReady(event) {
         log.warn(`[HNS] Imported namespace suffix refresh failed: ${err.message}`);
       });
   } catch (err) {
-    if (generation !== helperGeneration) return;
+    if (!isCurrent()) return;
     updateState(STATUS.ERROR, `Proxy configuration failed: ${err.message}`);
     setErrorState('hns', 'Proxy configuration failed');
     return;

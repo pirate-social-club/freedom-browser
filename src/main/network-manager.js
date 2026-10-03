@@ -22,6 +22,7 @@ const PUBLIC_NAMESPACES_URL = process.env.PIRATE_PUBLIC_NAMESPACES_URL || 'https
 let hnsProxyAddr = null;
 let hnsUpstreamProxyAddr = null;
 let hnsTrustIdentity = null;
+let hnsCertificateUpdating = false;
 let hnsTrustRevision = 0;
 let hnsRootResolverAddr = null;
 let hnsGuardServer = null;
@@ -580,6 +581,7 @@ async function stopPacServer() {
 
 function getRoutingIntent() {
   return { hnsUpstream: hnsUpstreamProxyAddr, rootResolver: hnsRootResolverAddr,
+    hnsCertificateUpdating,
     trustIdentity: hnsUpstreamProxyAddr ? hnsTrustIdentity : null,
     dvpnHost: dvpnProxyHost, dvpnPort: dvpnProxyPort,
     torSocksEndpoint, torRoutingConfigured,
@@ -587,6 +589,7 @@ function getRoutingIntent() {
 }
 
 async function prepareProxyPolicy(intent) {
+  if (intent.hnsCertificateUpdating) throw new Error('HNS certificate update in progress');
   // Existing Node operations cannot inherit a different helper or trust key.
   // Electron requests were withdrawn before this shared preparation began.
   await drainGuardResources();
@@ -620,7 +623,7 @@ const routing = createSessionRoutingCoordinator(proxySessions, {
   isValid: (policy) => policy.configuration.mode === 'direct' ||
     (pacServer === policy.pacServer && Boolean(pacServer && pacPort) && currentPacContent === policy.content &&
       (!policy.guardNeeded || (hnsGuardServer === policy.guardServer && Boolean(hnsGuardServer && hnsGuardPort)))),
-  isInitialDirect: (intent) => !intent.hnsUpstream && !intent.dvpnHost && !intent.torRoutingConfigured && !pacServer && !hnsGuardServer,
+  isInitialDirect: (intent) => !intent.hnsCertificateUpdating && !intent.hnsUpstream && !intent.dvpnHost && !intent.torRoutingConfigured && !pacServer && !hnsGuardServer,
   retire: async (policy) => {
     if (!policy.guardNeeded) await stopHnsGuardProxy();
     if (policy.configuration.mode === 'direct') await stopPacServer();
@@ -649,6 +652,7 @@ function clearProxy() {
 }
 
 function setHnsProxy(proxyAddr, trustIdentity = null) {
+  hnsCertificateUpdating = false;
   hnsUpstreamProxyAddr = proxyAddr;
   // A new CA or helper can invalidate live TLS even when addresses are reused.
   // Legacy callers without identity require a fresh application on every set.
@@ -667,6 +671,7 @@ function setHnsResolverAddrs({ rootAddr } = {}) {
 }
 
 function clearHnsProxy() {
+  hnsCertificateUpdating = false;
   hnsUpstreamProxyAddr = null;
   hnsTrustIdentity = null;
   hnsRootResolverAddr = null;
@@ -674,6 +679,19 @@ function clearHnsProxy() {
   hnsProxyHosts.clear();
   routing.intentChanged();
   log.info('[Network] HNS proxy cleared');
+}
+
+function beginHnsCertificateUpdate() {
+  hnsCertificateUpdating = true;
+  routing.intentChanged();
+  return proxySessions.enqueue(async () => {
+    try {
+      await Promise.all([proxySessions.quarantineAll(), drainGuardResources()]);
+    } catch (error) {
+      proxySessions.terminate('hns_trust_transition_failed');
+      throw error;
+    }
+  });
 }
 
 function setTorProxy(endpoint) {
@@ -767,6 +785,7 @@ module.exports = {
   getProxySessionPolicy: proxySessions.policyFor,
   setProxySessionPolicyObserver: proxySessions.setPolicyObserver,
   setHnsProxy,
+  beginHnsCertificateUpdate,
   setHnsResolverAddrs,
   clearHnsProxy,
   setDvpnProxy,

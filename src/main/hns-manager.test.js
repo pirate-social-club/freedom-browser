@@ -101,6 +101,7 @@ function loadHnsManagerModule(options = {}) {
   const clearService = jest.fn();
 
   const setHnsProxy = jest.fn();
+  const beginHnsCertificateUpdate = jest.fn(async () => {});
   const setHnsResolverAddrs = jest.fn();
   const clearHnsProxy = jest.fn();
   const registerProxySession = jest.fn(async () => {});
@@ -209,6 +210,7 @@ function loadHnsManagerModule(options = {}) {
       }),
       [require.resolve('./network-manager')]: () => ({
         setHnsProxy,
+        beginHnsCertificateUpdate,
         setHnsResolverAddrs,
         clearHnsProxy,
         registerProxySession,
@@ -257,6 +259,7 @@ function loadHnsManagerModule(options = {}) {
     clearErrorState,
     clearService,
     setHnsProxy,
+    beginHnsCertificateUpdate,
     setHnsResolverAddrs,
     clearHnsProxy,
     registerProxySession,
@@ -690,13 +693,7 @@ describe('hns-manager', () => {
       readFileSync: () => 'test certificate',
     });
 
-    await ctx.mod.startHns();
-    ctx.readlineHandlers.get('line')?.(JSON.stringify({
-      type: 'ready',
-      proxyAddr: '127.0.0.1:44041',
-      caPath: '/tmp/hns-ca.pem',
-    }));
-    await Promise.resolve();
+    await emitHelperReady(ctx);
 
     expect(ctx.setHnsProxy).toHaveBeenCalledWith('127.0.0.1:44041', {
       generation: expect.any(Number), caFingerprint: expect.any(String),
@@ -928,6 +925,50 @@ describe('hns-manager', () => {
     const trusted = ctx.mod.chromiumCertificateFingerprint(Buffer.from('test certificate'));
     verify({ hostname: 'app.pirate', certificate: { issuerCert: { fingerprint: trusted } } }, callback);
     expect(callback).toHaveBeenLastCalledWith(0);
+  });
+
+  test('ready waits for connection drainage before reading or applying a CA', async () => {
+    jest.useFakeTimers();
+    const ctx = loadCertificateSessionFixture();
+    let release;
+    ctx.beginHnsCertificateUpdate.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    await emitHelperReady(ctx);
+    expect(ctx.beginHnsCertificateUpdate).toHaveBeenCalledTimes(1);
+    expect(ctx.fsMock.readFileSync).not.toHaveBeenCalledWith('/tmp/hns-ca.pem', 'utf-8');
+    expect(ctx.session.defaultSession.setCertificateVerifyProc).not.toHaveBeenCalled();
+    expect(ctx.setHnsProxy).not.toHaveBeenCalled();
+    release();
+    for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    expect(ctx.session.defaultSession.setCertificateVerifyProc).toHaveBeenCalledWith(expect.any(Function));
+    expect(ctx.setHnsProxy).toHaveBeenCalledTimes(1);
+  });
+
+  test('failed drainage never reads or publishes a new CA', async () => {
+    jest.useFakeTimers();
+    const ctx = loadCertificateSessionFixture();
+    ctx.beginHnsCertificateUpdate.mockRejectedValueOnce(new Error('drain failed'));
+    await emitHelperReady(ctx);
+    expect(ctx.mod.getHnsStatus().status).toBe('error');
+    expect(ctx.fsMock.readFileSync).not.toHaveBeenCalledWith('/tmp/hns-ca.pem', 'utf-8');
+    expect(ctx.session.defaultSession.setCertificateVerifyProc).not.toHaveBeenCalled();
+    expect(ctx.setHnsProxy).not.toHaveBeenCalled();
+  });
+
+  test('a superseded ready event cannot publish after its drainage completes', async () => {
+    jest.useFakeTimers();
+    const ctx = loadCertificateSessionFixture();
+    let release;
+    ctx.beginHnsCertificateUpdate.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    await emitHelperReady(ctx);
+    ctx.readlineHandlers.get('line')(JSON.stringify({
+      type: 'ready', proxyAddr: '127.0.0.1:44042', caPath: '/tmp/hns-ca.pem',
+    }));
+    for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    expect(ctx.setHnsProxy).toHaveBeenCalledTimes(1);
+    expect(ctx.setHnsProxy.mock.calls[0][0]).toBe('127.0.0.1:44042');
+    release();
+    for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    expect(ctx.setHnsProxy).toHaveBeenCalledTimes(1);
   });
 
   test('late enrollment installs certificates before adopting routing', async () => {

@@ -651,6 +651,65 @@ describe('network-manager', () => {
     expect(ctx.session.defaultSession.closeAllConnections).toHaveBeenCalledTimes(2);
   });
 
+  test('certificate transitions withdraw all sessions and wait for old connections', async () => {
+    const ctx = loadNetworkManagerModule();
+    const guest = makeProxySession();
+    ctx.mod.setHnsProxy('127.0.0.1:5380', { generation: 1, caFingerprint: 'old-ca' });
+    await ctx.mod.rebuild();
+    await ctx.mod.registerProxySession(guest);
+    let release;
+    ctx.session.defaultSession.closeAllConnections.mockImplementationOnce(() =>
+      new Promise((resolve) => { release = resolve; }));
+    const transition = ctx.mod.beginHnsCertificateUpdate();
+    expect(ctx.mod.getProxySessionPolicy(ctx.session.defaultSession).allowed).toBe(false);
+    expect(ctx.mod.getProxySessionPolicy(guest).allowed).toBe(false);
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    let settled = false;
+    transition.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    release();
+    await transition;
+    expect(ctx.mod.getProxySessionPolicy(guest).state).toBe('quarantined');
+    await expect(ctx.mod.rebuild()).rejects.toThrow('prepare_failed');
+    expect(ctx.mod.getProxySessionPolicy(guest).allowed).toBe(false);
+    ctx.mod.setHnsProxy('127.0.0.1:5380', { generation: 1, caFingerprint: 'new-ca' });
+    await ctx.mod.rebuild();
+    expect(ctx.mod.getProxySessionPolicy(guest).allowed).toBe(true);
+  });
+
+  test('certificate transitions cannot enroll a new session before trust is applied', async () => {
+    const ctx = loadNetworkManagerModule();
+    await ctx.mod.rebuild();
+    await ctx.mod.beginHnsCertificateUpdate();
+    const guest = makeProxySession();
+    await expect(ctx.mod.registerProxySession(guest)).rejects.toThrow('policy_unprepared');
+    expect(guest.setProxy).not.toHaveBeenCalled();
+    expect(ctx.mod.getProxySessionPolicy(guest).allowed).toBe(false);
+  });
+
+  test('first-start certificate failure cannot restore DIRECT through new enrollment', async () => {
+    const ctx = loadNetworkManagerModule();
+    await ctx.mod.registerProxySession(ctx.session.defaultSession);
+    expect(ctx.mod.getProxySessionPolicy(ctx.session.defaultSession).allowed).toBe(true);
+    await ctx.mod.beginHnsCertificateUpdate();
+    // A failed CA installation leaves the transition pending, without a rebuild.
+    const guest = makeProxySession();
+    await expect(ctx.mod.registerProxySession(guest)).rejects.toThrow('policy_unprepared');
+    expect(guest.setProxy).not.toHaveBeenCalled();
+    expect(ctx.mod.getProxySessionPolicy(guest).allowed).toBe(false);
+    expect(ctx.mod.getProxySessionPolicy(ctx.session.defaultSession).allowed).toBe(false);
+  });
+
+  test('a failed connection drain during certificate rotation terminates routing', async () => {
+    const ctx = loadNetworkManagerModule();
+    await ctx.mod.rebuild();
+    ctx.session.defaultSession.closeAllConnections.mockRejectedValueOnce(new Error('drain failed'));
+    await expect(ctx.mod.beginHnsCertificateUpdate()).rejects.toThrow('Session quarantine drainage failed');
+    expect(ctx.onFatal).toHaveBeenCalledTimes(1);
+    expect(ctx.mod.getProxySessionPolicy(ctx.session.defaultSession).allowed).toBe(false);
+  });
+
   test.each(['guard', 'PAC'])('failed %s preparation cannot enroll a session on cached direct policy', async (phase) => {
     const ctx = loadNetworkManagerModule();
     await ctx.mod.rebuild();

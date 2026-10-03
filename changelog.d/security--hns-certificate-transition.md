@@ -1,0 +1,1 @@
+- Pause browsing and close existing connections before changing Handshake certificate trust, keeping traffic blocked if the update fails.
