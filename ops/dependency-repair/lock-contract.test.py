@@ -1,6 +1,7 @@
 """Exercise manifest, dependency-resolution and advisory refusal boundaries."""
 import copy
 import json
+import os
 from pathlib import Path
 import runpy
 import subprocess
@@ -10,6 +11,7 @@ from unittest import mock
 
 C = runpy.run_path(str(Path(__file__).with_name("lock-contract.py")))
 CLEANUP = runpy.run_path(str(Path(__file__).with_name("verify-refresh-cleanup.py")))
+REFRESH = runpy.run_path(str(Path(__file__).with_name("refresh-jest-lock.py")))
 
 
 def inputs():
@@ -35,6 +37,16 @@ def inputs():
 
 
 class ContractTests(unittest.TestCase):
+    def test_distinct_empty_npm_configuration(self):
+        with tempfile.TemporaryDirectory(prefix="freedom-refresh-config-") as directory:
+            with mock.patch.dict(os.environ, {}, clear=True):
+                REFRESH["isolate_npm_configuration"](Path(directory))
+                user = Path(os.environ["NPM_CONFIG_USERCONFIG"])
+                global_config = Path(os.environ["NPM_CONFIG_GLOBALCONFIG"])
+                self.assertNotEqual(user, global_config)
+                self.assertEqual(user.read_bytes(), b"")
+                self.assertEqual(global_config.read_bytes(), b"")
+
     def test_matching_scoped_update(self):
         self.assertTrue(C["validate_lock"](*inputs()))
 

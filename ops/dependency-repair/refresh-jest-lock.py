@@ -16,6 +16,13 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def isolate_npm_configuration(private):
+    for kind in ("user", "global"):
+        config = private / ("npm-" + kind + ".conf")
+        config.write_text("")
+        os.environ["NPM_CONFIG_" + kind.upper() + "CONFIG"] = str(config)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true")
@@ -50,6 +57,7 @@ def main():
                                   timeout=remaining, check=True)
 
     try:
+        isolate_npm_configuration(private)
         unit = os.environ["FREEDOM_REFRESH_UNIT"]
         cgroup = Path("/sys/fs/cgroup/system.slice") / unit
         assert Path("/proc/self/cgroup").read_text().strip() == "0::/system.slice/" + unit

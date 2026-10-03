@@ -62,7 +62,6 @@ jobs:
             --property=Nice=19 --property=MemoryMax=3221225472 --property=MemorySwapMax=0 \
             --property=RuntimeMaxSec=720 --property=TimeoutStopSec=5 --property=KillMode=control-group \
             --setenv="PATH=$PATH" --setenv=CI=1 --setenv=NODE_OPTIONS=--max-old-space-size=1536 \
-            --setenv=NPM_CONFIG_USERCONFIG=/dev/null --setenv=NPM_CONFIG_GLOBALCONFIG=/dev/null \
             --setenv=PYTHONDONTWRITEBYTECODE=1 --setenv=FREEDOM_DISPOSABLE_HOSTED=1 \
             --setenv="FREEDOM_REFRESH_UNIT=$refresh_unit" \
             --setenv="FREEDOM_REFRESH_SOURCE=$FREEDOM_REFRESH_SOURCE" \
