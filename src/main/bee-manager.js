@@ -6,6 +6,8 @@ const fs = require('fs');
 const http = require('http');
 const net = require('net');
 const IPC = require('../shared/ipc-channels');
+const checkpoint = require('../../package.json').checkpoint;
+const OMISSION_MESSAGE = 'The bundled Swarm node is omitted from this checkpoint.';
 const {
   MODE,
   DEFAULTS,
@@ -301,6 +303,12 @@ function startHealthCheck() {
 }
 
 async function startBee() {
+  if (app.isPackaged && checkpoint?.omitBee) {
+    clearService('bee');
+    setStatusMessage('bee', OMISSION_MESSAGE);
+    updateState(STATUS.ERROR, OMISSION_MESSAGE);
+    return;
+  }
   if (currentState === STATUS.RUNNING || currentState === STATUS.STARTING) {
     log.info(`[Bee] Ignoring start request, current state: ${currentState}`);
     return;
@@ -524,6 +532,7 @@ function stopBee() {
 }
 
 function checkBinary() {
+  if (app.isPackaged && checkpoint?.omitBee) return false;
   const binPath = getBeeBinaryPath();
   return fs.existsSync(binPath);
 }
@@ -551,6 +560,10 @@ function getActivePort() {
 }
 
 function registerBeeIpc() {
+  if (app.isPackaged && checkpoint?.omitBee) {
+    setStatusMessage('bee', OMISSION_MESSAGE);
+    updateState(STATUS.ERROR, OMISSION_MESSAGE);
+  }
   ipcMain.handle(IPC.BEE_START, () => {
     startBee();
     return { status: currentState, error: lastError };

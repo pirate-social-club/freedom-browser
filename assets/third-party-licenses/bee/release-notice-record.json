@@ -1,0 +1,12 @@
+{
+  "component": "bee",
+  "notices": [
+    {
+      "path": "LICENSE",
+      "source_url": "https://raw.githubusercontent.com/ethersphere/bee/v2.8.1/LICENSE",
+      "sha256": "be2cfae74a424aa5e5c82480bc91483ddecac4b8b319fd16fa556940ffefce6e"
+    }
+  ],
+  "scope": "Original release-project license texts; compiler and dependency notices have separate records.",
+  "executed_target": false
+}

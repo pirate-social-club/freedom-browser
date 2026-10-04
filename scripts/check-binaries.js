@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const {
   getCapabilityBinaries,
   getCapabilityDefinition,
@@ -7,8 +8,9 @@ const {
 } = require('../src/shared/platform-capabilities');
 
 const ROOT_DIR = path.join(__dirname, '..');
+const checkpoint = require('../package.json').checkpoint;
 const FORBIDDEN_HNS_BINARY_STRINGS = [['shake', 'station'].join('')];
-const FORBIDDEN_HNSD_DYNAMIC_STRINGS = ['libunbound.so'];
+const HNSD_LINUX_X64_SHA256 = 'ed2e2f8f22b60fa3e17a8a74445174540d6b4f1903d5849c9e27baee120182d2';
 
 function findForbiddenBinaryString(binaryPath, forbiddenStrings, fsImpl = fs) {
   if (!fsImpl.existsSync(binaryPath)) return null;
@@ -125,15 +127,10 @@ function checkCapabilityBinaries(capability, platform, options = {}) {
     }
 
     if (capability === 'hns' && platform.os === 'linux' && binary.name === 'hnsd') {
-      const dynamicDependency = findForbiddenBinaryString(
-        binaryPath,
-        FORBIDDEN_HNSD_DYNAMIC_STRINGS,
-        fsImpl
-      );
-      if (dynamicDependency) {
+      const digest = crypto.createHash('sha256').update(fsImpl.readFileSync(binaryPath)).digest('hex');
+      if (digest !== HNSD_LINUX_X64_SHA256) {
         missing.push(
-          `${definition.displayName} artifact for ${status.target} is not self-contained (` +
-          `${dynamicDependency}): ${binaryPath}`
+          `${definition.displayName} artifact for ${status.target} differs from the reviewed daemon: ${binaryPath}`
         );
       }
     }
@@ -159,7 +156,8 @@ function checkBinaries(platforms, options = {}) {
     const beePath = path.join(beeBinDir, platformDir, `bee${beeExt}`);
     const ipfsPath = path.join(ipfsBinDir, platformDir, `ipfs${ipfsExt}`);
 
-    if (!fsImpl.existsSync(beePath)) {
+    const omitBee = checkpoint?.omitBee && os === 'linux' && arch === 'x64';
+    if (!omitBee && !fsImpl.existsSync(beePath)) {
       missing.push(`bee binary for ${platformDir}: ${beePath}`);
     }
     if (!fsImpl.existsSync(ipfsPath)) {

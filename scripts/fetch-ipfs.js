@@ -26,7 +26,13 @@ async function main() {
     const destination = path.join(targetDir, executable);
     fs.mkdirSync(targetDir, { recursive: true });
 
-    await downloadVerified(artifact.url, archivePath, 'sha512', artifact.sha512);
+    try {
+      await downloadVerified(artifact.url, archivePath, 'sha512', artifact.sha512);
+    } catch (error) {
+      if (!artifact.mirrorUrl) throw error;
+      console.warn(`Primary Kubo download failed (${error.code || error.name}); trying pinned official mirror`);
+      await downloadVerified(artifact.mirrorUrl, archivePath, 'sha512', artifact.sha512);
+    }
     extractArchive(archivePath, targetDir, artifact.archive);
     fs.rmSync(archivePath, { force: true });
 
@@ -40,7 +46,11 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error('Kubo download failed:', error.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error('Kubo download failed:', error.message || error.code || error.name);
+    process.exit(1);
+  });
+}
+
+module.exports = { main };

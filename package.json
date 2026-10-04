@@ -171,13 +171,6 @@
     ],
     "extraResources": [
       {
-        "from": "bee-bin/${os}-${arch}/",
-        "to": "bee-bin",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
         "from": "ipfs-bin/${os}-${arch}/",
         "to": "ipfs-bin",
         "filter": [
@@ -202,12 +195,9 @@
         "from": "assets/",
         "to": "assets",
         "filter": [
-          "**/*"
+          "**/*",
+          "!third-party-licenses/bee/**"
         ]
-      },
-      {
-        "from": "config/bee.yaml",
-        "to": "bee.yaml"
       },
       {
         "from": "config/default-bookmarks.json",
@@ -219,8 +209,33 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "LICENSE",
+        "to": "LICENSE"
+      },
+      {
+        "from": "NOTICES",
+        "to": "NOTICES"
       }
-    ]
+    ],
+    "beforePack": "./scripts/checkpoint-offline-build.js",
+    "downloadAlternateFFmpeg": false,
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libunbound8",
+        "libc6 (>= 2.36)"
+      ]
+    }
   },
   "engines": {
     "node": ">=22.12.0"
@@ -228,13 +243,13 @@
   "devDependencies": {
     "@babel/preset-env": "^7.29.0",
     "@eslint/js": "^10.0.1",
-    "babel-jest": "^30.2.0",
+    "babel-jest": "30.3.0",
     "dotenv-cli": "^11.0.0",
     "electron": "^42.10.0",
     "electron-builder": "^26.7.0",
     "eslint": "^10.0.0",
     "globals": "^17.3.0",
-    "jest": "^30.2.0",
+    "jest": "30.3.0",
     "prettier": "^3.8.1"
   },
   "dependencies": {
@@ -259,6 +274,12 @@
     "@cosmjs/stargate": "0.39.0",
     "js-yaml": "^4.3.2",
     "uuid": "11.1.1",
-    "tmp": "0.2.7"
+    "tmp": "0.2.7",
+    "app-builder-lib@26.15.3": {
+      "@electron/get": "5.1.0"
+    }
+  },
+  "checkpoint": {
+    "omitBee": true
   }
 }

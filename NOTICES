@@ -2,10 +2,8 @@ Third-Party Notices
 
 This software includes the following third-party components:
 
-Swarm Bee
-  License: BSD-3-Clause
-  Copyright (c) 2020 Ethereum Swarm
-  https://github.com/ethersphere/bee
+Swarm
+  The bundled Bee node is omitted from this evaluation checkpoint.
 
 IPFS Kubo
   License: MIT OR Apache-2.0
@@ -19,5 +17,13 @@ Electron
   Chromium licenses: see LICENSES.chromium.html in app bundle
 
 npm dependencies
-  See package.json for full list.
-  All use permissive licenses (MIT, ISC, BSD, Apache-2.0).
+  See package.json and package-lock.json for the exact dependency inventory.
+  Original dependency notices remain with their packaged modules.
+
+Bundled helper notices
+  See resources/hns-bin/licenses/source-record.json and its original license
+  texts and source archive for hnsd, libuv, embedded cryptography, fingertipd
+  and its Go dependencies. hnsd uses the distribution's libunbound8 and libc6.
+  See resources/assets/third-party-licenses for the other helper notice records.
+  Each component retains its own terms; Freedom's application license does
+  not replace these licenses.
