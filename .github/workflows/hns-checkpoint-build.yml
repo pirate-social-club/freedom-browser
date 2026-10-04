@@ -1,0 +1,60 @@
+name: Checkpoint hnsd provenance
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/hns-checkpoint-build.yml
+      - ops/hns-checkpoint-build/**
+permissions:
+  contents: read
+concurrency:
+  group: hns-checkpoint-build-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  dynamic-helper:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'release/security-checkpoint-0.7.15')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Prepare pinned source and isolated build image
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          mkdir -m 755 "$RUNNER_TEMP/hns-checkpoint-input" "$RUNNER_TEMP/hns-checkpoint-output"
+          git -c core.hooksPath=/dev/null clone --branch v2.0.0 --depth 1 https://github.com/handshake-org/hnsd.git "$RUNNER_TEMP/hns-checkpoint-source"
+          test "$(git -C "$RUNNER_TEMP/hns-checkpoint-source" rev-parse HEAD)" = a5c7c287e848f46d3e97f16b698e2027c8dc96c3
+          git -C "$RUNNER_TEMP/hns-checkpoint-source" archive HEAD > "$RUNNER_TEMP/hns-checkpoint-input/hnsd-source.tar"
+          docker build --tag "hns-checkpoint:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" ops/hns-checkpoint-build
+          docker image inspect "hns-checkpoint:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" > "$RUNNER_TEMP/hns-checkpoint-output/image.json"
+          git rev-parse HEAD > "$RUNNER_TEMP/hns-checkpoint-output/freedom-source.txt"
+      - name: Compile and retain ELF observations
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -gt 0
+          docker run --name "hns-checkpoint-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --label "freedom.checkpoint.run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --user "$(id -u):$(id -g)" --network none --cpus 1 --cpuset-cpus 0 \
+            --memory 2g --memory-swap 2g --pids-limit 256 --cap-drop ALL \
+            --security-opt no-new-privileges \
+            -v "$RUNNER_TEMP/hns-checkpoint-input:/input:ro" \
+            -v "$RUNNER_TEMP/hns-checkpoint-output:/output" \
+            "hns-checkpoint:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            > "$RUNNER_TEMP/hns-checkpoint-output/build.log" 2>&1
+      - name: Retain container outcome and remove only this run's container
+        if: always()
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          python3 ops/hns-checkpoint-build/cleanup.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: checkpoint-hnsd-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/hns-checkpoint-output/
+          if-no-files-found: error
+          retention-days: 30
