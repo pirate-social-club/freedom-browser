@@ -50,6 +50,11 @@ When a user enters a `bzz://`, `ipfs://`, `ipns://`, `rad://`, or ENS URL, the m
 
 ### Platform capabilities
 
+The 0.7.15 Linux evaluation checkpoint omits the bundled Bee node and does not
+start or manage an external Bee node. Existing Swarm gateway URL conversion
+remains available for an independently installed node; Swarm is not accepted
+as a checkpoint capability. IPFS, Handshake and the existing Spaces-root route remain.
+
 | Capability | Linux x64 | Linux ARM64 | macOS x64/ARM64 | Windows x64 |
 | --- | --- | --- | --- | --- |
 | Handshake browsing | Supported | Unavailable | Unavailable | Unavailable |

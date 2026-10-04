@@ -171,13 +171,6 @@
     ],
     "extraResources": [
       {
-        "from": "bee-bin/${os}-${arch}/",
-        "to": "bee-bin",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
         "from": "ipfs-bin/${os}-${arch}/",
         "to": "ipfs-bin",
         "filter": [
@@ -202,12 +195,9 @@
         "from": "assets/",
         "to": "assets",
         "filter": [
-          "**/*"
+          "**/*",
+          "!third-party-licenses/bee/**"
         ]
-      },
-      {
-        "from": "config/bee.yaml",
-        "to": "bee.yaml"
       },
       {
         "from": "config/default-bookmarks.json",
@@ -288,5 +278,8 @@
     "app-builder-lib@26.15.3": {
       "@electron/get": "5.1.0"
     }
+  },
+  "checkpoint": {
+    "omitBee": true
   }
 }

@@ -27,7 +27,7 @@ native_probe="const DB=require('better-sqlite3');const db=new DB(':memory:');if(
 run([str(electron),'-e',native_probe],env={**os.environ,'ELECTRON_RUN_AS_NODE':'1'})
 # Prepare FPM directly with the reviewed Get 5 API before offline packaging.
 runpy.run_path(str(base/"prepare-fpm.py"))["prepare"](repo,root,run)
-for script in ['bee:download','ipfs:download','radicle:download']:run(['npm','run',script,'--','--target','linux-x64'])
+for script in ['ipfs:download','radicle:download']:run(['npm','run',script,'--','--target','linux-x64'])
 venv=root/'python';run(['/usr/bin/python3','-m','venv',str(venv)])
 run([str(venv/'bin/pip'),'install','--require-hashes','--only-binary=:all:','--disable-pip-version-check','-r',str(base/'requirements.txt')])
 browser=root/'browser';browser.mkdir();pin=json.loads((base/'agent-browser-pin.json').read_text());(browser/'package.json').write_text(json.dumps({'name':'freedom-hosted-cdp-tools','private':True,'version':'1.0.0','dependencies':{'agent-browser':pin['tarball']}}))

@@ -1,8 +1,9 @@
 # Bundled helper notices
 
 These directories retain original license and attribution texts for the Linux
-checkpoint's unchanged Bee, Kubo, V2Ray and Radicle binaries. Their source
-records distinguish release-project sources, dependency archives and compiler
+checkpoint's unchanged Kubo, V2Ray and Radicle binaries. Bee source evidence
+remains in this repository, but its directory is excluded from the checkpoint
+package with the omitted binary. Source records distinguish release-project sources, dependency archives and compiler
 sources. Dependency and compiler notice inclusion is conservative: archives
 can contain test, platform or build code absent from the executable.
 

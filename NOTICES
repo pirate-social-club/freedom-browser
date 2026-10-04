@@ -2,10 +2,8 @@ Third-Party Notices
 
 This software includes the following third-party components:
 
-Swarm Bee
-  License: BSD-3-Clause
-  Copyright (c) 2020 Ethereum Swarm
-  https://github.com/ethersphere/bee
+Swarm
+  The bundled Bee node is omitted from this evaluation checkpoint.
 
 IPFS Kubo
   License: MIT OR Apache-2.0

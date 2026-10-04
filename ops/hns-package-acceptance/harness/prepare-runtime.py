@@ -243,11 +243,14 @@ if not isinstance(asar_success,dict) or asar_success.get('passed') is not True:
  asar_failure=asar_receipt_failure(asar_check.stdout,'success_receipt_invalid_shape');raise AssertionError('ASAR success proof missing')
 preparation_phase='source_resources_native';preparation_progress()
 # Every configured extraResources file present at cold setup must be byte-identical.
-for directory,out in [('assets','assets'),('hns-bin/linux-x64','hns-bin'),('bee-bin/linux-x64','bee-bin'),('ipfs-bin/linux-x64','ipfs-bin'),('radicle-bin/linux-x64','radicle-bin'),('dvpn-bin/linux-x64','dvpn-bin'),('scripts/jacktrip','jacktrip-scripts')]:
+assert not (p/'package/resources/bee-bin').exists(),'Bee must be omitted from checkpoint'
+assert not (p/'package/resources/bee.yaml').exists(),'Bee configuration must be omitted from checkpoint'
+assert not any((p/'package/resources/assets/third-party-licenses/bee').rglob('*')),'Bee notices/source must be omitted with its binary'
+for directory,out in [('assets','assets'),('hns-bin/linux-x64','hns-bin'),('ipfs-bin/linux-x64','ipfs-bin'),('radicle-bin/linux-x64','radicle-bin'),('dvpn-bin/linux-x64','dvpn-bin'),('scripts/jacktrip','jacktrip-scripts')]:
  src=freedom/directory;assert src.is_dir(),'release resources absent '+directory
  for f in src.rglob('*'):
-  if f.is_file():assert f.read_bytes()==(p/'package/resources'/out/f.relative_to(src)).read_bytes(),'resource differs '+str(f.relative_to(freedom))
-for name,out in [('config/bee.yaml','bee.yaml'),('config/default-bookmarks.json','default-bookmarks.json'),('LICENSE','LICENSE'),('NOTICES','NOTICES')]:assert (freedom/name).read_bytes()==(p/'package/resources'/out).read_bytes()
+  if f.is_file() and not (directory=='assets' and f.is_relative_to(src/'third-party-licenses/bee')):assert f.read_bytes()==(p/'package/resources'/out/f.relative_to(src)).read_bytes(),'resource differs '+str(f.relative_to(freedom))
+for name,out in [('config/default-bookmarks.json','default-bookmarks.json'),('LICENSE','LICENSE'),('NOTICES','NOTICES')]:assert (freedom/name).read_bytes()==(p/'package/resources'/out).read_bytes()
 addon=Path('node_modules/better-sqlite3/build/Release/better_sqlite3.node');assert (freedom/addon).read_bytes()==(p/'package/resources/app.asar.unpacked'/addon).read_bytes()
 manifest=[{'path':str(f.relative_to(p/'package')),'sha256':hashlib.sha256(f.read_bytes()).hexdigest()} for f in sorted((p/'package').rglob('*')) if f.is_file()]
 (p/'package-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
