@@ -78,7 +78,15 @@ def main():
         manifest["overrides"]["app-builder-lib@26.15.3"] = {"@electron/get": "5.1.0"}
         (repo / "package.json").write_text(json.dumps(manifest, indent=2) + "\n")
         staged_lock = copy.deepcopy(old_lock)
-        del staged_lock["packages"]["node_modules/app-builder-lib/node_modules/@electron/get"]
+        stale_get = "node_modules/app-builder-lib/node_modules/@electron/get"
+        stale_records = {name for name in staged_lock["packages"]
+                         if name == stale_get or name.startswith(stale_get + "/node_modules/")}
+        assert stale_records == {stale_get, stale_get + "/node_modules/fs-extra",
+                                 stale_get + "/node_modules/semver"}, "stale_get_subtree_changed"
+        assert all(staged_lock["packages"][name].get("dev") is True for name in stale_records)
+        for name in stale_records:
+            del staged_lock["packages"][name]
+        receipt["regenerated_dev_records"] = sorted(stale_records)
         (repo / "package-lock.json").write_text(json.dumps(staged_lock, indent=2) + "\n")
         run(["npm", "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund",
              "--registry=https://registry.npmjs.org"], "generate")
