@@ -11,7 +11,7 @@ cp -a /usr/share/common-licenses /output/licenses/common-licenses
 dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\t${source:Version}\n' > /output/packages.tsv
 while IFS=$'\t' read -r package _version _source _source_version; do
   doc="/usr/share/doc/${package%%:*}/copyright"
-  if [[ -f "$doc" ]]; then cp -L "$doc" "/output/licenses/$package.copyright"; fi
+  if [[ -f "$doc" ]]; then cp -L "$doc" "/output/licenses/${package//:/_}.copyright"; fi
 done < /output/packages.tsv
 cp -a /etc/apt/sources.list.d /output/apt-sources
 cc --version > /output/compiler.txt
