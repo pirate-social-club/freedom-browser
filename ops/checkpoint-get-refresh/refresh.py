@@ -77,17 +77,28 @@ def main():
         manifest = copy.deepcopy(old_manifest)
         manifest["overrides"]["app-builder-lib@26.15.3"] = {"@electron/get": "5.1.0"}
         (repo / "package.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        staged_lock = copy.deepcopy(old_lock)
+        del staged_lock["packages"]["node_modules/app-builder-lib/node_modules/@electron/get"]
+        (repo / "package-lock.json").write_text(json.dumps(staged_lock, indent=2) + "\n")
         run(["npm", "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund",
              "--registry=https://registry.npmjs.org"], "generate")
-        new_lock = json.loads((repo / "package-lock.json").read_text())
+        generated_bytes = (repo / "package-lock.json").read_bytes()
+        new_lock = json.loads(generated_bytes)
+        (public / "npm-generated-lock.json").write_bytes(generated_bytes)
+        receipt["generated_lock_sha256"] = hashlib.sha256(generated_bytes).hexdigest()
+        for name in ("generate.log", "generate.stderr"):
+            (public / name).write_bytes((private / name).read_bytes())
         assert json.loads((repo / "package.json").read_text()) == manifest
         assert production_records(new_lock) == production_records(old_lock), "production_graph_changed"
         assert new_lock["packages"]["node_modules/app-builder-lib"]["version"] == "26.15.3"
         assert new_lock["packages"]["node_modules/@electron/get"]["version"] == "5.1.0"
         forbidden = {"got", "cacheable-request", "http-cache-semantics"}
-        assert not any(name.rsplit("node_modules/", 1)[-1] in forbidden for name in new_lock["packages"])
+        receipt["remaining_legacy_packages"] = [name for name in new_lock["packages"]
+                                               if name.rsplit("node_modules/", 1)[-1] in forbidden]
+        assert not receipt["remaining_legacy_packages"], "legacy_downloaders_remain"
         run(["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"], "cold_install")
-        run(["node", "-e", "const p=require.resolve('@electron/get',{paths:[require.resolve('app-builder-lib')]});const get=require(p);if(typeof get.downloadArtifact!=='function'||!get.ElectronDownloadCacheMode)throw Error('Get5 exports');console.log(p)"], "get_import")
+        run(["node", "-e", "const p=require.resolve('@electron/get',{paths:[require.resolve('app-builder-lib')]});const meta=JSON.parse(require('fs').readFileSync(require('path').join(require('path').dirname(p),'..','package.json')));if(meta.name!=='@electron/get'||meta.version!=='5.1.0')throw Error('Get5 installed version');const get=require(p);if(typeof get.downloadArtifact!=='function'||!get.ElectronDownloadCacheMode)throw Error('Get5 exports');console.log(JSON.stringify({path:p,version:meta.version}))"], "get_import")
+        (public / "get-import.json").write_bytes((private / "get_import.log").read_bytes())
         result = run(["npm", "audit", "--json", "--audit-level=high"], "audit", check=False)
         audit = json.loads((private / "audit.log").read_text())
         (public / "audit.json").write_text(json.dumps(audit, indent=2) + "\n")
