@@ -28,13 +28,16 @@ links there rather than restating it.
   `src/shared/radicle-addon-version.js` plus `PINNED_SHA256SUMS` in the fetch
   script.
 - **Arti** — the Tor client, bundled where the build carries one (macOS arm64,
-  Linux x64/arm64, Windows x64). Unlike the others it is **compiled from
+  Windows x64). The first integrated Linux deb omits Arti; Linux development
+  builds can still prepare it. Unlike the others it is **compiled from
   crates.io**, host-only, not downloaded. Fetch script `scripts/fetch-arti.js`;
   pin `PINNED_ARTI_VERSION` (and `MIN_RUST_VERSION`) in that script.
 
 Adjacent but out of scope here: **Myotis** (the experimental Ethereum light
 client addon, `scripts/fetch-myotis.js`, `npm run myotis:download`) follows the
-same shape and is covered by `npm run check-binaries` too.
+same shape and is covered by `npm run check-binaries` on macOS and Windows.
+The first integrated Linux deb omits the addon and supervisor; Linux development
+builds retain the optional integration.
 
 ## Where each binary lands, and how to fetch it
 

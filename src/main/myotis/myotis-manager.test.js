@@ -1,12 +1,14 @@
 const path = require('path');
 const IPC = require('../../shared/ipc-channels');
-const { createIpcMainMock, loadMainModule } = require('../../../test/helpers/main-process-test-utils');
+const { createAppMock, createIpcMainMock, loadMainModule } = require('../../../test/helpers/main-process-test-utils');
+
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
 
 describe('myotis-manager', () => {
   beforeEach(() => jest.useFakeTimers());
-  afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); jest.restoreAllMocks(); });
+  afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); jest.restoreAllMocks(); Object.defineProperty(process, 'platform', platformDescriptor); });
 
-  function loadManager(mode = 'managed') {
+  function loadManager(mode = 'managed', { isPackaged = false } = {}) {
     const clients = [];
     const existsSync = jest.fn(() => true);
     const clipboard = { writeText: jest.fn() };
@@ -53,7 +55,7 @@ describe('myotis-manager', () => {
     const BrowserWindow = { getAllWindows: () => [], fromWebContents: jest.fn(() => win) };
     const dataDir = path.join('/profile', 'myotis');
     const { mod } = loadMainModule(require.resolve('./myotis-manager'), {
-      ipcMain, dialog, BrowserWindow, clipboard,
+      app: createAppMock({ isPackaged }), ipcMain, dialog, BrowserWindow, clipboard,
       extraMocks: {
         fs: () => ({ existsSync }),
         [require.resolve('./myotis-process')]: () => ({ MyotisProcess: MockProcess }),
@@ -73,6 +75,34 @@ describe('myotis-manager', () => {
     return { mod, clients, dataDir, ipcMain, status, event, win, dialog, acquireCheckpoint, store, profile, existsSync, clipboard,
       gateStart, releaseStart: (value) => startGate.release(value) };
   }
+
+  test('packaged Linux refuses Myotis even with an inherited addon override', async () => {
+    Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'linux' });
+    jest.replaceProperty(process, 'env', { ...process.env, MYOTIS_NODE_PATH: '/cached/myotis-node.node' });
+    const { mod, clients, store, existsSync, ipcMain } = loadManager('managed', { isPackaged: true });
+    expect(mod.isEnabled()).toBe(false);
+    mod.registerMyotisIpc();
+    for (const chainId of [1, 100]) {
+      const status = await ipcMain.invoke(IPC.MYOTIS_GET_STATUS, chainId);
+      expect(status).toMatchObject({ chainId, supported: false, available: false, running: false, state: 'unavailable' });
+      expect(status.recovery).toBeUndefined();
+    }
+    await expect(mod.startMyotis()).resolves.toBe(false);
+    await expect(mod.startMyotis({ chainId: 100 })).resolves.toBe(false);
+    expect(clients).toHaveLength(0);
+    expect(store.loadOrCreateState).not.toHaveBeenCalled();
+    expect(existsSync).not.toHaveBeenCalled();
+  });
+
+  test.each(['darwin', 'win32'])('packaged %s keeps Myotis discovery', (platform) => {
+    Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform });
+    expect(loadManager('managed', { isPackaged: true }).mod.isEnabled()).toBe(true);
+  });
+
+  test('development Linux keeps Myotis discovery', () => {
+    Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'linux' });
+    expect(loadManager().mod.isEnabled()).toBe(true);
+  });
 
   test('keeps independent chain processes and profile directories', async () => {
     const { mod, clients, dataDir } = loadManager();

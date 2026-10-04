@@ -93,6 +93,9 @@ const EXTRA_RESOURCES = {
     auditName: 'myotis',
     noticeMatch: /^Myotis \(trustless Ethereum wallet engine\)$/m,
     pin: { file: 'scripts/myotis-release.json', re: /"releaseTag": "([^"]+)"/ },
+    platformClaims: [
+      { file: 'NOTICES', line: /^ {2}Bundled on .+ only\.$/m },
+    ],
   },
   'arti-bin/${os}-${arch}/': {
     thirdParty: true,

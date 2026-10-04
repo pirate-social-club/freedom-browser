@@ -64,7 +64,7 @@ describe('Radicle build inputs', () => {
 
 
 describe('Myotis supervisor build inputs', () => {
-  test.each([['mac', 'arm64'], ['linux', 'x64'], ['win', 'x64']])(
+  test.each([['mac', 'arm64'], ['win', 'x64']])(
     'requires a source-built helper on %s-%s', (os, arch) => {
       fs.existsSync.mockImplementation((target) => !target.includes('myotis-supervisor'));
       expect(checkBinaries([{ os, arch }])).toEqual([
@@ -72,6 +72,20 @@ describe('Myotis supervisor build inputs', () => {
       ]);
     }
   );
+  test.each(['x64', 'arm64'])('Linux %s does not require Myotis bytes or provenance', (arch) => {
+    jest.clearAllMocks();
+    fs.existsSync.mockImplementation((target) => !target.includes('myotis'));
+    expect(checkBinaries([{ os: 'linux', arch }])).toEqual([]);
+    expect(validateInstalledAddon).not.toHaveBeenCalled();
+  });
+  test('Linux resource matchers exclude both optional nodes even with cached binaries', () => {
+    fs.existsSync.mockReturnValue(true);
+    const resources = [...packageJson.build.extraResources, ...packageJson.build.linux.extraResources];
+    expect(resources.some(({ from }) => from.startsWith('myotis-bin/') || from.startsWith('arti-bin/'))).toBe(false);
+    for (const os of ['mac', 'win']) {
+      expect(packageJson.build[os].extraResources.some(({ to }) => to === 'myotis-node')).toBe(true);
+    }
+  });
   test('refuses a vanilla or modified addon without valid checkpoint provenance', () => {
     fs.existsSync.mockReturnValue(true);
     validateInstalledAddon.mockReturnValueOnce('checkpoint-addon checksum mismatch');
@@ -80,7 +94,7 @@ describe('Myotis supervisor build inputs', () => {
     ]);
   });
   test('packages both helper names and only adds the mac helper to explicit signing', () => {
-    const resource = packageJson.build.extraResources.find(({ to }) => to === 'myotis-node');
+    const resource = packageJson.build.mac.extraResources.find(({ to }) => to === 'myotis-node');
     expect(resource.filter).toEqual(['myotis-node.node', 'myotis-supervisor', 'myotis-supervisor.exe']);
     expect(packageJson.build.mac.binaries).toEqual(['Contents/Resources/myotis-node/myotis-supervisor']);
   });
@@ -93,7 +107,7 @@ describe('Arti (Tor) build inputs', () => {
     jest.clearAllMocks();
   });
 
-  test.each(['mac', 'linux', 'win'])('packages the built binary on %s', (target) => {
+  test.each(['mac', 'win'])('packages the built binary on %s', (target) => {
     const resource = packageJson.build[target].extraResources.find(({ to }) => to === 'arti-bin');
 
     expect(resource).toMatchObject({
@@ -115,7 +129,6 @@ describe('Arti (Tor) build inputs', () => {
   // skipped here while it shipped no Arti at all.
   test.each([
     ['mac', 'arm64', 'arti'],
-    ['linux', 'x64', 'arti'],
     ['win', 'x64', 'arti.exe'],
   ])('creates the %s-%s resource dir and looks for %s', (os, arch, binName) => {
     fs.existsSync.mockReturnValue(false);
@@ -137,6 +150,13 @@ describe('Arti (Tor) build inputs', () => {
     expect(warn).toHaveBeenCalled();
 
     warn.mockRestore();
+  });
+
+  test('Linux does not prepare an omitted Arti directory', () => {
+    fs.existsSync.mockReturnValue(false);
+    ensureOptionalArti([{ os: 'linux', arch: 'x64' }]);
+    expect(fs.existsSync).not.toHaveBeenCalled();
+    expect(fs.mkdirSync).not.toHaveBeenCalled();
   });
 
   test('leaves an already built binary alone', () => {

@@ -121,6 +121,7 @@
         "notice_required": true
       },
       "version_pin": "scripts/myotis-release.json releaseTag",
+      "platforms": ["mac", "win"],
       "bundled_with_app": true,
       "linking_or_integration": "native-addon",
       "risk": "yellow",
@@ -147,7 +148,7 @@
       "version_pin": "scripts/fetch-arti.js PINNED_ARTI_VERSION",
       "bundled_with_app": true,
       "linking_or_integration": "separate-process",
-      "platforms": ["mac", "linux", "win"],
+      "platforms": ["mac", "win"],
       "risk": "green",
       "issues": [
         {

@@ -62,6 +62,8 @@ launching can use `open -n -a Freedom --args --profile=<id>`.
 
 ## Integrated Myotis Light Client (Experimental)
 
+The first integrated Linux deb omits Myotis. Development builds retain its optional integration.
+
 - **Per-profile clients**: Ethereum and Gnosis have independent native runtimes and state for each browser profile.
 - **Independent controls**: Each chain has separate startup, runtime, synchronization, peer, and finalized-block controls.
 - **Verified chain data**: Wallet and compatible dApp reads can prefer Myotis before falling back through the configured Colibri and RPC methods.
@@ -72,8 +74,8 @@ launching can use `open -n -a Freedom --args --profile=<id>`.
 - **Onion-only routing**: When enabled, Freedom routes only `.onion` hosts through the profile's Arti SOCKS5 proxy; clearnet and decentralized protocols remain direct.
 - **Fail-closed behavior**: If Arti stops unexpectedly, `.onion` requests fail instead of falling back to direct DNS.
 - **Profile isolation**: Managed Tor state, cache, endpoint, and private-window routing are profile-scoped.
-- **Optional binary**: Source builds require `npm run tor:download`; the release workflow bundles Tor for macOS arm64, Linux x64/arm64 and Windows x64. Windows x64 bundling landed in September 2026, so only releases cut after that carry Arti on Windows — an earlier Windows install has none.
-- **Bundled or nothing**: Arti is compiled host-only from crates.io, so each release runner builds its own platform's binary. The Tor rows are hidden from the Experimental settings section on any build that carries no Arti binary (a source build that skipped `npm run tor:download`, or a Windows release cut before Windows bundling landed), unless the integration is already enabled — an external Tor SOCKS proxy needs no bundled binary. No Windows ARM64 build is published; it would need the same build step on an ARM64 Windows runner.
+- **Optional binary**: Source builds require `npm run tor:download`; bundled Tor is available for macOS arm64 and Windows x64. The first integrated Linux deb omits Arti; Linux development builds can still prepare it. Windows x64 bundling landed in September 2026, so only releases cut after that carry Arti on Windows — an earlier Windows install has none.
+- **Bundled or nothing**: Arti is compiled host-only from crates.io, so each release runner builds its own platform's binary. The Tor rows are hidden from the Experimental settings section on any build that carries no Arti binary (the Linux deb, a source build that skipped `npm run tor:download`, or a Windows release cut before Windows bundling landed), unless the integration is already enabled — an external Tor SOCKS proxy needs no bundled binary. No Windows ARM64 build is published; it would need the same build step on an ARM64 Windows runner.
 
 ## Integrated Radicle Node
 

@@ -33,6 +33,8 @@ libradicle
   https://github.com/solardev-xyz/heartwood
 
 Myotis (trustless Ethereum wallet engine)
+  Bundled on macOS and Windows only.
+  Omitted from the Linux deb.
   License: Apache-2.0
   https://github.com/biafra23/myotis
   Upstream NOTICE, reproduced per Apache License 2.0 section 4(d):
@@ -48,7 +50,7 @@ Myotis (trustless Ethereum wallet engine)
 
         http://www.apache.org/licenses/LICENSE-2.0
 
-Arti (Tor client, macOS, Linux and Windows x64 builds)
+Arti (Tor client, macOS and Windows x64 builds)
   License: MIT OR Apache-2.0
   Copyright 2019-2025, The Tor Project, Inc.
   https://gitlab.torproject.org/tpo/core/arti

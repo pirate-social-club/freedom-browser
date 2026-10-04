@@ -89,10 +89,11 @@ const FREEDOM_IPFS_NATIVE_ADDON = 'freedom_ipfs_native.node';
 const RADICLE_BIN_DIR = path.join(__dirname, '..', 'radicle-bin');
 const RADICLE_EMBEDDED_ADDON = 'libradicle.node';
 const MYOTIS_BIN_DIR = path.join(__dirname, '..', 'myotis-bin');
-// Targets published by the pinned official Myotis release addon.
+// Targets that bundle the pinned official Myotis release addon.
+// Linux deb deliberately omits Myotis.
 // Anything else (e.g. win-arm64) is skipped with a notice — the app degrades
 // gracefully to Colibri/quorum when the addon is absent.
-const MYOTIS_SUPPORTED = new Set(['mac-x64', 'mac-arm64', 'linux-x64', 'linux-arm64', 'win-x64']);
+const MYOTIS_SUPPORTED = new Set(['mac-x64', 'mac-arm64', 'win-x64']);
 const ARTI_BIN_DIR = path.join(__dirname, '..', 'arti-bin');
 
 function getPlatformArch() {
@@ -213,7 +214,7 @@ function checkBinaries(platforms) {
         missing.push(`myotis supervisor for ${platformDir}: ${supervisorPath}`);
       }
     } else {
-      console.log(`  (myotis-node: no addon published for ${platformDir} — skipping)`);
+      console.log(`  (myotis-node: not bundled for ${platformDir} — skipping)`);
     }
   }
 
@@ -230,6 +231,7 @@ function checkBinaries(platforms) {
  */
 function ensureOptionalArti(platforms) {
   for (const { os, arch } of platforms) {
+    if (os === 'linux') continue; // Linux deb omits bundled Arti.
     const platformDir = `${os}-${arch}`;
     // Same name `scripts/fetch-arti.js` writes and `tor-manager.js` looks for.
     const artiPath = path.join(ARTI_BIN_DIR, platformDir, os === 'win' ? 'arti.exe' : 'arti');

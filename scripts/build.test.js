@@ -70,14 +70,19 @@ test('verify-tools still rejects an ambiguous target before running a CLI', () =
   expect(ctx.execSync).not.toHaveBeenCalled();
 });
 
-test('the actual build still prepares native helpers and checks target binaries', () => {
+test('Linux build omits Myotis preparation and keeps target binary checks', () => {
   const ctx = run(['--linux', '--x64', '--dist']);
-  expect(ctx.buildForTargets).toHaveBeenCalledWith('linux', ['x64']);
+  expect(ctx.buildForTargets).not.toHaveBeenCalled();
   expect(ctx.assertTargetPrebuild).toHaveBeenCalledWith({ platform: 'linux', archs: ['x64'] });
   expect(ctx.pruneSourceBuildFallback).toHaveBeenCalledTimes(1);
   expect(ctx.execSync.mock.calls.map(([command]) => command)).toEqual([
     'npm run check-binaries -- --linux --x64', 'electron-builder --linux --x64',
   ]);
+});
+
+test.each(['mac', 'win'])('still prepares Myotis for %s builds', (platform) => {
+  const ctx = run([`--${platform}`, '--x64', '--dist', '--unsigned']);
+  expect(ctx.buildForTargets).toHaveBeenCalledWith(platform, ['x64']);
 });
 
 test('the actual build refuses a missing target prebuild before packaging', () => {

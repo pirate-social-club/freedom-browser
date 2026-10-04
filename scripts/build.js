@@ -147,7 +147,7 @@ if (!fs.existsSync(chromiumNoticesPath)) {
 // Build the owned Myotis helper from local source before binary preflight.
 // Native macOS builds cover every requested architecture; foreign targets
 // require a helper built with an already installed compiler on that target.
-buildForTargets(platform, archs);
+if (platform !== 'linux') buildForTargets(platform, archs);
 
 // 1. Check binaries for the target platform/arch
 const checkArgs = [`--${platform}`, ...archs.map((a) => `--${a}`)].join(' ');

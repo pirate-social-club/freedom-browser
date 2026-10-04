@@ -127,7 +127,12 @@ function publishAvailability(instance, ready, reason, force = false) {
 // Addon discovery, mirroring freedom-ipfs-native-binding: env override
 // (spike/testing) → dev fetch dir (scripts/fetch-myotis.js, per-platform
 // subdir) → packaged resources. Enabled iff one of them exists.
+function isPackagedLinux() {
+  return require('electron').app.isPackaged && process.platform === 'linux';
+}
+
 function addonPath() {
+  if (isPackagedLinux()) return null;
   const osDir = { darwin: 'mac', linux: 'linux', win32: 'win' }[process.platform];
   const candidates = [
     process.env.MYOTIS_NODE_PATH,
@@ -718,12 +723,12 @@ const SUPPORTED_TARGETS = new Set([
 ]);
 
 function isSupportedTarget() {
-  return SUPPORTED_TARGETS.has(`${process.platform}-${process.arch}`);
+  return !isPackagedLinux() && SUPPORTED_TARGETS.has(`${process.platform}-${process.arch}`);
 }
 
 // Renderer-facing status snapshot (Nodes UI and settings ENS section). One flat
 // object; `state` is the one-word summary the UI keys copy on. `supported`
-// lets the UI distinguish "this platform can never run Myotis" (hide the
+// lets the UI distinguish "this build cannot run Myotis" (hide the
 // controls) from "addon merely not installed" (disable with a hint).
 function publicStatus(chainId = 1) {
   const instance = instanceFor(chainId);
