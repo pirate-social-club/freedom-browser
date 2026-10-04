@@ -16,3 +16,14 @@ This does not establish compatibility of Builder's ordinary online downloader
 with Get 5's timeout or proxy interface, or validate other platforms. It does
 not waive licensing, installed acceptance, the public-host gate or release
 approval. The baseline-bound generator is retired after lock adoption.
+
+Run 37186519707 produced the independently reviewed lock with unchanged
+production records, cold installation, a builder-resolved Get 5.1.0 import
+and a full clean audit. Its automatic PR trigger is retired. Manual execution
+still requires the original baseline and refuses the adopted inputs.
+
+The beforePack hook rejects accidental online source packaging with the
+default checkpoint configuration. The owned acceptance command provides the
+actual network namespace and prepared-input checks. Builder configuration
+replacement and prepackaged inputs can bypass its hook; those commands are
+outside the accepted recipe. No package has been built with this repair yet.

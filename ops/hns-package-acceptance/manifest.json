@@ -1,7 +1,7 @@
 {
   "README.md": "4e8c3fe1f05153be95bedcefc2dafbb67ebccc1e0bc90a1e7b17a888e932f0de",
   "agent-browser-pin.json": "b056d3ac845656934e2eecaa978c62d16b53623bf75734a6c1b529832e0325f2",
-  "cold-setup.py": "ba664db01abf0d1b31a31dcd952b689346152d10cef34277ae1d3ec02280a0ed",
+  "cold-setup.py": "b9bd68f1d658f53ad21d17c6b08261469dd47014b54794a3e632317471047e05",
   "harness/authenticated-route.py": "4ee9eb8883b1c3a23c8492c9d0ef02b9435e21dbb7b7cc9ead5b4e93c9826dd0",
   "harness/capture-wire.py": "b7a601f25caf938a78045b4ec6179c0af6a2e602391d13f953386d299bb0a73f",
   "harness/checkpoint-integrity.json": "4edab3ec782db36dac70a50a7e6390b2d6b6c98d95e3574d15970e46952c126d",
@@ -20,7 +20,7 @@
   "harness/observe-welcome.py": "0edc97c5e958707809b5f0893fe1cf2a1fb8fe6d68be8a81845cf9600db61774",
   "harness/os-dns.py": "33a44f0fc54f4715b7db81d2c15dd5c0fca27fe727bbd1e990bf6dd6ca4ee950",
   "harness/prepare-candidate.py": "909166ac4e887158f9bc5fc791b540341bbc69ec8c95e52526f8d1900504b444",
-  "harness/prepare-runtime.py": "81130cec4c1eeb58398f9e564f3afee333a3a896ab431e25b7002767792dc4ac",
+  "harness/prepare-runtime.py": "a47975a328da17b717e023513d6fa0284236b43f8cbb5211d1b49a43cef5b3b5",
   "harness/probe-sandbox-eligibility.py": "4dd47c60fb02ddeec5748dd44b18a3a81f19d0900c20f28a6068bea4d0267f9d",
   "harness/profile-settings-fixture.json": "0770764bc3a7d1ccf3f76bb4162c99bf9310d3e3e4fef816f638338b04dd58f5",
   "harness/prove-installed-sandbox.py": "da15d674571f1b1558d09cf746fd3bf389b7526ad3696e4ed05ab19530780c10",
@@ -33,9 +33,10 @@
   "harness/verify-asar.js": "2b3a1db07ff3a4b915ad79e41c447f2ca020986f0814ddf8fbe62b57674e4fe6",
   "harness/warm-checkpoint-main.dat": "c23b485e961e406d9d302932feeb2aaea8f39c47001a04435c426c03414ceea1",
   "harness/wrong-tls.py": "942b20b81ca68277cbc731194f302658e76052cc723f3ec093aec8c72a9150ac",
-  "hns-current-package-acceptance.yml": "668e928035693e5ec0b643bf66eae78818beb534f0878c791331bcd5ba825726",
+  "hns-current-package-acceptance.yml": "56a71c32fbba4d60830e41aeb36617693e9f791a334a0b652cbfab57ee19c770",
   "launch.py": "d3a368da0c0f1be6ba499078638fcf97e796e0bda64e941cf1d7d4e02bc5d294",
+  "prepare-fpm.py": "3378df8d9f2d1fe1b721807958b324a1e75416d43a5dbb96510a039778b3d673",
   "python-wheel-pins.json": "12bec3d3d647ad38a403502f4df8ba9a8bda13c0d3fa3c5fe9f6025982be5e1a",
   "requirements.txt": "05bbd77cf30d45eb47f1ed042f5208ba7afb5fa00be12afb8d4b5c716876cefc",
-  "runtime-source-pins.json": "223b7ea41f3db2b95b4c7ac02d9a91a9a1030dcee91914b40bce9c2b266c7ac0"
+  "runtime-source-pins.json": "24e4cc87b018a1a9994404113d921b9b765cd1db620eb94de7d966f9536ba577"
 }
