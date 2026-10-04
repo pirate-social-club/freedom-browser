@@ -1,0 +1,1 @@
+- Restrict settings changes to Freedom's browser UI and its own Settings page, preventing other pages and embedded frames from changing browser protections.

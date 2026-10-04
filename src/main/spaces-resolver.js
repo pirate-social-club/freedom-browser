@@ -1,3 +1,5 @@
+const { runWithPrivateLogContext, redactForLog } = require('./private/private-log-context');
+const { isPrivateWebContents } = require('./private/private-windows');
 const log = require('./logger');
 const { ipcMain } = require('electron');
 const IPC = require('../shared/ipc-channels');
@@ -115,7 +117,7 @@ async function resolveSpace(handle) {
     return cached.result;
   }
 
-  log.info(`[spaces] Resolving ${normalizedHandle} via ${SPACES_RESOLVER_BASE_URL}`);
+  log.info(`[spaces] Resolving ${redactForLog(normalizedHandle)} via ${SPACES_RESOLVER_BASE_URL}`);
 
   try {
     const result = await resolveViaPublicResolver(normalizedHandle);
@@ -128,15 +130,15 @@ async function resolveSpace(handle) {
       reason: 'RESOLVER_UNAVAILABLE',
       message: err.message,
     };
-    log.warn(`[spaces] Public resolver failed for ${normalizedHandle}: ${err.message}`, err.cause || '');
+    log.warn(`[spaces] Public resolver failed for ${redactForLog(normalizedHandle)}: ${redactForLog(err.message)}`, redactForLog(err.cause || ''));
     spaceResultCache.set(normalizedHandle, { result, timestamp: Date.now() });
     return result;
   }
 }
 
 function registerSpacesIpc() {
-  ipcMain.handle(IPC.SPACES_RESOLVE, async (_event, payload = {}) => {
-    return resolveSpace(payload.handle);
+  ipcMain.handle(IPC.SPACES_RESOLVE, async (event, payload = {}) => {
+    return runWithPrivateLogContext(isPrivateWebContents(event.sender), () => resolveSpace(payload.handle));
   });
 }
 

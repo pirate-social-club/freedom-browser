@@ -43,10 +43,12 @@
 }
 
 .bee-toggle-switch.running {
+  /* theme-literal: node status colour, not a theme surface: green means running everywhere */
   background: #4caf50;
 }
 
 .bee-toggle-switch.starting {
+  /* theme-literal: node status colour, not a theme surface: amber means starting everywhere */
   background: #ffcc00;
 }
 
@@ -134,10 +136,12 @@
 }
 
 .ipfs-toggle-switch.running {
+  /* theme-literal: node status colour, not a theme surface: green means running everywhere */
   background: #4caf50;
 }
 
 .ipfs-toggle-switch.starting {
+  /* theme-literal: node status colour, not a theme surface: amber means starting everywhere */
   background: #ffcc00;
 }
 
@@ -185,10 +189,12 @@
 }
 
 .radicle-toggle-switch.running {
+  /* theme-literal: node status colour, not a theme surface: green means running everywhere */
   background: #4caf50;
 }
 
 .radicle-toggle-switch.starting {
+  /* theme-literal: node status colour, not a theme surface: amber means starting everywhere */
   background: #ffcc00;
 }
 
@@ -218,12 +224,6 @@
 
 .radicle-info-label {
   color: var(--muted);
-}
-
-.node-id-truncated {
-  font-family: monospace;
-  font-size: 0.9em;
-  cursor: help;
 }
 
 /* Disable hover highlight on toggle menu items */
@@ -256,25 +256,8 @@
 
 .bee-toggle.external .bee-toggle-switch.running,
 .ipfs-toggle.external .ipfs-toggle-switch.running {
+  /* theme-literal: node status colour, not a theme surface: green means running everywhere */
   background: #4caf50;
-}
-
-/* Radicle external node badge */
-.radicle-external-badge {
-  display: none;
-  font-size: 9px;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: var(--border);
-  color: var(--muted);
-  font-weight: 500;
-  letter-spacing: 0.03em;
-  line-height: 1.4;
-  cursor: help;
-}
-
-.radicle-toggle.external .radicle-external-badge {
-  display: inline-block;
 }
 
 .ipfs-info {
@@ -301,17 +284,21 @@
   color: var(--muted);
 }
 
-#ipfs-bandwidth-down,
-#ipfs-bandwidth-up {
+#ipfs-active-requests-count,
+#ipfs-data-read,
+#ipfs-version-text {
   text-align: right;
 }
 
 .status-indicator.running {
+  /* theme-literal: node status colour, not a theme surface: green means running everywhere */
   background: #4caf50;
+  /* theme-literal: glow of the running-green dot above */
   box-shadow: 0 0 4px #4caf50;
 }
 
 .status-indicator.starting {
+  /* theme-literal: node status colour: orange means starting up */
   background: #ff9800;
   animation: pulse 1s infinite;
 }
@@ -326,4 +313,148 @@
   100% {
     opacity: 1;
   }
+}
+
+/* Tor (.onion) section — mirrors the Radicle section styling */
+.tor-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+
+.tor-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  width: 100%;
+  justify-content: space-between;
+}
+
+.tor-toggle-switch {
+  width: 36px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--border);
+  position: relative;
+  transition: background 0.2s ease;
+  flex-shrink: 0;
+}
+
+.tor-toggle-knob {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  transition: transform 0.2s ease;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+}
+
+.tor-toggle-switch.running {
+  /* theme-literal: node status colour, not a theme surface: green means running everywhere */
+  background: #4caf50;
+}
+
+.tor-toggle-switch.starting {
+  /* theme-literal: node status colour, not a theme surface: amber means starting everywhere */
+  background: #ffcc00;
+}
+
+.tor-toggle-switch.running .tor-toggle-knob {
+  transform: translateX(18px);
+}
+
+.tor-info {
+  padding: 8px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+/*
+ * Same gate as the Radicle/IPFS info panels: nothing renders beneath the toggle
+ * while the node is off (#349). `tor-ui.js`'s updateTorInfoVisibility is the
+ * sole writer of the class; individual rows still self-manage inside a visible
+ * block (status via .node-status-row, version via [hidden] in external mode).
+ */
+.tor-info:not(.visible) {
+  display: none;
+}
+
+.tor-info-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tor-info-label {
+  color: var(--muted);
+}
+
+.tor-toggle:hover {
+  background: transparent;
+}
+
+.tor-toggle.disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.tor-toggle.disabled .tor-toggle-switch {
+  background: var(--border);
+}
+
+.myotis-checkpoint-retry[hidden],
+.myotis-recovery-message[hidden] {
+  display: none;
+}
+
+.myotis-recovery-message {
+  margin: 0 0 4px;
+  line-height: 1.5;
+  white-space: normal;
+  color: var(--text);
+}
+
+.myotis-recovery-message.warning {
+  border-left: 2px solid var(--warning-fg);
+  padding-left: 8px;
+}
+
+.myotis-checkpoint-retry {
+  align-self: flex-start;
+  margin-bottom: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.myotis-checkpoint-retry:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+#myotis-recovery-notice {
+  bottom: 88px;
+  max-width: min(520px, calc(100vw - 32px));
+}
+
+#myotis-recovery-notice .update-toast-content {
+  flex-wrap: wrap;
+}
+
+#myotis-recovery-notice-text {
+  flex: 1 1 230px;
+  line-height: 1.5;
 }

@@ -8,14 +8,40 @@
  * - Provides IPC handlers for renderer communication
  */
 
-const { ipcMain, app } = require('electron');
+const { ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const IPC = require('../shared/ipc-channels');
+const {
+  getAntDataDir,
+  getIdentityDataDir,
+  getIpfsDataDir,
+  getRadicleDataDir,
+} = require('./profile-paths');
+const { getActiveProfile } = require('./profile-resolver');
+const { VAULT_LOCKED_MESSAGE } = require('./wallet/vault-errors');
 
-// Identity module (ESM) - loaded dynamically
+// Identity module - loaded lazily
 let identityModule = null;
+
+// Optional Bee node lifecycle hooks, wired by the main process (see index.js).
+// Bee holds an exclusive LevelDB lock on statestore while running, so it must be
+// stopped before its stale state is wiped during (re)injection — otherwise the
+// wipe fails with EPERM on Windows (issue #90). `stop` resolves to whether Bee
+// was running; `start` brings it back up with the freshly injected identity.
+let beeLifecycle = { stop: null, start: null };
+
+/**
+ * Register Bee node lifecycle hooks used around identity (re)injection.
+ * @param {{stop?: () => Promise<boolean>, start?: () => Promise<void>}} hooks
+ */
+function setBeeLifecycle(hooks = {}) {
+  beeLifecycle = {
+    stop: typeof hooks.stop === 'function' ? hooks.stop : null,
+    start: typeof hooks.start === 'function' ? hooks.start : null,
+  };
+}
 
 // Cached derived keys (only available when unlocked)
 let derivedKeys = null;
@@ -29,16 +55,8 @@ let injectedNodes = {
 
 // Vault metadata file
 const VAULT_META_FILE = 'vault-meta.json';
-
-/**
- * Get the app data directory for identity storage
- */
-function getIdentityDataDir() {
-  if (!app.isPackaged) {
-    return path.join(__dirname, '..', '..', 'identity-data');
-  }
-  return path.join(app.getPath('userData'), 'identity');
-}
+const LEGACY_NON_CATALOG_BEE_API_PORT = 1633;
+const LEGACY_NON_CATALOG_BEE_P2P_PORT = 1634;
 
 /**
  * Get the path to the vault metadata file
@@ -81,11 +99,11 @@ function saveVaultMeta(meta) {
 /**
  * Load the ESM identity module dynamically
  */
-async function loadIdentityModule() {
+function loadIdentityModule() {
   if (identityModule) return identityModule;
 
   try {
-    identityModule = await import('./identity/index.js');
+    identityModule = require('./identity');
     return identityModule;
   } catch (err) {
     console.error('[IdentityManager] Failed to load identity module:', err);
@@ -234,62 +252,74 @@ function getDerivedKeys() {
 }
 
 /**
- * Get the Bee data directory
+ * Derive a Swarm publisher key at a specific origin index.
+ * Vault must be unlocked. Keys are derived on-demand (not pre-cached)
+ * because the number of origins is unbounded.
+ * @param {number} originIndex - Origin index (0, 1, 2, ...)
+ * @returns {Promise<Object>} { privateKey, publicKey, address, path, originIndex }
  */
-function getBeeDataDir() {
-  if (!app.isPackaged) {
-    return path.join(__dirname, '..', '..', 'bee-data');
+async function getPublisherKey(originIndex) {
+  const identity = await loadIdentityModule();
+  const mnemonic = identity.getMnemonic();
+
+  if (!mnemonic) {
+    throw new Error('Vault must be unlocked to derive publisher keys');
   }
-  return path.join(app.getPath('userData'), 'bee-data');
+
+  return identity.derivePublisherKey(mnemonic, originIndex);
 }
 
 /**
- * Get the IPFS data directory
+ * Derive a browser Ethereum wallet key by wallet/account index.
+ * Vault must be unlocked. This returns the same key material used by
+ * wallet transaction/message signing without persisting it elsewhere.
+ * @param {number} walletIndex - Wallet account index (0, 1, 2, ...)
+ * @returns {Promise<Object>} { privateKey, publicKey, address, path, accountIndex }
  */
-function getIpfsDataDir() {
-  if (!app.isPackaged) {
-    return path.join(__dirname, '..', '..', 'ipfs-data');
+async function getUserWalletKey(walletIndex) {
+  if (typeof walletIndex !== 'number' || !Number.isInteger(walletIndex) || walletIndex < 0) {
+    throw new Error('Wallet index must be a non-negative integer');
   }
-  return path.join(app.getPath('userData'), 'ipfs-data');
+
+  const record = getWalletRecord(walletIndex);
+  if (!record) {
+    throw new Error(`Wallet with index ${walletIndex} does not exist`);
+  }
+  if (record.type !== WALLET_TYPES.MNEMONIC) {
+    throw new Error('This account has no derivable private key — the key never leaves its device');
+  }
+
+  const identity = await loadIdentityModule();
+  const mnemonic = identity.getMnemonic();
+  if (!mnemonic) {
+    throw new Error('Vault must be unlocked to derive wallet keys');
+  }
+
+  return identity.deriveUserWallet(mnemonic, walletIndex);
 }
 
 /**
- * Get the Radicle data directory
- */
-function getRadicleDataDir() {
-  if (!app.isPackaged) {
-    return path.join(__dirname, '..', '..', 'radicle-data');
-  }
-  return path.join(app.getPath('userData'), 'radicle-data');
-}
-
-/**
- * Check if Bee identity has been injected
+ * Check if the Swarm identity has been injected into Ant's data directory.
  */
 function isBeeIdentityInjected() {
-  const dataDir = getBeeDataDir();
+  const dataDir = getAntDataDir();
   const keystorePath = path.join(dataDir, 'keys', 'swarm.key');
   return fs.existsSync(keystorePath);
 }
 
+function isIpfsIdentityPrepared() {
+  return false;
+}
+
 /**
- * Check if IPFS has an identity (either injected by us or generated by ipfs init)
+ * Check if IPFS has an active injected runtime identity.
+ *
+ * The desktop app now uses native freedom-ipfs as a read-oriented retrieval
+ * node. It deliberately uses ephemeral libp2p identities today, so there is no
+ * durable vault-derived PeerID to report as injected.
  */
 function isIpfsIdentityInjected() {
-  const dataDir = getIpfsDataDir();
-  const configPath = path.join(dataDir, 'config');
-
-  if (!fs.existsSync(configPath)) {
-    return false;
-  }
-
-  try {
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    // Check if Identity.PeerID exists (indicates IPFS has been initialized with an identity)
-    return !!(config.Identity && config.Identity.PeerID);
-  } catch {
-    return false;
-  }
+  return false;
 }
 
 /**
@@ -302,24 +332,14 @@ function isRadicleIdentityInjected() {
 }
 
 /**
- * Read IPFS PeerID from config file (no unlock required)
+ * Read the active native IPFS PeerID (no unlock required).
+ *
+ * Native freedom-ipfs uses ephemeral libp2p identities for retrieval today and
+ * does not expose a stable app/node PeerID.
  * @returns {string|null}
  */
 function readIpfsPeerId() {
-  const dataDir = getIpfsDataDir();
-  const configPath = path.join(dataDir, 'config');
-
-  if (!fs.existsSync(configPath)) {
-    return null;
-  }
-
-  try {
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    return config.Identity?.PeerID || null;
-  } catch (err) {
-    console.error('[IdentityManager] Failed to read IPFS PeerID:', err.message);
-    return null;
-  }
+  return null;
 }
 
 /**
@@ -372,6 +392,151 @@ function generateBeeKeystorePassword() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+function getBeeApiPortForIdentityConfig() {
+  const profile = getActiveProfile();
+  const apiPort = profile?.metadata?.nodes?.bee?.apiPort;
+  if (Number.isInteger(apiPort)) {
+    return apiPort;
+  }
+
+  if (!profile || profile.source !== 'catalog') {
+    return LEGACY_NON_CATALOG_BEE_API_PORT;
+  }
+
+  throw new Error('Active profile is missing a Bee API port');
+}
+
+function getBeeP2pPortForIdentityConfig() {
+  const profile = getActiveProfile();
+  const p2pPort = profile?.metadata?.nodes?.bee?.p2pPort;
+  if (Number.isInteger(p2pPort)) {
+    return p2pPort;
+  }
+
+  if (!profile || profile.source !== 'catalog') {
+    return LEGACY_NON_CATALOG_BEE_P2P_PORT;
+  }
+
+  throw new Error('Active profile is missing a Bee P2P port');
+}
+
+// On Windows, deleting LevelDB-backed dirs (statestore/localstore) throws
+// EPERM while the node still holds the `LOCK` file open without
+// FILE_SHARE_DELETE (issue #90). Node's own rmSync maxRetries/retryDelay does
+// NOT help here: on Windows an open-handle EPERM is short-circuited by
+// libuv/Node's fixWinEPERM path (which only clears a read-only *attribute*) and
+// never reaches the retry-sleep loop, so it throws immediately. We therefore
+// run our own synchronous retry loop, giving the node a moment to exit and the
+// OS to release the handle. Verified on Windows on ARM against a real Bee node.
+const RM_MAX_ATTEMPTS = 10;
+const RM_RETRY_DELAY_MS = 100;
+
+/**
+ * Block the current thread for `ms` without spinning the event loop.
+ * @param {number} ms
+ */
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Recursively remove a path, retrying on transient Windows lock errors
+ * (EPERM/EBUSY) until the holding process exits and releases the handle.
+ * Returns true if the path existed and was removed.
+ * @param {string} targetPath - Absolute path to remove
+ * @returns {boolean}
+ */
+function removePathWithRetry(targetPath) {
+  if (!fs.existsSync(targetPath)) {
+    return false;
+  }
+  for (let attempt = 1; attempt <= RM_MAX_ATTEMPTS; attempt++) {
+    try {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      return true;
+    } catch (err) {
+      const transient = err.code === 'EPERM' || err.code === 'EBUSY' || err.code === 'ENOTEMPTY';
+      if (!transient || attempt === RM_MAX_ATTEMPTS) {
+        throw err;
+      }
+      sleepSync(attempt * RM_RETRY_DELAY_MS);
+    }
+  }
+  return true;
+}
+
+/**
+ * Remove Bee's persisted state directories so a freshly injected identity
+ * isn't mixed with state derived from the previous key.
+ * @param {string} dataDir - Bee data directory
+ */
+function removeStaleBeeDirs(dataDir) {
+  const staleDirs = ['statestore', 'localstore', 'kademlia-metrics', 'stamperstore'];
+  for (const dir of staleDirs) {
+    if (removePathWithRetry(path.join(dataDir, dir))) {
+      console.log(`[IdentityManager] Removed old ${dir} (identity change)`);
+    }
+  }
+}
+
+/**
+ * Wipe Bee's stale persisted state ahead of a fresh key injection.
+ *
+ * A running Bee node holds an exclusive LevelDB lock on `statestore`; on Windows
+ * deleting it then fails with EPERM (issue #90). The synchronous retry loop in
+ * removePathWithRetry only helps if the holder exits, so we first stop the node
+ * via the registered lifecycle hook and wait for it to exit, releasing the lock.
+ *
+ * @param {string} dataDir - Bee data directory
+ * @returns {Promise<boolean>} whether Bee was running and was stopped
+ */
+async function wipeStaleBeeState(dataDir) {
+  let beeWasRunning = false;
+  if (beeLifecycle.stop) {
+    try {
+      beeWasRunning = (await beeLifecycle.stop()) === true;
+    } catch (err) {
+      console.warn('[IdentityManager] Bee stop hook failed before wipe:', err.message);
+    }
+  }
+
+  // When re-injecting with a new key, Bee's persisted state (overlay address,
+  // auxiliary keys) becomes invalid. Remove everything except the directories
+  // we're about to write fresh (keys/ and config.yaml).
+  try {
+    removeStaleBeeDirs(dataDir);
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EBUSY') {
+      throw new Error(
+        'Could not reset node data because it is still in use. ' +
+          'Please close Freedom completely and try again.',
+        { cause: err }
+      );
+    }
+    throw err;
+  }
+  for (const keyFile of ['libp2p_v2.key', 'pss.key']) {
+    if (removePathWithRetry(path.join(dataDir, 'keys', keyFile))) {
+      console.log(`[IdentityManager] Removed old ${keyFile} (password mismatch prevention)`);
+    }
+  }
+
+  // antd self-generates a native node identity (identity.json + signing.key)
+  // whenever it starts on a data dir that has no injected `keys/swarm.key`
+  // (e.g. the node auto-started at launch before the vault was unlocked). If
+  // those files survive, antd keeps that throwaway identity instead of loading
+  // the swarm.key we're about to inject — so the node would run under the wrong
+  // wallet (different overlay, none of the user's postage stamps or chequebook).
+  // Remove them so the injected keystore becomes the sole identity on restart.
+  for (const idFile of ['identity.json', 'signing.key']) {
+    if (removePathWithRetry(path.join(dataDir, idFile))) {
+      console.log(`[IdentityManager] Removed antd self-generated ${idFile} (identity injection)`);
+    }
+  }
+
+  return beeWasRunning;
+}
+
 /**
  * Inject Bee identity
  * Generates its own random password for the keystore (stored in config.yaml)
@@ -380,35 +545,19 @@ function generateBeeKeystorePassword() {
  */
 async function injectBeeIdentity() {
   if (!derivedKeys) {
-    throw new Error('Vault is locked');
+    throw new Error(VAULT_LOCKED_MESSAGE);
   }
 
   const identity = await loadIdentityModule();
-  const dataDir = getBeeDataDir();
+  const dataDir = getAntDataDir();
 
   // Ensure directory exists
   if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
   }
 
-  // When re-injecting with a new key, Bee's persisted state (overlay address,
-  // auxiliary keys) becomes invalid. Remove everything except the directories
-  // we're about to write fresh (keys/ and config.yaml).
-  const staleDirs = ['statestore', 'localstore', 'kademlia-metrics', 'stamperstore'];
-  for (const dir of staleDirs) {
-    const dirPath = path.join(dataDir, dir);
-    if (fs.existsSync(dirPath)) {
-      fs.rmSync(dirPath, { recursive: true });
-      console.log(`[IdentityManager] Removed old ${dir} (identity change)`);
-    }
-  }
-  for (const keyFile of ['libp2p_v2.key', 'pss.key']) {
-    const keyPath = path.join(dataDir, 'keys', keyFile);
-    if (fs.existsSync(keyPath)) {
-      fs.unlinkSync(keyPath);
-      console.log(`[IdentityManager] Removed old ${keyFile} (password mismatch prevention)`);
-    }
-  }
+  // Stop Bee (if running) and wipe its stale state before writing fresh keys.
+  const beeWasRunning = await wipeStaleBeeState(dataDir);
 
   // Generate a random password for the Bee keystore
   // This is separate from the vault password - defense in depth
@@ -418,92 +567,51 @@ async function injectBeeIdentity() {
   await identity.injectBeeKey(dataDir, derivedKeys.beeWallet.privateKey, beePassword);
 
   // Store the password in config so Bee can decrypt the keystore on startup
-  identity.createBeeConfig(dataDir, beePassword);
+  identity.createBeeConfig(
+    dataDir,
+    beePassword,
+    getBeeApiPortForIdentityConfig(),
+    getBeeP2pPortForIdentityConfig()
+  );
 
   injectedNodes.bee = true;
+
+  // If we stopped a running node to wipe it, bring it back up with the new
+  // identity so the user isn't left with a silently-stopped node.
+  if (beeWasRunning && beeLifecycle.start) {
+    try {
+      await beeLifecycle.start();
+    } catch (err) {
+      console.warn('[IdentityManager] Bee start hook failed after injection:', err.message);
+    }
+  }
 
   console.log(`[IdentityManager] Bee identity injected: ${derivedKeys.beeWallet.address}`);
   return { address: derivedKeys.beeWallet.address };
 }
 
 /**
- * Inject IPFS identity
- * @returns {Promise<{peerId: string}>}
+ * Report IPFS identity mode.
+ *
+ * Native freedom-ipfs currently uses ephemeral identities by design. Keep IPFS
+ * visible in onboarding/status, but do not derive or persist a stable PeerID
+ * that the runtime cannot consume.
+ * @returns {Promise<{mode: string, active: boolean, peerId: null, stableIdentitySupported: boolean}>}
  */
 async function injectIpfsIdentity() {
   if (!derivedKeys) {
-    throw new Error('Vault is locked');
+    throw new Error(VAULT_LOCKED_MESSAGE);
   }
 
-  const identity = await loadIdentityModule();
-  const dataDir = getIpfsDataDir();
+  injectedNodes.ipfs = false;
 
-  // Ensure directory exists
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
-
-  // Check if IPFS repo exists - if not, run ipfs init first
-  const configPath = path.join(dataDir, 'config');
-  if (!fs.existsSync(configPath)) {
-    // Need to run ipfs init to create a proper repo structure
-    const { execSync } = require('child_process');
-    const ipfsBinPath = getIpfsBinaryPath();
-
-    if (fs.existsSync(ipfsBinPath)) {
-      try {
-        console.log('[IdentityManager] Initializing IPFS repo...');
-        execSync(`"${ipfsBinPath}" init`, {
-          env: { ...process.env, IPFS_PATH: dataDir },
-          stdio: 'pipe',
-        });
-        console.log('[IdentityManager] IPFS repo initialized');
-      } catch (err) {
-        console.error('[IdentityManager] Failed to init IPFS repo:', err.message);
-        throw new Error('Failed to initialize IPFS repo', { cause: err });
-      }
-    } else {
-      throw new Error('IPFS binary not found');
-    }
-  }
-
-  const peerId = identity.injectIpfsKey(
-    dataDir,
-    derivedKeys.ipfsKey.privateKey,
-    derivedKeys.ipfsKey.publicKey
-  );
-
-  // Write marker file to indicate we injected the identity
-  fs.writeFileSync(path.join(dataDir, '.identity-injected'), new Date().toISOString());
-
-  injectedNodes.ipfs = true;
-
-  console.log(`[IdentityManager] IPFS identity injected: ${peerId}`);
-  return { peerId };
-}
-
-/**
- * Get IPFS binary path (mirrors ipfs-manager logic)
- */
-function getIpfsBinaryPath() {
-  const arch = process.arch;
-  const platformMap = {
-    darwin: 'mac',
-    linux: 'linux',
-    win32: 'win',
+  console.log('[IdentityManager] IPFS uses ephemeral native identities for retrieval');
+  return {
+    mode: 'ephemeral',
+    active: false,
+    peerId: null,
+    stableIdentitySupported: false,
   };
-  const platform = platformMap[process.platform] || process.platform;
-
-  let basePath = path.join(__dirname, '..', '..', 'ipfs-bin');
-
-  if (app.isPackaged) {
-    basePath = path.join(process.resourcesPath, 'ipfs-bin');
-    const binName = process.platform === 'win32' ? 'ipfs.exe' : 'ipfs';
-    return path.join(basePath, binName);
-  }
-
-  const binName = process.platform === 'win32' ? 'ipfs.exe' : 'ipfs';
-  return path.join(basePath, `${platform}-${arch}`, binName);
 }
 
 /**
@@ -513,7 +621,7 @@ function getIpfsBinaryPath() {
  */
 async function injectRadicleIdentity(alias = 'FreedomBrowser') {
   if (!derivedKeys) {
-    throw new Error('Vault is locked');
+    throw new Error(VAULT_LOCKED_MESSAGE);
   }
 
   const identity = await loadIdentityModule();
@@ -528,9 +636,7 @@ async function injectRadicleIdentity(alias = 'FreedomBrowser') {
   // routing db, etc.) becomes invalid. Remove stale state directories.
   const staleDirs = ['node', 'cobs', 'storage'];
   for (const dir of staleDirs) {
-    const dirPath = path.join(dataDir, dir);
-    if (fs.existsSync(dirPath)) {
-      fs.rmSync(dirPath, { recursive: true });
+    if (removePathWithRetry(path.join(dataDir, dir))) {
       console.log(`[IdentityManager] Removed old ${dir} (identity change)`);
     }
   }
@@ -556,7 +662,7 @@ async function injectRadicleIdentity(alias = 'FreedomBrowser') {
  */
 async function injectAllIdentities(radicleAlias = 'FreedomBrowser', force = false) {
   if (!derivedKeys) {
-    throw new Error('Vault is locked');
+    throw new Error(VAULT_LOCKED_MESSAGE);
   }
 
   const results = {
@@ -572,30 +678,20 @@ async function injectAllIdentities(radicleAlias = 'FreedomBrowser', force = fals
     const wasInjected = isBeeIdentityInjected();
     results.bee = await injectBeeIdentity();
     if (wasInjected && force) {
+      // Bee's restart is owned by injectBeeIdentity (via the lifecycle hook),
+      // which stops the lock-holding node before the wipe and starts it again
+      // with the new key. Deliberately NOT added to needsRestart so the
+      // renderer doesn't restart Bee a second time (issue #90).
       results.bee.reinjected = true;
-      results.needsRestart.push('bee');
     }
   } else {
     results.bee = { address: derivedKeys.beeWallet.address, alreadyInjected: true };
   }
 
-  // Inject IPFS (only if not already injected OR force)
-  if (force || !isIpfsIdentityInjected()) {
-    const wasInjected = isIpfsIdentityInjected();
-    results.ipfs = await injectIpfsIdentity();
-    if (wasInjected && force) {
-      results.ipfs.reinjected = true;
-      results.needsRestart.push('ipfs');
-    }
-  } else {
-    // Get PeerID from config
-    const identity = await loadIdentityModule();
-    const ipfsIdentity = identity.createIpfsIdentity(
-      derivedKeys.ipfsKey.privateKey,
-      derivedKeys.ipfsKey.publicKey
-    );
-    results.ipfs = { peerId: ipfsIdentity.peerId, alreadyInjected: true };
-  }
+  // Native freedom-ipfs uses ephemeral libp2p identities for read-only
+  // retrieval today. Keep this in the result so onboarding can show IPFS as an
+  // intentional identity mode rather than a failed injection.
+  results.ipfs = await injectIpfsIdentity();
 
   // Inject Radicle (only if not already injected OR force)
   if (force || !isRadicleIdentityInjected()) {
@@ -624,7 +720,7 @@ async function injectAllIdentities(radicleAlias = 'FreedomBrowser', force = fals
  * Get identity status
  * Returns addresses without requiring vault unlock by reading from:
  * - vault-meta.json for wallet addresses (stored at vault creation)
- * - IPFS config for PeerID
+ * - native IPFS mode (ephemeral; no durable PeerID today)
  * - Radicle public key for DID
  * @returns {Promise<Object>}
  */
@@ -639,11 +735,6 @@ async function getIdentityStatus() {
     // Vault is unlocked - compute from derived keys (most accurate)
     const identity = await loadIdentityModule();
 
-    const ipfsIdentity = identity.createIpfsIdentity(
-      derivedKeys.ipfsKey.privateKey,
-      derivedKeys.ipfsKey.publicKey
-    );
-
     const radicleIdentity = identity.createRadicleIdentity(
       derivedKeys.radicleKey.privateKey,
       derivedKeys.radicleKey.publicKey,
@@ -653,7 +744,7 @@ async function getIdentityStatus() {
     addresses = {
       userWallet: derivedKeys.userWallet.address,
       beeWallet: derivedKeys.beeWallet.address,
-      ipfsPeerId: ipfsIdentity.peerId,
+      ipfsPeerId: null,
       radicleDid: radicleIdentity.did,
     };
   } else if (hasVaultResult) {
@@ -673,6 +764,10 @@ async function getIdentityStatus() {
     isUnlocked,
     beeInjected: isBeeIdentityInjected(),
     ipfsInjected: isIpfsIdentityInjected(),
+    ipfsIdentityPrepared: isIpfsIdentityPrepared(),
+    ipfsIdentityMode: 'ephemeral',
+    ipfsStableIdentitySupported: false,
+    ipfsNativeIdentityActive: false,
     radicleInjected: isRadicleIdentityInjected(),
     addresses,
   };
@@ -692,8 +787,136 @@ async function exportMnemonic() {
 // ============================================
 
 /**
+ * Wallet account types. Entries in vault-meta's `derivedWallets[]` without
+ * a `type` field predate hardware-wallet support and are mnemonic-derived.
+ */
+const WALLET_TYPES = {
+  MNEMONIC: 'mnemonic',
+  LEDGER: 'ledger',
+  REMOTE: 'remote', // phone / other device signing over openlv
+  SAFE: 'safe', // Safe smart account owned by other wallet records
+};
+
+/** User-facing labels for non-mnemonic account types (auto-names, error text). */
+const DEVICE_LABELS = {
+  [WALLET_TYPES.LEDGER]: 'Ledger',
+  [WALLET_TYPES.REMOTE]: 'Phone',
+  [WALLET_TYPES.SAFE]: 'Safe',
+};
+
+/** Type-specific record fields to expose through the record seams. */
+function extraRecordFields(record) {
+  const fields = {};
+  if (record.path) {
+    fields.path = record.path;
+  }
+  if (record.type === WALLET_TYPES.SAFE) {
+    fields.owners = record.owners;
+    fields.threshold = record.threshold;
+    fields.saltNonce = record.saltNonce;
+    fields.deployed = record.deployed || {};
+  }
+  return fields;
+}
+
+/**
+ * Hardware accounts are allocated from a disjoint, never-reused slice of
+ * the wallet index space, starting here.
+ *
+ * A wallet's `index` is two things at once: the account id every
+ * persisted reference stores (dApp permissions, Swarm publisher
+ * identities, `activeWalletIndex`) and — for mnemonic accounts — the
+ * BIP-44 account index its key is derived at. Letting hardware accounts
+ * take ids from that same pool breaks both roles: the mnemonic account
+ * at the squatted derivation index can never be re-created (the hardware
+ * guards block derivation at that index), stranding any funds it holds,
+ * and every persisted reference to that index silently rebinds to a
+ * different address and signing backend.
+ *
+ * @see nextHardwareWalletIndex
+ */
+const HARDWARE_INDEX_BASE = 1000000;
+
+function isHardwareWalletIndex(index) {
+  return Number.isInteger(index) && index >= HARDWARE_INDEX_BASE;
+}
+
+/**
+ * Allocate the index for a new hardware account: monotonic and never
+ * reused, so deleting a Ledger does not hand its index — and with it
+ * every dApp permission and publisher identity pinned to that index — to
+ * the next device account that gets added.
+ *
+ * The counter lives in vault-meta; the on-disk wallet list is used as a
+ * high-water mark so a missing or stale counter can never produce a
+ * collision.
+ *
+ * @param {Object} meta - Parsed vault-meta
+ * @param {Array<Object>} wallets - Current wallet list
+ * @returns {number}
+ */
+function nextHardwareWalletIndex(meta, wallets) {
+  const counter = Number.isInteger(meta.nextHardwareWalletIndex)
+    ? meta.nextHardwareWalletIndex
+    : HARDWARE_INDEX_BASE;
+  const highWater = wallets.reduce(
+    (max, wallet) => (isHardwareWalletIndex(wallet.index) ? Math.max(max, wallet.index + 1) : max),
+    HARDWARE_INDEX_BASE
+  );
+  return Math.max(counter, highWater);
+}
+
+/**
+ * The wallet list stored in vault-meta, with the implicit pre-multi-wallet
+ * default (just the main wallet) when `derivedWallets` was never written.
+ *
+ * @param {Object} meta - Parsed vault-meta
+ * @returns {Array<Object>} Raw derivedWallets entries
+ */
+function getWalletList(meta) {
+  return (
+    meta.derivedWallets || [
+      { index: 0, name: 'Main Wallet', address: meta.addresses?.userWallet || null },
+    ]
+  );
+}
+
+/**
+ * Look up a single wallet account record by index, normalized: `type`
+ * always present, address falling back to the stored main-wallet address
+ * for index 0. Returns null when the index is unknown.
+ *
+ * Used by the signer factory and the vault-access guard to decide which
+ * signing backend an index resolves to — must stay synchronous and cheap.
+ *
+ * @param {number} walletIndex
+ * @param {Object} [meta] - Already-loaded vault-meta, to skip the disk read
+ * @returns {{index: number, name: string, address: string|null, type: string, path?: string}|null}
+ */
+function getWalletRecord(walletIndex, meta = getVaultMeta()) {
+  if (!meta) {
+    return null;
+  }
+  const record = getWalletList(meta).find((wallet) => wallet.index === walletIndex);
+  if (!record) {
+    return null;
+  }
+  let address = record.address || null;
+  if (!address && record.index === 0) {
+    address = meta.addresses?.userWallet || null;
+  }
+  return {
+    index: record.index,
+    name: record.name,
+    address,
+    type: record.type || WALLET_TYPES.MNEMONIC,
+    ...extraRecordFields(record),
+  };
+}
+
+/**
  * Get list of derived user wallets
- * @returns {Array<{index: number, name: string, address: string}>}
+ * @returns {Array<{index: number, name: string, address: string, type: string}>}
  */
 async function getDerivedWallets() {
   const identity = await loadIdentityModule();
@@ -706,11 +929,13 @@ async function getDerivedWallets() {
   // Initialize with default wallet if derivedWallets not present
   if (!meta.derivedWallets) {
     const mainWalletAddress = meta.addresses?.userWallet || null;
-    const wallets = [{
-      index: 0,
-      name: 'Main Wallet',
-      address: mainWalletAddress,
-    }];
+    const wallets = [
+      {
+        index: 0,
+        name: 'Main Wallet',
+        address: mainWalletAddress,
+      },
+    ];
 
     // Update meta with derivedWallets (include address for persistence)
     saveVaultMeta({
@@ -719,7 +944,7 @@ async function getDerivedWallets() {
       activeWalletIndex: 0,
     });
 
-    return wallets;
+    return wallets.map((wallet) => ({ ...wallet, type: WALLET_TYPES.MNEMONIC }));
   }
 
   // If vault is unlocked, derive addresses; otherwise use stored addresses
@@ -727,9 +952,14 @@ async function getDerivedWallets() {
   const wallets = [];
 
   for (const wallet of meta.derivedWallets) {
+    const type = wallet.type || WALLET_TYPES.MNEMONIC;
     let address = null;
 
-    if (mnemonic) {
+    if (type !== WALLET_TYPES.MNEMONIC) {
+      // Device accounts (Ledger, phone): the address was read from the
+      // device when the account was added; nothing to derive locally.
+      address = wallet.address || null;
+    } else if (mnemonic) {
       // Derive address from mnemonic
       const derived = identity.deriveUserWallet(mnemonic, wallet.index);
       address = derived.address;
@@ -746,10 +976,165 @@ async function getDerivedWallets() {
       index: wallet.index,
       name: wallet.name,
       address,
+      type,
+      ...extraRecordFields(wallet),
     });
   }
 
   return wallets;
+}
+
+/**
+ * Add a device account (Ledger, phone) to the wallet list.
+ *
+ * The address comes from the device when the account is added and is
+ * persisted — it can never be re-derived locally. Does not require the
+ * vault to be unlocked (no mnemonic involved), only that a vault exists
+ * so there is a wallet list to add to.
+ *
+ * @param {string} type - WALLET_TYPES.LEDGER or WALLET_TYPES.REMOTE
+ * @param {string} name - Display name ('' → auto "<label> N")
+ * @param {string} address - Checksummed address reported by the device
+ * @param {object} [extra] - Extra record fields (e.g. Ledger's path)
+ */
+async function addDeviceWallet(type, name, address, extra = {}) {
+  const label = DEVICE_LABELS[type];
+  const { isAddress } = require('ethers');
+  if (typeof address !== 'string' || !isAddress(address)) {
+    throw new Error(`Invalid ${label} account address`);
+  }
+
+  const meta = getVaultMeta();
+  if (!meta) {
+    throw new Error('No vault found');
+  }
+
+  const wallets = getWalletList(meta);
+
+  const duplicate = wallets.find(
+    (wallet) => wallet.address && wallet.address.toLowerCase() === address.toLowerCase()
+  );
+  if (duplicate) {
+    throw new Error(`This account is already in your wallet list as "${duplicate.name}"`);
+  }
+
+  const newIndex = nextHardwareWalletIndex(meta, wallets);
+  const sameTypeCount = wallets.filter((w) => w.type === type).length;
+  const newWallet = {
+    index: newIndex,
+    name: (name || '').trim() || `${label} ${sameTypeCount + 1}`,
+    address,
+    type,
+    ...extra,
+  };
+  wallets.push(newWallet);
+
+  saveVaultMeta({
+    ...meta,
+    derivedWallets: wallets,
+    nextHardwareWalletIndex: newIndex + 1,
+  });
+
+  return { ...newWallet };
+}
+
+/**
+ * Add a Ledger hardware-wallet account.
+ *
+ * @param {string} name - Display name ('' → auto "Ledger N")
+ * @param {string} address - Checksummed address read from the device
+ * @param {string} path - Derivation path in device format (e.g. "44'/60'/0'/0/0")
+ * @returns {Promise<{index: number, name: string, address: string, type: string, path: string}>}
+ */
+async function addLedgerWallet(name, address, path) {
+  if (typeof path !== 'string' || !path) {
+    throw new Error('Missing derivation path for Ledger account');
+  }
+  return addDeviceWallet(WALLET_TYPES.LEDGER, name, address, { path });
+}
+
+/**
+ * Add a remote (phone / other device) account, signing over openlv.
+ *
+ * @param {string} name - Display name ('' → auto "Phone N")
+ * @param {string} address - Address the phone reported via eth_requestAccounts
+ * @returns {Promise<{index: number, name: string, address: string, type: string}>}
+ */
+async function addRemoteWallet(name, address) {
+  return addDeviceWallet(WALLET_TYPES.REMOTE, name, address);
+}
+
+/**
+ * Add a Safe smart-account record.
+ *
+ * The init params (owners, threshold, saltNonce) are FROZEN once stored —
+ * they are what makes the CREATE2 address reproducible on other chains
+ * (retroactive deployment recovers funds sent there), so nothing may ever
+ * rewrite them. `owners` are wallet indexes of existing records; the
+ * caller (safe-service) resolves their addresses and predicts `address`
+ * before storing.
+ *
+ * Only the shipped presets are accepted: 1-of-2 and 2-of-3. 2-of-2 is
+ * deliberately not offered — losing either device bricks the funds.
+ *
+ * @param {string} name - Display name ('' → auto "Safe N")
+ * @param {Object} params
+ * @param {string} params.address - Predicted counterfactual address
+ * @param {number[]} params.owners - Wallet indexes of the owner records
+ * @param {number} params.threshold
+ * @param {string} params.saltNonce
+ * @returns {Promise<Object>} The stored record
+ */
+async function addSafeWallet(name, { address, owners, threshold, saltNonce }) {
+  const validPreset =
+    Array.isArray(owners) &&
+    ((owners.length === 2 && threshold === 1) || (owners.length === 3 && threshold === 2));
+  if (!validPreset) {
+    throw new Error('A Safe needs 1 of 2 or 2 of 3 owners');
+  }
+  if (new Set(owners).size !== owners.length) {
+    throw new Error('Duplicate owner accounts');
+  }
+  for (const ownerIndex of owners) {
+    const record = getWalletRecord(ownerIndex);
+    if (!record) {
+      throw new Error(`Owner wallet index ${ownerIndex} does not exist`);
+    }
+    if (record.type === WALLET_TYPES.SAFE) {
+      throw new Error('A Safe cannot own another Safe');
+    }
+  }
+  if (typeof saltNonce !== 'string' || !/^\d+$/.test(saltNonce)) {
+    throw new Error('Invalid Safe salt nonce');
+  }
+
+  return addDeviceWallet(WALLET_TYPES.SAFE, name, address, {
+    owners: [...owners],
+    threshold,
+    saltNonce,
+    deployed: {},
+  });
+}
+
+/**
+ * Record that a Safe's contract is now live on a chain. Deployment state
+ * is the ONLY mutable part of a safe record — init params stay frozen.
+ *
+ * @param {number} index - Wallet index of the safe record
+ * @param {number} chainId
+ */
+async function markSafeDeployed(index, chainId) {
+  const meta = getVaultMeta();
+  if (!meta) {
+    throw new Error('No vault found');
+  }
+  const wallets = getWalletList(meta);
+  const record = wallets.find((w) => w.index === index);
+  if (!record || record.type !== WALLET_TYPES.SAFE) {
+    throw new Error(`Wallet ${index} is not a Safe account`);
+  }
+  record.deployed = { ...(record.deployed || {}), [chainId]: true };
+  saveVaultMeta({ ...meta, derivedWallets: wallets });
 }
 
 /**
@@ -772,8 +1157,8 @@ async function setActiveWalletIndex(index) {
   }
 
   // Verify wallet exists
-  const wallets = meta.derivedWallets || [{ index: 0, name: 'Main Wallet' }];
-  const walletExists = wallets.some(w => w.index === index);
+  const wallets = getWalletList(meta);
+  const walletExists = wallets.some((w) => w.index === index);
 
   if (!walletExists) {
     throw new Error(`Wallet with index ${index} does not exist`);
@@ -804,11 +1189,23 @@ async function createDerivedWallet(name) {
   }
 
   // Get current wallets
-  const wallets = meta.derivedWallets || [{ index: 0, name: 'Main Wallet' }];
+  const wallets = getWalletList(meta);
 
-  // Find next available index (use account index, starting from max + 1)
-  const maxIndex = wallets.reduce((max, w) => Math.max(max, w.index), -1);
-  const newIndex = maxIndex + 1;
+  // Find next available index (use account index, starting from max + 1).
+  // Only mnemonic accounts constrain it — this index *is* the BIP-44
+  // account index the key is derived at, and hardware accounts live in
+  // their own range (see HARDWARE_INDEX_BASE). The taken-index skip is a
+  // safety net for vault-meta written before that split, where a Ledger
+  // may still sit on a low index.
+  const taken = new Set(wallets.map((w) => w.index));
+  const maxIndex = wallets.reduce(
+    (max, w) => (isHardwareWalletIndex(w.index) ? max : Math.max(max, w.index)),
+    -1
+  );
+  let newIndex = maxIndex + 1;
+  while (taken.has(newIndex)) {
+    newIndex += 1;
+  }
 
   // Derive the new wallet
   const derived = identity.deriveUserWallet(mnemonic, newIndex);
@@ -845,8 +1242,8 @@ async function renameDerivedWallet(index, newName) {
     throw new Error('No vault found');
   }
 
-  const wallets = meta.derivedWallets || [{ index: 0, name: 'Main Wallet' }];
-  const walletIndex = wallets.findIndex(w => w.index === index);
+  const wallets = getWalletList(meta);
+  const walletIndex = wallets.findIndex((w) => w.index === index);
 
   if (walletIndex === -1) {
     throw new Error(`Wallet with index ${index} does not exist`);
@@ -858,6 +1255,19 @@ async function renameDerivedWallet(index, newName) {
     ...meta,
     derivedWallets: wallets,
   });
+}
+
+function getSwarmPublisherIdentityReferences(walletIndex) {
+  const { getEthereumWalletIdentityReferences } = require('./swarm/feed-store');
+  return getEthereumWalletIdentityReferences(walletIndex);
+}
+
+function formatPublisherIdentityReferenceError(walletIndex, references) {
+  const origins = references.map((reference) => reference.origin);
+  const shownOrigins = origins.slice(0, 3).join(', ');
+  const extraCount = origins.length - 3;
+  const extra = extraCount > 0 ? ` and ${extraCount} more` : '';
+  return `Cannot delete wallet with index ${walletIndex}; it is active or pinned to Swarm feeds for ${shownOrigins}${extra}. Switch the affected publisher identities before deleting this wallet.`;
 }
 
 /**
@@ -874,11 +1284,42 @@ async function deleteDerivedWallet(index) {
     throw new Error('No vault found');
   }
 
-  const wallets = meta.derivedWallets || [{ index: 0, name: 'Main Wallet' }];
-  const walletIndex = wallets.findIndex(w => w.index === index);
+  const wallets = getWalletList(meta);
+  const walletIndex = wallets.findIndex((w) => w.index === index);
 
   if (walletIndex === -1) {
     throw new Error(`Wallet with index ${index} does not exist`);
+  }
+
+  const publisherIdentityReferences = getSwarmPublisherIdentityReferences(index);
+  if (publisherIdentityReferences.length > 0) {
+    const err = new Error(formatPublisherIdentityReferenceError(index, publisherIdentityReferences));
+    err.code = 'SWARM_PUBLISHER_IDENTITY_WALLET_IN_USE';
+    err.references = publisherIdentityReferences;
+    throw err;
+  }
+
+  // Safe owners are referenced by index; deleting one would leave the
+  // Safe unable to collect that signature (and break executor selection).
+  const owningSafe = wallets.find(
+    (w) => w.type === WALLET_TYPES.SAFE && (w.owners || []).includes(index)
+  );
+  if (owningSafe) {
+    throw new Error(
+      `This account is an owner of "${owningSafe.name}" — delete that Safe account first`
+    );
+  }
+
+  // A Safe's half-signed state is keyed by wallet index (safe-pending.json
+  // entry, in-memory SafeMessage session). Discard both WITH the record:
+  // a later account that reuses the index must neither inherit nor be
+  // blocked by the deleted Safe's leftovers. Cleanup precedes the meta
+  // write so a failure never leaves a deleted record with live state.
+  // (Lazy requires — both modules are dependency-light — keep the Safe
+  // stack out of ordinary wallet operations.)
+  if (wallets[walletIndex].type === WALLET_TYPES.SAFE) {
+    require('./wallet/safe/message-sessions').discardSession(index);
+    require('./wallet/safe/pending-store').clearPending(index);
   }
 
   // Remove from list
@@ -895,6 +1336,15 @@ async function deleteDerivedWallet(index) {
     derivedWallets: wallets,
     activeWalletIndex: activeIndex,
   });
+
+  // A dApp permission is a standing authorisation to sign with this one
+  // account (plus any auto-approve rules on top). It cannot outlive the
+  // account: the stored index would dangle, and for a hardware account it
+  // would dangle into an index that has no signer at all.
+  // Lazy require: dapp-permissions pulls in electron's `app` for its
+  // storage path, which identity-manager must not need at load time.
+  const { revokePermissionsForWalletIndex } = require('./wallet/dapp-permissions');
+  revokePermissionsForWalletIndex(index);
 }
 
 /**
@@ -910,6 +1360,14 @@ async function getActiveWalletAddress() {
   }
 
   const activeIndex = meta.activeWalletIndex ?? 0;
+
+  // Hardware accounts always use the stored device address — there is
+  // no local derivation, unlocked vault or not.
+  const record = getWalletRecord(activeIndex, meta);
+  if (record && record.type !== WALLET_TYPES.MNEMONIC) {
+    return record.address;
+  }
+
   const mnemonic = identity.getMnemonic();
 
   if (mnemonic) {
@@ -918,11 +1376,7 @@ async function getActiveWalletAddress() {
   }
 
   // Vault locked - can only return main wallet address from stored meta
-  if (activeIndex === 0) {
-    return meta.addresses?.userWallet || null;
-  }
-
-  return null;
+  return activeIndex === 0 ? (record?.address ?? null) : null;
 }
 
 /**
@@ -984,24 +1438,30 @@ function registerIdentityIpc() {
   });
 
   // Create new vault
-  ipcMain.handle(IPC.IDENTITY_CREATE_VAULT, async (_event, password, strength, userKnowsPassword) => {
-    try {
-      const mnemonic = await createNewVault(password, strength, userKnowsPassword);
-      return { success: true, mnemonic };
-    } catch (err) {
-      return { success: false, error: err.message };
+  ipcMain.handle(
+    IPC.IDENTITY_CREATE_VAULT,
+    async (_event, password, strength, userKnowsPassword) => {
+      try {
+        const mnemonic = await createNewVault(password, strength, userKnowsPassword);
+        return { success: true, mnemonic };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
     }
-  });
+  );
 
   // Import mnemonic
-  ipcMain.handle(IPC.IDENTITY_IMPORT_MNEMONIC, async (_event, password, mnemonic, userKnowsPassword) => {
-    try {
-      await importExistingMnemonic(password, mnemonic, userKnowsPassword);
-      return { success: true };
-    } catch (err) {
-      return { success: false, error: err.message };
+  ipcMain.handle(
+    IPC.IDENTITY_IMPORT_MNEMONIC,
+    async (_event, password, mnemonic, userKnowsPassword) => {
+      try {
+        await importExistingMnemonic(password, mnemonic, userKnowsPassword);
+        return { success: true };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
     }
-  });
+  );
 
   // Get vault metadata (setup type, etc.)
   ipcMain.handle('identity:get-vault-meta', () => {
@@ -1068,6 +1528,16 @@ function registerIdentityIpc() {
     try {
       if (!password) {
         return { success: false, error: 'Password is required to export private key' };
+      }
+      // Same two-part guard as withVaultPrivateKey: the index range alone
+      // is decisive, so a deleted device account (no record) cannot export
+      // a phantom mnemonic key derived at its index.
+      const record = getWalletRecord(accountIndex);
+      if (isHardwareWalletIndex(accountIndex) || (record && record.type !== WALLET_TYPES.MNEMONIC)) {
+        return {
+          success: false,
+          error: 'This account has no exportable private key — the key never leaves its device',
+        };
       }
       const identity = await loadIdentityModule();
       const dataDir = getIdentityDataDir();
@@ -1153,6 +1623,26 @@ function registerIdentityIpc() {
     }
   });
 
+  // Add a Ledger hardware-wallet account (address read from the device)
+  ipcMain.handle('wallet:add-ledger-wallet', async (_event, name, address, path) => {
+    try {
+      const wallet = await addLedgerWallet(name, address, path);
+      return { success: true, wallet };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // Add a remote (phone) account (address reported over openlv)
+  ipcMain.handle('wallet:add-remote-wallet', async (_event, name, address) => {
+    try {
+      const wallet = await addRemoteWallet(name, address);
+      return { success: true, wallet };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
   // Rename wallet
   ipcMain.handle('wallet:rename-wallet', async (_event, index, newName) => {
     try {
@@ -1204,17 +1694,30 @@ module.exports = {
 
   // Key operations
   getDerivedKeys,
+  getPublisherKey,
+  getUserWalletKey,
 
   // Multi-wallet operations
+  WALLET_TYPES,
+  HARDWARE_INDEX_BASE,
+  isHardwareWalletIndex,
+  getWalletRecord,
   getDerivedWallets,
   getActiveWalletIndex,
   setActiveWalletIndex,
   createDerivedWallet,
+  addLedgerWallet,
+  addRemoteWallet,
+  addSafeWallet,
+  markSafeDeployed,
   renameDerivedWallet,
   deleteDerivedWallet,
   getActiveWalletAddress,
 
   // Identity injection
+  setBeeLifecycle,
+  removeStaleBeeDirs,
+  wipeStaleBeeState,
   injectBeeIdentity,
   injectIpfsIdentity,
   injectRadicleIdentity,
@@ -1224,11 +1727,12 @@ module.exports = {
   getIdentityStatus,
   isBeeIdentityInjected,
   isIpfsIdentityInjected,
+  isIpfsIdentityPrepared,
   isRadicleIdentityInjected,
 
   // Data directories
   getIdentityDataDir,
-  getBeeDataDir,
+  getAntDataDir,
   getIpfsDataDir,
   getRadicleDataDir,
 };

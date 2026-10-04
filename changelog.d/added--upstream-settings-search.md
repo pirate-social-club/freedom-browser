@@ -1,0 +1,2 @@
+- Settings search ([#39](https://github.com/pirate-social-club/freedom-browser/pull/39))
+  - Search supported settings by their labels and descriptions

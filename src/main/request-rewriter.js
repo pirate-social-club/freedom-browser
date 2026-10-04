@@ -1,19 +1,7 @@
 const log = require('./logger');
-const { activeBzzBases, activeIpfsBases, activeRadBases } = require('./state');
-const { getBeeApiUrl, getIpfsGatewayUrl, getRadicleApiUrl } = require('./service-registry');
-const { loadSettings } = require('./settings-store');
-const { isHnsHost } = require('../shared/hns-hosts');
+const { activeBzzBases } = require('./state');
+const { registerWebRequestHandler } = require('./webrequest-dispatcher');
 const { URL } = require('url');
-
-let electronApp = null;
-try {
-  ({ app: electronApp } = require('electron'));
-} catch {
-  electronApp = null;
-}
-
-const UNKNOWN_SINGLE_LABEL_LOG_WINDOW_MS = 30 * 1000;
-const unknownSingleLabelLogState = new Map();
 
 const sanitizeUrlForLog = (rawUrl) => {
   if (!rawUrl || typeof rawUrl !== 'string') return 'unknown';
@@ -44,182 +32,14 @@ const sanitizeUrlForLog = (rawUrl) => {
   }
 };
 
-const sanitizeRequestUrlForDiagnostics = (rawUrl) => {
-  if (!rawUrl || typeof rawUrl !== 'string') return 'unknown';
-  try {
-    const parsed = new URL(rawUrl);
-    for (const [key] of parsed.searchParams) {
-      if (/(auth|code|secret|session|state|token)/i.test(key)) {
-        parsed.searchParams.set(key, '<redacted>');
-      }
-    }
-    return `${parsed.origin}${parsed.pathname}${parsed.search}`;
-  } catch {
-    return 'unknown';
-  }
-};
-
-const isUnknownSingleLabelDiagnosticsEnabled = () =>
-  electronApp?.isPackaged === false || process.env.FREEDOM_HNS_DIAGNOSTICS === '1';
-
-const isLoopbackHostname = (hostname = '') =>
-  hostname === 'localhost' || hostname === '::1' || /^127\./.test(hostname);
-
-const formatRequestSource = (details = {}) => {
-  const parts = [
-    `type=${details.resourceType || 'unknown'}`,
-    `webContentsId=${details.webContentsId ?? 'unknown'}`,
-    `frameId=${details.frameId ?? 'unknown'}`,
-  ];
-  if (details.initiator) parts.push(`initiator=${details.initiator}`);
-  if (details.referrer) {
-    parts.push(`referrer=${sanitizeRequestUrlForDiagnostics(details.referrer)}`);
-  }
-  return parts.join(' ');
-};
-
-const logUnknownSingleLabelRequest = (details = {}) => {
-  if (!isUnknownSingleLabelDiagnosticsEnabled()) return;
-
-  let hostname;
-  try {
-    const parsed = new URL(details.url);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
-    hostname = parsed.hostname.toLowerCase();
-  } catch {
-    return;
-  }
-
-  if (!hostname || hostname.includes('.') || isLoopbackHostname(hostname) || isHnsHost(hostname)) {
-    return;
-  }
-
-  const message =
-    `[Network] Unknown single-label request bypassed HNS: ${details.method || 'GET'} ` +
-    `${sanitizeRequestUrlForDiagnostics(details.url)} ${formatRequestSource(details)}`;
-  const now = Date.now();
-  const previous = unknownSingleLabelLogState.get(message);
-
-  if (previous && now - previous.lastLoggedAt < UNKNOWN_SINGLE_LABEL_LOG_WINDOW_MS) {
-    previous.suppressed += 1;
-    return;
-  }
-
-  if (previous?.suppressed > 0) {
-    log.warn(`[Network] Unknown single-label diagnostics suppressed ${previous.suppressed} repeat(s): ${message}`);
-  }
-
-  log.warn(message);
-  unknownSingleLabelLogState.set(message, {
-    lastLoggedAt: now,
-    suppressed: 0,
-  });
-};
-
-// Validate IPFS CID format (mirrors src/renderer/lib/url-utils.js)
-function isValidCid(str) {
-  if (!str) return false;
-  // CIDv0: Qm + 44 base58 chars
-  if (/^Qm[1-9A-HJ-NP-Za-km-z]{44}$/.test(str)) return true;
-  // CIDv1 base32: baf + 50+ lowercase base32 chars
-  if (/^baf[a-z2-7]{50,}$/i.test(str)) return true;
-  // CIDv1 base58btc: z + 40+ base58 chars
-  if (/^z[1-9A-HJ-NP-Za-km-z]{40,}$/.test(str)) return true;
-  return false;
-}
-
-// Validate IPNS name: DNS name (e.g., docs.ipfs.io) or libp2p key (k51..., 12D3...)
-function isValidIpnsName(str) {
-  if (!str) return false;
-  // Only allow alphanumeric, dots, hyphens, underscores (covers DNS names and base36/base58 keys)
-  return /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,252}$/.test(str);
-}
-
-/**
- * Convert a custom protocol URL (bzz://, ipfs://, ipns://) to a gateway URL
- * Uses service registry for dynamic port resolution.
- * Validates that the URL contains a non-empty hash/CID/name before converting,
- * to avoid sending malformed paths to the gateway.
- * @param {string} url - The URL to check/convert
- * @returns {{ converted: boolean, url: string }} Result with converted flag and URL
- */
-function convertProtocolUrl(url) {
-  if (!url) {
-    return { converted: false, url };
-  }
-
-  // Handle bzz:// protocol
-  if (url.startsWith('bzz://')) {
-    const afterScheme = url.slice(6).replace(/^\/+/, '');
-    if (!afterScheme) {
-      return { converted: false, url };
-    }
-    const hash = afterScheme.split(/[/?#]/)[0];
-    if (!hash || !/^[a-fA-F0-9]{64}([a-fA-F0-9]{64})?$/.test(hash)) {
-      return { converted: false, url };
-    }
-    const beeApiUrl = getBeeApiUrl();
-    const gatewayUrl = `${beeApiUrl}/bzz/${afterScheme}`;
-    return { converted: true, url: gatewayUrl };
-  }
-
-  // Handle ipfs:// protocol
-  if (url.startsWith('ipfs://')) {
-    const afterScheme = url.slice(7).replace(/^\/+/, '');
-    if (!afterScheme) {
-      return { converted: false, url };
-    }
-    const cid = afterScheme.split(/[/?#]/)[0];
-    if (!cid || !isValidCid(cid)) {
-      return { converted: false, url };
-    }
-    const ipfsGatewayUrl = getIpfsGatewayUrl();
-    const gatewayUrl = `${ipfsGatewayUrl}/ipfs/${afterScheme}`;
-    return { converted: true, url: gatewayUrl };
-  }
-
-  // Handle ipns:// protocol
-  if (url.startsWith('ipns://')) {
-    const afterScheme = url.slice(7).replace(/^\/+/, '');
-    if (!afterScheme) {
-      return { converted: false, url };
-    }
-    const name = afterScheme.split(/[/?#]/)[0];
-    if (!name || !isValidIpnsName(name)) {
-      return { converted: false, url };
-    }
-    const ipfsGatewayUrl = getIpfsGatewayUrl();
-    const gatewayUrl = `${ipfsGatewayUrl}/ipns/${afterScheme}`;
-    return { converted: true, url: gatewayUrl };
-  }
-
-  // Handle rad: and rad:// protocols
-  // rad:RID or rad://RID -> http://127.0.0.1:8780/api/v1/repos/RID
-  // rad:RID/tree/branch/path -> http://127.0.0.1:8780/api/v1/repos/RID/tree/branch/path
-  if (url.startsWith('rad:')) {
-    if (loadSettings().enableRadicleIntegration !== true) {
-      return { converted: false, url };
-    }
-    // Handle both rad:RID and rad://RID formats
-    const remainder = url.startsWith('rad://') ? url.slice(6) : url.slice(4);
-    const radicleApiUrl = getRadicleApiUrl();
-    // Parse the remainder to extract RID and optional path
-    const slashIndex = remainder.indexOf('/');
-    const rid = slashIndex === -1 ? remainder : remainder.slice(0, slashIndex);
-    const pathPart = slashIndex === -1 ? '' : remainder.slice(slashIndex);
-
-    // Validate RID: must start with z followed by base58 characters
-    if (!/^z[1-9A-HJ-NP-Za-km-z]{20,60}$/.test(rid)) {
-      log.warn(`[rewrite] Blocked invalid Radicle RID: ${rid}`);
-      return { converted: false, url };
-    }
-
-    const gatewayUrl = `${radicleApiUrl}/api/v1/repos/${rid}${pathPart}`;
-    return { converted: true, url: gatewayUrl };
-  }
-
-  return { converted: false, url };
-}
+// Note: `bzz://`, `ipfs://`, `ipns://`, and `rad:`/`rad://` are handled
+// by custom protocol handlers in `src/main/swarm/bzz-protocol.js`,
+// `src/main/ipfs/ipfs-protocol.js`, and `src/main/radicle/rad-protocol.js`;
+// see README "Swarm Content Retrieval" and "IPFS / IPNS Content
+// Retrieval". Requests for these schemes never reach the webRequest
+// rewriter — they're dispatched to the protocol handlers before
+// webRequest sees them, so this module only rewrites HTTP(S) requests
+// relative to an active bzz base.
 
 /**
  * Determines if a request should be rewritten to stay within a content-addressed context.
@@ -251,9 +71,11 @@ function shouldRewriteRequest(requestUrl, baseUrl) {
   if (normalizedPath.startsWith('/ipfs/') || normalizedPath.startsWith('/ipns/')) {
     return { shouldRewrite: false, reason: 'already_ipfs_path' };
   }
-  if (normalizedPath.startsWith('/api/v1/repos/')) {
-    return { shouldRewrite: false, reason: 'already_rad_path' };
-  }
+  // NOTE: there is deliberately no `/api/v1/repos/` exclusion here. Radicle
+  // is served in-process over the `rad:`/`radapi:` schemes, which never reach
+  // webRequest — so such a path can only be a same-origin asset of the bzz
+  // page itself (`/api/v1/repos/...` is an ordinary site path), and skipping
+  // it would send the request to the Bee node's real origin and 404.
 
   // Don't rewrite cross-origin requests
   if (requested.origin !== base.origin) {
@@ -266,7 +88,7 @@ function shouldRewriteRequest(requestUrl, baseUrl) {
 /**
  * Builds the rewritten URL for a request that should stay within the Swarm hash context.
  * @param {string} requestUrl - The URL being requested
- * @param {string} baseUrl - The current bzz base URL (e.g., http://127.0.0.1:1633/bzz/hash/)
+ * @param {string} baseUrl - The current bzz base URL (e.g., <bee-api>/bzz/hash/)
  * @returns {string|null} The rewritten URL, or null if URLs are invalid
  */
 function buildRewriteTarget(requestUrl, baseUrl) {
@@ -306,89 +128,57 @@ function shouldBlockInvalidBzzRequest(url) {
   return false;
 }
 
-function registerRequestRewriter(targetSession) {
-  if (!targetSession) {
-    return;
+/**
+ * Pure dispatcher handler — examines a request and returns an action
+ * object (`{redirectURL}` or `{cancel}`) or `null` to pass through.
+ * Exported separately from the install step so tests can drive it
+ * without mocking `session.webRequest`.
+ */
+function rewriteRequestForDispatch(details) {
+  const webContentsId = details.webContentsId;
+
+  // Check for Swarm (bzz) base first
+  const bzzBaseUrl = activeBzzBases.get(webContentsId);
+  if (bzzBaseUrl) {
+    const { shouldRewrite } = shouldRewriteRequest(details.url, bzzBaseUrl);
+    if (shouldRewrite) {
+      const redirectTarget = buildRewriteTarget(details.url, bzzBaseUrl);
+      if (redirectTarget) {
+        log.info(
+          `[rewrite:bzz] ${sanitizeUrlForLog(details.url)} -> ${sanitizeUrlForLog(redirectTarget)}`
+        );
+        return { redirectURL: redirectTarget };
+      }
+    }
   }
 
-  targetSession.webRequest.onBeforeRequest((details, callback) => {
-    const webContentsId = details.webContentsId;
-    logUnknownSingleLabelRequest(details);
+  // No IPFS rewriter arm — `ipfs://` and `ipns://` are standard schemes
+  // dispatched to `src/main/ipfs/ipfs-protocol.js`, so the page origin is
+  // `ipfs://<cid|name>/` and same-origin sub-resources never reach
+  // webRequest as gateway URLs.
 
-    // First, check for custom protocol URLs (bzz://, ipfs://, ipns://)
-    const { converted, url: convertedUrl } = convertProtocolUrl(details.url);
-    if (converted) {
-      log.info(
-        `[rewrite:protocol] ${sanitizeUrlForLog(details.url)} -> ${sanitizeUrlForLog(convertedUrl)}`
-      );
-      callback({ redirectURL: convertedUrl });
-      return;
-    }
+  // Final guard: block requests to /bzz/ with missing or invalid hash
+  // to prevent "bzz download: invalid path" errors on the Bee node
+  if (shouldBlockInvalidBzzRequest(details.url)) {
+    return { cancel: true };
+  }
 
-    // Check for Swarm (bzz) base first
-    const bzzBaseUrl = activeBzzBases.get(webContentsId);
-    if (bzzBaseUrl) {
-      const { shouldRewrite } = shouldRewriteRequest(details.url, bzzBaseUrl);
-      if (shouldRewrite) {
-        const redirectTarget = buildRewriteTarget(details.url, bzzBaseUrl);
-        if (redirectTarget) {
-          log.info(
-            `[rewrite:bzz] ${sanitizeUrlForLog(details.url)} -> ${sanitizeUrlForLog(redirectTarget)}`
-          );
-          callback({ redirectURL: redirectTarget });
-          return;
-        }
-      }
-    }
+  return null;
+}
 
-    // Check for IPFS base
-    const ipfsBaseUrl = activeIpfsBases.get(webContentsId);
-    if (ipfsBaseUrl) {
-      const { shouldRewrite } = shouldRewriteRequest(details.url, ipfsBaseUrl);
-      if (shouldRewrite) {
-        const redirectTarget = buildRewriteTarget(details.url, ipfsBaseUrl);
-        if (redirectTarget) {
-          log.info(
-            `[rewrite:ipfs] ${sanitizeUrlForLog(details.url)} -> ${sanitizeUrlForLog(redirectTarget)}`
-          );
-          callback({ redirectURL: redirectTarget });
-          return;
-        }
-      }
-    }
-
-    // Check for Radicle base
-    const radBaseUrl = activeRadBases.get(webContentsId);
-    if (radBaseUrl && loadSettings().enableRadicleIntegration === true) {
-      const { shouldRewrite } = shouldRewriteRequest(details.url, radBaseUrl);
-      if (shouldRewrite) {
-        const redirectTarget = buildRewriteTarget(details.url, radBaseUrl);
-        if (redirectTarget) {
-          log.info(
-            `[rewrite:rad] ${sanitizeUrlForLog(details.url)} -> ${sanitizeUrlForLog(redirectTarget)}`
-          );
-          callback({ redirectURL: redirectTarget });
-          return;
-        }
-      }
-    }
-
-    // Final guard: block requests to /bzz/ with missing or invalid hash
-    // to prevent "bzz download: invalid path" errors on the Bee node
-    if (shouldBlockInvalidBzzRequest(details.url)) {
-      callback({ cancel: true });
-      return;
-    }
-
-    // No rewrite needed
-    callback({});
-  });
+/**
+ * Register the request rewriter as an onBeforeRequest handler. Must run
+ * before `attachWebRequestDispatcher()`.
+ */
+function installRequestRewriter() {
+  registerWebRequestHandler('onBeforeRequest', 'request-rewriter', rewriteRequestForDispatch);
 }
 
 module.exports = {
-  registerRequestRewriter,
+  installRequestRewriter,
+  rewriteRequestForDispatch,
   shouldRewriteRequest,
   buildRewriteTarget,
-  convertProtocolUrl,
   shouldBlockInvalidBzzRequest,
+  sanitizeUrlForLog,
 };

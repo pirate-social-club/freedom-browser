@@ -70,8 +70,8 @@ export async function refreshBalances(forceRefresh = false) {
 export async function loadChainRegistry() {
   try {
     const [chainsResult, tokensResult] = await Promise.all([
-      window.chainRegistry.getChains(),
-      window.chainRegistry.getTokens(),
+      window.networks.getChains(),
+      window.tokens.getTokens(),
     ]);
 
     if (chainsResult.success) {
@@ -192,7 +192,7 @@ export function renderAssetList() {
 
     if (Object.keys(walletState.currentBalances).length === 0) {
       // Balances not loaded yet
-      emptyEl.textContent = 'Loading balances...';
+      emptyEl.textContent = 'Loading balances…';
     } else {
       // Balances loaded but all are zero
       emptyEl.textContent = 'No assets with balance';
@@ -284,9 +284,17 @@ export async function loadCachedBalances() {
     if (swarmResult?.success && swarmResult.balances) {
       displaySwarmBalances(swarmResult.balances);
     }
+    const cacheMiss = (userAddress && !(userResult?.success && userResult.balances)) ||
+      (swarmAddress && !(swarmResult?.success && swarmResult.balances));
+    if (cacheMiss && walletIsVisible()) await refreshBalances();
   } catch (err) {
     console.error('[WalletUI] Failed to load cached balances:', err);
   }
+}
+
+function walletIsVisible() {
+  const walletTab = document.getElementById('tab-wallet');
+  return walletTab && !document.hidden && walletTab.checkVisibility();
 }
 
 /**
@@ -296,8 +304,7 @@ export function startBalanceRefresh() {
   stopBalanceRefresh();
   walletState.balanceRefreshInterval = setInterval(() => {
     // Only refresh if wallet tab is visible
-    const walletTab = document.getElementById('tab-wallet');
-    if (walletTab && !walletTab.classList.contains('hidden') && walletState.fullAddresses.wallet) {
+    if (walletIsVisible() && walletState.fullAddresses.wallet) {
       refreshBalances();
     }
   }, walletState.BALANCE_REFRESH_MS);

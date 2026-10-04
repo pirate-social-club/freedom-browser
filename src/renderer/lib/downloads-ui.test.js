@@ -1,0 +1,438 @@
+const { createDocument, createElement } = require('../../../test/helpers/fake-dom.js');
+
+describe('downloads-ui', () => {
+  const originalDocument = global.document;
+  const originalWindow = global.window;
+
+  let shelfEl;
+  let electronAPI;
+  let updateHandler;
+
+  const loadModule = async ({ withShelf = true } = {}) => {
+    jest.resetModules();
+    jest.useFakeTimers();
+
+    updateHandler = null;
+    electronAPI = {
+      onDownloadUpdated: jest.fn((callback) => {
+        updateHandler = callback;
+        return () => {};
+      }),
+      cancelDownload: jest.fn(),
+      resumeDownload: jest.fn(),
+      openDownloadedFile: jest.fn(),
+      showDownloadInFolder: jest.fn(),
+    };
+
+    shelfEl = createElement('div');
+    global.document = createDocument({
+      elementsById: withShelf ? { 'download-shelf': shelfEl } : {},
+    });
+    global.window = { electronAPI };
+
+    const mod = await import('./downloads-ui.js');
+    mod._resetForTest();
+    mod.initDownloadsUi();
+    return mod;
+  };
+
+  // The shelf holds the cards plus, once any card exists, the
+  // "Full Download History" footer (#326) — count cards explicitly.
+  const cardEls = () => shelfEl.children.filter((el) => el.classList.contains('download-card'));
+  const historyRow = () => shelfEl.querySelector('[data-test="download-shelf-history"]');
+
+  afterEach(() => {
+    jest.useRealTimers();
+    global.document = originalDocument;
+    global.window = originalWindow;
+  });
+
+  describe('formatBytes', () => {
+    test('formats across unit boundaries', async () => {
+      const mod = await loadModule();
+      expect(mod.formatBytes(0)).toBe('0 B');
+      expect(mod.formatBytes(999)).toBe('999 B');
+      expect(mod.formatBytes(1024)).toBe('1.0 KB');
+      expect(mod.formatBytes(1024 * 1024 * 3.5)).toBe('3.5 MB');
+      expect(mod.formatBytes(1024 ** 3)).toBe('1.0 GB');
+      expect(mod.formatBytes(-5)).toBe('0 B');
+      expect(mod.formatBytes(undefined)).toBe('0 B');
+    });
+  });
+
+  describe('progressPercent', () => {
+    test('is null for unknown totals and clamped otherwise', async () => {
+      const mod = await loadModule();
+      expect(mod.progressPercent({ total_bytes: 0, received_bytes: 10 })).toBeNull();
+      expect(mod.progressPercent({ total_bytes: 200, received_bytes: 50 })).toBe(25);
+      expect(mod.progressPercent({ total_bytes: 100, received_bytes: 150 })).toBe(100);
+      expect(mod.progressPercent({ total_bytes: 100, received_bytes: 0 })).toBe(0);
+    });
+  });
+
+  describe('downloadStatusText', () => {
+    test('covers all states', async () => {
+      const mod = await loadModule();
+      expect(
+        mod.downloadStatusText({ state: 'in_progress', received_bytes: 512, total_bytes: 2048 })
+      ).toBe('512 B of 2.0 KB');
+      expect(
+        mod.downloadStatusText({ state: 'in_progress', received_bytes: 512, total_bytes: 0 })
+      ).toBe('512 B');
+      expect(
+        mod.downloadStatusText({
+          state: 'in_progress',
+          is_paused: true,
+          received_bytes: 512,
+          total_bytes: 2048,
+        })
+      ).toBe('Paused — 512 B of 2.0 KB');
+      expect(
+        mod.downloadStatusText({ state: 'completed', received_bytes: 2048, total_bytes: 2048 })
+      ).toBe('Done — 2.0 KB');
+      expect(mod.downloadStatusText({ state: 'cancelled' })).toBe('Cancelled');
+      expect(mod.downloadStatusText({ state: 'interrupted' })).toBe(
+        'Failed — download interrupted'
+      );
+      // Live-but-stalled is not a terminal failure and must not read as an
+      // in-flight transfer either.
+      expect(
+        mod.downloadStatusText({
+          state: 'in_progress',
+          is_interrupted: true,
+          received_bytes: 512,
+          total_bytes: 2048,
+        })
+      ).toBe('Interrupted — 512 B of 2.0 KB');
+    });
+  });
+
+  describe('isSettledState', () => {
+    test('only terminal states settle', async () => {
+      const mod = await loadModule();
+      expect(mod.isSettledState('completed')).toBe(true);
+      expect(mod.isSettledState('cancelled')).toBe(true);
+      expect(mod.isSettledState('interrupted')).toBe(true);
+      expect(mod.isSettledState('in_progress')).toBe(false);
+    });
+  });
+
+  describe('shelf cards', () => {
+    test('subscribes to download updates on init', async () => {
+      await loadModule();
+      expect(electronAPI.onDownloadUpdated).toHaveBeenCalledTimes(1);
+      expect(typeof updateHandler).toBe('function');
+    });
+
+    test('creates one card per download and updates it in place', async () => {
+      await loadModule();
+
+      updateHandler({
+        id: 1,
+        filename: 'file.zip',
+        state: 'in_progress',
+        received_bytes: 100,
+        total_bytes: 1000,
+      });
+      expect(cardEls()).toHaveLength(1);
+
+      updateHandler({
+        id: 1,
+        filename: 'file.zip',
+        state: 'in_progress',
+        received_bytes: 500,
+        total_bytes: 1000,
+      });
+      expect(cardEls()).toHaveLength(1);
+
+      const card = cardEls()[0];
+      const fill = card.querySelector('.download-card-progress-fill');
+      expect(fill.style.width).toBe('50%');
+      const status = card.querySelector('.download-card-status');
+      expect(status.textContent).toBe('500 B of 1000 B');
+    });
+
+    test('in-progress cards offer Cancel which routes to electronAPI', async () => {
+      await loadModule();
+
+      updateHandler({
+        id: 2,
+        filename: 'big.iso',
+        state: 'in_progress',
+        received_bytes: 0,
+        total_bytes: 0,
+      });
+      const cancelBtn = cardEls()[0].querySelector('[data-test="download-cancel"]');
+      expect(cancelBtn).toBeTruthy();
+
+      cancelBtn.dispatch('click');
+      expect(electronAPI.cancelDownload).toHaveBeenCalledWith(2);
+    });
+
+    test('completion swaps controls to Open / Show in folder and auto-dismisses', async () => {
+      await loadModule();
+
+      updateHandler({
+        id: 3,
+        filename: 'done.pdf',
+        state: 'in_progress',
+        received_bytes: 10,
+        total_bytes: 10,
+      });
+      updateHandler({
+        id: 3,
+        filename: 'done.pdf',
+        state: 'completed',
+        received_bytes: 10,
+        total_bytes: 10,
+      });
+
+      const card = cardEls()[0];
+      expect(card.querySelector('[data-test="download-cancel"]')).toBeNull();
+      const showBtn = card.querySelector('[data-test="download-show-in-folder"]');
+      const openBtn = card.querySelector('[data-test="download-open"]');
+      expect(showBtn).toBeTruthy();
+      expect(openBtn).toBeTruthy();
+
+      openBtn.dispatch('click');
+      expect(electronAPI.openDownloadedFile).toHaveBeenCalledWith(3);
+      // Dismissal now awaits main's result — settle the microtask queue.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // The open click dismissed the card, and a repeat of the same update
+      // does not bring it back (#309).
+      expect(cardEls()).toHaveLength(0);
+      updateHandler({
+        id: 3,
+        filename: 'done.pdf',
+        state: 'completed',
+        received_bytes: 10,
+        total_bytes: 10,
+      });
+      expect(cardEls()).toHaveLength(0);
+    });
+
+    test('an untouched settled card auto-dismisses after the timeout', async () => {
+      await loadModule();
+
+      updateHandler({
+        id: 33,
+        filename: 'done.pdf',
+        state: 'completed',
+        received_bytes: 10,
+        total_bytes: 10,
+      });
+      expect(cardEls()).toHaveLength(1);
+      jest.advanceTimersByTime(5000);
+      expect(cardEls()).toHaveLength(0);
+    });
+
+    // #309: main emits a progress tick every 250 ms, so a dismiss that is not
+    // remembered is undone almost immediately — the card blinked out and came
+    // back for the length of the transfer.
+    test('a card dismissed mid-download stays dismissed across later updates', async () => {
+      await loadModule();
+
+      updateHandler({
+        id: 4,
+        filename: 'big.iso',
+        state: 'progressing',
+        received_bytes: 1000,
+        total_bytes: 100000,
+      });
+      expect(cardEls()).toHaveLength(1);
+
+      const closeBtn = cardEls()[0].querySelector('[data-test="download-close"]');
+      closeBtn.dispatch('click');
+      expect(cardEls()).toHaveLength(0);
+
+      // The next progress tick, and every one after it, is ignored...
+      updateHandler({
+        id: 4,
+        filename: 'big.iso',
+        state: 'progressing',
+        received_bytes: 2000,
+        total_bytes: 100000,
+      });
+      updateHandler({
+        id: 4,
+        filename: 'big.iso',
+        state: 'progressing',
+        received_bytes: 90000,
+        total_bytes: 100000,
+      });
+      expect(cardEls()).toHaveLength(0);
+
+      // ...as is the terminal update when the download finishes.
+      updateHandler({
+        id: 4,
+        filename: 'big.iso',
+        state: 'completed',
+        received_bytes: 100000,
+        total_bytes: 100000,
+      });
+      expect(cardEls()).toHaveLength(0);
+
+      // The dismissal is scoped to that download: another one still shows.
+      updateHandler({
+        id: 5,
+        filename: 'other.iso',
+        state: 'progressing',
+        received_bytes: 10,
+        total_bytes: 100,
+      });
+      expect(cardEls()).toHaveLength(1);
+    });
+
+    test('a failed Open keeps the card and surfaces the error', async () => {
+      await loadModule();
+      electronAPI.openDownloadedFile.mockResolvedValue({
+        success: false,
+        error: 'File no longer exists',
+      });
+
+      updateHandler({
+        id: 7,
+        filename: 'gone.iso',
+        state: 'completed',
+        received_bytes: 5,
+        total_bytes: 5,
+      });
+      const card = cardEls()[0];
+      card.querySelector('[data-test="download-open"]').dispatch('click');
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(cardEls()).toHaveLength(1);
+      expect(card.querySelector('.download-card-status').textContent).toBe(
+        'File no longer exists'
+      );
+    });
+
+    test('failed downloads show their state and auto-dismiss', async () => {
+      await loadModule();
+
+      updateHandler({
+        id: 4,
+        filename: 'lost.bin',
+        state: 'interrupted',
+        received_bytes: 5,
+        total_bytes: 100,
+      });
+      const card = cardEls()[0];
+      expect(card.classList.contains('failed')).toBe(true);
+      expect(card.querySelector('.download-card-status').textContent).toBe(
+        'Failed — download interrupted'
+      );
+      jest.advanceTimersByTime(5000);
+      expect(cardEls()).toHaveLength(0);
+    });
+
+    test('a live interrupted download swaps Cancel-only for Resume + Cancel', async () => {
+      await loadModule();
+
+      updateHandler({
+        id: 5,
+        filename: 'big.iso',
+        state: 'in_progress',
+        received_bytes: 400,
+        total_bytes: 1000,
+      });
+      let card = cardEls()[0];
+      expect(card.querySelector('[data-test="download-resume"]')).toBeNull();
+
+      // Connection drops mid-transfer: still live, still resumable.
+      updateHandler({
+        id: 5,
+        filename: 'big.iso',
+        state: 'in_progress',
+        is_interrupted: true,
+        can_resume: true,
+        received_bytes: 400,
+        total_bytes: 1000,
+      });
+      card = cardEls()[0];
+      expect(card.classList.contains('stalled')).toBe(true);
+      expect(card.querySelector('.download-card-status').textContent).toBe(
+        'Interrupted — 400 B of 1000 B'
+      );
+      const resumeBtn = card.querySelector('[data-test="download-resume"]');
+      expect(resumeBtn).toBeTruthy();
+      resumeBtn.dispatch('click');
+      expect(electronAPI.resumeDownload).toHaveBeenCalledWith(5);
+
+      // Still live, so the card must not auto-dismiss.
+      jest.advanceTimersByTime(5000);
+      expect(cardEls()).toHaveLength(1);
+
+      // Back to progressing → Resume goes away again.
+      updateHandler({
+        id: 5,
+        filename: 'big.iso',
+        state: 'in_progress',
+        received_bytes: 600,
+        total_bytes: 1000,
+      });
+      card = cardEls()[0];
+      expect(card.classList.contains('stalled')).toBe(false);
+      expect(card.querySelector('[data-test="download-resume"]')).toBeNull();
+      expect(card.querySelector('[data-test="download-cancel"]')).toBeTruthy();
+    });
+
+    test('missing shelf container disables the module without throwing', async () => {
+      await loadModule({ withShelf: false });
+      expect(electronAPI.onDownloadUpdated).not.toHaveBeenCalled();
+    });
+  });
+
+  // #326: Chrome's download bubble carries "Full download history" under the
+  // items; the shelf carries the same action under its cards.
+  describe('Full Download History row', () => {
+    test('appears with the first card, stays last, and goes with the last card', async () => {
+      const mod = await loadModule();
+      expect(historyRow()).toBeNull();
+
+      updateHandler({ id: 1, filename: 'a.zip', state: 'in_progress', received_bytes: 1 });
+      expect(historyRow()).toBeTruthy();
+      expect(historyRow().textContent).toBe('Full Download History');
+      // Below the cards, whichever card arrived last.
+      expect(
+        shelfEl.children[shelfEl.children.length - 1].classList.contains('download-card')
+      ).toBe(false);
+
+      updateHandler({ id: 2, filename: 'b.zip', state: 'in_progress', received_bytes: 1 });
+      expect(cardEls()).toHaveLength(2);
+      expect(shelfEl.children).toHaveLength(3);
+      expect(
+        shelfEl.children[2].querySelector('[data-test="download-shelf-history"]')
+      ).toBeTruthy();
+
+      // Both cards settle and auto-dismiss: the row leaves with them.
+      updateHandler({ id: 1, filename: 'a.zip', state: 'completed', received_bytes: 1 });
+      updateHandler({ id: 2, filename: 'b.zip', state: 'completed', received_bytes: 1 });
+      jest.advanceTimersByTime(5000);
+      expect(cardEls()).toHaveLength(0);
+      expect(historyRow()).toBeNull();
+      expect(shelfEl.children).toHaveLength(0);
+
+      // A later download brings it back.
+      updateHandler({ id: 3, filename: 'c.zip', state: 'in_progress', received_bytes: 1 });
+      expect(historyRow()).toBeTruthy();
+      mod._resetForTest();
+    });
+
+    test('opens the downloads page through the injected singleton callback', async () => {
+      const mod = await loadModule();
+      const openDownloadsPage = jest.fn();
+      mod.setOnOpenDownloadsPage(openDownloadsPage);
+
+      updateHandler({ id: 7, filename: 'd.zip', state: 'in_progress', received_bytes: 1 });
+      historyRow().dispatch('click');
+
+      expect(openDownloadsPage).toHaveBeenCalledTimes(1);
+      // Clicking it is not a dismissal — the card keeps tracking the download.
+      expect(cardEls()).toHaveLength(1);
+    });
+  });
+});

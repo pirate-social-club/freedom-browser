@@ -1,0 +1,1 @@
+- Routing notices follow the selected browser theme, and Handshake errors use consistent headings ([#39](https://github.com/pirate-social-club/freedom-browser/pull/39))

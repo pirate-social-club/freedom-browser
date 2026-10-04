@@ -4,11 +4,12 @@ const path = require('node:path');
 // Use the real Node loader: Jest's loader cannot import the builder's nested ESM dependencies.
 // This child parses fixed arguments only; it never calls build or downloads anything.
 function parseWithNode(expression) {
+  // Source checks can be throttled to ten percent of one CPU.
   const output = execFileSync(process.execPath, ['--max-old-space-size=128', '-e', `
     const { createYargs, configureBuildCommand } = require('electron-builder/out/builder');
     const parser = configureBuildCommand(createYargs()).exitProcess(false).strict();
     ${expression}
-  `], { cwd: path.resolve(__dirname, '..'), timeout: 30000, encoding: 'utf8' });
+  `], { cwd: path.resolve(__dirname, '..'), timeout: 120000, encoding: 'utf8' });
   return JSON.parse(output.trim());
 }
 
