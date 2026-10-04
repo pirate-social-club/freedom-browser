@@ -43,7 +43,7 @@ jobs:
           test "$(git -C "$FREEDOM_JOB_ROOT/blue-ai-connect" rev-parse HEAD)" = "924d472cb8be47b11f2432515f23bd5ea20d297c"
           python3 -c 'import os,stat; from pathlib import Path; paths=[Path(os.environ["FREEDOM_JOB_ROOT"]),Path(os.environ["FREEDOM_REPOSITORY"])]; assert all(p.is_dir() and p.stat().st_mode & stat.S_IXOTH for p in paths), "fresh copied source parent must be traversable"'
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb slirp4netns nftables python3-venv binutils p7zip-full apparmor libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xdg-utils libatspi2.0-0 libuuid1 libsecret-1-0
+          sudo apt-get install -y --no-install-recommends xvfb slirp4netns nftables python3-venv binutils p7zip-full libunbound8 apparmor libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xdg-utils libatspi2.0-0 libuuid1 libsecret-1-0
           timeout --signal=TERM --kill-after=5s 1155s python3 "$FREEDOM_REPOSITORY/ops/hns-package-acceptance/cold-setup.py"
       - name: One contained current-package acceptance
         timeout-minutes: 11

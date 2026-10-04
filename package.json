@@ -219,10 +219,33 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "LICENSE",
+        "to": "LICENSE"
+      },
+      {
+        "from": "NOTICES",
+        "to": "NOTICES"
       }
     ],
     "beforePack": "./scripts/checkpoint-offline-build.js",
-    "downloadAlternateFFmpeg": false
+    "downloadAlternateFFmpeg": false,
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libunbound8",
+        "libc6 (>= 2.36)"
+      ]
+    }
   },
   "engines": {
     "node": ">=22.12.0"

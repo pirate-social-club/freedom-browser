@@ -1,0 +1,22 @@
+{
+  "component": "v2ray-geodata",
+  "notices": [
+    {
+      "path": "geoip-LICENSE-CC-BY-SA-4.0",
+      "source_url": "https://raw.githubusercontent.com/v2fly/geoip/fa604c3e5e5343b56bff50f021d621ae74b0fb4f/LICENSE",
+      "sha256": "5e436ff8ffbb77d8607220e9bce20c8915d860010feeb6c1ebef5a85688e9b39"
+    },
+    {
+      "path": "geoip-historical-attribution.md",
+      "source_url": "https://raw.githubusercontent.com/v2fly/geoip/fa604c3e5e5343b56bff50f021d621ae74b0fb4f/README.md",
+      "sha256": "5bdcb8f881ba920fc7e77093902852376dfabe3d55d5698bf9b27a19fc230816"
+    },
+    {
+      "path": "geosite-LICENSE-MIT",
+      "source_url": "https://raw.githubusercontent.com/v2fly/domain-list-community/128c6228a467fadd10eeeff8310ecb07f0a61f2e/LICENSE",
+      "sha256": "b9d84a22870d3f21c91a4c6e410c9cc51d00902f5233ad0c84011479244bf7d2"
+    }
+  ],
+  "scope": "Original release-project license texts; compiler and dependency notices have separate records.",
+  "executed_target": false
+}

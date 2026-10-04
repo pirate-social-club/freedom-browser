@@ -1,10 +1,12 @@
 const path = require('path');
+const fs = require('fs');
 const { checkCapabilityBinaries } = require('./check-binaries');
 
 function createFsMock(files = {}) {
   return {
     existsSync: jest.fn((target) => Object.prototype.hasOwnProperty.call(files, target)),
-    readFileSync: jest.fn((target) => Buffer.from(files[target]?.contents || 'current helper')),
+    readFileSync: jest.fn((target) => files[target]?.contents ||
+      (path.basename(target) === 'hnsd' ? fs.readFileSync(path.join(__dirname, '../hns-bin/linux-x64/hnsd')) : Buffer.from('current helper'))),
     statSync: jest.fn((target) => ({ mode: files[target]?.mode ?? 0o755 })),
   };
 }
@@ -76,7 +78,7 @@ describe('capability binary checks', () => {
     expect(missing).toEqual([expect.stringContaining('not executable')]);
   });
 
-  test('rejects an HNS daemon with an unbundled libunbound dependency', () => {
+  test('rejects an unreviewed daemon even when it names the expected system library', () => {
     const files = capabilityFiles(rootDir, 'hns-bin', 'linux-x64', [
       'fingertipd',
       'hnsd',
@@ -88,7 +90,15 @@ describe('capability binary checks', () => {
       rootDir,
       fsImpl: createFsMock(files),
     });
-    expect(missing).toEqual([expect.stringContaining('not self-contained')]);
+    expect(missing).toEqual([expect.stringContaining('differs from the reviewed daemon')]);
+  });
+
+  test('rejects an arbitrary static daemon', () => {
+    const files = capabilityFiles(rootDir, 'hns-bin', 'linux-x64', ['fingertipd', 'hnsd', 'PROVENANCE.md']);
+    files[path.join(rootDir, 'hns-bin/linux-x64/hnsd')].contents = Buffer.from('static old daemon');
+    expect(checkCapabilityBinaries('hns', { os: 'linux', arch: 'x64' }, {
+      rootDir, fsImpl: createFsMock(files),
+    })).toEqual([expect.stringContaining('differs from the reviewed daemon')]);
   });
 
   test('accepts complete supported capability bundles', () => {

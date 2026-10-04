@@ -134,7 +134,7 @@ def pin():
  assert not git('diff','--name-only') and not git('diff','--cached','--name-only'),'tracked source dirty'
 pin()
 for name,digest in json.loads((Path(os.environ['FREEDOM_HARNESS_BASE'])/'runtime-source-pins.json').read_text()).items():assert hashlib.sha256((freedom/name).read_bytes()).hexdigest()==digest,'reviewed runtime input changed '+name
-assets={'fingertipd':'065e4f0d5c118213f09319998c94633033cae7f96dc6d714083208468225f766','hnsd':'881ba4728f3e36a2015185f8cfa478d718260eaf7f406404af386b0ed4d863af'}
+assets={'fingertipd':'065e4f0d5c118213f09319998c94633033cae7f96dc6d714083208468225f766','hnsd':'ed2e2f8f22b60fa3e17a8a74445174540d6b4f1903d5849c9e27baee120182d2'}
 for name,digest in assets.items():assert hashlib.sha256((freedom/'hns-bin/linux-x64'/name).read_bytes()).hexdigest()==digest
 assert json.loads((freedom/'node_modules/electron/package.json').read_text())['version']=='42.10.0'
 assert json.loads((freedom/'node_modules/axios/package.json').read_text())['version']=='1.20.0'
@@ -185,6 +185,8 @@ for installed_script,template_name in [(postinst,'after-install.tpl'),(postrm,'a
  script_provenance[installed_script.name]={'sha256':streamed_sha(installed_script),'template_sha256':streamed_sha(template_path),'rendered_template_present':True}
 fields=run(['dpkg-deb','--field',str(deb),'Package','Version','Architecture'],stdout=subprocess.PIPE).stdout.decode().splitlines()
 expected_version=json.loads((freedom/'package.json').read_text())['version']
+depends=run(['dpkg-deb','--field',str(deb),'Depends'],stdout=subprocess.PIPE).stdout.decode().strip()
+assert set(json.loads((freedom/'package.json').read_text())['build']['deb']['depends']).issubset({name.strip() for name in depends.split(',')}),'deb runtime dependencies missing'
 assert fields==['Package: freedom-browser','Version: '+expected_version,'Architecture: amd64'],'deb identity mismatch'
 # dpkg runs on this disposable runner without apt repair/downloads or policy changes.
 # Write the cleanup identity before installation, including partial-install failures.
@@ -209,6 +211,8 @@ assert payload_paths(installed)==payload_paths(base),'installed payload path set
 for path in installed.rglob('*'):
  if path.is_symlink():assert path.readlink()==(base/path.relative_to(installed)).readlink(),'installed symlink differs'
  elif path.is_file():assert streamed_sha(path)==streamed_sha(base/path.relative_to(installed)),'installed payload differs'
+hns_runtime=runpy.run_path(str(Path(os.environ['FREEDOM_HARNESS_BASE'])/'helper-runtime.py'))['observe'](installed/'resources/hns-bin/hnsd',run,namespace=True)
+(p/'hnsd-runtime.json').write_text(json.dumps(hns_runtime,indent=2)+'\n')
 assert (installed/'chrome-sandbox').stat().st_uid==0 and (installed/'chrome-sandbox').stat().st_mode&0o7777==0o755,'packaged chrome-sandbox unexpected owner/mode'
 assert (p/'package/freedom').read_bytes()==(freedom/'node_modules/electron/dist/electron').read_bytes(),'Electron executable mismatch'
 version_proof=runpy.run_path(str(p/'electron-provenance.py'))['installed_proof'](freedom,Path(os.environ['FREEDOM_COLD_ROOT']),installed/'freedom',p/'package/freedom',app_sha)
@@ -243,13 +247,13 @@ for directory,out in [('assets','assets'),('hns-bin/linux-x64','hns-bin'),('bee-
  src=freedom/directory;assert src.is_dir(),'release resources absent '+directory
  for f in src.rglob('*'):
   if f.is_file():assert f.read_bytes()==(p/'package/resources'/out/f.relative_to(src)).read_bytes(),'resource differs '+str(f.relative_to(freedom))
-for name,out in [('config/bee.yaml','bee.yaml'),('config/default-bookmarks.json','default-bookmarks.json')]:assert (freedom/name).read_bytes()==(p/'package/resources'/out).read_bytes()
+for name,out in [('config/bee.yaml','bee.yaml'),('config/default-bookmarks.json','default-bookmarks.json'),('LICENSE','LICENSE'),('NOTICES','NOTICES')]:assert (freedom/name).read_bytes()==(p/'package/resources'/out).read_bytes()
 addon=Path('node_modules/better-sqlite3/build/Release/better_sqlite3.node');assert (freedom/addon).read_bytes()==(p/'package/resources/app.asar.unpacked'/addon).read_bytes()
 manifest=[{'path':str(f.relative_to(p/'package')),'sha256':hashlib.sha256(f.read_bytes()).hexdigest()} for f in sorted((p/'package').rglob('*')) if f.is_file()]
 (p/'package-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 native="const path=require('path');const app=process.argv[1];const DB=require(path.join(app,'node_modules/better-sqlite3'));const db=new DB(':memory:');if(db.prepare('SELECT 42 AS value').get().value!==42)throw Error('sqlite ABI');db.close();const axios=require(path.join(app,'node_modules/axios'));if(axios.VERSION!=='1.20.0'||typeof axios.request!=='function')throw Error('runtime Axios');"
 run(['unshare','--user','--map-root-user','--net',str(installed/'freedom'),'-e',native,str(installed/'resources/app.asar')],cwd=p/'package',env={**os.environ,'ELECTRON_RUN_AS_NODE':'1'})
-(p/'candidate-integrity.json').write_text(json.dumps({'Freedom_source':app_sha,'asar_integrity':json.loads((p/'asar-integrity.json').read_text()),'tested_helper_build_source':artifact_source,'tested_helper_build_compiler':'Go 1.26.2','helper_sha256':assets['fingertipd'],'hnsd_sha256':assets['hnsd'],'package_build_command':command,'packaged_source_files_compared':len(checks),'packaged_Axios_version':'1.20.0','packaged_Axios_files_compared':len(axios_files),'native_ABI_check_passed':True,'native_sqlite_SELECT42':True,'helper_rebuilt':False,'installed_deb_payload_matched':True,'verified_asar_path':'/opt/Freedom/resources/app.asar','Electron_version_proof_sha256':streamed_sha(p/'electron-version-proof.json'),'Electron_version':'42.10.0','Electron_executable_sha256':hashlib.sha256((p/'package/freedom').read_bytes()).hexdigest()},indent=2)+'\n')
+(p/'candidate-integrity.json').write_text(json.dumps({'Freedom_source':app_sha,'asar_integrity':json.loads((p/'asar-integrity.json').read_text()),'tested_helper_build_source':artifact_source,'tested_helper_build_compiler':'Go 1.26.2','helper_sha256':assets['fingertipd'],'hnsd_sha256':assets['hnsd'],'package_build_command':command,'packaged_source_files_compared':len(checks),'packaged_Axios_version':'1.20.0','packaged_Axios_files_compared':len(axios_files),'native_ABI_check_passed':True,'native_sqlite_SELECT42':True,'fingertipd_rebuilt':False,'hnsd_rebuilt':True,'hnsd_build_source':'a5c7c287e848f46d3e97f16b698e2027c8dc96c3','installed_deb_payload_matched':True,'verified_asar_path':'/opt/Freedom/resources/app.asar','Electron_version_proof_sha256':streamed_sha(p/'electron-version-proof.json'),'Electron_version':'42.10.0','Electron_executable_sha256':hashlib.sha256((p/'package/freedom').read_bytes()).hexdigest()},indent=2)+'\n')
 preparation_phase='fixtures';preparation_progress()
 checkpoint=p/'warm-checkpoint-main.dat';metadata=json.loads((p/'checkpoint-integrity.json').read_text());assert hashlib.sha256(checkpoint.read_bytes()).hexdigest()==metadata['sha256']
 assert checkpoint.read_bytes()==(freedom/'assets/hns/checkpoint_main.dat').read_bytes(),'seed differs from shipped checkpoint'
