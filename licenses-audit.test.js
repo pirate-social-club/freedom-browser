@@ -1005,6 +1005,10 @@ describe('audit files agree with each other', () => {
   it('reports no unresolved blockers and an OK_TO_SHIP verdict', () => {
     expect(audit.blockers).toEqual([]);
     expect(audit.verdict.status).toBe('OK_TO_SHIP');
+    // A clearance names what was inspected and what invalidates it.
+    expect(audit.verdict.scope).toBe('Linux x64 evaluation deb');
+    expect(audit.verdict.inspected_commit).toMatch(/^[0-9a-f]{40}$/);
+    expect(audit.verdict.reinspect_when).toMatch(/extraResources/);
   });
 
   it('does not claim zero copyleft while shipping copyleft', () => {

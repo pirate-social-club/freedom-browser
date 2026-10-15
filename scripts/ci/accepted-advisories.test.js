@@ -37,7 +37,7 @@ const vulnerable = (root = advisory(), nodes = [`node_modules/${root.name}`]) =>
 function report({ root = advisory(), extra = {} } = {}) {
   const vulnerabilities = { [root.name]: vulnerable(root) };
   for (const link of RECORDED) {
-    vulnerabilities[link.package] = { name: link.package, severity: 'low', via: VIA[link.package], nodes: link.paths };
+    vulnerabilities[link.package] = { name: link.package, severity: 'low', isDirect: link.direct, via: VIA[link.package], nodes: link.paths };
   }
   return { auditReportVersion: 2, vulnerabilities: { ...vulnerabilities, ...extra } };
 }
@@ -74,6 +74,14 @@ describe('accepted advisories gate', () => {
     const wallet = { name: 'some-new-wallet', severity: 'low', via: ['@ethersproject/signing-key'], nodes: ['node_modules/some-new-wallet'] };
     expect(evaluate(report({ extra: { 'some-new-wallet': wallet } }), accepted, lockFor({ 'node_modules/some-new-wallet': { version: '1.0.0' } }), TODAY)).toEqual([
       expect.stringContaining('new: some-new-wallet@1.0.0 at node_modules/some-new-wallet'),
+    ]);
+  });
+
+  test('refuses Freedom taking a chain package as a direct dependency', () => {
+    const r = report();
+    r.vulnerabilities['@ethersproject/signing-key'].isDirect = true;
+    expect(evaluate(r, accepted, lockFor(), TODAY)).toEqual([
+      expect.stringContaining('new: @ethersproject/signing-key@5.8.0 (direct)'),
     ]);
   });
 

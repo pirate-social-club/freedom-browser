@@ -35,8 +35,10 @@ const DEFAULT_LOCK = path.join(__dirname, '..', '..', 'package-lock.json');
 
 /**
  * Every audit entry that reaches `name` through its `via` package names,
- * transitively, as `{ package, versions, paths }` sorted by package. Versions
- * come from the lock, so a bump anywhere in the chain changes the record.
+ * transitively, as `{ package, direct, versions, paths }` sorted by package.
+ * Versions come from the lock, so a bump anywhere in the chain changes the
+ * record; `direct` is npm's isDirect, so Freedom taking a chain package as its
+ * own dependency changes it too.
  */
 function dependentChain(audit, name, lock) {
   const reached = new Set([name]);
@@ -52,9 +54,10 @@ function dependentChain(audit, name, lock) {
   }
   reached.delete(name);
   return [...reached].sort().map((dependent) => {
-    const paths = [...(audit.vulnerabilities[dependent].nodes || [])].sort();
+    const entry = audit.vulnerabilities[dependent];
+    const paths = [...(entry.nodes || [])].sort();
     const versions = [...new Set(paths.map((node) => lock?.packages?.[node]?.version ?? 'unlocked'))].sort();
-    return { package: dependent, versions, paths };
+    return { package: dependent, direct: entry.isDirect === true, versions, paths };
   });
 }
 
@@ -107,9 +110,13 @@ function evaluate(audit, accepted, lock, today = new Date().toISOString().slice(
         `${advisory.url} on ${advisory.name} is locked at ${advisory.nodes.join(', ') || 'no path'}, accepted only at ${paths.join(', ') || 'no path'}`
       );
     }
-    const describe = (chain) => chain.map((link) => `${link.package}@${link.versions.join('|')} at ${link.paths.join('|')}`);
+    // One order for both sides: plain code-unit sort of the rendered links.
+    const describe = (chain) =>
+      chain
+        .map((link) => `${link.package}@${link.versions.join('|')}${link.direct ? ' (direct)' : ''} at ${link.paths.join('|')}`)
+        .sort();
     const reported = describe(advisory.chain);
-    const recorded = describe([...(entry.chain || [])].sort((a, b) => a.package.localeCompare(b.package)));
+    const recorded = describe(entry.chain || []);
     if (!sameList(reported, recorded)) {
       const added = reported.filter((link) => !recorded.includes(link));
       const gone = recorded.filter((link) => !reported.includes(link));

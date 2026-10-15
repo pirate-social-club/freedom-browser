@@ -53,7 +53,7 @@ function configuredHosts() {
 }
 
 const HOSTS = configuredHosts();
-const UNCLAIMED = process.env.FREEDOM_E2E_HNS_UNCLAIMED || `nobody-${Date.now().toString(36)}.8s28`;
+const UNCLAIMED = (process.env.FREEDOM_E2E_HNS_UNCLAIMED || `nobody-${Date.now().toString(36)}.8s28`).toLowerCase();
 
 // The first navigation also waits out hnsd's initial chain sync from the
 // packaged checkpoint, which took about half a minute on the owner's machine.
@@ -177,9 +177,16 @@ function packagedHelpers(appPid, resourcesDir) {
   return helpers;
 }
 
+// Every process anywhere on the machine running an executable from the
+// installed package's resources. A helper that was reparented away from the
+// app (a restarted fingertipd's hnsd, say) or left by an earlier run shows here.
+function anyPackagedHelpers(resourcesDir) {
+  return [...processTable().values()].filter((proc) => proc.exe && proc.exe.startsWith(`${resourcesDir}${path.sep}`));
+}
+
 // Quit the way a user does and require a clean shutdown: the app exits by
-// itself with code 0 (never killed at the launcher's quit deadline), and every
-// helper it started is gone afterwards. Returns the evidence for the report.
+// itself with code 0 (never killed at the launcher's quit deadline), and no
+// process from the package's resources is left anywhere. Returns the evidence.
 async function quitCleanly(app, resourcesDir, phase) {
   const helpers = packagedHelpers(app.process().pid, resourcesDir);
   expect(helpers.map((proc) => path.basename(proc.exe)), `the HNS helpers were running (${phase})`).toEqual(
@@ -192,11 +199,10 @@ async function quitCleanly(app, resourcesDir, phase) {
   await expect
     .poll(
       () => {
-        const table = processTable();
-        survivors = helpers.filter((proc) => table.get(proc.pid)?.start === proc.start);
+        survivors = anyPackagedHelpers(resourcesDir).map((proc) => ({ pid: proc.pid, exe: proc.exe }));
         return survivors.length;
       },
-      { message: `helpers left running after quit (${phase})`, timeout: 15_000, intervals: [500] }
+      { message: `packaged helpers left running after quit (${phase})`, timeout: 15_000, intervals: [500] }
     )
     .toBe(0);
   return { exit, helpers: helpers.map((proc) => ({ pid: proc.pid, exe: proc.exe })), survivors };
@@ -207,13 +213,18 @@ async function quitCleanly(app, resourcesDir, phase) {
 // response or turned an empty error response into a load failure.
 async function watchDocumentStatus(app, host) {
   const statuses = [];
+  const servers = [];
   const sessions = [];
   for (const page of app.context().pages()) {
     if (/\/renderer\/index\.html(?:[?#]|$)/.test(page.url())) continue;
     const cdp = await page.context().newCDPSession(page);
     cdp.on('Network.responseReceived', ({ type, response }) => {
       try {
-        if (type === 'Document' && new URL(response.url).host === host) statuses.push(response.status);
+        if (type === 'Document' && new URL(response.url).host === host) {
+          statuses.push(response.status);
+          const server = Object.entries(response.headers || {}).find(([name]) => name.toLowerCase() === 'server');
+          servers.push(server ? server[1] : null);
+        }
       } catch {
         // Not a URL with a host.
       }
@@ -223,6 +234,8 @@ async function watchDocumentStatus(app, host) {
   }
   return {
     statuses,
+    servers,
+    guests: sessions.length,
     stop: () => Promise.all(sessions.map((cdp) => cdp.detach().catch(() => {}))),
   };
 }
@@ -254,7 +267,12 @@ test.describe('installed HNS browsing', () => {
     );
 
     // The installed package's resources directory, next to its executable.
-    const resourcesDir = fs.realpathSync(path.join(path.dirname(packagedLaunchTarget().executablePath), 'resources'));
+    const resourcesDir = fs.realpathSync(
+      path.join(path.dirname(fs.realpathSync(packagedLaunchTarget().executablePath)), 'resources')
+    );
+    // Nothing from the package may be running before the first launch, so the
+    // post-quit scan can only find what this run left behind.
+    expect(anyPackagedHelpers(resourcesDir), 'packaged helpers already running before launch').toEqual([]);
     let session = null;
     try {
       for (const phase of ['first launch', 'after full restart']) {
@@ -289,10 +307,13 @@ test.describe('installed HNS browsing', () => {
           )
           .toMatch(/^(status 421|error ERR_HTTP_RESPONSE_CODE_FAILURE)$/);
         await documentStatus.stop();
+        expect(documentStatus.guests, `no tab webview was watched for ${UNCLAIMED} (${phase})`).toBeGreaterThan(0);
         expect(documentStatus.statuses, `${UNCLAIMED} main-frame response status (${phase})`).toEqual([421]);
+        // The refusal comes from the HNS gateway itself, not the local DANE proxy.
+        expect(documentStatus.servers, `${UNCLAIMED} response origin (${phase})`).toEqual(['Caddy']);
         test.info().annotations.push({
           type: phase,
-          description: `${UNCLAIMED}: ${JSON.stringify({ ...unclaimed, responseStatuses: documentStatus.statuses })}`,
+          description: `${UNCLAIMED}: ${JSON.stringify({ ...unclaimed, responseStatuses: documentStatus.statuses, responseServers: documentStatus.servers })}`,
         });
         const quit = await quitCleanly(session.app, resourcesDir, phase);
         session = null;
