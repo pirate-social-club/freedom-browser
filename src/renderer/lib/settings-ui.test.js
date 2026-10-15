@@ -384,6 +384,7 @@ describe('settings-ui', () => {
     expect(elements.startHnsAtLaunchCheckbox.checked).toBe(true);
     expect(elements.enableIdentityWalletCheckbox.checked).toBe(false);
     expect(elements.autoUpdateCheckbox.checked).toBe(false);
+    expect(elements.autoUpdateCheckbox.disabled).toBe(true);
     expect(elements.startRadicleAtLaunchCheckbox.disabled).toBe(false);
     expect(elements.startHnsAtLaunchCheckbox.disabled).toBe(false);
     expect(elements.settingsModal.showModal).toHaveBeenCalled();
@@ -411,7 +412,7 @@ describe('settings-ui', () => {
       enableHnsIntegration: true,
       startHnsAtLaunch: true,
       enableIdentityWallet: false,
-      autoUpdate: true,
+      autoUpdate: false,
       showDvpnControls: false,
       dvpnMaxSpendP2P: 1,
       dvpnLowBalanceStop: 0.5,
@@ -432,7 +433,7 @@ describe('settings-ui', () => {
         enableHnsIntegration: true,
         startHnsAtLaunch: true,
         enableIdentityWallet: false,
-        autoUpdate: true,
+        autoUpdate: false,
         showDvpnControls: false,
         dvpnMaxSpendP2P: 1,
         dvpnLowBalanceStop: 0.5,

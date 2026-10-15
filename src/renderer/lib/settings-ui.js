@@ -323,7 +323,7 @@ const saveSettings = async () => {
     enableHnsIntegration: enableHnsIntegrationCheckbox?.checked ?? true,
     startHnsAtLaunch: startHnsAtLaunchCheckbox?.checked ?? true,
     enableIdentityWallet: enableIdentityWalletCheckbox?.checked ?? false,
-    autoUpdate: autoUpdateCheckbox?.checked ?? true,
+    autoUpdate: false,
     showDvpnControls: showDvpnControlsCheckbox?.checked ?? false,
     dvpnMaxSpendP2P: Math.max(0.1, parseFloat(dvpnMaxSpendInput?.value || '1') || 1),
     dvpnLowBalanceStop: Math.max(0.1, parseFloat(dvpnLowBalanceStopInput?.value || '0.5') || 0.5),
@@ -523,7 +523,10 @@ export const initSettings = async () => {
         dvpnMaxDurationInput.value = String(settings.dvpnMaxDurationMinutes ?? 120);
       if (enableIdentityWalletCheckbox)
         enableIdentityWalletCheckbox.checked = settings.enableIdentityWallet === true;
-      if (autoUpdateCheckbox) autoUpdateCheckbox.checked = settings.autoUpdate !== false;
+      if (autoUpdateCheckbox) {
+        autoUpdateCheckbox.checked = false;
+        autoUpdateCheckbox.disabled = true;
+      }
       updateRadicleSettingsVisibility();
       updateHnsSettingsVisibility();
       updateDvpnSettingsVisibility();

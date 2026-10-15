@@ -65,10 +65,7 @@
     "directories": {
       "output": "dist"
     },
-    "publish": {
-      "provider": "generic",
-      "url": "https://freedom.baby/downloads"
-    },
+    "publish": null,
     "protocols": [
       {
         "name": "Freedom URLs",

@@ -25,7 +25,7 @@ const DEFAULT_SETTINGS = {
   startIpfsAtLaunch: true,
   startRadicleAtLaunch: false,
   startHnsAtLaunch: true,
-  autoUpdate: true,
+  autoUpdate: false,
   showBookmarkBar: false,
   showDvpnControls: false,
   dvpnMaxSpendP2P: 1.0,
@@ -59,6 +59,9 @@ function loadSettings() {
     cachedSettings = { ...DEFAULT_SETTINGS };
   }
 
+  // A persisted preference cannot enable updates in an evaluation build.
+  cachedSettings.autoUpdate = false;
+
   // Apply theme to nativeTheme
   applyNativeTheme(cachedSettings.theme);
 
@@ -67,7 +70,7 @@ function loadSettings() {
 
 function saveSettings(newSettings) {
   try {
-    const merged = { ...loadSettings(), ...newSettings };
+    const merged = { ...loadSettings(), ...newSettings, autoUpdate: false };
     const filePath = getSettingsPath();
     fs.writeFileSync(filePath, JSON.stringify(merged, null, 2), 'utf-8');
     cachedSettings = merged;

@@ -35,7 +35,7 @@ describe('settings-store', () => {
       startIpfsAtLaunch: true,
       startRadicleAtLaunch: false,
       startHnsAtLaunch: true,
-      autoUpdate: true,
+      autoUpdate: false,
       showBookmarkBar: false,
       showDvpnControls: false,
       dvpnMaxSpendP2P: 1.0,
@@ -75,7 +75,7 @@ describe('settings-store', () => {
     expect(mod.loadSettings()).toEqual(
       expect.objectContaining({
         theme: 'system',
-        autoUpdate: true,
+        autoUpdate: false,
       })
     );
     expect(nativeTheme.themeSource).toBe('system');
@@ -96,6 +96,21 @@ describe('settings-store', () => {
       })
     );
     expect(nativeTheme.themeSource).toBe('light');
+  });
+
+  test('refuses old persisted and newly saved update opt-ins', () => {
+    fs.writeFileSync(
+      path.join(userDataDir, 'settings.json'),
+      JSON.stringify({ autoUpdate: true }),
+      'utf-8'
+    );
+    const { mod } = loadSettingsStore({ userDataDir });
+
+    expect(mod.loadSettings().autoUpdate).toBe(false);
+    expect(mod.saveSettings({ autoUpdate: true })).toBe(true);
+    expect(mod.loadSettings().autoUpdate).toBe(false);
+    expect(JSON.parse(fs.readFileSync(path.join(userDataDir, 'settings.json'), 'utf-8')).autoUpdate)
+      .toBe(false);
   });
 
   test('registers IPC handlers for loading and saving settings', async () => {
