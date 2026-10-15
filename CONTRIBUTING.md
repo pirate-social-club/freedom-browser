@@ -64,6 +64,6 @@ AI assistance is allowed, but a human must remain accountable for every submissi
 
 ## Licensing
 
-Freedom Browser is licensed under the [Mozilla Public License 2.0](LICENSE). Unless explicitly agreed otherwise, submitted contributions are made available under MPL-2.0. Only submit work you have the right to contribute, preserve applicable notices, and do not copy material with incompatible license terms.
+This fork of Freedom Browser is licensed under the [GNU Affero General Public License, version 3 or later](LICENSE). Code taken from upstream Freedom Browser remains under the Mozilla Public License 2.0 within this larger work. Unless explicitly agreed otherwise, submitted contributions are made available under AGPL-3.0-or-later. Only submit work you have the right to contribute, preserve applicable notices, and do not copy material with incompatible license terms.
 
 If a report may expose a security vulnerability, do not include exploit details, keys, credentials, or sensitive user data in a public issue. Contact `browser@freedom.baby` before public disclosure.

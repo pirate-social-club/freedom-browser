@@ -62,7 +62,7 @@ The fork moved Freedom Browser from MPL-2.0 to AGPL-3.0-or-later in 2026-05 (`LI
 
 The fork's own obligation is the AGPL's: anyone who receives a package, or interacts with the software over a network, must be able to obtain the corresponding source. The fork's repository is public (https://github.com/pirate-social-club/freedom-browser) and `NOTICES` names it. Build inputs the fork adds, such as the hnsd patch, live in that repository.
 
-Two inconsistencies sit outside this audit's edit scope. `README.md` still says Freedom Browser is available under the Mozilla Public License 2.0, which contradicts `LICENSE`. The fork also ships under upstream's product name, app id and icons, while MPL-2.0 section 2.3 grants no trademark rights; upstream's own records call the icons and artwork original Freedom Team work. Both are decisions for the fork, not licence-text fixes.
+`README.md` and `CONTRIBUTING.md` now state the AGPL-3.0-or-later posture, with upstream code remaining MPL-2.0 and contributions taken under AGPL-3.0-or-later. One inconsistency remains a decision for the fork rather than a licence-text fix: the fork ships under upstream's product name, app id and icons, while MPL-2.0 section 2.3 grants no trademark rights, and upstream's own records call the icons and artwork original Freedom Team work.
 
 Every licence found in the tree is compatible with AGPL-3.0-or-later. Permissive licences (MIT, BSD, ISC, Apache-2.0, 0BSD, BlueOak, Python-2.0, Zlib, CC0) combine freely, Apache-2.0 included because AGPL-3.0 is GPLv3-family. LGPL-3.0 combines on its own terms, which the OpenLV arrangement keeps. GPL-3.0 code could combine under the GPLv3 and AGPLv3 section 13 provisions, so the uBlock files would be acceptable even if they were not a separate aggregate. CC BY-SA data ships alongside rather than combined.
 
@@ -357,7 +357,7 @@ Two recommended items are not blockers. Agora should be asked for a licence file
 
 - [x] `LICENSE` holds the AGPL-3.0-or-later text
 - [x] `package.json` `license` field is `AGPL-3.0-or-later`
-- [ ] `README.md` agrees with `LICENSE`
+- [x] `README.md` and `CONTRIBUTING.md` agree with `LICENSE`
 - [x] `NOTICES` names the upstream MPL-2.0 code and both source locations
 - [x] `NOTICES` names every shipped binary, addon, vendor bundle and data file
 - [x] Myotis's and readonly-date-esm's upstream `NOTICE` files and the grpc and yaml.v3 `NOTICE` files reproduced verbatim

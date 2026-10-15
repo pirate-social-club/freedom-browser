@@ -15,11 +15,12 @@ const advisory = (overrides = {}) => ({
 
 // The shape `npm audit --json` writes: the vulnerable package carries the
 // advisory object and its locked paths, its dependents name it by package.
-const finding = (root, nodes = [`node_modules/${root.name}`]) => ({
+const finding = (root, nodes = [`node_modules/${root.name}`], effects = ['@ethersproject/signing-key']) => ({
   name: root.name,
   severity: root.severity,
   via: [root],
   nodes,
+  effects,
 });
 const report = (...findings) => ({
   auditReportVersion: 2,
@@ -69,6 +70,13 @@ describe('accepted advisories gate', () => {
     const nested = finding(advisory(), ['node_modules/elliptic', 'node_modules/some-wallet/node_modules/elliptic']);
     expect(evaluate(report(nested), accepted, TODAY)).toEqual([
       expect.stringContaining('accepted only at node_modules/elliptic'),
+    ]);
+  });
+
+  test('refuses the accepted package reached by a new dependent', () => {
+    const wider = finding(advisory(), undefined, ['@ethersproject/signing-key', 'some-new-wallet']);
+    expect(evaluate(report(wider), accepted, TODAY)).toEqual([
+      expect.stringContaining('accepted only through @ethersproject/signing-key'),
     ]);
   });
 

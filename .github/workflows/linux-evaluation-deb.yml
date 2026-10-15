@@ -65,7 +65,7 @@ jobs:
           # The HNS and dVPN helpers ship as extraResources; a packaging change
           # that drops them must fail here rather than upload a deb without them.
           for file in hns-bin/hnsd hns-bin/fingertipd hns-bin/encrypted-validator.json hns-bin/PROVENANCE.md \
-                      hns-bin/licenses/source-record.json dvpn-bin/v2ray; do
+                      hns-bin/licenses/source-record.json dvpn-bin/v2ray dvpn-bin/licenses/source-record.json; do
             grep -Eq "/opt/Freedom/resources/${file}\$" contents.txt || { echo "missing from deb: $file"; exit 1; }
           done
           # V2Ray's GeoIP/GeoSite data is unused and deliberately not shipped.

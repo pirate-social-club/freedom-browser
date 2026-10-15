@@ -30,7 +30,10 @@ dev-app-update.yml
 CLAUDE.md
 .codex
 identity-data/
-hns-bin/
+# Downloaded or locally built HNS helpers stay untracked; the reviewed Linux
+# helper bundle and its licence records are tracked.
+hns-bin/*
+!hns-bin/linux-x64/
 hns-data/
 jacktrip-bin/
 research/

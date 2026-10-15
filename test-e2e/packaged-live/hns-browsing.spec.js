@@ -71,10 +71,15 @@ const evalInActiveWebview = (window, snippet) =>
     }
   }, snippet);
 
+// The committed document in the active tab, with its main-frame HTTP status
+// from Navigation Timing (0 for a document that was not fetched over HTTP).
 const pageIdentity = (window) =>
-  evalInActiveWebview(window, 'JSON.stringify({ host: location.host, protocol: location.protocol, title: document.title })').then(
-    (value) => (value ? JSON.parse(value) : null)
-  );
+  evalInActiveWebview(
+    window,
+    'JSON.stringify({ host: location.host, protocol: location.protocol, title: document.title, ' +
+      'search: location.pathname.endsWith("/pages/error.html") ? location.search : "", ' +
+      'status: performance.getEntriesByType("navigation")[0]?.responseStatus ?? 0 })'
+  ).then((value) => (value ? JSON.parse(value) : null));
 
 // Drive the address bar the way a user would: focus, type, Enter.
 async function navigate(window, address) {
@@ -167,14 +172,27 @@ test.describe('installed HNS browsing', () => {
           test.info().annotations.push({ type: phase, description: `${host}: ${seen.title}` });
           first = false;
         }
-        // The gateway answers 421 for a name nobody owns; the browser must not
-        // show any configured community or member page for it.
+        // The gateway answers an empty 421 for a name nobody owns. Chromium
+        // either commits that response or fails the load with
+        // ERR_HTTP_RESPONSE_CODE_FAILURE, which Freedom shows on its error
+        // page. Either outcome means HNS resolution, DANE/TLS and routing all
+        // reached the gateway and it refused; a DNS, tunnel or certificate
+        // failure, a script failure or a catch-all page fails here.
         await navigate(window, UNCLAIMED);
-        await window.waitForTimeout(10_000);
-        const unclaimed = await pageIdentity(window);
-        for (const [, title] of HOSTS) {
-          expect(unclaimed?.title ?? '', `${UNCLAIMED} rendered a configured page (${phase})`).not.toMatch(new RegExp(title));
-        }
+        let unclaimed = null;
+        await expect
+          .poll(
+            async () => {
+              unclaimed = await pageIdentity(window);
+              if (!unclaimed) return null;
+              if (unclaimed.host === UNCLAIMED && unclaimed.protocol === 'https:') return `status ${unclaimed.status}`;
+              const params = new URLSearchParams(unclaimed.search);
+              const failed = params.get('url') ? new URL(params.get('url')).host : null;
+              return failed === UNCLAIMED ? `error ${params.get('error')}` : null;
+            },
+            { message: `${UNCLAIMED} must reach the gateway and be refused (${phase})`, timeout: RENDER_TIMEOUT_MS, intervals: [1_000] }
+          )
+          .toMatch(/^(status 421|error ERR_HTTP_RESPONSE_CODE_FAILURE)$/);
         test.info().annotations.push({ type: phase, description: `${UNCLAIMED}: ${JSON.stringify(unclaimed)}` });
         await closeApp(session.app, { timeout: 100_000 });
         session = null;

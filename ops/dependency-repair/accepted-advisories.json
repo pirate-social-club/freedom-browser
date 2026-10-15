@@ -5,6 +5,7 @@
       "package": "elliptic",
       "range": "<=6.6.1",
       "paths": ["node_modules/elliptic"],
+      "effects": ["@ethersproject/signing-key"],
       "maxSeverity": "low",
       "reviewBy": "2027-01-15",
       "reason": "No elliptic release fixes this advisory; 6.6.1 is the latest. npm audit's only remedy is downgrading @ledgerhq/hw-app-eth across a major version to 6.40.3, which would drop the Ledger app features Freedom's signer uses, so that route is rejected. elliptic reaches Freedom only through @ledgerhq/hw-app-eth 7.10.0 and its ethers v5 @ethersproject/transactions and @ethersproject/signing-key. Freedom's Ledger callers (src/main/wallet/ledger/signer.js, transport.js) hand unsigned transaction bytes, messages and typed data to the hardware device, and the unsigned parsers skip signature recovery; no software private key enters the ethers v5 signing path. Software vault signers (src/main/wallet/signers.js, vault-access.js) use root ethers v6 and Noble. This is a static reachability review of the actual callers, not a claim that ethers v5 can never touch a private key; re-check the callers and the lock on every Ledger or ethers bump.",

@@ -8,10 +8,11 @@
  * warnings") lets an advisory with no acceptable fix stand when it is not
  * exploitable in Freedom's usage, provided the reason is written down. This
  * makes that record machine-checked: an accepted advisory names the exact
- * vulnerable package, range and locked paths, the highest severity it was
- * accepted at, the written reason and a review date. A new advisory, the same
- * advisory on another package, range or path, a higher severity, a lapsed
- * review date, or an acceptance the report no longer needs fails the gate.
+ * vulnerable package, range and locked paths, the packages that depend on it
+ * (the reachability the written reason argues about), the highest severity it
+ * was accepted at, the reason and a review date. A new advisory, the same
+ * advisory on another package, range, path or dependent, a higher severity, a
+ * lapsed review date, or an acceptance the report no longer needs fails it.
  *
  *   node scripts/ci/accepted-advisories.js <audit.json> [accepted.json]
  */
@@ -42,7 +43,11 @@ function rootAdvisories(audit) {
   for (const entry of Object.values(audit.vulnerabilities)) {
     for (const via of entry.via || []) {
       if (via && typeof via === 'object') {
-        roots.push({ ...via, nodes: Array.isArray(entry.nodes) ? [...entry.nodes].sort() : [] });
+        roots.push({
+          ...via,
+          nodes: Array.isArray(entry.nodes) ? [...entry.nodes].sort() : [],
+          effects: Array.isArray(entry.effects) ? [...entry.effects].sort() : [],
+        });
       }
     }
   }
@@ -72,6 +77,12 @@ function evaluate(audit, accepted, today = new Date().toISOString().slice(0, 10)
     if (!sameList(advisory.nodes, paths)) {
       problems.push(
         `${advisory.url} on ${advisory.name} is locked at ${advisory.nodes.join(', ') || 'no path'}, accepted only at ${paths.join(', ') || 'no path'}`
+      );
+    }
+    const effects = [...(entry.effects || [])].sort();
+    if (!sameList(advisory.effects, effects)) {
+      problems.push(
+        `${advisory.url} on ${advisory.name} now reaches ${advisory.effects.join(', ') || 'nothing'}, accepted only through ${effects.join(', ') || 'nothing'}`
       );
     }
     if (SEVERITIES.indexOf(advisory.severity) > SEVERITIES.indexOf(entry.maxSeverity)) {

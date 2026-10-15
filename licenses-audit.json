@@ -924,7 +924,7 @@
         {
           "kind": "copyleft",
           "details": "Most of this tree is upstream Freedom Browser code, which upstream licenses under MPL-2.0 and which carries no Exhibit B notice. MPL-2.0 section 3.3 lets the fork distribute it inside a Larger Work under a Secondary License (the GNU GPL family, AGPL-3.0 included), but the upstream files stay MPL-2.0: recipients must be told so and how to obtain the MPL-2.0 text (section 3.1), and the Source Code Form must be available (section 3.2(a)). The fork's LICENSE holds only the AGPL text.",
-          "recommended_fix": "NOTICES now names the upstream code, its MPL-2.0 licence and where the text and the source are published. README.md still says the project is available under MPL-2.0, which contradicts LICENSE; that file is outside this audit's edit scope."
+          "recommended_fix": "NOTICES now names the upstream code, its MPL-2.0 licence and where the text and the source are published. README.md and CONTRIBUTING.md now state the AGPL-3.0-or-later posture with upstream code remaining MPL-2.0."
         }
       ]
     },
@@ -1501,7 +1501,7 @@
     {
       "priority": "required",
       "action": "Keep the upstream MPL-2.0 notice",
-      "details": "Upstream Freedom code stays MPL-2.0 inside the AGPL fork. NOTICES must keep telling recipients so, with the MPL-2.0 text location and the source location. README.md's MPL-2.0 sentence should be corrected to match LICENSE."
+      "details": "Upstream Freedom code stays MPL-2.0 inside the AGPL fork. NOTICES must keep telling recipients so, with the MPL-2.0 text location and the source location. README.md and CONTRIBUTING.md match LICENSE."
     },
     {
       "priority": "recommended",
