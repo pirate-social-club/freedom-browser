@@ -97,13 +97,9 @@ const SURFACES = {
     '44-settings-search',
     '45-settings-shortcut-conflict',
   ],
-  // Settings → Updates and the hamburger row in the states the settings walk
-  // can't reach on its own (#87): the harness drives the update state.
-  'update states': [
-    '46-settings-updates-downloading',
-    '47-settings-updates-ready',
-    '48-app-menu-update-ready',
-  ],
+  // Upstream's 'update states' group (#87) is gone: Freedom's Linux
+  // evaluation build never constructs an updater (src/main/updater.js), so
+  // there is no downloading or staged-update state to paint.
   'private window': ['60-private-window', '61-private-sidebar'],
   'internal page: home': ['49-page-home'],
 };

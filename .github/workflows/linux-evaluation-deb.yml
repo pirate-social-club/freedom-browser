@@ -1,0 +1,82 @@
+name: Linux evaluation deb
+
+# Builds the Linux x64 evaluation deb from exactly the checked-out commit and
+# uploads it with its SHA-256. It publishes nothing: package.json names no
+# update provider, and this workflow creates no tag, release or feed. It runs on
+# pull requests because a dispatch-only workflow is offered only once it exists
+# on the default branch.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-evaluation-deb-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deb:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # A pull_request run's GITHUB_SHA is a synthetic merge commit; build the
+      # pushed head itself so the deb is bound to a commit that exists.
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Confirm the checked-out source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - name: Set up pinned Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24.14.0
+          cache: npm
+      - name: Install Linux native dependencies
+        uses: ./.github/actions/install-linux-native-deps
+      - name: Install dependencies
+        uses: ./.github/actions/install-node-deps
+      - name: Download pinned Linux x64 runtime binaries and filter lists
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          npm run ant:download -- --target linux-x64
+          npm run ipfs:download -- --target linux-x64
+          npm run radicle:download -- --linux --x64
+          npm run adblock:download
+      - name: Build the deb
+        run: npm run dist -- --linux --x64
+      - name: Record the source and artifact digests
+        run: |
+          set -euo pipefail
+          cd dist
+          test "$(ls -1 *.deb | wc -l)" -eq 1
+          sha256sum *.deb > SHA256SUMS.txt
+          printf 'source %s\n' "$SOURCE_SHA" >> SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          dpkg-deb --info *.deb
+          dpkg-deb --contents *.deb > contents.txt
+          # The HNS and dVPN helpers ship as extraResources; a packaging change
+          # that drops them must fail here rather than upload a deb without them.
+          for file in hns-bin/hnsd hns-bin/fingertipd hns-bin/encrypted-validator.json hns-bin/PROVENANCE.md \
+                      hns-bin/licenses/source-record.json dvpn-bin/v2ray; do
+            grep -Eq "/opt/Freedom/resources/${file}\$" contents.txt || { echo "missing from deb: $file"; exit 1; }
+          done
+          # V2Ray's GeoIP/GeoSite data is unused and deliberately not shipped.
+          if grep -Eq 'dvpn-bin/geo(ip|site)\.dat$' contents.txt; then echo "unexpected geo data in deb"; exit 1; fi
+          rm contents.txt
+      - name: Upload the deb
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: freedom-linux-evaluation-deb-${{ env.SOURCE_SHA }}
+          path: |
+            dist/*.deb
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14

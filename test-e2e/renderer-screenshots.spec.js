@@ -547,55 +547,6 @@ test.describe('renderer screenshots', () => {
         surfaces.tookEverySurface();
       });
 
-      // The update states (#87). `39-settings-about` above is the state a
-      // test-mode launch really has — no updater running; these drive the
-      // main-process state machine through the harness, the same entry point
-      // electron-updater's events use, so both renderers paint what a user
-      // would see mid-download and once an update is staged. Sizes and speed
-      // are fixed, and "Last checked just now" holds for the minute this takes.
-      test(`update states (${theme})`, async ({ electronApp, window }) => {
-        test.setTimeout(180_000);
-        const ctx = { app: electronApp, win: window };
-        const dispatch = (event) =>
-          electronApp.evaluate(
-            (_electron, ev) => globalThis.__FREEDOM_TEST_HARNESS__.dispatchUpdate(ev),
-            event
-          );
-        await dispatch({ type: 'supported' });
-        await dispatch({ type: 'available', version: '9.9.9' });
-        await dispatch({
-          type: 'progress',
-          percent: 42,
-          transferred: 42 * 1024 * 1024,
-          total: 100 * 1024 * 1024,
-          bytesPerSecond: 3 * 1024 * 1024,
-        });
-        const page = await recipes.settings(ctx, 'about');
-        await page.waitForSelector('#update-progress:not([hidden])');
-        const scrollbar = [
-          ...(await guestScrollbarMask(window)),
-          ...(await guestElementMask(window, page, '#update-current-version', UPDATE_VERSION_MASK)),
-        ];
-        const surfaces = surfaceGroup(theme, 'update states');
-        await snap(surfaces, window, `${theme}-46-settings-updates-downloading`, {
-          mask: scrollbar,
-        });
-
-        await dispatch({ type: 'downloaded', version: '9.9.9' });
-        await page.waitForSelector('#update-restart:not([hidden])');
-        await page.waitForTimeout(300);
-        await snap(surfaces, window, `${theme}-47-settings-updates-ready`, { mask: scrollbar });
-
-        // Not the usual whole-guest mask: the dropdown hangs over the guest and
-        // a mask paints over everything inside its box, which would cover the
-        // row this baseline is for. The guest is the ready Settings page above,
-        // already stable, so only its scrollbar strip is masked.
-        await recipes.appMenu(ctx);
-        await snap(surfaces, window, `${theme}-48-app-menu-update-ready`, { mask: scrollbar });
-        await closeMenus(window);
-        surfaces.tookEverySurface();
-      });
-
       test(`private window (${theme})`, async ({ electronApp, window }) => {
         test.setTimeout(240_000);
         const ctx = { app: electronApp, win: window };

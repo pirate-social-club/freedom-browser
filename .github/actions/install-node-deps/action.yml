@@ -8,9 +8,12 @@ description: >
 inputs:
   ignore-scripts:
     description: >
-      Install with `--ignore-scripts`. Jobs that only need the JavaScript on
-      disk (jest, lint, an addon download) skip the lifecycle scripts. Those
-      jobs also never launch Electron, so the Electron cache below is skipped
+      Skip even the allowlisted install scripts. npm ci itself always runs
+      with `--ignore-scripts`; with this input left `'false'` the action then
+      rebuilds only the allowlisted packages and runs the repository's own
+      `postinstall` (scripts/ci/install-script-allowlist.test.js keeps that list
+      honest). Jobs that only need the JavaScript on disk (jest, lint, an addon
+      download) pass `'true'` and skip both. Those jobs also never launch Electron, so the Electron cache below is skipped
       for them — not because `--ignore-scripts` suppresses a download (it does
       not: the `electron` package ships no postinstall script, and fetches the
       binary lazily on the first `require('electron')`), but because there is
@@ -90,14 +93,20 @@ runs:
     # so @electron/rebuild skips the module (see its header). The prebuilt
     # addons it looks for ship inside the npm tarball, which `actions/setup-node`'s
     # `cache: npm` already covers, so there is no second directory to cache here.
+    #
+    # Dependency lifecycle scripts never run implicitly. The dVPN SDK packages
+    # (blue-js-sdk, sentinel-ai-connect) ship setup scripts that re-enter
+    # `npm install` without end and may `sudo` a WireGuard install; Freedom
+    # ships its own pinned dVPN binaries, so only the packages named below,
+    # and the repository's own `postinstall`, run their install scripts.
     - name: Run npm ci (bounded and retried)
       shell: bash
-      env:
-        IGNORE_SCRIPTS: ${{ inputs.ignore-scripts }}
+      run: node scripts/ci/npm-ci-hardening.js --ignore-scripts
+
+    - name: Run allowlisted dependency install scripts
+      if: inputs.ignore-scripts != 'true'
+      shell: bash
       run: |
         set -euo pipefail
-        if [ "$IGNORE_SCRIPTS" = 'true' ]; then
-          node scripts/ci/npm-ci-hardening.js --ignore-scripts
-        else
-          node scripts/ci/npm-ci-hardening.js
-        fi
+        npm rebuild keccak node-hid usb esbuild unrs-resolver electron-winstaller
+        npm run postinstall
