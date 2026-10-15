@@ -77,7 +77,7 @@ jobs:
           (root/'encrypted-validator.json').write_text(json.dumps(record,indent=2)+'\n')
           PY
           unit="freedom-hns-native-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.service"
-          cleanup() { sudo systemctl stop "$unit"; }
+          cleanup() { sudo systemctl stop "$unit" || test "$?" -eq 5; }
           trap cleanup EXIT
           sudo systemd-run --unit="$unit" --slice=system.slice --wait --pipe \
             --uid="$(id -u)" --gid="$(id -g)" --working-directory="$GITHUB_WORKSPACE" \
