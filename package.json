@@ -89,11 +89,7 @@
     "directories": {
       "output": "dist"
     },
-    "publish": {
-      "provider": "generic",
-      "url": "https://freedom.baby/downloads",
-      "channel": "latest"
-    },
+    "publish": null,
     "mac": {
       "target": [
         "dmg",

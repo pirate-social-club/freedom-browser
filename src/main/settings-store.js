@@ -46,7 +46,7 @@ const DEFAULT_SETTINGS = {
   // the decentralized protocols keep connecting directly).
   enableTorIntegration: false,
   startTorAtLaunch: false,
-  autoUpdate: true,
+  autoUpdate: false,
   showBookmarkBar: false,
   // When true, every download opens a native save dialog. Off by default:
   // files land in the OS Downloads folder without a prompt.
@@ -222,7 +222,9 @@ function loadSettings() {
       const keysMigrated = migrateRenamedKeys(parsed);
       const removedKeysMigrated = migrateRemovedKeys(parsed);
       const structuredSettingsChanged = normalizeStructuredSettings(parsed);
-      const settingsChanged = keysMigrated || removedKeysMigrated || structuredSettingsChanged;
+      const updaterPreferenceChanged = parsed.autoUpdate !== false;
+      parsed.autoUpdate = false;
+      const settingsChanged = keysMigrated || removedKeysMigrated || structuredSettingsChanged || updaterPreferenceChanged;
       if (settingsChanged) {
         try {
           fs.writeFileSync(filePath, JSON.stringify(parsed, null, 2), 'utf-8');
@@ -253,6 +255,9 @@ function loadSettings() {
     { onDrop: recordRevertedOverrides(reverted) }
   );
   revertedShortcutOverrides = reverted;
+
+  // Evaluation updates cannot be enabled by an old or hand-edited file.
+  cachedSettings.autoUpdate = false;
 
   // Apply theme to nativeTheme
   applyNativeTheme(cachedSettings.theme);
@@ -300,6 +305,7 @@ function saveSettings(newSettings) {
     if (newSettings && typeof newSettings === 'object') {
       for (const key of Object.keys(DEFAULT_SETTINGS)) {
         if (!Object.prototype.hasOwnProperty.call(newSettings, key)) continue;
+        if (key === 'autoUpdate') continue;
 
         if (key === 'shortcutOverrides') {
           // The conflict pass has to run here too, not just at load: this is

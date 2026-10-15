@@ -47,7 +47,7 @@ describe('settings-store', () => {
         startRadicleAtLaunch: false,
         enableTorIntegration: false,
         startTorAtLaunch: false,
-        autoUpdate: true,
+        autoUpdate: false,
         showBookmarkBar: false,
         searchProvider: 'duckduckgo',
         customSearchProviders: [],
@@ -144,7 +144,7 @@ describe('settings-store', () => {
       expect.objectContaining({
         theme: 'system',
         antNodeMode: 'ultraLight',
-        autoUpdate: true,
+        autoUpdate: false,
       })
     );
     expect(nativeTheme.themeSource).toBe('system');
@@ -237,6 +237,17 @@ describe('settings-store', () => {
     expect(JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).customSearchProviders).toEqual(
       mod.loadSettings().customSearchProviders
     );
+  });
+
+  test('normalizes old update opt-ins and refuses subsequent opt-ins', () => {
+    const settingsPath = path.join(userDataDir, 'settings.json');
+    fs.writeFileSync(settingsPath, JSON.stringify({ autoUpdate: true }), 'utf-8');
+    const { mod } = loadSettingsStore({ userDataDir });
+    expect(mod.loadSettings().autoUpdate).toBe(false);
+    expect(JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).autoUpdate).toBe(false);
+    expect(mod.saveSettings({ autoUpdate: true })).toBe(true);
+    expect(mod.loadSettings().autoUpdate).toBe(false);
+    expect(JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).autoUpdate).toBe(false);
   });
 
   test('saveSettings broadcasts settings:updated to all webContents', () => {

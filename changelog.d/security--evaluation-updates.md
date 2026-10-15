@@ -1,0 +1,1 @@
+- Disabled upstream updates in evaluation packages; updates require installing a reviewed Freedom package ([#39](https://github.com/pirate-social-club/freedom-browser/pull/39))
