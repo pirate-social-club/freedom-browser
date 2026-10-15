@@ -1,0 +1,12 @@
+{
+  "component": "v2ray",
+  "notices": [
+    {
+      "path": "LICENSE",
+      "source_url": "https://raw.githubusercontent.com/v2fly/v2ray-core/v5.2.1/LICENSE",
+      "sha256": "777cb9c87ac86712cc6e0d4c628bfc92328aabae8d4531b6a2eb5a84236ab4e2"
+    }
+  ],
+  "scope": "Original release-project license texts; compiler and dependency notices have separate records.",
+  "executed_target": false
+}

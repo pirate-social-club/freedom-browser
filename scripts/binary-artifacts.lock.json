@@ -43,7 +43,8 @@
       "linux-x64": {
         "url": "https://dist.ipfs.tech/kubo/v0.43.0/kubo_v0.43.0_linux-amd64.tar.gz",
         "sha512": "6af21cd24a307d94326807b3d3827064c74fb7122f83b6940af250e6ae40da250e0ec0e1f3551256b78cd204623ed56c32ce735bbe28bdcc787b36943c52458a",
-        "archive": "tar.gz"
+        "archive": "tar.gz",
+        "mirrorUrl": "https://github.com/ipfs/kubo/releases/download/v0.43.0/kubo_v0.43.0_linux-amd64.tar.gz"
       },
       "linux-arm64": {
         "url": "https://dist.ipfs.tech/kubo/v0.43.0/kubo_v0.43.0_linux-arm64.tar.gz",

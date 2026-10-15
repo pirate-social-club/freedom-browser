@@ -1,0 +1,22 @@
+{
+  "component": "ipfs",
+  "notices": [
+    {
+      "path": "LICENSE",
+      "source_url": "https://raw.githubusercontent.com/ipfs/kubo/v0.43.0/LICENSE",
+      "sha256": "194b7fb642b929fb736c38c3efcae3f6509e2b840531b8ea5a75d6ddf30c9368"
+    },
+    {
+      "path": "LICENSE-MIT",
+      "source_url": "https://raw.githubusercontent.com/ipfs/kubo/v0.43.0/LICENSE-MIT",
+      "sha256": "8f71659370c5268d9a1dc962a46232540e8fca63462586d8efaa95aab492a208"
+    },
+    {
+      "path": "LICENSE-APACHE",
+      "source_url": "https://raw.githubusercontent.com/ipfs/kubo/v0.43.0/LICENSE-APACHE",
+      "sha256": "30fdfde4dbde73c66123aba24487366771ffc54bba09566b313338199c3eb7dc"
+    }
+  ],
+  "scope": "Original release-project license texts; compiler and dependency notices have separate records.",
+  "executed_target": false
+}

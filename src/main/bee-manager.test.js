@@ -319,6 +319,25 @@ function loadBeeManagerModule(options = {}) {
 }
 
 describe('bee-manager', () => {
+  test('omitted packaged Bee cannot start or reuse an external node', async () => {
+    const portResolver = jest.fn(() => true);
+    const ctx = loadBeeManagerModule({ isPackaged: true, binExists: true, portResolver,
+      httpResponse: () => ({ statusCode: 200, body: { version: 'available' } }),
+    });
+    ctx.mod.registerBeeIpc();
+    await expect(ctx.ipcMain.invoke(IPC.BEE_GET_STATUS)).resolves.toEqual({
+      status: 'error', error: 'The bundled Swarm node is omitted from this checkpoint.',
+    });
+    await ctx.mod.startBee();
+    expect(portResolver).not.toHaveBeenCalled();
+    expect(ctx.httpGet).not.toHaveBeenCalled();
+    await expect(ctx.ipcMain.invoke(IPC.BEE_CHECK_BINARY)).resolves.toEqual({ available: false });
+    await expect(ctx.ipcMain.invoke(IPC.BEE_GET_STATUS)).resolves.toEqual({
+      status: 'error', error: 'The bundled Swarm node is omitted from this checkpoint.',
+    });
+    expect(ctx.spawn).not.toHaveBeenCalled();
+    expect(ctx.updateService).not.toHaveBeenCalled();
+  });
   afterEach(() => {
     jest.clearAllMocks();
     jest.clearAllTimers();

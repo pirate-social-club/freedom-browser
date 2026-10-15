@@ -6,13 +6,15 @@ The compiler is Go 1.26.2 on Linux amd64, with CGO_ENABLED=0, GOMAXPROCS=1, GOME
 
 The exact helper bytes passed packaged DNSSEC/DANE security acceptance and initial/final controls in a disposable byte-compared Freedom 43503816528243e530347dbc98a979c5228c4765 package on 2026-09-30. Retained public evidence is agentStagingRoot/archive/fingertipd-packaged-security-pass-2026-09-30. No private key or full profile is part of this artifact.
 
-The hnsd source remains handshake-org/hnsd v2.0.0 at a5c7c287e848f46d3e97f16b698e2027c8dc96c3. Its rebuild baseline is debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241. It remains fully static including libunbound, and its bytes are unchanged. Freedom keeps this static rebuild rather than the prior helper-release daemon that required libunbound.so.8 and glibc 2.38.
+The hnsd source is handshake-org/hnsd v2.0.0 at a5c7c287e848f46d3e97f16b698e2027c8dc96c3. Hosted run 37184107654 rebuilt it in debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241, with an ordinary UID and no network during compilation. This replaces the former static daemon. Its direct system dependencies are libunbound.so.8 and libc.so.6; its own maximum required glibc symbol version is 2.36. Ubuntu's libunbound package has separate transitive requirements. The deb declares libunbound8 and libc6 (>= 2.36), while retaining Electron's existing runtime dependencies. System libraries are not bundled.
+
+The licenses directory retains the full hnsd source archive, project/libuv/secp256k1 notices and BLAKE2b headers under the offered Apache 2.0 option. The source archive preserves libuv's embedded ISC/BSD and other crypto notices. It also carries the unchanged fingertip helper's project, Go-module and standard-library notices. source-record.json binds those materials to exact source and binary identities. The import itself did not execute either helper; new installed acceptance remains required.
 
 ## Shipped files
 
 ```text
 065e4f0d5c118213f09319998c94633033cae7f96dc6d714083208468225f766  fingertipd
-881ba4728f3e36a2015185f8cfa478d718260eaf7f406404af386b0ed4d863af  hnsd
+ed2e2f8f22b60fa3e17a8a74445174540d6b4f1903d5849c9e27baee120182d2  hnsd
 ```
 
 Handshake browsing is supported on Linux x64 only by the existing capability manifest. Other shipping browser platforms do not ship these helper artifacts or enable Handshake browsing. This artifact change does not add platform support, enable validating DoH or relax DNSSEC/DANE.

@@ -1,4 +1,4 @@
-import os,sys,json,time,hashlib,subprocess,secrets,shutil,re
+import os,sys,json,time,hashlib,subprocess,secrets,shutil,re,importlib.util
 from pathlib import Path
 base=Path(__file__).parent;start=time.monotonic();epoch=time.time();deadline=start+600
 repo=Path(os.environ['FREEDOM_REPOSITORY']).resolve();sha=os.environ['FREEDOM_SOURCE_SHA'];assert re.fullmatch('[0-9a-f]{40}',sha)
@@ -23,7 +23,7 @@ ef=root/'service.env';ef.write_text(''.join(k+'='+quote(v)+'\n' for k,v in env.i
 errors=[];run_result=None;status={};stop_result=None
 try:
  with (root/'systemd-launch.log').open('wb') as log:
-  run_result=subprocess.run(['systemd-run','--unit='+unit,'--wait','--pipe','--collect','--property=Slice=system.slice','--property=CPUQuota=100%','--property=AllowedCPUs=0','--property=CPUAffinity=0','--property=MemoryMax=2147483648','--property=MemorySwapMax=0','--property=Nice=19','--property=RuntimeMaxSec=585','--property=TimeoutStopSec=5','--property=KillMode=control-group','--property=EnvironmentFile='+str(ef),str(venv/'bin/python3'),str(base/'harness/supervise.py')],stdout=log,stderr=subprocess.STDOUT,timeout=max(1,deadline-time.monotonic()-9))
+  run_result=subprocess.run(['systemd-run','--unit='+unit,'--wait','--pipe','--collect','--property=Slice=system.slice','--property=CPUQuota=100%','--property=AllowedCPUs=0','--property=CPUAffinity=0','--property=MemoryMax=3221225472','--property=MemorySwapMax=0','--property=Nice=19','--property=RuntimeMaxSec=585','--property=TimeoutStopSec=5','--property=KillMode=control-group','--property=EnvironmentFile='+str(ef),str(venv/'bin/python3'),str(base/'harness/supervise.py')],stdout=log,stderr=subprocess.STDOUT,timeout=max(1,deadline-time.monotonic()-9))
 except BaseException as e:errors.append('launch '+type(e).__name__)
 finally:
  try:stop_result=subprocess.run(['systemctl','stop',unit],capture_output=True,text=True,timeout=max(.1,min(5,deadline-time.monotonic()-3)))
@@ -48,7 +48,7 @@ finally:
   assert resources and required<=set(resources) and all(isinstance(resources[name],str) and resources[name] for name in required),'missing final resource values'
   quota,period=resources['cpu.max'].split()
   assert quota!='max' and 0<int(quota)<=int(period),'invalid final CPU cap'
-  assert resources['memory.max']!='max' and 0<int(resources['memory.max'])<=2147483648,'invalid final memory cap'
+  assert resources['memory.max']!='max' and 0<int(resources['memory.max'])<=3221225472,'invalid final memory cap'
   assert resources['memory.swap.max']=='0' and int(resources['memory.swap.peak'])==0,'swap enabled or used'
   assert int(resources['memory.peak'])>=0,'missing memory peak'
   events=dict(line.split() for line in resources['memory.events'].splitlines())
@@ -62,7 +62,7 @@ finally:
  passed=not errors and bool(run_result and run_result.returncode==0 and acceptance and acceptance.get('passed') is True and containment and containment.get('errors')==[]) and cleanup and resource_proved and (loaded_success or reaped) and time.monotonic()<=deadline
  receipt={'passed':passed,'source':sha,'unit':unit,'expected_cgroup':str(cg),'actual_cgroup_absent':not cg.exists(),'service_wait_returncode':None if run_result is None else run_result.returncode,'post_completion_stop_returncode':None if stop_result is None else stop_result.returncode,'status':status,'cleanup_proved':cleanup,'final_resource_proof_passed':resource_proved,'elapsed_seconds':time.monotonic()-start,'errors':errors,'hosted_runner_egress':'GitHub hosted Ubuntu; not local Mullvad/VPN acceptance','full_app_restart_tested':False}
  # Public proofs plus the bounded credential-free build error only. No runtime logs, keys, profiles or environment file.
- names=['electron-version-proof.json','automation-socket-preflight.json','manual-observer-diagnostic.json','offline-build-error.log','installed-deb.json','installed-deb-cleanup.json','renderer-sandbox-pre-security-proof.json','renderer-sandbox-final-proof.json','sandbox-eligibility-diagnostic.json','initial-observer-diagnostic.json','browser-lifecycle-diagnostic.json','preparation-progress.json','acceptance-summary.json','candidate-integrity.json','package-manifest.json','source-files.json','profile-seed.json','signature-validity-recheck.json','wrong-pin-proof.json','new-host-responses.json','public-signed-responses.json','fixture-queries.jsonl','wrong-tls-events.jsonl','dnssec-attribution.json','dane-attribution.json','welcome-summary.json','fresh-first-tab.json','fresh-registry-transition.json','warm-renderer-observations.json','warm-renderer-first-tab.json','manual-navigation-home.json','resource-preflight.json','resources.json','containment.json','timing.json','synced-state.json','browser-launch.json']
+ names=['hnsd-runtime.json','electron-version-proof.json','automation-socket-preflight.json','manual-observer-diagnostic.json','offline-build-error.log','installed-deb.json','installed-deb-cleanup.json','renderer-sandbox-pre-security-proof.json','renderer-sandbox-final-proof.json','sandbox-eligibility-diagnostic.json','initial-observer-diagnostic.json','browser-lifecycle-diagnostic.json','preparation-progress.json','acceptance-summary.json','candidate-integrity.json','package-manifest.json','source-files.json','profile-seed.json','signature-validity-recheck.json','wrong-pin-proof.json','new-host-responses.json','public-signed-responses.json','fixture-queries.jsonl','wrong-tls-events.jsonl','dnssec-attribution.json','dane-attribution.json','welcome-summary.json','fresh-first-tab.json','fresh-registry-transition.json','warm-renderer-observations.json','warm-renderer-first-tab.json','manual-navigation-home.json','resource-preflight.json','resources.json','containment.json','timing.json','synced-state.json','browser-launch.json']
  work=root/'work'
  removed=False
  try:
@@ -71,6 +71,9 @@ finally:
     if f.is_file() and (f.name in names or re.fullmatch(r'(valid-first|bad-dnssec|wrong-dane|valid-final-community|valid-final-fresh)-(navigation|connections|wire|authenticated-route|failed)\.json',f.name)):
      try:shutil.copy2(f,result/f.name)
      except BaseException as error:errors.append('public receipt copy '+f.name+' '+type(error).__name__)
+   if passed and not errors:
+    spec=importlib.util.spec_from_file_location('retain_package',base/'retain-package.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    receipt['evaluation_package']=module.retain(work,result,sha)
  except BaseException as error:errors.append('public receipt enumeration '+type(error).__name__)
  finally:
   # Receipt errors never skip safe private-state removal after the service cgroup is gone.

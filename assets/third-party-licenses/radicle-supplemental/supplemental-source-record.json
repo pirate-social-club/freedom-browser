@@ -1,0 +1,2363 @@
+{
+  "components": [
+    {
+      "component": "alloc-stdlib@0.2.4",
+      "declaration": "BSD-3-Clause",
+      "selected_license": "BSD-3-Clause",
+      "source_archive_sha256": "0e76a019e91224d279006ff972f1e984179a6e9feb050adba6ce8274aef23195",
+      "vcs": {
+        "git": {
+          "sha1": "ae42d22078b98549e987d2f03d12df7b984fde47"
+        },
+        "path_in_vcs": "alloc-stdlib"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "alloc-stdlib-0.2.4/Cargo.toml",
+          "sha256": "9b65004149aeacdda9e2aa7cc08c36912d26cd51e8d91914fd63ad5bc1893a01"
+        },
+        {
+          "source": "alloc-stdlib-0.2.4/.cargo_vcs_info.json",
+          "sha256": "5d07554db80324e6f09a3074928e6ae0e7cea58248f4c1db3f32d9ce0ec85efb"
+        },
+        {
+          "source": "alloc-stdlib-0.2.4/README.md",
+          "sha256": "4857caaabcb6eb367687e6671d70fef3b8dcbab1276999612b71f9f4cd6190b0"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/BSD-3-Clause.txt",
+          "sha256": "5a93d5831e1297ab10fe643e1a631e83be392896da14ee2951285a79012df69d"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/ae42d22078b98549e987d2f03d12df7b984fde47/LICENSE",
+          "sha256": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/ae42d22078b98549e987d2f03d12df7b984fde47/README.md",
+          "sha256": "1c61af27d4012fa35e2d280c0ac37d772a4660994d9f3444c0c4a32b69b5e757"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/ae42d22078b98549e987d2f03d12df7b984fde47/alloc-stdlib/README.md",
+          "sha256": "4857caaabcb6eb367687e6671d70fef3b8dcbab1276999612b71f9f4cd6190b0"
+        }
+      ]
+    },
+    {
+      "component": "amplify_num@0.5.3",
+      "declaration": "Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "source_archive_sha256": "99bcb75a2982047f733547042fc3968c0f460dfcf7d90b90dea3b2744580e9ad",
+      "vcs": {
+        "git": {
+          "sha1": "98cda24f2ed2d19ffaba743f59f9ad34464bb492"
+        },
+        "path_in_vcs": "num"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "amplify_num-0.5.3/Cargo.toml",
+          "sha256": "105012dbfdb395cee0e57c5e7bc1e0234e39c4068894438d7072dc3f0ba47cab"
+        },
+        {
+          "source": "amplify_num-0.5.3/.cargo_vcs_info.json",
+          "sha256": "aae7f02cc81c0c1aa3dfaf1b20a2a72c85ae768b9299eca98816aa00a30e6094"
+        },
+        {
+          "source": "amplify_num-0.5.3/README.md",
+          "sha256": "9091df248fd92d2f76062507dee1cadbe9236b6beccf56ea234c85c4ead199ea"
+        },
+        {
+          "source": "amplify_num-0.5.3/src/bigint.rs first 100 lines",
+          "sha256": "419a5e152ed78c4568954194f15dc82f66567a95b2c728820ec2b6a48fa13f34"
+        },
+        {
+          "source": "amplify_num-0.5.3/src/error.rs first 100 lines",
+          "sha256": "71d9375a501c6b1def7d3237ab3bea67f6775f1be940d5ca6e1d18183f76ede9"
+        },
+        {
+          "source": "amplify_num-0.5.3/src/hex.rs first 100 lines",
+          "sha256": "00b91e0940614dba453067fc874e43805d3e6ada390da75ffa33ec0b163496de"
+        },
+        {
+          "source": "amplify_num-0.5.3/src/lib.rs first 100 lines",
+          "sha256": "71fe800c9049498926e4b31907254903e859a5b1171d9bd7760e85c934720b9c"
+        },
+        {
+          "source": "amplify_num-0.5.3/src/posit.rs first 100 lines",
+          "sha256": "594a5124a5f45e08c77e3510845224c8402c028a609cd49f42d88d6368204649"
+        },
+        {
+          "source": "amplify_num-0.5.3/src/smallint.rs first 100 lines",
+          "sha256": "ccaf7fbd5cdd9a99b81ff8eb32d012fa2971fec646fad6060b4fcfe1aaa2abc6"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/rust-amplify/amplify-num/98cda24f2ed2d19ffaba743f59f9ad34464bb492/LICENSE",
+          "sha256": "77b04ce7fbdecebd48c88512a3f303a25b5186a4dd05a533622e2a901284a8c7"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/rust-amplify/amplify-num/98cda24f2ed2d19ffaba743f59f9ad34464bb492/README.md",
+          "sha256": "9091df248fd92d2f76062507dee1cadbe9236b6beccf56ea234c85c4ead199ea"
+        }
+      ]
+    },
+    {
+      "component": "amplify_num@0.5.4",
+      "declaration": "Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "source_archive_sha256": "afed304556696656d2d71495e1e5f2c4b524a3fb6eb0f2f3778ffc482a40b8a8",
+      "vcs": {
+        "git": {
+          "sha1": "872842c3d151296b18314dfa5bf86548c2ce4f29"
+        },
+        "path_in_vcs": "num"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "amplify_num-0.5.4/Cargo.toml",
+          "sha256": "7bd5cfd9d28e18d4836f1d588395cadeac10864374b02fb155f96abd3ecae2a4"
+        },
+        {
+          "source": "amplify_num-0.5.4/.cargo_vcs_info.json",
+          "sha256": "466d57d387565fa7c32c3b518320b6f7dcf23a68900fbe32cd4fbd83b0100584"
+        },
+        {
+          "source": "amplify_num-0.5.4/README.md",
+          "sha256": "839fefb26f505fb882820f5a3e6d7ae05a6109e0ff03295e61e26425dcbe06ab"
+        },
+        {
+          "source": "amplify_num-0.5.4/src/bigint.rs first 100 lines",
+          "sha256": "ebdf38cffaa72f0d4e30a87e1f1f58a670f45fc967748d4db7eaeedef8f29982"
+        },
+        {
+          "source": "amplify_num-0.5.4/src/error.rs first 100 lines",
+          "sha256": "c0b0cf5b770df71471dd91813523e385a59ab856c1eabe086f03bfdcfe5c11c4"
+        },
+        {
+          "source": "amplify_num-0.5.4/src/lib.rs first 100 lines",
+          "sha256": "5abc2b7780270ddd08b8f75e9b0906375ccdd5fafe2cd9f9d0ce1bc2fded0af0"
+        },
+        {
+          "source": "amplify_num-0.5.4/src/smallint.rs first 100 lines",
+          "sha256": "8a9ccba17ee99b8ac5922759aa753e7004309f31f6dd04fb8c7efbad2de8907b"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/rust-amplify/amplify-num/872842c3d151296b18314dfa5bf86548c2ce4f29/LICENSE",
+          "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/rust-amplify/amplify-num/872842c3d151296b18314dfa5bf86548c2ce4f29/README.md",
+          "sha256": "839fefb26f505fb882820f5a3e6d7ae05a6109e0ff03295e61e26425dcbe06ab"
+        }
+      ]
+    },
+    {
+      "component": "amplify_syn@2.0.1",
+      "declaration": "Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "source_archive_sha256": "7736fb8d473c0d83098b5bac44df6a561e20470375cd8bcae30516dc889fd62a",
+      "vcs": {
+        "git": {
+          "sha1": "29ca86c56316ce683bf3827a9d245334db69ce1f"
+        },
+        "path_in_vcs": "syn"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "amplify_syn-2.0.1/Cargo.toml",
+          "sha256": "7417651e1e479c526c971a3a46494f7637267665ac6b4f613e1736a9fc9a4f13"
+        },
+        {
+          "source": "amplify_syn-2.0.1/.cargo_vcs_info.json",
+          "sha256": "6b025b33bfc2d515b4415604b8bebde6d23462f89da0b35a817a253f526ae16d"
+        },
+        {
+          "source": "amplify_syn-2.0.1/README.md",
+          "sha256": "bb2a4e60e878842a69784772b34d104b10c4290629f99e0e120b36704a9cb48b"
+        },
+        {
+          "source": "amplify_syn-2.0.1/src/attr.rs first 100 lines",
+          "sha256": "668ac8eede7b83051849193e1fe81c59ebf5eca5ff8b3e27a1c5fff70a497038"
+        },
+        {
+          "source": "amplify_syn-2.0.1/src/cls.rs first 100 lines",
+          "sha256": "7508a533804e070940f9bd266e5425a6cc328165f1076cec8cbfd35114a65f0e"
+        },
+        {
+          "source": "amplify_syn-2.0.1/src/data.rs first 100 lines",
+          "sha256": "3a0c1316fd3a6a1204b365cebe2b79606e0d2e1f5633141a44578331ed8babb0"
+        },
+        {
+          "source": "amplify_syn-2.0.1/src/error.rs first 100 lines",
+          "sha256": "c193a487ab160b77849e8db8afc1b0a9bd46e85f31a56eaf0726ab21c5e91ddf"
+        },
+        {
+          "source": "amplify_syn-2.0.1/src/lib.rs first 100 lines",
+          "sha256": "956d0438c381b5c71d76a9b49add20f31368524910a43ebacd5c2cf4815c6f46"
+        },
+        {
+          "source": "amplify_syn-2.0.1/src/parsers.rs first 100 lines",
+          "sha256": "925a804e1d4555ec06e5793ec2047285997b10044bc02a7dcbe16443730862dd"
+        },
+        {
+          "source": "amplify_syn-2.0.1/src/req.rs first 100 lines",
+          "sha256": "c18636cbf71e93b38bec7beaa90e9a90b024216216f3e123f1b00796d2d2180c"
+        },
+        {
+          "source": "amplify_syn-2.0.1/src/val.rs first 100 lines",
+          "sha256": "4d71a0b95245cf770a2b616878dac511e9cdd636de4cbdb83945264870f65fc8"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/rust-amplify/amplify-derive/29ca86c56316ce683bf3827a9d245334db69ce1f/LICENSE",
+          "sha256": "a7173d3ff287d45cecb4f31f854259264206b152b00bf4ac6ba0445bb0e864a9"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/rust-amplify/amplify-derive/29ca86c56316ce683bf3827a9d245334db69ce1f/README.md",
+          "sha256": "d1adc3615c5ca672a8e468143c43cd148f2489243be569ff79ab161d21726192"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/rust-amplify/amplify-derive/29ca86c56316ce683bf3827a9d245334db69ce1f/syn/README.md",
+          "sha256": "bb2a4e60e878842a69784772b34d104b10c4290629f99e0e120b36704a9cb48b"
+        }
+      ]
+    },
+    {
+      "component": "base256emoji@1.0.2",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "b5e9430d9a245a77c92176e649af6e275f20839a48389859d1661e9a128d077c",
+      "vcs": {
+        "git": {
+          "sha1": "f7cf4ae2c15123376d6634ca7aed005034b396ec"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "base256emoji-1.0.2/Cargo.toml",
+          "sha256": "b3992cebc64caf18ef80bf4d9e3488e78ffb70e1860d519a6b2afe0968722673"
+        },
+        {
+          "source": "base256emoji-1.0.2/.cargo_vcs_info.json",
+          "sha256": "46b14ddfb855320321e29cca96f6bea295ae2568b1767f96c6f32088abe66708"
+        },
+        {
+          "source": "base256emoji-1.0.2/README.md",
+          "sha256": "1b15efee3ccb354787b0d74912cec33844bda6134d5d93d311bde37076ed49c9"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Jorropo/base256emoji/f7cf4ae2c15123376d6634ca7aed005034b396ec/README.md",
+          "sha256": "1b15efee3ccb354787b0d74912cec33844bda6134d5d93d311bde37076ed49c9"
+        }
+      ]
+    },
+    {
+      "component": "base45@3.2.0",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "240e56f4d3c453c36faacb695c535a4d5f8c7d23dac175014f32eb0a71012a03",
+      "vcs": {
+        "git": {
+          "sha1": "b9959a71143e0bd7b5f6ce547fe3c65f2031ad97",
+          "dirty": true
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "base45-3.2.0/Cargo.toml",
+          "sha256": "c879aa7b3c00d09e0b3cb19752b06c0d6f3802949bbaca633ed0b4c1b06c8e22"
+        },
+        {
+          "source": "base45-3.2.0/.cargo_vcs_info.json",
+          "sha256": "d7bfa1c4e193d2500a3ee0e5d090fe05b95800cc7233c9318274978a25feab48"
+        },
+        {
+          "source": "base45-3.2.0/README.md",
+          "sha256": "ba2162f894e2eaea66c09b96e5cc7e7b5c972bfd6274bae20e9d5f413e58159e"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/opendevtools/base45/b9959a71143e0bd7b5f6ce547fe3c65f2031ad97/README.md",
+          "sha256": "ba2162f894e2eaea66c09b96e5cc7e7b5c972bfd6274bae20e9d5f413e58159e"
+        }
+      ]
+    },
+    {
+      "component": "const-str@0.4.3",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "2f421161cb492475f1661ddc9815a745a1c894592070661180fdec3d4872e9c3",
+      "vcs": {
+        "git": {
+          "sha1": "a549b512ced97f5ec6569823dbce08916cd611f3"
+        },
+        "path_in_vcs": "const-str"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "const-str-0.4.3/Cargo.toml",
+          "sha256": "56a09fec68d7a978c5f8bf1ceb29d6415e47f424fad9a5db86648527f67f7ccd"
+        },
+        {
+          "source": "const-str-0.4.3/.cargo_vcs_info.json",
+          "sha256": "4454a9f30535e071d600f8a932b02cc0d77f33ebb2a3375cda151f0731363c04"
+        },
+        {
+          "source": "const-str-0.4.3/README.md",
+          "sha256": "35627512c44104e7341adae958257d1bc9b75e773531cf47806c3030348028ff"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Nugine/const-str/a549b512ced97f5ec6569823dbce08916cd611f3/LICENSE",
+          "sha256": "565aacda8f5ea53f937f867ed49a0ac7e6828b60b4568803185cd0a13297d4e4"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Nugine/const-str/a549b512ced97f5ec6569823dbce08916cd611f3/README.md",
+          "sha256": "35627512c44104e7341adae958257d1bc9b75e773531cf47806c3030348028ff"
+        }
+      ]
+    },
+    {
+      "component": "cypheraddr@0.4.1",
+      "declaration": "Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "source_archive_sha256": "4204e8808fcdd40bed39e49371f13f56d6984c32bc03dcb577d2a40b989b9d68",
+      "vcs": {
+        "git": {
+          "sha1": "8e68baedec9d30c9b4748e09592613a1abf97bf9"
+        },
+        "path_in_vcs": "addr"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "cypheraddr-0.4.1/Cargo.toml",
+          "sha256": "96da86e8c26a02fbd3253166a9c0fb0a1041bd50b5ff67811de3b630b066235f"
+        },
+        {
+          "source": "cypheraddr-0.4.1/.cargo_vcs_info.json",
+          "sha256": "0a399f9b88bb8759e7f8d817bcd2147396eb297d516ed92b62cf1294a2f77852"
+        },
+        {
+          "source": "cypheraddr-0.4.1/README.md",
+          "sha256": "56f467d028e0fbed5c9c5edb8bdea451e490258f271c2e19cae3c3b5870787af"
+        },
+        {
+          "source": "cypheraddr-0.4.1/src/host.rs first 100 lines",
+          "sha256": "7d87eab36faf24dfee107c88b95f0ae9101fe50681871cfd6202a83b174a86d1"
+        },
+        {
+          "source": "cypheraddr-0.4.1/src/i2p.rs first 100 lines",
+          "sha256": "baf9cf20a06dc934074824312f8dbc6c5576d81c2fc52b37f72a50448c21ceaf"
+        },
+        {
+          "source": "cypheraddr-0.4.1/src/lib.rs first 100 lines",
+          "sha256": "7be95aa4c2f05eaac5acf95c3066e501ff4f77d07a5bde686173b169bad74af9"
+        },
+        {
+          "source": "cypheraddr-0.4.1/src/net.rs first 100 lines",
+          "sha256": "79f349f94ba19dc1adc4a78836b21dce0a0c1f0aae32cd2940871014de41c378"
+        },
+        {
+          "source": "cypheraddr-0.4.1/src/nym.rs first 100 lines",
+          "sha256": "09fa08e86ae30269176f9b5afbcb7b04197bcf01712a15c3d289e3aa2f7960d2"
+        },
+        {
+          "source": "cypheraddr-0.4.1/src/p2p.rs first 100 lines",
+          "sha256": "945cced81afbff18e095c6019c3bbabf94ed42339ead6a6a77513dd9d1bc18c6"
+        },
+        {
+          "source": "cypheraddr-0.4.1/src/proxied.rs first 100 lines",
+          "sha256": "ae8ffeea84642e6e6a9a6d4493cc181123fba24ff9c6681ff0e7313a6b637b4b"
+        },
+        {
+          "source": "cypheraddr-0.4.1/src/tor.rs first 100 lines",
+          "sha256": "4387263d30a82d04ee4ea9a71aa077ae3c0115edd34b5883d7d38fa99371b5cb"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Cyphernet-DAO/rust-cyphernet/8e68baedec9d30c9b4748e09592613a1abf97bf9/LICENSE",
+          "sha256": "84d98ff0b94cfe5112e7410c6491c15b8b002d285488aea0cce84940e0b82cc4"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Cyphernet-DAO/rust-cyphernet/8e68baedec9d30c9b4748e09592613a1abf97bf9/README.md",
+          "sha256": "1c662a990798c43921ad856887cd048e05c7e7cd05f3b5872616542260a10804"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Cyphernet-DAO/rust-cyphernet/8e68baedec9d30c9b4748e09592613a1abf97bf9/addr/README.md",
+          "sha256": "56f467d028e0fbed5c9c5edb8bdea451e490258f271c2e19cae3c3b5870787af"
+        }
+      ]
+    },
+    {
+      "component": "cyphergraphy@0.3.1",
+      "declaration": "Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "source_archive_sha256": "f23b157ed1e424149e1af82c6ed8300d41941756f5e9841396fd987d946ab0fe",
+      "vcs": {
+        "git": {
+          "sha1": "23a1eb1b5d8522f2b03f017d40b080d13fba333a"
+        },
+        "path_in_vcs": "cyphergraphy"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "cyphergraphy-0.3.1/Cargo.toml",
+          "sha256": "d25c8b30f0634d9f7f9238ba896f1377c9d00a3168cc25959e446f2acd2230d4"
+        },
+        {
+          "source": "cyphergraphy-0.3.1/.cargo_vcs_info.json",
+          "sha256": "85c5863e575fb72d4126766a2a44ef908ef3fa8b0b089dd0add41b320064bd67"
+        },
+        {
+          "source": "cyphergraphy-0.3.1/README.md",
+          "sha256": "a088af3952e9d1891f9a3f6962e4a66a60543c3f5c88af90f507de036b9097be"
+        },
+        {
+          "source": "cyphergraphy-0.3.1/src/bip340.rs first 100 lines",
+          "sha256": "2317d4aec2d3a10937fbc45ce22ef8f44a51827b8ec3ecbd89f19bc864e2ddd2"
+        },
+        {
+          "source": "cyphergraphy-0.3.1/src/digest.rs first 100 lines",
+          "sha256": "52dbecf0f89a71f72179f4c416bd42f61c0c0e41075190b8e4a02797959ca8f6"
+        },
+        {
+          "source": "cyphergraphy-0.3.1/src/display.rs first 100 lines",
+          "sha256": "cfd6ffa01b3aed3437ac447aa773409c8817a8808c304acb6ec4a156bb62b430"
+        },
+        {
+          "source": "cyphergraphy-0.3.1/src/ed25519.rs first 100 lines",
+          "sha256": "2ba0659d0b71997a6183ace275e5d2d625457332f3e77fb33aa225b15f1a3803"
+        },
+        {
+          "source": "cyphergraphy-0.3.1/src/lib.rs first 100 lines",
+          "sha256": "7eb85c9965487c46f1a6e9afab69b0348a539eef3ffd89a8f426ddba50c7e7a3"
+        },
+        {
+          "source": "cyphergraphy-0.3.1/src/secp256k1.rs first 100 lines",
+          "sha256": "76cd83812543a3b113b023f40a3329d923b6254dcc02bfca119b72d66be4fb48"
+        },
+        {
+          "source": "cyphergraphy-0.3.1/src/x25519.rs first 100 lines",
+          "sha256": "189aad3cbacf54343c107e09212418ef28d3b13e014fb6e2a113c4e7a6742f6c"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Cyphernet-DAO/rust-cyphernet/23a1eb1b5d8522f2b03f017d40b080d13fba333a/LICENSE",
+          "sha256": "84d98ff0b94cfe5112e7410c6491c15b8b002d285488aea0cce84940e0b82cc4"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Cyphernet-DAO/rust-cyphernet/23a1eb1b5d8522f2b03f017d40b080d13fba333a/README.md",
+          "sha256": "1c662a990798c43921ad856887cd048e05c7e7cd05f3b5872616542260a10804"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Cyphernet-DAO/rust-cyphernet/23a1eb1b5d8522f2b03f017d40b080d13fba333a/cyphergraphy/README.md",
+          "sha256": "a088af3952e9d1891f9a3f6962e4a66a60543c3f5c88af90f507de036b9097be"
+        }
+      ]
+    },
+    {
+      "component": "git+https://seed.radicle.dev/z2UcCU1LgMshWvXj6hXSDDrwB8q8M/z6MkwPUeUS2fJMfc2HZN1RQTQcTTuhw4HhPySB8JeUg2mVvx?branch=patches%2Fda55667860741ee221483fc42fa7cbbb58e0cfc2#77cf8fb415f1f9026fb8a0bd5ef807eca54f69d4",
+      "declaration": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "source_archive_sha256": "e2d7607d654cf9d94723108655b653f668cc6afd116b7b03e47e8419698b99f8",
+      "vcs": {},
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "radicle-job/Cargo.toml",
+          "sha256": "417dc4f02dff15ee3d4251eee06c4d9dec34f7648cc2138f67f728a0a3fd7d30"
+        },
+        {
+          "source": "radicle-job/README.md",
+          "sha256": "0afa72768307fbdd4c696405a3ea16e3863a08381d48c558136a3780ac0825d6"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "component": "inquire@0.9.4",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "6654738b8024300cf062d04a1c13c10c8e2cea598ec1c47dc9b6641159429756",
+      "vcs": {
+        "git": {
+          "sha1": "3d5b65422a247acc773d767558e34fcb69ab04bf"
+        },
+        "path_in_vcs": "inquire"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "inquire-0.9.4/Cargo.toml",
+          "sha256": "d7166a58c4fbe7cfe6b3a0fddcaf17868ef94bfee62acf2254e2ff511e9641c6"
+        },
+        {
+          "source": "inquire-0.9.4/.cargo_vcs_info.json",
+          "sha256": "c98dc609585b4e507a902c8c4b76c3cb437f432d54d4958d2b677ae847299768"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/mikaelmello/inquire/3d5b65422a247acc773d767558e34fcb69ab04bf/LICENSE",
+          "sha256": "f72340c0a3886a23409003bddfd1aeab6c64acd128582ef4436e1ad5ae2033c8"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/mikaelmello/inquire/3d5b65422a247acc773d767558e34fcb69ab04bf/README.md",
+          "sha256": "1982e585debaec63f7830f51eb57737c91b1fa6393eef76c0ca548b5d39aa409"
+        }
+      ]
+    },
+    {
+      "component": "match-lookup@0.1.2",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "757aee279b8bdbb9f9e676796fd459e4207a1f986e87886700abf589f5abf771",
+      "vcs": {
+        "git": {
+          "sha1": "52a9278249565b0dad80c27e9cb8470272bf7c2d"
+        },
+        "path_in_vcs": "match_lookup"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "match-lookup-0.1.2/Cargo.toml",
+          "sha256": "393cdbd70e2bc9a353c517163abc2d85218a395a233a45c6cda9343f3995bfc9"
+        },
+        {
+          "source": "match-lookup-0.1.2/.cargo_vcs_info.json",
+          "sha256": "79eefc92a191f8c00430ea91c59cad3ffcd261ec2520fd14788be5b088dbf4ea"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/mriise/smol-base-x/52a9278249565b0dad80c27e9cb8470272bf7c2d/README.md",
+          "sha256": "c46173300f55cd907359106bf53e5e3ae4384fb0e44ae0cfbd8c7d6bd9c11fe8"
+        }
+      ]
+    },
+    {
+      "component": "meilisearch-index-setting-macro@0.33.0",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "93b5b21df781c820a9cc387b808d4128cbc164dd28d67ac6ed666a00996f8f15",
+      "vcs": {
+        "git": {
+          "sha1": "60213d550cc306b59fcb0158f51d4820e1192a33"
+        },
+        "path_in_vcs": "meilisearch-index-setting-macro"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "meilisearch-index-setting-macro-0.33.0/Cargo.toml",
+          "sha256": "e610926fd49c70c20151277c271215fdad09484f9da60451d704d3184e3015f3"
+        },
+        {
+          "source": "meilisearch-index-setting-macro-0.33.0/.cargo_vcs_info.json",
+          "sha256": "6bb98e90a39c6acd0471cbcf15fd19fa652284b00285bec4a2c59fb87491832f"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/meilisearch/meilisearch-rust/60213d550cc306b59fcb0158f51d4820e1192a33/LICENSE",
+          "sha256": "b0b5aee3ad1a8cad84dd3b73dbac346bf2b903b33ea90b1d1b3d0800744f5a74"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/meilisearch/meilisearch-rust/60213d550cc306b59fcb0158f51d4820e1192a33/README.md",
+          "sha256": "3cb9e856575dab5463ef177122373b71721db673fb6fde7901d15a8b93e9353a"
+        }
+      ]
+    },
+    {
+      "component": "noise-framework@0.4.1",
+      "declaration": "Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "source_archive_sha256": "f5c755e84e52d3ae076203f7c8b9063d451fadad4916d7d1cd74786807abd636",
+      "vcs": {
+        "git": {
+          "sha1": "fe39e18392a775b42857e6fa3e92bd001ecfe1c3"
+        },
+        "path_in_vcs": "noise"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "noise-framework-0.4.1/Cargo.toml",
+          "sha256": "1a91c355b2116b67cbc88645c019e6b805b2efa93908a38ae7bc88000511a3b8"
+        },
+        {
+          "source": "noise-framework-0.4.1/.cargo_vcs_info.json",
+          "sha256": "3fca420fa80f54e16e000409191d03f693c68cce6181b1e23605a0b4d021c7ee"
+        },
+        {
+          "source": "noise-framework-0.4.1/README.md",
+          "sha256": "a34d0383acaceafa69b241e362af212fdc9fdc2688f1e395ba3d8b7efca7edec"
+        },
+        {
+          "source": "noise-framework-0.4.1/src/cipher.rs first 100 lines",
+          "sha256": "a7166352a944df6f36a3aa576f06a51abafb785b8073e24adf04ab57231efab3"
+        },
+        {
+          "source": "noise-framework-0.4.1/src/error.rs first 100 lines",
+          "sha256": "e8988f44ca420a02471c6ca3873efae965a1e2c67573f99980d3746fb1c038b1"
+        },
+        {
+          "source": "noise-framework-0.4.1/src/hkdf.rs first 100 lines",
+          "sha256": "a2fafbbc2d0be3ec9761da1b1f048481bcbefb1b17e7af6ec969583ef58f76c0"
+        },
+        {
+          "source": "noise-framework-0.4.1/src/lib.rs first 100 lines",
+          "sha256": "fbf21b678ba7428ebb4f33b31b9d1c4331401791c8a87d2c8f6aaefbf944394a"
+        },
+        {
+          "source": "noise-framework-0.4.1/src/patterns.rs first 100 lines",
+          "sha256": "58d5577590717f84b7ac9145571e0598de1ec0a4cae95d58acbd57cc7847d209"
+        },
+        {
+          "source": "noise-framework-0.4.1/src/state.rs first 100 lines",
+          "sha256": "cb4ec01f15ef3ae252b0c0054578940bee215e50f0721f2db300c81cfe09fbf8"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Cyphernet-DAO/rust-cyphernet/fe39e18392a775b42857e6fa3e92bd001ecfe1c3/LICENSE",
+          "sha256": "84d98ff0b94cfe5112e7410c6491c15b8b002d285488aea0cce84940e0b82cc4"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Cyphernet-DAO/rust-cyphernet/fe39e18392a775b42857e6fa3e92bd001ecfe1c3/README.md",
+          "sha256": "1c662a990798c43921ad856887cd048e05c7e7cd05f3b5872616542260a10804"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Cyphernet-DAO/rust-cyphernet/fe39e18392a775b42857e6fa3e92bd001ecfe1c3/noise/README.md",
+          "sha256": "a34d0383acaceafa69b241e362af212fdc9fdc2688f1e395ba3d8b7efca7edec"
+        }
+      ]
+    },
+    {
+      "component": "objc2-core-foundation@0.3.2",
+      "declaration": "Zlib OR Apache-2.0 OR MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536",
+      "vcs": {
+        "git": {
+          "sha1": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+        },
+        "path_in_vcs": "framework-crates/objc2-core-foundation"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "objc2-core-foundation-0.3.2/Cargo.toml",
+          "sha256": "c0f54260fa1396923f2db4edf1e2d54e8ab09dea214af4b8ce37aaefa7185e60"
+        },
+        {
+          "source": "objc2-core-foundation-0.3.2/.cargo_vcs_info.json",
+          "sha256": "1c1a87985a2bd25015f5e2413f4041379bea0172b2fce88dae3e6482b50aab26"
+        },
+        {
+          "source": "objc2-core-foundation-0.3.2/README.md",
+          "sha256": "c02a9b113d8855df956d9d854321c5bfef3c2921131070dc0c64870053b42459"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/README.md",
+          "sha256": "84a32b17c487d0c6413b3401ec7ce5db3d2c591852d3987ee426878ca9c5b77f"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/framework-crates/objc2-core-foundation/README.md",
+          "sha256": "c02a9b113d8855df956d9d854321c5bfef3c2921131070dc0c64870053b42459"
+        }
+      ]
+    },
+    {
+      "component": "objc2-io-kit@0.3.2",
+      "declaration": "Zlib OR Apache-2.0 OR MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "33fafba39597d6dc1fb709123dfa8289d39406734be322956a69f0931c73bb15",
+      "vcs": {
+        "git": {
+          "sha1": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+        },
+        "path_in_vcs": "framework-crates/objc2-io-kit"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "objc2-io-kit-0.3.2/Cargo.toml",
+          "sha256": "116aba27ef95c53958cf8373de72ee6e939c5042d992d3c3c9936c6dd3e51071"
+        },
+        {
+          "source": "objc2-io-kit-0.3.2/.cargo_vcs_info.json",
+          "sha256": "f9cd70629de590df57227fdc11d9eb1d6cde8d9a35013ecf20950449c0cf176f"
+        },
+        {
+          "source": "objc2-io-kit-0.3.2/README.md",
+          "sha256": "64c30d7808e763add513e0ee114c695bc58624d7ab987c228d19ee242a4c9f3b"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/README.md",
+          "sha256": "84a32b17c487d0c6413b3401ec7ce5db3d2c591852d3987ee426878ca9c5b77f"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/framework-crates/objc2-io-kit/README.md",
+          "sha256": "64c30d7808e763add513e0ee114c695bc58624d7ab987c228d19ee242a4c9f3b"
+        }
+      ]
+    },
+    {
+      "component": "qcheck@1.0.0",
+      "declaration": "Unlicense OR MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "b439bd4242da51d62d18c95e6a6add749346756b0d1a587dfd0cc22fa6b5f3f0",
+      "vcs": {
+        "git": {
+          "sha1": "5bea00b0f786038cd8b488b7ea88b7c463c08cdb"
+        },
+        "path_in_vcs": "qcheck"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "qcheck-1.0.0/Cargo.toml",
+          "sha256": "f6e8f6fc7de038c9e252fb88cf9d982fadd227ce7c42ba517e17bf644cf1429b"
+        },
+        {
+          "source": "qcheck-1.0.0/.cargo_vcs_info.json",
+          "sha256": "042778d92d574a025f8268160e2a5432fcd5d0ede666c3f8f9590a744be93055"
+        },
+        {
+          "source": "qcheck-1.0.0/README.md",
+          "sha256": "42523a5a4f1ec25346a708b17fd3b1f70a523d7cb01c13555739527839205519"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/cloudhead/qcheck/5bea00b0f786038cd8b488b7ea88b7c463c08cdb/LICENSE-MIT",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/cloudhead/qcheck/5bea00b0f786038cd8b488b7ea88b7c463c08cdb/UNLICENSE",
+          "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/cloudhead/qcheck/5bea00b0f786038cd8b488b7ea88b7c463c08cdb/README.md",
+          "sha256": "42523a5a4f1ec25346a708b17fd3b1f70a523d7cb01c13555739527839205519"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/cloudhead/qcheck/5bea00b0f786038cd8b488b7ea88b7c463c08cdb/qcheck/README.md",
+          "sha256": "dbcc210d7f4962499db6d4cfa18658e26d05ee700c962a811cac911f095e22fd"
+        }
+      ]
+    },
+    {
+      "component": "r-efi@5.3.0",
+      "declaration": "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
+      "selected_license": "MIT",
+      "source_archive_sha256": "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f",
+      "vcs": {
+        "git": {
+          "sha1": "97b55bed1c2c91dcbf787674849f05337ff80b33"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "r-efi-5.3.0/Cargo.toml",
+          "sha256": "dba000c0173b09b1e3b69afa42a715b5ab64355e6502ce6d9d1767c7845cf402"
+        },
+        {
+          "source": "r-efi-5.3.0/.cargo_vcs_info.json",
+          "sha256": "50e0c72ee0164f182d7b5db0213cdb1626bad950f2443b05d006c28c7f0641b5"
+        },
+        {
+          "source": "r-efi-5.3.0/AUTHORS",
+          "sha256": "ff92bed461f50338dd703a9ba9aee496a425957873df1d91192776e4bdf5dda7"
+        },
+        {
+          "source": "r-efi-5.3.0/README.md",
+          "sha256": "420f65fec3ba2e89d49da51b222d2881d26959037a7b7d3794143db4bd4627b1"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/r-efi/r-efi/97b55bed1c2c91dcbf787674849f05337ff80b33/AUTHORS",
+          "sha256": "ff92bed461f50338dd703a9ba9aee496a425957873df1d91192776e4bdf5dda7"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/r-efi/r-efi/97b55bed1c2c91dcbf787674849f05337ff80b33/README.md",
+          "sha256": "420f65fec3ba2e89d49da51b222d2881d26959037a7b7d3794143db4bd4627b1"
+        }
+      ]
+    },
+    {
+      "component": "r-efi@6.0.0",
+      "declaration": "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
+      "selected_license": "MIT",
+      "source_archive_sha256": "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf",
+      "vcs": {
+        "git": {
+          "sha1": "7e1b0322d31d625f81a5656096330934f9cd835d"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "r-efi-6.0.0/Cargo.toml",
+          "sha256": "a021f9fb0645cc5de5770cf7f41594c1deff4b388eca933b289752aa52666829"
+        },
+        {
+          "source": "r-efi-6.0.0/.cargo_vcs_info.json",
+          "sha256": "d8d0d853429b028d5e3c7b969f7c6b77b04e17486c57fac0759eb8083a359f3f"
+        },
+        {
+          "source": "r-efi-6.0.0/AUTHORS",
+          "sha256": "d027e91dbc9cdbb2f1190068e498bd6b61cff022b6a032b191021ba658d96111"
+        },
+        {
+          "source": "r-efi-6.0.0/README.md",
+          "sha256": "420f65fec3ba2e89d49da51b222d2881d26959037a7b7d3794143db4bd4627b1"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/r-efi/r-efi/7e1b0322d31d625f81a5656096330934f9cd835d/AUTHORS",
+          "sha256": "d027e91dbc9cdbb2f1190068e498bd6b61cff022b6a032b191021ba658d96111"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/r-efi/r-efi/7e1b0322d31d625f81a5656096330934f9cd835d/README.md",
+          "sha256": "420f65fec3ba2e89d49da51b222d2881d26959037a7b7d3794143db4bd4627b1"
+        }
+      ]
+    },
+    {
+      "component": "radicle-cob@0.21.1",
+      "declaration": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "source_archive_sha256": "8a6b295464ff130975fc151feb8aef4d6fd22ddd1da2a5a2a561f283c7abd41e",
+      "vcs": {
+        "git": {
+          "sha1": "71a91042d96bb994c4cd4311d85f5cd1a6311b4e"
+        },
+        "path_in_vcs": "crates/radicle-cob"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "radicle-cob-0.21.1/Cargo.toml",
+          "sha256": "b6bbeecac7d4879be82d5de1717bbefc4cc9a703abc2267211b7262bcf4751fd"
+        },
+        {
+          "source": "radicle-cob-0.21.1/.cargo_vcs_info.json",
+          "sha256": "fc49d830e7a0709dd7261dc6231e9bdd15113bcc28dab79905a30bb275974812"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/backend/git/change.rs first 100 lines",
+          "sha256": "17bec229d72e27ee6f75fa0ae9632938b6fcdada3306baba7b075e269454b065"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/backend/git.rs first 100 lines",
+          "sha256": "46c082b2992edd2fd4fee14bbb2b3eac84265007edeb4d5ef57f33faf1b9469f"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/backend.rs first 100 lines",
+          "sha256": "bb9b5b9e8bf93a3c0a96229a9c9998607205e8e79bef7043ef85eac786c77323"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/change/store.rs first 100 lines",
+          "sha256": "d8b004bb07b617c1499b50d528937be9ab26bcb646873ce35d998d0ea37b2dfd"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/change.rs first 100 lines",
+          "sha256": "cfd30268988d2e9234655214202f8c396cc9bc62bf7897e50d53306c3ea71a7b"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/change_graph.rs first 100 lines",
+          "sha256": "eb628491196afe2fe73360c4833c177f2a5aabc75828bc34f67154306380b854"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/history.rs first 100 lines",
+          "sha256": "9322c0db6c7b3ac8dfddd2b81155cb8cf678bd45ae0ab4b2bd543c9d808dad5c"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/lib.rs first 100 lines",
+          "sha256": "3080d5d68df0d271eefc345f5865949a77f43ba686ad1145886ad78ec32c3472"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/object/collaboration/create.rs first 100 lines",
+          "sha256": "cb7718384141b43af2e1b39487d30aec51964868337a5740b23a638cfb247534"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/object/collaboration/error.rs first 100 lines",
+          "sha256": "851f48d282cbd61ad5a6059becdf27b1de9d1a1cc511bbe8eb3f760681dbea55"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/object/collaboration/get.rs first 100 lines",
+          "sha256": "7b168ed2662f45632e835dc17497f91e7438a1c8820d20a08036cf4a5378283e"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/object/collaboration/info.rs first 100 lines",
+          "sha256": "7b6b1401ac95a0f3efc890aebb79e731f689dfa4a61d7665ba189f06024ecb1f"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/object/collaboration/list.rs first 100 lines",
+          "sha256": "4d973d8b65828d04556c9dbc3e2da8facf12626a07031dfe7e1fb4e39e40d121"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/object/collaboration/remove.rs first 100 lines",
+          "sha256": "707153d9f36f3ad2708eaa86ac123ccae0c1f08382165068e2cb9724a101525d"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/object/collaboration/update.rs first 100 lines",
+          "sha256": "e6bd8fa16d3a48fe8dad9e59392a4193a176a53ea6f2df26d1a2b1706be22c70"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/object/collaboration.rs first 100 lines",
+          "sha256": "a9e14b0411bcf4c27a6795e4bd9d9558dcc35538f24d8a2fda2627a6d2d556c9"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/object/storage.rs first 100 lines",
+          "sha256": "57d69c1b6a4f04a388543b9e030cc1d648f48802023017ca96eed474e20459ad"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/object.rs first 100 lines",
+          "sha256": "ccd1487973a4b32ad135317584273b0e9973574ee63b6645c417ac4a3e7240d4"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/sign.rs first 100 lines",
+          "sha256": "f9c02632f623318b5ddb17b91d084584e606ce3b0ff67b282b36be84cf9c9b37"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/signatures/error.rs first 100 lines",
+          "sha256": "dae382bf6cd4eaccb37ef9806c61cf20e8b76e38b9e615563666084d14750462"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/signatures.rs first 100 lines",
+          "sha256": "963a14b317042fb02d312c16f5d711cd740792a53e170cf06abdc696dca0048b"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/trailers.rs first 100 lines",
+          "sha256": "db3514845d8977a447b16d5d17ca8323812d6dfd6f4b1a987845ac28d290b2eb"
+        },
+        {
+          "source": "radicle-cob-0.21.1/src/type_name.rs first 100 lines",
+          "sha256": "26212c2e85cc8025477ab9507d97ed6a7f03c2333d637277178fbcc49e5f41a5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/radicle-dev/heartwood/71a91042d96bb994c4cd4311d85f5cd1a6311b4e/LICENSE-MIT",
+          "sha256": "fff889db903497b59500b5171806c511b3c83df1100532c2f7aa8f96af46cc4d"
+        }
+      ]
+    },
+    {
+      "component": "radicle-core@0.4.1",
+      "declaration": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "source_archive_sha256": "077e01c4da810fed233fa67ce87b94fe0dd6ffa03b6640e3b71caa9769a5ec9f",
+      "vcs": {
+        "git": {
+          "sha1": "71a91042d96bb994c4cd4311d85f5cd1a6311b4e"
+        },
+        "path_in_vcs": "crates/radicle-core"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "radicle-core-0.4.1/Cargo.toml",
+          "sha256": "c0e40141e78130057dfc2337806e1bf4200cb33f447898f99f8e8c3849bf5295"
+        },
+        {
+          "source": "radicle-core-0.4.1/.cargo_vcs_info.json",
+          "sha256": "994022083496254931e41b02c42ec70e09bed10c529fd7b66cbd7320389e649c"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/radicle-dev/heartwood/71a91042d96bb994c4cd4311d85f5cd1a6311b4e/LICENSE-MIT",
+          "sha256": "fff889db903497b59500b5171806c511b3c83df1100532c2f7aa8f96af46cc4d"
+        }
+      ]
+    },
+    {
+      "component": "radicle-crypto@0.19.0",
+      "declaration": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "source_archive_sha256": "76de6172f3ccae0f489578f4a5da45bc77ff8855ace6352b002d94c0e0783bb5",
+      "vcs": {
+        "git": {
+          "sha1": "71a91042d96bb994c4cd4311d85f5cd1a6311b4e"
+        },
+        "path_in_vcs": "crates/radicle-crypto"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "radicle-crypto-0.19.0/Cargo.toml",
+          "sha256": "d67265590c03ebf37160e11416cf2260e725b88c3e935cfbb21a689ddcc7323f"
+        },
+        {
+          "source": "radicle-crypto-0.19.0/.cargo_vcs_info.json",
+          "sha256": "c5d0731b8031f01c675cea54a48e52ca28b39cfa26c7eac6ce584775ff043887"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/radicle-dev/heartwood/71a91042d96bb994c4cd4311d85f5cd1a6311b4e/LICENSE-MIT",
+          "sha256": "fff889db903497b59500b5171806c511b3c83df1100532c2f7aa8f96af46cc4d"
+        }
+      ]
+    },
+    {
+      "component": "radicle-dag@0.10.0",
+      "declaration": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "source_archive_sha256": "cb41c7e10ada3a4df960190a96bfb4af56d33ada890f917acc8e3b122b614875",
+      "vcs": {
+        "git": {
+          "sha1": "fd892d006ff0b107533257b1427d3781c5586588"
+        },
+        "path_in_vcs": "radicle-dag"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "radicle-dag-0.10.0/Cargo.toml",
+          "sha256": "9177f3a9d037d7fb56160302f282c0350f563e3d6a396bf14f6a60711655ab52"
+        },
+        {
+          "source": "radicle-dag-0.10.0/.cargo_vcs_info.json",
+          "sha256": "7c49b633bcda9a76fbd95d4474745378bf5cca47a0ba58fe3c8646fb27903f54"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/radicle-dev/heartwood/fd892d006ff0b107533257b1427d3781c5586588/LICENSE-MIT",
+          "sha256": "fff889db903497b59500b5171806c511b3c83df1100532c2f7aa8f96af46cc4d"
+        }
+      ]
+    },
+    {
+      "component": "radicle-git-metadata@0.2.1",
+      "declaration": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "source_archive_sha256": "57755b5dc9d234b11bcfc4863ab3a7574d848686c0984487bd9f5395c00958bf",
+      "vcs": {
+        "git": {
+          "sha1": "71a91042d96bb994c4cd4311d85f5cd1a6311b4e"
+        },
+        "path_in_vcs": "crates/radicle-git-metadata"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "radicle-git-metadata-0.2.1/Cargo.toml",
+          "sha256": "f14c88b82be0cd1b8a0cc4b9777c19979cbe53e2aec914f10be6624d521d5fb7"
+        },
+        {
+          "source": "radicle-git-metadata-0.2.1/.cargo_vcs_info.json",
+          "sha256": "19c2eec2bb32df7bbb2413348f0ac9656e24258b9e141029bd06c26b9ddde1ff"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/radicle-dev/heartwood/71a91042d96bb994c4cd4311d85f5cd1a6311b4e/LICENSE-MIT",
+          "sha256": "fff889db903497b59500b5171806c511b3c83df1100532c2f7aa8f96af46cc4d"
+        }
+      ]
+    },
+    {
+      "component": "radicle-git-ref-format@0.2.0",
+      "declaration": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "source_archive_sha256": "8cd8067caf7de3c75f2736c24da52081b5fa9f9f2aa6357b8ad8d67ba5411ec6",
+      "vcs": {
+        "git": {
+          "sha1": "71a91042d96bb994c4cd4311d85f5cd1a6311b4e"
+        },
+        "path_in_vcs": "crates/radicle-git-ref-format"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "radicle-git-ref-format-0.2.0/Cargo.toml",
+          "sha256": "096583d0e79d4ac3e0fe1e72374397e3575965fcab9c4ab6cc7e5218c1fb5994"
+        },
+        {
+          "source": "radicle-git-ref-format-0.2.0/.cargo_vcs_info.json",
+          "sha256": "d52a9e321c9d63200b41fce92b1c2163257193a836a0ac3dc3fe57908d7a24ca"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/radicle-dev/heartwood/71a91042d96bb994c4cd4311d85f5cd1a6311b4e/LICENSE-MIT",
+          "sha256": "fff889db903497b59500b5171806c511b3c83df1100532c2f7aa8f96af46cc4d"
+        }
+      ]
+    },
+    {
+      "component": "radicle-localtime@0.1.0",
+      "declaration": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "source_archive_sha256": "c5c36714fd32dc9421f8ed3edf0d1c1a4aa3b5210fddf8eaef40ea90c88fdddd",
+      "vcs": {
+        "git": {
+          "sha1": "a0b434c3201d398732bff3c3c7e92978a7427416"
+        },
+        "path_in_vcs": "crates/radicle-localtime"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "radicle-localtime-0.1.0/Cargo.toml",
+          "sha256": "f0fd76ab016f1beb6515b6b21a31d87f0e5c061f9b3bfda863eb205bb5cbd505"
+        },
+        {
+          "source": "radicle-localtime-0.1.0/.cargo_vcs_info.json",
+          "sha256": "46a0c8d965f8d2575c89a21d257815f4509fd04a29a5dfb9571ebff70ab35fa4"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/radicle-dev/heartwood/a0b434c3201d398732bff3c3c7e92978a7427416/LICENSE-MIT",
+          "sha256": "fff889db903497b59500b5171806c511b3c83df1100532c2f7aa8f96af46cc4d"
+        }
+      ]
+    },
+    {
+      "component": "radicle-oid@0.2.2",
+      "declaration": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "source_archive_sha256": "7a0b9a4cbe2b75f8d95a4c887836b909542da704673e708d3b85186a4664400c",
+      "vcs": {
+        "git": {
+          "sha1": "71a91042d96bb994c4cd4311d85f5cd1a6311b4e"
+        },
+        "path_in_vcs": "crates/radicle-oid"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "radicle-oid-0.2.2/Cargo.toml",
+          "sha256": "76302516a46ee8da0c10a204b21085a4c856e72d10c9ecbf11cc4dddb3c03686"
+        },
+        {
+          "source": "radicle-oid-0.2.2/.cargo_vcs_info.json",
+          "sha256": "696303476a919af1b0984acbbdaa6d0eef29bce0e24138c5e91bf651d0f98772"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/radicle-dev/heartwood/71a91042d96bb994c4cd4311d85f5cd1a6311b4e/LICENSE-MIT",
+          "sha256": "fff889db903497b59500b5171806c511b3c83df1100532c2f7aa8f96af46cc4d"
+        }
+      ]
+    },
+    {
+      "component": "radicle-signals@0.12.1",
+      "declaration": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "source_archive_sha256": "137929529ba88f1f82cce97d29c14bd26a234a747db23fc7f6643796a37cc956",
+      "vcs": {
+        "git": {
+          "sha1": "71a91042d96bb994c4cd4311d85f5cd1a6311b4e"
+        },
+        "path_in_vcs": "crates/radicle-signals"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "radicle-signals-0.12.1/Cargo.toml",
+          "sha256": "9b9e76a5c6d8a38063dc9ab64855b015764749d53cc8c12265b2dfc558c42f23"
+        },
+        {
+          "source": "radicle-signals-0.12.1/.cargo_vcs_info.json",
+          "sha256": "d774a602069f4235a58ede93bbc6013a64c5617ea66567991e102ba4a75e75cd"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/radicle-dev/heartwood/71a91042d96bb994c4cd4311d85f5cd1a6311b4e/LICENSE-MIT",
+          "sha256": "fff889db903497b59500b5171806c511b3c83df1100532c2f7aa8f96af46cc4d"
+        }
+      ]
+    },
+    {
+      "component": "radicle-term@0.19.1",
+      "declaration": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "source_archive_sha256": "8f7059000b2441b45d30d0584d26c22dfd97907c22a329d281fb427002f9458e",
+      "vcs": {
+        "git": {
+          "sha1": "71a91042d96bb994c4cd4311d85f5cd1a6311b4e"
+        },
+        "path_in_vcs": "crates/radicle-term"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "radicle-term-0.19.1/Cargo.toml",
+          "sha256": "38044ef206f1e2eb4d25210fb0f1c47f9ae98c590213a9b8fb3207c0fde8584d"
+        },
+        {
+          "source": "radicle-term-0.19.1/.cargo_vcs_info.json",
+          "sha256": "fd99319fc55b2af9feca3f49c79b02039134bd55e29ba0b624709923935a07b4"
+        },
+        {
+          "source": "radicle-term-0.19.1/src/ansi.rs first 100 lines",
+          "sha256": "640bc0ebafb9de5561b9be2aca566fc514da2fd23f4b3f4a64689afdd7f7c054"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/radicle-dev/heartwood/71a91042d96bb994c4cd4311d85f5cd1a6311b4e/LICENSE-MIT",
+          "sha256": "fff889db903497b59500b5171806c511b3c83df1100532c2f7aa8f96af46cc4d"
+        }
+      ]
+    },
+    {
+      "component": "radicle@0.25.1",
+      "declaration": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "source_archive_sha256": "fc23b44b518df749486358fef29c4375daa47299eeec32b3659781c1bfd207e4",
+      "vcs": {
+        "git": {
+          "sha1": "71a91042d96bb994c4cd4311d85f5cd1a6311b4e"
+        },
+        "path_in_vcs": "crates/radicle"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "radicle-0.25.1/Cargo.toml",
+          "sha256": "dafe7065e6abc4be46e038850ee5bb1acc8a98cf00d316c2e745498da359c9e7"
+        },
+        {
+          "source": "radicle-0.25.1/.cargo_vcs_info.json",
+          "sha256": "e040258b977dd432dfbc79cf98e3b707c7216760980a4d43caaded6011aadec9"
+        },
+        {
+          "source": "radicle-0.25.1/src/canonical/formatter.rs first 100 lines",
+          "sha256": "1554c1237dee07e1f942aa70467866aa74b05c2f468cd3f12cf60c7e23dde6c9"
+        },
+        {
+          "source": "radicle-0.25.1/src/test/assert.rs first 100 lines",
+          "sha256": "e155d15ed2ef35532b4cd354da7fb3aca37c5ca89fd9452bc715cc48e708de8b"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/radicle-dev/heartwood/71a91042d96bb994c4cd4311d85f5cd1a6311b4e/LICENSE-MIT",
+          "sha256": "fff889db903497b59500b5171806c511b3c83df1100532c2f7aa8f96af46cc4d"
+        }
+      ]
+    },
+    {
+      "component": "sem_safe@0.2.1",
+      "declaration": "Unlicense",
+      "selected_license": "Unlicense",
+      "source_archive_sha256": "be9665e92f9b596cf2b20a8c0f55126cfee3514307740a859f1b25bc929e4947",
+      "vcs": {
+        "git": {
+          "sha1": "bc8febc1f07c0b71d1dd1512a6b8c50ac2caf0aa"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "sem_safe-0.2.1/Cargo.toml",
+          "sha256": "af5e629dc93bc0bc284b115218e018e2d95639636e33274b2abbdab298296d92"
+        },
+        {
+          "source": "sem_safe-0.2.1/.cargo_vcs_info.json",
+          "sha256": "4a4d52b902fda1bb0a45034052aafad4db98d563223ffcacbfe631c28652854f"
+        },
+        {
+          "source": "sem_safe-0.2.1/README.md",
+          "sha256": "5aebaf144d518ae2e0a84aafbaad4af3e5d8628fd2226dc9c7b6c549587cce15"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/Unlicense.txt",
+          "sha256": "0bdebfeda07d45dada625ae1317c6f833186e798b171d0db640bcf32e92a8240"
+        }
+      ]
+    },
+    {
+      "component": "signals_receipts@0.2.5",
+      "declaration": "Unlicense",
+      "selected_license": "Unlicense",
+      "source_archive_sha256": "8400878c2b53f6e3e224fcbdf20d87743a5c6547129f0a6a227f8282b6c6910b",
+      "vcs": {
+        "git": {
+          "sha1": "93120dd2bad3b74182f119352d5cdb0941be1a22"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "signals_receipts-0.2.5/Cargo.toml",
+          "sha256": "0e96bef6db5b38d78ee974ba9a1c8354caebf7f05ee75965a89d8fa7febc7a91"
+        },
+        {
+          "source": "signals_receipts-0.2.5/.cargo_vcs_info.json",
+          "sha256": "630d6c62a75ec020ab384f2e3b5b4e8775e1bce5d3425cc259be9733facf2d71"
+        },
+        {
+          "source": "signals_receipts-0.2.5/README.md",
+          "sha256": "da985e303cc7d47b0946d6800832110459a014b9c60135318102ca9e7db37fef"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/Unlicense.txt",
+          "sha256": "0bdebfeda07d45dada625ae1317c6f833186e798b171d0db640bcf32e92a8240"
+        }
+      ]
+    },
+    {
+      "component": "socks5-client@0.4.3",
+      "declaration": "Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "source_archive_sha256": "3a76ee33b601147d2d4b117252ebc70005d7938b7ad0e48a521243909702a115",
+      "vcs": {
+        "git": {
+          "sha1": "fe39e18392a775b42857e6fa3e92bd001ecfe1c3"
+        },
+        "path_in_vcs": "socks5-client"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "socks5-client-0.4.3/Cargo.toml",
+          "sha256": "898210ba23972582e5431a4ac13a0a678f98227318fe1ddb0e24088ba18c77c7"
+        },
+        {
+          "source": "socks5-client-0.4.3/.cargo_vcs_info.json",
+          "sha256": "2b6e7ae4a9e918abbcb6d6712a354df393b45a64a31e13be80a0389be600dae9"
+        },
+        {
+          "source": "socks5-client-0.4.3/README.md",
+          "sha256": "3a7cb3e8f76b28331eb08e7e49b847e0f4971373a067048f7526af3230cb6eb4"
+        },
+        {
+          "source": "socks5-client-0.4.3/src/auth.rs first 100 lines",
+          "sha256": "21b500b5453fddf01b2911c16bf2c2d66e3381892c0de614cc7e9b257a9c8ffc"
+        },
+        {
+          "source": "socks5-client-0.4.3/src/encoding.rs first 100 lines",
+          "sha256": "cdff29c7c800d1beefa2f19950b3e6965386c087fdeb1da6d1aa7a67d6bf894a"
+        },
+        {
+          "source": "socks5-client-0.4.3/src/error.rs first 100 lines",
+          "sha256": "d7ab285ac11abdc07c8a71729b548ac3b531cc50ad125810ee279a0d135d7b8d"
+        },
+        {
+          "source": "socks5-client-0.4.3/src/lib.rs first 100 lines",
+          "sha256": "64f36a24543045f59c3f455b349fcd19c05aebae453cb252212d64793ef0ead5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Cyphernet-DAO/rust-cyphernet/fe39e18392a775b42857e6fa3e92bd001ecfe1c3/LICENSE",
+          "sha256": "84d98ff0b94cfe5112e7410c6491c15b8b002d285488aea0cce84940e0b82cc4"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Cyphernet-DAO/rust-cyphernet/fe39e18392a775b42857e6fa3e92bd001ecfe1c3/README.md",
+          "sha256": "1c662a990798c43921ad856887cd048e05c7e7cd05f3b5872616542260a10804"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Cyphernet-DAO/rust-cyphernet/fe39e18392a775b42857e6fa3e92bd001ecfe1c3/socks5-client/README.md",
+          "sha256": "3a7cb3e8f76b28331eb08e7e49b847e0f4971373a067048f7526af3230cb6eb4"
+        }
+      ]
+    },
+    {
+      "component": "structmeta-derive@0.3.0",
+      "declaration": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "source_archive_sha256": "152a0b65a590ff6c3da95cabe2353ee04e6167c896b28e3b14478c2636c922fc",
+      "vcs": {
+        "git": {
+          "sha1": "f1c6394d81cd57d3d6840b25175761c9bb9788e9"
+        },
+        "path_in_vcs": "structmeta-derive"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "structmeta-derive-0.3.0/Cargo.toml",
+          "sha256": "ab1084ab87511472014cf2e6f426a65d3b698ae83993208da19b168cce25ec7a"
+        },
+        {
+          "source": "structmeta-derive-0.3.0/.cargo_vcs_info.json",
+          "sha256": "93e303a80a099548b56401d51b544b45a718b3f5c4f8ef1f099628bf8129c178"
+        },
+        {
+          "source": "structmeta-derive-0.3.0/README.md",
+          "sha256": "9cc6be367030515984300f160642bcb8e9d07b605a9e521cb2eba11f43b42e9c"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/frozenlib/structmeta/f1c6394d81cd57d3d6840b25175761c9bb9788e9/LICENSE-MIT",
+          "sha256": "ddb60e03aa20910515ff5d52d73e3a3152e9b83198a8ed79c58c057cc0d58ef6"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/frozenlib/structmeta/f1c6394d81cd57d3d6840b25175761c9bb9788e9/LICENSE-APACHE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/frozenlib/structmeta/f1c6394d81cd57d3d6840b25175761c9bb9788e9/README.md",
+          "sha256": "9cc6be367030515984300f160642bcb8e9d07b605a9e521cb2eba11f43b42e9c"
+        }
+      ]
+    },
+    {
+      "component": "structmeta@0.3.0",
+      "declaration": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "source_archive_sha256": "2e1575d8d40908d70f6fd05537266b90ae71b15dbbe7a8b7dffa2b759306d329",
+      "vcs": {
+        "git": {
+          "sha1": "f1c6394d81cd57d3d6840b25175761c9bb9788e9"
+        },
+        "path_in_vcs": "structmeta"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "structmeta-0.3.0/Cargo.toml",
+          "sha256": "22c04a8f1b8a83658cd9fa8e185718351719e3e4bb9e5931f5de6673f3de9756"
+        },
+        {
+          "source": "structmeta-0.3.0/.cargo_vcs_info.json",
+          "sha256": "c5bab1108930a3166539eb71c27e92dbe9d4d15de1c04d33838c763ac10ec008"
+        },
+        {
+          "source": "structmeta-0.3.0/README.md",
+          "sha256": "9cc6be367030515984300f160642bcb8e9d07b605a9e521cb2eba11f43b42e9c"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/frozenlib/structmeta/f1c6394d81cd57d3d6840b25175761c9bb9788e9/LICENSE-MIT",
+          "sha256": "ddb60e03aa20910515ff5d52d73e3a3152e9b83198a8ed79c58c057cc0d58ef6"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/frozenlib/structmeta/f1c6394d81cd57d3d6840b25175761c9bb9788e9/LICENSE-APACHE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/frozenlib/structmeta/f1c6394d81cd57d3d6840b25175761c9bb9788e9/README.md",
+          "sha256": "9cc6be367030515984300f160642bcb8e9d07b605a9e521cb2eba11f43b42e9c"
+        }
+      ]
+    },
+    {
+      "component": "tree-sitter-bash@0.23.3",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "329a4d48623ac337d42b1df84e81a1c9dbb2946907c102ca72db158c1964a52e",
+      "vcs": {
+        "git": {
+          "sha1": "487734f87fd87118028a65a4599352fa99c9cde8"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "tree-sitter-bash-0.23.3/Cargo.toml",
+          "sha256": "43495ee5e0a9945e3186750087d3be35dc7c46b146534485f5893e084770534e"
+        },
+        {
+          "source": "tree-sitter-bash-0.23.3/.cargo_vcs_info.json",
+          "sha256": "0ab6849da15f5c1906476c26605b97b7e8d60307b1ae442c290a28e7ea41833f"
+        },
+        {
+          "source": "tree-sitter-bash-0.23.3/README.md",
+          "sha256": "744e95f0420c071690071eb93cdd5bff1ed5de4dd36ce50cf5f09cab1dda4134"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-bash/487734f87fd87118028a65a4599352fa99c9cde8/LICENSE",
+          "sha256": "49bf33cf78ef5897e4e161ce1517df7de1ae5042a65b6bcfd44401e0fc606559"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-bash/487734f87fd87118028a65a4599352fa99c9cde8/README.md",
+          "sha256": "744e95f0420c071690071eb93cdd5bff1ed5de4dd36ce50cf5f09cab1dda4134"
+        }
+      ]
+    },
+    {
+      "component": "tree-sitter-c@0.23.4",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "afd2b1bf1585dc2ef6d69e87d01db8adb059006649dd5f96f31aa789ee6e9c71",
+      "vcs": {
+        "git": {
+          "sha1": "3efee11f784605d44623d7dadd6cd12a0f73ea92"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "tree-sitter-c-0.23.4/Cargo.toml",
+          "sha256": "b1b6e2bcc0b90f8eba8dd42989a3c8cf163724d260e2a44322a782a3e54de191"
+        },
+        {
+          "source": "tree-sitter-c-0.23.4/.cargo_vcs_info.json",
+          "sha256": "8f7dec529289940105c8b9d5af8f02130e8ab4e7a1b048d767ec774e08c06bcb"
+        },
+        {
+          "source": "tree-sitter-c-0.23.4/README.md",
+          "sha256": "15e4e31290537d4b1c3a3babdaa21fda99835274e93beea385747fccf0362381"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-c/3efee11f784605d44623d7dadd6cd12a0f73ea92/LICENSE",
+          "sha256": "2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-c/3efee11f784605d44623d7dadd6cd12a0f73ea92/README.md",
+          "sha256": "15e4e31290537d4b1c3a3babdaa21fda99835274e93beea385747fccf0362381"
+        }
+      ]
+    },
+    {
+      "component": "tree-sitter-css@0.23.2",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "5ad6489794d41350d12a7fbe520e5199f688618f43aace5443980d1ddcf1b29e",
+      "vcs": {
+        "git": {
+          "sha1": "c0d581e32d183a536731ed6c3a72758b27e20411"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "tree-sitter-css-0.23.2/Cargo.toml",
+          "sha256": "0ad7aac0415360faa91442066d0b88c850be306dec61a03ae6291b028bf99aef"
+        },
+        {
+          "source": "tree-sitter-css-0.23.2/.cargo_vcs_info.json",
+          "sha256": "edb20e499fbc411abe0e8baf4002716452c3fab1dab829c87d555166139ff61f"
+        },
+        {
+          "source": "tree-sitter-css-0.23.2/README.md",
+          "sha256": "bc7adb1cbb0679cb96d1b48246d1a685701cc46eba83d6f41f02ac73c3d717f7"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-css/c0d581e32d183a536731ed6c3a72758b27e20411/LICENSE",
+          "sha256": "c5cfb43042b6b72045f4ba997834d0a7786d2793d91680868b5815b39f14fc78"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-css/c0d581e32d183a536731ed6c3a72758b27e20411/README.md",
+          "sha256": "bc7adb1cbb0679cb96d1b48246d1a685701cc46eba83d6f41f02ac73c3d717f7"
+        }
+      ]
+    },
+    {
+      "component": "tree-sitter-go@0.23.4",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "b13d476345220dbe600147dd444165c5791bf85ef53e28acbedd46112ee18431",
+      "vcs": {
+        "git": {
+          "sha1": "3c3775faa968158a8b4ac190a7fda867fd5fb748"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "tree-sitter-go-0.23.4/Cargo.toml",
+          "sha256": "b05bdc98d5c6dc10dd0ae42eca2bd40a4c0c55500a96f0b121820b645259e8fa"
+        },
+        {
+          "source": "tree-sitter-go-0.23.4/.cargo_vcs_info.json",
+          "sha256": "b2200dd31437bcc355c584286850292d6a11cc5e838e66f52582a2cb0bb365b7"
+        },
+        {
+          "source": "tree-sitter-go-0.23.4/README.md",
+          "sha256": "37e2434348fcf0f67520f55fe71090b72d23ebfedb453c351492ec6e11bcb4d2"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-go/3c3775faa968158a8b4ac190a7fda867fd5fb748/LICENSE",
+          "sha256": "2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-go/3c3775faa968158a8b4ac190a7fda867fd5fb748/README.md",
+          "sha256": "37e2434348fcf0f67520f55fe71090b72d23ebfedb453c351492ec6e11bcb4d2"
+        }
+      ]
+    },
+    {
+      "component": "tree-sitter-highlight@0.24.7",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "6411813e4a9ebc87d391b98b0f3ce65d5361cd80c54de8651d8b85b555ea5d95",
+      "vcs": {
+        "git": {
+          "sha1": "5e8760bf462ce7b19b3d2396d5b7860f3906a297"
+        },
+        "path_in_vcs": "highlight"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "tree-sitter-highlight-0.24.7/Cargo.toml",
+          "sha256": "c348b95caa57e2c714e3eb36d0d0f5369f7cfc7bbdf7bd152d031f9f9f936011"
+        },
+        {
+          "source": "tree-sitter-highlight-0.24.7/.cargo_vcs_info.json",
+          "sha256": "46fc50e802e2238f46968c467dd823dba1f2a5f3f6005a408d220d1c49c6c182"
+        },
+        {
+          "source": "tree-sitter-highlight-0.24.7/README.md",
+          "sha256": "0376a825cef4dc1f5f664ce0a98affd185d47d025b1e363d364a758a45262794"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter/5e8760bf462ce7b19b3d2396d5b7860f3906a297/LICENSE",
+          "sha256": "5f9cf9fb6acb1972b35ae29119ce563bb60ec097656bc4b69b9bac2d04c7a147"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter/5e8760bf462ce7b19b3d2396d5b7860f3906a297/README.md",
+          "sha256": "f88d466368c6213d0f6fe7ae22e74e77be4693aa8f51d0933502a1ccf4d56cf8"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter/5e8760bf462ce7b19b3d2396d5b7860f3906a297/highlight/README.md",
+          "sha256": "0376a825cef4dc1f5f664ce0a98affd185d47d025b1e363d364a758a45262794"
+        }
+      ]
+    },
+    {
+      "component": "tree-sitter-html@0.23.2",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "261b708e5d92061ede329babaaa427b819329a9d427a1d710abb0f67bbef63ee",
+      "vcs": {
+        "git": {
+          "sha1": "5a5ca8551a179998360b4a4ca2c0f366a35acc03"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "tree-sitter-html-0.23.2/Cargo.toml",
+          "sha256": "5a81ad520c0bdf1294fc41f8dd54cb18db57934dc5a846373a6082f8d08b0fc2"
+        },
+        {
+          "source": "tree-sitter-html-0.23.2/.cargo_vcs_info.json",
+          "sha256": "ca9170bf5a6587c2a8df2e280d5fb0c77d7427a4551dfac38bd0aab8946724d5"
+        },
+        {
+          "source": "tree-sitter-html-0.23.2/README.md",
+          "sha256": "1e27ed8ccd8096ace1af54e0ba29113d2e2efb1d960ae7ae4048ee8d7432d52f"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-html/5a5ca8551a179998360b4a4ca2c0f366a35acc03/LICENSE",
+          "sha256": "2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-html/5a5ca8551a179998360b4a4ca2c0f366a35acc03/README.md",
+          "sha256": "1e27ed8ccd8096ace1af54e0ba29113d2e2efb1d960ae7ae4048ee8d7432d52f"
+        }
+      ]
+    },
+    {
+      "component": "tree-sitter-json@0.24.8",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "4d727acca406c0020cffc6cf35516764f36c8e3dc4408e5ebe2cb35a947ec471",
+      "vcs": {
+        "git": {
+          "sha1": "ee35a6ebefcef0c5c416c0d1ccec7370cfca5a24"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "tree-sitter-json-0.24.8/Cargo.toml",
+          "sha256": "50f8e38f8a1f66a6f4a1d6572dd6e9839c667dc2264b20f729003d3ec1886114"
+        },
+        {
+          "source": "tree-sitter-json-0.24.8/.cargo_vcs_info.json",
+          "sha256": "9015c652b6a2d43a8b1dbdb2a50ab43da4fc1d2c66a47050e5ca73ccd8704bff"
+        },
+        {
+          "source": "tree-sitter-json-0.24.8/README.md",
+          "sha256": "87ebce8a481310a54d58f7de1bd30f192b53a1ef43f2dc030a648916bb9290d6"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-json/ee35a6ebefcef0c5c416c0d1ccec7370cfca5a24/LICENSE",
+          "sha256": "2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-json/ee35a6ebefcef0c5c416c0d1ccec7370cfca5a24/README.md",
+          "sha256": "87ebce8a481310a54d58f7de1bd30f192b53a1ef43f2dc030a648916bb9290d6"
+        }
+      ]
+    },
+    {
+      "component": "tree-sitter-md@0.3.2",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "17f968c22a01010b83fc960455ae729db08dbeb6388617d9113897cb9204b030",
+      "vcs": {
+        "git": {
+          "sha1": "1c8dea73bc0c996d92dd9ebc30dd388716b1c5db"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "tree-sitter-md-0.3.2/Cargo.toml",
+          "sha256": "f2ad355368ebc3054d9660ee388a5e47e88955641b0a2778b16d2c29fb844f22"
+        },
+        {
+          "source": "tree-sitter-md-0.3.2/.cargo_vcs_info.json",
+          "sha256": "1ecb059752c53b92e18027465753106fb903556e510b554402dee8ae5c731086"
+        },
+        {
+          "source": "tree-sitter-md-0.3.2/README.md",
+          "sha256": "6e23c66b45837ee9c92670ce8e3e39f834a3c65a16c1e16903e3f435d137d2c8"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-markdown/1c8dea73bc0c996d92dd9ebc30dd388716b1c5db/LICENSE",
+          "sha256": "52ec8a1bf8256511e2a92613e0bb41ffefba3897f16fa958d7bb28c466dd4804"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-markdown/1c8dea73bc0c996d92dd9ebc30dd388716b1c5db/README.md",
+          "sha256": "6e23c66b45837ee9c92670ce8e3e39f834a3c65a16c1e16903e3f435d137d2c8"
+        }
+      ]
+    },
+    {
+      "component": "tree-sitter-python@0.23.6",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "3d065aaa27f3aaceaf60c1f0e0ac09e1cb9eb8ed28e7bcdaa52129cffc7f4b04",
+      "vcs": {
+        "git": {
+          "sha1": "bffb65a8cfe4e46290331dfef0dbf0ef3679de11"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "tree-sitter-python-0.23.6/Cargo.toml",
+          "sha256": "348778f73e7c6f4183c9e4a5cdc16bf918bb8b7e24f37cc21fc75d3b3a96ef5a"
+        },
+        {
+          "source": "tree-sitter-python-0.23.6/.cargo_vcs_info.json",
+          "sha256": "1463cc992954938c70a99faa079fd1d0e947513a7d67705964d70e8e135b3c4a"
+        },
+        {
+          "source": "tree-sitter-python-0.23.6/README.md",
+          "sha256": "f36a78a14e69e951378922daebc85a385930fbdcd1cc32624456c45d0bf365c2"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-python/bffb65a8cfe4e46290331dfef0dbf0ef3679de11/LICENSE",
+          "sha256": "d724405ce238a22c0d35769c5a36b386ad5958192efe8bbb304fb2896254575f"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-python/bffb65a8cfe4e46290331dfef0dbf0ef3679de11/README.md",
+          "sha256": "f36a78a14e69e951378922daebc85a385930fbdcd1cc32624456c45d0bf365c2"
+        }
+      ]
+    },
+    {
+      "component": "tree-sitter-ruby@0.23.1",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "be0484ea4ef6bb9c575b4fdabde7e31340a8d2dbc7d52b321ac83da703249f95",
+      "vcs": {
+        "git": {
+          "sha1": "71bd32fb7607035768799732addba884a37a6210"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "tree-sitter-ruby-0.23.1/Cargo.toml",
+          "sha256": "9c07a96ad2106ffd9aab932770d8f043c4e83c414ebd19e6459dc7ec70fa3ab4"
+        },
+        {
+          "source": "tree-sitter-ruby-0.23.1/.cargo_vcs_info.json",
+          "sha256": "f09308df1430c9653a13fad412d1d3a4e8f09cb14219985b74a12f98b3405fdc"
+        },
+        {
+          "source": "tree-sitter-ruby-0.23.1/README.md",
+          "sha256": "8bee75838a85bf55dab9dcb25dc4b117a86c3275a7ed487ff036787157f6eebd"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-ruby/71bd32fb7607035768799732addba884a37a6210/LICENSE",
+          "sha256": "ee006f02a3d856df282e409be2a86e24a65bb573a98b9c28343771141351bb6b"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-ruby/71bd32fb7607035768799732addba884a37a6210/README.md",
+          "sha256": "8bee75838a85bf55dab9dcb25dc4b117a86c3275a7ed487ff036787157f6eebd"
+        }
+      ]
+    },
+    {
+      "component": "tree-sitter-rust@0.23.3",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "ca8ccb3e3a3495c8a943f6c3fd24c3804c471fd7f4f16087623c7fa4c0068e8a",
+      "vcs": {
+        "git": {
+          "sha1": "3d087c3df25286140393ddecc339208fae107149"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "tree-sitter-rust-0.23.3/Cargo.toml",
+          "sha256": "461d2136c1bd385cf29586d8b0b4220cc766cc625a57bfdb715ccc9db8065873"
+        },
+        {
+          "source": "tree-sitter-rust-0.23.3/.cargo_vcs_info.json",
+          "sha256": "5de9cc4641e72d7dd26b926cccee4b78db5716c233cc548a86d595fecb777f73"
+        },
+        {
+          "source": "tree-sitter-rust-0.23.3/README.md",
+          "sha256": "2d9ed9b99c93d7a48a3d4f0c3e957f12100eee0d8bb2c3e0a136926312d0e9f5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-rust/3d087c3df25286140393ddecc339208fae107149/LICENSE",
+          "sha256": "31d5b6f4243d5c7c6e1c4ebbbb9f6407bd1457a08bcc4f706521710341acba36"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-rust/3d087c3df25286140393ddecc339208fae107149/README.md",
+          "sha256": "2d9ed9b99c93d7a48a3d4f0c3e957f12100eee0d8bb2c3e0a136926312d0e9f5"
+        }
+      ]
+    },
+    {
+      "component": "tree-sitter-toml-ng@0.6.0",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "695d20cd83acf16c02c773f03e76d7b43b19883d4e2ce3652a8f06b5e0da7455",
+      "vcs": {
+        "git": {
+          "sha1": "16a30c83ce427385b8d14939c45c137fcfca6c42"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "tree-sitter-toml-ng-0.6.0/Cargo.toml",
+          "sha256": "69ccb9ff8ffc7c83c47eae26fb96351851f7184c440d66b16719a2d392cdc6d8"
+        },
+        {
+          "source": "tree-sitter-toml-ng-0.6.0/.cargo_vcs_info.json",
+          "sha256": "5cf0256fb4c0bf616367f98dd268bddd7bdcc41403132239a682ae4e0d68280e"
+        },
+        {
+          "source": "tree-sitter-toml-ng-0.6.0/README.md",
+          "sha256": "938426e1ba20fdcab3d81899f0d5f86554cce9c728643c275f22f3cb255781ef"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-toml/16a30c83ce427385b8d14939c45c137fcfca6c42/LICENSE",
+          "sha256": "b727eee929bee836e8102cecf749a795b199f291b58c885bcd81cae727ac5a46"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-toml/16a30c83ce427385b8d14939c45c137fcfca6c42/README.md",
+          "sha256": "938426e1ba20fdcab3d81899f0d5f86554cce9c728643c275f22f3cb255781ef"
+        }
+      ]
+    },
+    {
+      "component": "tree-sitter-typescript@0.23.2",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "6c5f76ed8d947a75cc446d5fccd8b602ebf0cde64ccf2ffa434d873d7a575eff",
+      "vcs": {
+        "git": {
+          "sha1": "f975a621f4e7f532fe322e13c4f79495e0a7b2e7"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "tree-sitter-typescript-0.23.2/Cargo.toml",
+          "sha256": "a2912fa21e6bd6c5d7de52b8dfc9ac6891bb97522f0f5ca53cabfbf45d477d54"
+        },
+        {
+          "source": "tree-sitter-typescript-0.23.2/.cargo_vcs_info.json",
+          "sha256": "e4fa0597518b944f116182165bc8b0c99e2d53f1c1a6df40a75024d5ffc560ee"
+        },
+        {
+          "source": "tree-sitter-typescript-0.23.2/README.md",
+          "sha256": "56d77257cc26b3469abefd371b10d230246ea085431bd26a397d31a1ca7f79c5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-typescript/f975a621f4e7f532fe322e13c4f79495e0a7b2e7/LICENSE",
+          "sha256": "49bf33cf78ef5897e4e161ce1517df7de1ae5042a65b6bcfd44401e0fc606559"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-typescript/f975a621f4e7f532fe322e13c4f79495e0a7b2e7/README.md",
+          "sha256": "56d77257cc26b3469abefd371b10d230246ea085431bd26a397d31a1ca7f79c5"
+        }
+      ]
+    },
+    {
+      "component": "unicode-display-width@0.3.0",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "9a43273b656140aa2bb8e65351fe87c255f0eca706b2538a9bd4a590a3490bf3",
+      "vcs": {
+        "git": {
+          "sha1": "5e28d94c75e8c421a87199363b85c90dc37125b8"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "unicode-display-width-0.3.0/Cargo.toml",
+          "sha256": "f07593cb5e5ee3ec08758e853dad81052278a41cdc5d9320d03bdcf1d66912d0"
+        },
+        {
+          "source": "unicode-display-width-0.3.0/.cargo_vcs_info.json",
+          "sha256": "d15534fb71100357a82d4c0a2ba0e1e9bd5af2fab1c62684eb9f40369a7057bf"
+        },
+        {
+          "source": "unicode-display-width-0.3.0/README.md",
+          "sha256": "510641f67a87666e5dcd4d6b1c8274cdb4f47d08dc40c0f50f5379a0f0ccc8d0"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/jameslanska/unicode-display-width/5e28d94c75e8c421a87199363b85c90dc37125b8/README.md",
+          "sha256": "510641f67a87666e5dcd4d6b1c8274cdb4f47d08dc40c0f50f5379a0f0ccc8d0"
+        }
+      ]
+    },
+    {
+      "component": "uuid-simd@0.8.0",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "23b082222b4f6619906941c17eb2297fff4c2fb96cb60164170522942a200bd8",
+      "vcs": {
+        "git": {
+          "sha1": "d74c030d9dc4f3cae02146d1f497ff62726ef09a"
+        },
+        "path_in_vcs": "crates/uuid-simd"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "uuid-simd-0.8.0/Cargo.toml",
+          "sha256": "ec723e989ff2ceff4e2d51c831093fb3e5f5e69f8496afd01bbf6648e37e2464"
+        },
+        {
+          "source": "uuid-simd-0.8.0/.cargo_vcs_info.json",
+          "sha256": "9235ab068fdb6b50a2b0fdad57df40ed34461ea3a81e7d3a1584962f3f84e5a9"
+        },
+        {
+          "source": "uuid-simd-0.8.0/README.md",
+          "sha256": "7ab240fee8858bc5f779430196578adbddd80dc74725bb37d2ddb5ea590cdb30"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+          "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/README.md",
+          "sha256": "49d7cf2311166db95f37ed0929fe99d0b5f50570a9c194ff0071a93d6297161c"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/crates/uuid-simd/README.md",
+          "sha256": "7ab240fee8858bc5f779430196578adbddd80dc74725bb37d2ddb5ea590cdb30"
+        }
+      ]
+    },
+    {
+      "component": "valuable@0.1.1",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65",
+      "vcs": {
+        "git": {
+          "sha1": "9efc29b6e58cef28f6566a47aa7e142a55fead77"
+        },
+        "path_in_vcs": "valuable"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "valuable-0.1.1/Cargo.toml",
+          "sha256": "c53c978c9d732571df8431fa37ad9820563b5fb8aeb7d62ada311b1f09a7080b"
+        },
+        {
+          "source": "valuable-0.1.1/.cargo_vcs_info.json",
+          "sha256": "34111200d67ce91680f8c64c5bfd537fc251f7ed7bb3a4e6110cb9299dacc0b2"
+        },
+        {
+          "source": "valuable-0.1.1/README.md",
+          "sha256": "847f41128733b704280d60b93915a38c1cbfbdbcb12362e11e4119fd5ca8eb38"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tokio-rs/valuable/9efc29b6e58cef28f6566a47aa7e142a55fead77/LICENSE",
+          "sha256": "ed60d479b8fd1f64e9cbc3de449a16a53ac1b3d1b6aeb9bf9d190a8e93061b44"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/tokio-rs/valuable/9efc29b6e58cef28f6566a47aa7e142a55fead77/README.md",
+          "sha256": "847f41128733b704280d60b93915a38c1cbfbdbcb12362e11e4119fd5ca8eb38"
+        }
+      ]
+    },
+    {
+      "component": "vsimd@0.8.0",
+      "declaration": "MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64",
+      "vcs": {
+        "git": {
+          "sha1": "d74c030d9dc4f3cae02146d1f497ff62726ef09a"
+        },
+        "path_in_vcs": "crates/vsimd"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "vsimd-0.8.0/Cargo.toml",
+          "sha256": "7a3defd1f3b642bc229a518351f3feb23a69ddaf0349414562edbeeca40d60ad"
+        },
+        {
+          "source": "vsimd-0.8.0/.cargo_vcs_info.json",
+          "sha256": "b6a479e65704d09745d31e0d86d23ca44ba673b01ddd0da81cc8ba619a92b2aa"
+        },
+        {
+          "source": "vsimd-0.8.0/README.md",
+          "sha256": "f0accc1732bf72b4635825e7d55e37b3bfe46c56d3d933bdd88b68787666fba9"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+          "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/README.md",
+          "sha256": "49d7cf2311166db95f37ed0929fe99d0b5f50570a9c194ff0071a93d6297161c"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/crates/vsimd/README.md",
+          "sha256": "f0accc1732bf72b4635825e7d55e37b3bfe46c56d3d933bdd88b68787666fba9"
+        }
+      ]
+    },
+    {
+      "component": "wasip2@1.0.2+wasi-0.2.9",
+      "declaration": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "selected_license": "MIT",
+      "source_archive_sha256": "9517f9239f02c069db75e65f174b3da828fe5f5b945c4dd26bd25d89c03ebcf5",
+      "vcs": {
+        "git": {
+          "sha1": "06ce201370fcde0d1b0d47cac8ecb1b0b312c9f9"
+        },
+        "path_in_vcs": "crates/wasip2"
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "wasip2-1.0.2+wasi-0.2.9/Cargo.toml",
+          "sha256": "df5f20155009f7a858d67af7755ba85c925b0174559abc8723ec3c97ca6629df"
+        },
+        {
+          "source": "wasip2-1.0.2+wasi-0.2.9/.cargo_vcs_info.json",
+          "sha256": "6db47a044aaea8461ba63346a96ac4ee93eb065b05d902e91eae7fd7b07549e8"
+        },
+        {
+          "source": "wasip2-1.0.2+wasi-0.2.9/README.md",
+          "sha256": "b768b011583d6c3f7d47c57de28f7dd9ade631b286753435ae1ae9acab6ce557"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/bytecodealliance/wasi-rs/06ce201370fcde0d1b0d47cac8ecb1b0b312c9f9/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/bytecodealliance/wasi-rs/06ce201370fcde0d1b0d47cac8ecb1b0b312c9f9/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/bytecodealliance/wasi-rs/06ce201370fcde0d1b0d47cac8ecb1b0b312c9f9/README.md",
+          "sha256": "7a2f20fc21d361d9380431499267f3c65581ddf64214d4333a6a0ad67fd7e52e"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/bytecodealliance/wasi-rs/06ce201370fcde0d1b0d47cac8ecb1b0b312c9f9/crates/wasip2/README.md",
+          "sha256": "b768b011583d6c3f7d47c57de28f7dd9ade631b286753435ae1ae9acab6ce557"
+        }
+      ]
+    },
+    {
+      "component": "winapi-i686-pc-windows-gnu@0.4.0",
+      "declaration": "MIT/Apache-2.0",
+      "selected_license": "MIT",
+      "source_archive_sha256": "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6",
+      "vcs": {},
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "winapi-i686-pc-windows-gnu-0.4.0/Cargo.toml",
+          "sha256": "9652222664ffc7e2a26fdcdebdce0917a455b39d8fbcbf451bf0b011a3067bf7"
+        },
+        {
+          "source": "winapi-i686-pc-windows-gnu-0.4.0/build.rs first 100 lines",
+          "sha256": "4344ce95f51197e1377429cd9ef7a8e3f97d39546776705857991f2f9416f545"
+        },
+        {
+          "source": "winapi-i686-pc-windows-gnu-0.4.0/src/lib.rs first 100 lines",
+          "sha256": "79212a91f610f8a77aa6ed4cc77212c2531eeb35630388bf07323cc328fcca42"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "component": "winapi-x86_64-pc-windows-gnu@0.4.0",
+      "declaration": "MIT/Apache-2.0",
+      "selected_license": "MIT",
+      "source_archive_sha256": "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f",
+      "vcs": {},
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "winapi-x86_64-pc-windows-gnu-0.4.0/Cargo.toml",
+          "sha256": "a88605a11db5def9b6cf73398e83b3edb72228cb43ea935729fac5cd33cec22c"
+        },
+        {
+          "source": "winapi-x86_64-pc-windows-gnu-0.4.0/build.rs first 100 lines",
+          "sha256": "b4ab421e1dc98159dd4440813cdaf7d9ea98278324bc6118d0f7cf378933f371"
+        },
+        {
+          "source": "winapi-x86_64-pc-windows-gnu-0.4.0/src/lib.rs first 100 lines",
+          "sha256": "79212a91f610f8a77aa6ed4cc77212c2531eeb35630388bf07323cc328fcca42"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "component": "winsplit@0.1.0",
+      "declaration": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "source_archive_sha256": "3ab703352da6a72f35c39a533526393725640575bb211f61987a2748323ad956",
+      "vcs": {
+        "git": {
+          "sha1": "691e800ac384bc7fc815ca55d1dd2b09b1f15d96"
+        },
+        "path_in_vcs": ""
+      },
+      "source_reconstruction_proved": false,
+      "notices": [
+        {
+          "source": "winsplit-0.1.0/Cargo.toml",
+          "sha256": "4aef3e030384e8a14f801ee6c8d023ef0a54163bb760f4f07d77ae99ac260f79"
+        },
+        {
+          "source": "winsplit-0.1.0/.cargo_vcs_info.json",
+          "sha256": "ff01914b10038393618e087f1324bbdcb249064e5541e6715e699beea12d48af"
+        },
+        {
+          "source": "winsplit-0.1.0/README.md",
+          "sha256": "39bb1a6d7befd101a9f8228db3b2deab823042b54dc82a410534cb68ba93edbc"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        },
+        {
+          "source": "https://raw.githubusercontent.com/chipsenkbeil/winsplit-rs/691e800ac384bc7fc815ca55d1dd2b09b1f15d96/README.md",
+          "sha256": "39bb1a6d7befd101a9f8228db3b2deab823042b54dc82a410534cb68ba93edbc"
+        }
+      ]
+    }
+  ],
+  "executed_target": false
+}

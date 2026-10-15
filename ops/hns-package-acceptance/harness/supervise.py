@@ -29,7 +29,7 @@ assert preflight['inherited_cpuset_effective'] and set(os.sched_getaffinity(0))=
 (p/'resource-preflight.json').write_text(json.dumps(preflight,indent=2)+'\n')
 quota,period=preflight['cpu.max'].split()
 assert quota!='max' and int(quota)<=int(period),'CPU quota exceeds one CPU'
-assert preflight['memory.max']!='max' and int(preflight['memory.max'])<=2147483648,'memory cap exceeds 2 GiB'
+assert preflight['memory.max']!='max' and int(preflight['memory.max'])<=3221225472,'memory cap exceeds 3 GiB'
 assert preflight['memory.swap.max']=='0','swap not disabled'
 assert set(os.sched_getaffinity(0))=={0},'CPU 0 affinity not enforced'
 assert os.getpriority(os.PRIO_PROCESS,0)==19,'idle priority not enforced'
@@ -109,7 +109,7 @@ try:
  assert all(value is not None and value!='' for value in resource.values()),'missing final resource values'
  quota,period=resource['cpu.max'].split()
  assert quota!='max' and int(quota)>0 and int(period)>0 and int(quota)<=int(period),'invalid CPU cap'
- assert resource['memory.max']!='max' and 0<int(resource['memory.max'])<=2147483648,'invalid memory cap'
+ assert resource['memory.max']!='max' and 0<int(resource['memory.max'])<=3221225472,'invalid memory cap'
  assert resource['memory.swap.max']=='0' and int(resource['memory.swap.peak'])==0,'swap used or enabled'
  assert int(resource['memory.peak'])>=0,'memory peak unavailable'
  events=dict(line.split() for line in resource['memory.events'].splitlines())
