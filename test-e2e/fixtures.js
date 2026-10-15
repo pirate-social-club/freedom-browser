@@ -78,12 +78,24 @@ async function browserWindow(app) {
 // DEFAULT_SETTINGS, so writing this file before app launch lets specs
 // pick known initial values without going through the saveSettings IPC
 // (which broadcasts events and would fight with the renderer's bootstrap).
+//
+// Freedom's Linux evaluation build changes two defaults the upstream harness
+// specs are written against: the identity wallet starts off, and the bundled
+// HNS resolver starts at launch (its PAC then claims every unresolvable dotted
+// host). Every harness profile therefore starts from upstream's baseline for
+// those keys, as renderer-screenshots and theme-parity already seed it; a
+// spec's own seedSettings still wins key by key.
+const HARNESS_BASELINE_SETTINGS = Object.freeze({
+  enableIdentityWallet: true,
+  enableHnsIntegration: false,
+  startHnsAtLaunch: false,
+});
+
 function seedSettings(userDataDir, overrides) {
-  if (!overrides) return;
   fs.mkdirSync(userDataDir, { recursive: true });
   fs.writeFileSync(
     path.join(userDataDir, 'settings.json'),
-    JSON.stringify(overrides, null, 2),
+    JSON.stringify({ ...HARNESS_BASELINE_SETTINGS, ...(overrides || {}) }, null, 2),
     'utf-8'
   );
 }

@@ -91,9 +91,11 @@ describe('native menu ellipsis character (#257)', () => {
     expect(menu).toContain('Find in Page…');
   });
 
-  test('the update row labels follow the convention too', () => {
+  test('the disabled evaluation updater offers no install rows', () => {
+    // Freedom's Linux evaluation build never constructs an updater, so the
+    // upstream "Install Update and Restart…" rows must not come back.
     const updater = read(path.join(MAIN, 'updater.js'));
-    expect(updater).toContain('Install Update and Restart…');
-    expect(updater).toContain('Install Update and Close…');
+    expect(updater).toContain('Updates are disabled for this evaluation build.');
+    expect(updater).not.toContain('Install Update');
   });
 });

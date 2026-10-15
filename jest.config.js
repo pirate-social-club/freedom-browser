@@ -11,6 +11,12 @@ module.exports = {
     '/ant-bin/',
     '/ipfs-bin/',
     '/test-e2e/.*\\.spec\\.js$',
+    // The unit job runs behind an egress-auditing proxy that answers names a
+    // real network refuses (`.onion` included), so the two real-Electron
+    // network probes run in their own ipfs-gateway-proxy CI job instead.
+    ...(process.env.FREEDOM_SKIP_ELECTRON_NET_TEST === '1'
+      ? ['/src/main/__tests__/integration/(ens-ccip-proxy|ipfs-gateway-proxy)\\.test\\.js$']
+      : []),
   ],
   collectCoverageFrom: ['src/**/*.js', '!src/**/*.test.js', '!src/renderer/vendor/**'],
   // Coverage thresholds are intentionally below typical "healthy" targets.

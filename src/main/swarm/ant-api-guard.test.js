@@ -462,6 +462,16 @@ test('index.js installs the guard first, before any session attaches the dispatc
   const guard = src.indexOf('installAntApiGuard();');
   expect(guard).toBeGreaterThan(-1);
   expect(guard).toBeLessThan(src.indexOf('installRequestRewriter();'));
-  expect(guard).toBeLessThan(src.indexOf('attachWebRequestDispatcher(defaultSession)'));
-  expect(guard).toBeLessThan(src.indexOf('attachWebRequestDispatcher(privateSession'));
+  // Freedom attaches dispatchers through network-manager's session routing:
+  // the default session in initializeSessionRouting(), private sessions when
+  // their dispatcher options and HNS routing are registered.
+  for (const attachment of [
+    'initializeSessionRouting(terminateRouting);',
+    'setProxySessionDispatcherOptions(privateSession, {',
+    'await registerHnsSession(privateSession);',
+  ]) {
+    expect(src.indexOf(attachment)).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(src.indexOf(attachment));
+  }
+  expect(src).not.toContain('attachWebRequestDispatcher(');
 });

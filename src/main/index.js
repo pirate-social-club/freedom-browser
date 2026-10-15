@@ -492,7 +492,7 @@ async function bootstrap() {
     registerIpfsProtocol(defaultSession);
     registerIpnsProtocol(defaultSession);
     registerRadProtocol(defaultSession);
-    // Before attachWebRequestDispatcher() below: this also installs the
+    // Before initializeSessionRouting() below: this also installs the
     // process-wide `radapi-guard` onBeforeRequest handler.
     registerRadicleApiProtocol(defaultSession);
     registerOnchainAppProtocol(defaultSession);

@@ -36,6 +36,9 @@ const TRUSTED_TEST_HOSTS = new Set([CLEARNET_HOST, ONION_HOST]);
 app.commandLine.appendSwitch('host-resolver-rules', `MAP ${CLEARNET_HOST} 127.0.0.1`);
 const PROBE_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-ccip-probe-'));
 app.setPath('userData', PROBE_USER_DATA);
+// This probe isolates the Tor/CCIP transport; HNS has its own installed acceptance.
+fs.writeFileSync(path.join(PROBE_USER_DATA, 'settings.json'),
+  JSON.stringify({ enableHnsIntegration: false }));
 
 const { ccipReadFetch } = require('../../ens/ccip-fetch');
 const { applyOnionProxy, clearOnionProxy } = require('../../tor-proxy');
@@ -213,6 +216,7 @@ async function attempt(urls, signal) {
 }
 
 async function main() {
+  require('../../network-manager').initializeSessionRouting(() => app.exit(70));
   const originPort = await startOrigin();
   const socksPort = await startSocks(originPort);
   const ses = session.defaultSession;

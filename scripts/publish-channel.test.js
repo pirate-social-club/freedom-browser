@@ -2,9 +2,12 @@ const packageJson = require('../package.json');
 const { DEFAULT_CHANNEL, publishOverrideArgs, updateManifestName } = require('./publish-channel');
 
 describe('publish overrides', () => {
-  test('the default channel is the one package.json pins for the stable feed', () => {
-    expect(packageJson.build.publish.channel).toBe(DEFAULT_CHANNEL);
-    expect(packageJson.build.publish.provider).toBe('generic');
+  test('the evaluation build publishes no update feed', () => {
+    // Freedom's Linux evaluation build disables updating, so package.json
+    // names no provider and electron-builder writes no app-update.yml. The
+    // override cases below still describe upstream's channel naming.
+    expect(packageJson.build.publish).toBeNull();
+    expect(DEFAULT_CHANNEL).toBe('latest');
   });
 
   describe('with no environment overrides', () => {

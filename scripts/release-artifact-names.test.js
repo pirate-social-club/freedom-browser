@@ -28,7 +28,9 @@ describe('release artifact names', () => {
     expect(linuxBuild).toContain('ant:download -- --target linux-x64');
     expect(linuxBuild).toContain('ipfs:download -- --target linux-x64');
     expect(linuxBuild).toContain('radicle:download -- --linux --x64');
-    expect(linuxBuild).toContain('MYOTIS_DOWNLOAD_TARGET=linux-x64');
+    // The Linux evaluation package omits experimental Myotis and bundled Arti.
+    expect(linuxBuild).not.toContain('MYOTIS_DOWNLOAD_TARGET');
+    expect(linuxBuild).not.toContain('arti:download');
     expect(workflow).toContain('ipfs_target: darwin-x64');
     expect(workflow).toContain('ipfs_target: win32-x64');
     expect(workflow).toContain('npm run ipfs:download -- --target ${{ matrix.ipfs_target }}');

@@ -41,13 +41,14 @@ describe('hns-health', () => {
 
 describe('local HNS chain metadata', () => {
   const answer = (name, text, klass = 4) => ({ name, text: [text], klass, type: 16 });
-  const responses = (synced = 'false') => ({
-    'chain.hnsd': { rcode: 0, answers: [answer('synced.chain.hnsd', synced), answer('height.tip.chain.hnsd', '136149'), answer('progress.chain.hnsd', '0.4')] },
+  const TIP_HASH = '0000000000000000a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718';
+  const responses = (synced = 'false', tipHash = TIP_HASH) => ({
+    'chain.hnsd': { rcode: 0, answers: [answer('synced.chain.hnsd', synced), answer('height.tip.chain.hnsd', '136149'), answer('progress.chain.hnsd', '0.4'), answer('hash.tip.chain.hnsd', tipHash), answer('time.tip.chain.hnsd', '1760000000')] },
     'size.pool.hnsd': { rcode: 0, answers: [answer('size.pool.hnsd', '2')] },
   });
   test('reads chain synchronization separately from website health', async () => {
     const query = jest.fn(async ({ hostname }) => responses()[hostname]);
-    expect(await probeHnsChainState({ rootAddr: '127.0.0.1:25349', query })).toEqual({ synced: false, height: 136149, progress: 0.4, peers: 2 });
+    expect(await probeHnsChainState({ rootAddr: '127.0.0.1:25349', query })).toEqual({ synced: false, height: 136149, progress: 0.4, peers: 2, tipHash: TIP_HASH, tipTime: 1760000000 });
     expect(query).toHaveBeenCalledWith(expect.objectContaining({ klass: 4, type: 16, host: '127.0.0.1' }));
   });
   test('rejects external metadata endpoints before sending a query', async () => {
@@ -57,6 +58,9 @@ describe('local HNS chain metadata', () => {
   });
   test.each(['yes', '1', '', ' true'])('rejects malformed sync value %p', async (value) => {
     await expect(probeHnsChainState({ rootAddr: '127.0.0.1:25349', query: async ({ hostname }) => responses(value)[hostname] })).rejects.toThrow('Invalid HNS');
+  });
+  test.each(['', 'not-a-hash', `${TIP_HASH}00`])('rejects malformed tip hash %p', async (value) => {
+    await expect(probeHnsChainState({ rootAddr: '127.0.0.1:25349', query: async ({ hostname }) => responses('true', value)[hostname] })).rejects.toThrow('Invalid HNS');
   });
   test('rejects ordinary DNS records masquerading as internal metadata', async () => {
     const data = responses(); data['chain.hnsd'].answers[0].klass = 1;

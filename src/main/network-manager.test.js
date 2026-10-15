@@ -206,37 +206,58 @@ describe('network-manager', () => {
     expect(() => ctx.mod.setTorProxy('127.0.0.1:9150; DIRECT')).toThrow('Invalid Tor SOCKS endpoint');
   });
 
-  test('HNS-only PAC: HNS candidates go PROXY, ordinary resolved hosts go DIRECT', () => {
+  test('HNS-only PAC: HNS candidates go PROXY, ordinary resolved hosts go DIRECT', async () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
 
+    await ctx.mod.rebuild();
     const pac = ctx.mod.buildPacScript();
 
-    expect(pac).toContain('PROXY 127.0.0.1:5380');
+    expect(pac).toContain('PROXY 127.0.0.1:9999');
+    // The PAC names only the local guard, never the upstream helper.
+    expect(pac).not.toContain('127.0.0.1:5380');
     expect(pac).toContain('return "DIRECT"');
     expect(pac).toContain('var hnsRoots = {"pirate":1}');
     expect(pac).toContain('dnsDomainLevels(host) === 0');
     expect(pac).toContain('!isResolvable(host)');
-    expect(evaluatePac(pac, 'pirate')).toBe('PROXY 127.0.0.1:5380');
-    expect(evaluatePac(pac, REPRESENTATIVE_PIRATE_HOST)).toBe('PROXY 127.0.0.1:5380');
-    expect(evaluatePac(pac, 'unknown-single-label')).toBe('PROXY 127.0.0.1:5380');
-    expect(evaluatePac(pac, 'missing.example')).toBe('PROXY 127.0.0.1:5380');
+    expect(evaluatePac(pac, 'pirate')).toBe('PROXY 127.0.0.1:9999');
+    expect(evaluatePac(pac, REPRESENTATIVE_PIRATE_HOST)).toBe('PROXY 127.0.0.1:9999');
+    expect(evaluatePac(pac, 'unknown-single-label')).toBe('PROXY 127.0.0.1:9999');
+    expect(evaluatePac(pac, 'missing.example')).toBe('PROXY 127.0.0.1:9999');
     expect(evaluatePac(pac, 'example.com')).toBe('DIRECT');
   });
 
-  test('HNS + dVPN PAC composition: known HNS hosts go PROXY, others go SOCKS5', () => {
+  test('until the guard is up, HNS hosts are refused rather than sent to the helper', async () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setHnsProxy('127.0.0.1:5380');
+
+    // Before routing has started the guard, the PAC names the refusing
+    // discard port, never the helper's own address.
+    const waiting = ctx.mod.buildPacScript();
+    expect(evaluatePac(waiting, 'app.pirate')).toBe('PROXY 127.0.0.1:9');
+    expect(evaluatePac(waiting, 'missing.example')).toBe('PROXY 127.0.0.1:9');
+    expect(evaluatePac(waiting, 'example.com')).toBe('DIRECT');
+    expect(waiting).not.toContain('127.0.0.1:5380');
+
+    await ctx.mod.rebuild();
+    expect(ctx.mod.getHnsProxyAddr()).toBe('127.0.0.1:9999');
+    expect(ctx.mod.buildPacScript()).not.toContain('127.0.0.1:5380');
+  });
+
+  test('HNS + dVPN PAC composition: known HNS hosts go PROXY, others go SOCKS5', async () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
     ctx.mod.setDvpnProxy('127.0.0.1', 10808);
 
+    await ctx.mod.rebuild();
     const pac = ctx.mod.buildPacScript();
 
     expect(pac).toContain('var hnsRoots = {"pirate":1}');
-    expect(pac).toContain('PROXY 127.0.0.1:5380');
+    expect(pac).toContain('PROXY 127.0.0.1:9999');
     expect(pac).toContain('SOCKS5 127.0.0.1:10808');
-    expect(evaluatePac(pac, 'pirate')).toBe('PROXY 127.0.0.1:5380');
-    expect(evaluatePac(pac, REPRESENTATIVE_PIRATE_HOST)).toBe('PROXY 127.0.0.1:5380');
-    expect(evaluatePac(pac, 'unknown-single-label')).toBe('PROXY 127.0.0.1:5380');
+    expect(evaluatePac(pac, 'pirate')).toBe('PROXY 127.0.0.1:9999');
+    expect(evaluatePac(pac, REPRESENTATIVE_PIRATE_HOST)).toBe('PROXY 127.0.0.1:9999');
+    expect(evaluatePac(pac, 'unknown-single-label')).toBe('PROXY 127.0.0.1:9999');
   });
 
   test.each([
@@ -288,25 +309,27 @@ describe('network-manager', () => {
     expect(evaluatePac(ctx.mod.buildPacScript(), 'localhost')).toBe('DIRECT');
   });
 
-  test('unknown single-label hosts go to the HNS proxy when set', () => {
+  test('unknown single-label hosts go to the HNS proxy when set', async () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
 
+    await ctx.mod.rebuild();
     const pac = ctx.mod.buildPacScript();
 
-    expect(evaluatePac(pac, 'unknown-single-label')).toBe('PROXY 127.0.0.1:5380');
-    expect(evaluatePac(pac, 'pirate')).toBe('PROXY 127.0.0.1:5380');
+    expect(evaluatePac(pac, 'unknown-single-label')).toBe('PROXY 127.0.0.1:9999');
+    expect(evaluatePac(pac, 'pirate')).toBe('PROXY 127.0.0.1:9999');
   });
 
-  test('representative .pirate hosts go to HNS proxy when set', () => {
+  test('representative .pirate hosts go to HNS proxy when set', async () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
 
+    await ctx.mod.rebuild();
     const pac = ctx.mod.buildPacScript();
 
     expect(pac).toContain('var hnsRoots = {"pirate":1}');
     expect(REPRESENTATIVE_PIRATE_HOST.endsWith('.pirate')).toBe(true);
-    expect(evaluatePac(pac, REPRESENTATIVE_PIRATE_HOST)).toBe('PROXY 127.0.0.1:5380');
+    expect(evaluatePac(pac, REPRESENTATIVE_PIRATE_HOST)).toBe('PROXY 127.0.0.1:9999');
   });
 
   test('ordinary hosts go SOCKS5 when dVPN is connected', () => {
@@ -340,11 +363,12 @@ describe('network-manager', () => {
     expect(evaluatePac(pac, REPRESENTATIVE_PIRATE_HOST)).toBe('DIRECT');
   });
 
-  test('HNS not regressed by dVPN: known HNS hosts still go to HNS PROXY', () => {
+  test('HNS not regressed by dVPN: known HNS hosts still go to HNS PROXY', async () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
     ctx.mod.setDvpnProxy('127.0.0.1', 10808);
 
+    await ctx.mod.rebuild();
     const pac = ctx.mod.buildPacScript();
 
     const hnsBlockStart = pac.indexOf('hnsRoots[host.toLowerCase()] === 1');
@@ -353,8 +377,8 @@ describe('network-manager', () => {
     expect(hnsBlockStart).toBeGreaterThan(-1);
     expect(socksStart).toBeGreaterThan(-1);
     expect(hnsBlockStart).toBeLessThan(socksStart);
-    expect(evaluatePac(pac, 'pirate')).toBe('PROXY 127.0.0.1:5380');
-    expect(evaluatePac(pac, 'unknown-single-label')).toBe('PROXY 127.0.0.1:5380');
+    expect(evaluatePac(pac, 'pirate')).toBe('PROXY 127.0.0.1:9999');
+    expect(evaluatePac(pac, 'unknown-single-label')).toBe('PROXY 127.0.0.1:9999');
   });
 
   test('imported namespace suffixes are routed to the HNS proxy after refresh', async () => {

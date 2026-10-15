@@ -295,7 +295,8 @@ describe('buildSettingsSearchIndex', () => {
     expect(attribution('Swarm publishing')).toBe('Nodes');
     expect(attribution('Block ads')).toBe('Privacy and security › Ad Blocking');
     expect(attribution('Prefer verified answers')).toBe('Networks › Name Resolution');
-    expect(attribution('Automatically check for updates')).toBe('About Freedom › Updates');
+    // The Linux evaluation build disables updating; its row keeps the place.
+    expect(attribution('Updates are disabled for this evaluation build')).toBe('About Freedom › Updates');
     // #87's status row (the running version, Check now) is part of About's
     // Updates panel too.
     expect(attribution('Freedom')).toBe('About Freedom › Updates');
