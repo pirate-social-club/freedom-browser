@@ -395,6 +395,12 @@
       "@cosmjs/encoding": "0.39.0",
       "@cosmjs/proto-signing": "0.39.0",
       "@cosmjs/stargate": "0.39.0"
+    },
+    "app-builder-lib": {
+      "@electron/get": "5.1.0"
+    },
+    "js-yaml": {
+      "argparse": "2.0.1"
     }
   },
   "title": "Freedom",
