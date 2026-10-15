@@ -350,6 +350,28 @@ test('error page: renders the failure and Try Again retries', async ({
   expect(await cspViolations(electronApp)).toEqual([]);
 });
 
+test('live room and the Spaces result page run their scripts without a violation', async ({
+  window,
+  electronApp,
+}) => {
+  // Both pages used to run one inline script, and live-room pulled the Agora
+  // SDK from download.agora.io into this privileged page. Each now loads
+  // scripts/<page>.js, and live-room loads the SDK from src/renderer/vendor.
+  await navigate(window, 'freedom://live-room');
+  const liveRoom = await pageFor(electronApp, '/pages/live-room.html');
+  await liveRoom.waitForLoadState('load');
+  expect(await liveRoom.evaluate(() => typeof window.AgoraRTC)).not.toBe('undefined');
+
+  // Any @space input lands on the result page, resolved or not; its script
+  // fills the status line in every branch.
+  await navigate(window, '@csp-probe');
+  const space = await pageFor(electronApp, '/pages/space-browser.html');
+  await space.waitForLoadState('load');
+  await expect(space.locator('#status')).not.toBeEmpty();
+
+  expect(await cspViolations(electronApp)).toEqual([]);
+});
+
 test('home and publish load without a violation', async ({ window, electronApp }) => {
   // home.html is the new-tab page (already open at launch, before the recorder
   // was installed, so load it again); publish is the other routable page with
