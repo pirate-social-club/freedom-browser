@@ -14,7 +14,14 @@
       "libradicle.node",
       "myotis-node.node"
     ],
-    "external_binaries": ["antd", "arti", "myotis-supervisor", "hnsd", "fingertipd", "v2ray"],
+    "external_binaries": [
+      "antd",
+      "arti",
+      "myotis-supervisor",
+      "hnsd",
+      "fingertipd",
+      "v2ray"
+    ],
     "vendored_renderer_bundles": [
       "src/renderer/vendor/openlv.esm.js",
       "src/renderer/vendor/highlight.min.js",
@@ -35,9 +42,13 @@
         "url": "https://github.com/electron/electron"
       },
       "license": {
-        "spdx": ["MIT"],
+        "spdx": [
+          "MIT"
+        ],
         "raw": "MIT",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": true
       },
       "bundled_with_app": true,
@@ -62,9 +73,15 @@
         "url": "https://github.com/freedom-hq/ant"
       },
       "license": {
-        "spdx": ["MIT", "Apache-2.0"],
+        "spdx": [
+          "MIT",
+          "Apache-2.0"
+        ],
         "raw": "MIT OR Apache-2.0",
-        "license_files": ["LICENSE-MIT", "LICENSE-APACHE"],
+        "license_files": [
+          "LICENSE-MIT",
+          "LICENSE-APACHE"
+        ],
         "notice_required": true
       },
       "version_pin": "scripts/fetch-ant.js PINNED_RELEASE_TAG",
@@ -83,9 +100,15 @@
         "url": "https://github.com/solardev-xyz/freedom-ipfs"
       },
       "license": {
-        "spdx": ["MIT", "Apache-2.0"],
+        "spdx": [
+          "MIT",
+          "Apache-2.0"
+        ],
         "raw": "MIT OR Apache-2.0",
-        "license_files": ["LICENSE-MIT", "LICENSE-APACHE"],
+        "license_files": [
+          "LICENSE-MIT",
+          "LICENSE-APACHE"
+        ],
         "notice_required": true
       },
       "version_pin": "scripts/fetch-freedom-ipfs-native.js releaseTag",
@@ -104,7 +127,10 @@
         "url": "https://github.com/solardev-xyz/libradicle"
       },
       "license": {
-        "spdx": ["MIT", "Apache-2.0"],
+        "spdx": [
+          "MIT",
+          "Apache-2.0"
+        ],
         "raw": "MIT OR Apache-2.0",
         "license_files": [],
         "notice_required": true
@@ -131,13 +157,21 @@
         "url": "https://github.com/biafra23/myotis"
       },
       "license": {
-        "spdx": ["Apache-2.0"],
+        "spdx": [
+          "Apache-2.0"
+        ],
         "raw": "Apache-2.0",
-        "license_files": ["LICENSE", "NOTICE"],
+        "license_files": [
+          "LICENSE",
+          "NOTICE"
+        ],
         "notice_required": true
       },
       "version_pin": "scripts/myotis-release.json releaseTag",
-      "platforms": ["mac", "win"],
+      "platforms": [
+        "mac",
+        "win"
+      ],
       "bundled_with_app": true,
       "linking_or_integration": "native-addon",
       "risk": "yellow",
@@ -159,15 +193,24 @@
         "url": "https://gitlab.torproject.org/tpo/core/arti"
       },
       "license": {
-        "spdx": ["MIT", "Apache-2.0"],
+        "spdx": [
+          "MIT",
+          "Apache-2.0"
+        ],
         "raw": "MIT OR Apache-2.0",
-        "license_files": ["LICENSE-MIT", "LICENSE-APACHE"],
+        "license_files": [
+          "LICENSE-MIT",
+          "LICENSE-APACHE"
+        ],
         "notice_required": true
       },
       "version_pin": "scripts/fetch-arti.js PINNED_ARTI_VERSION",
       "bundled_with_app": true,
       "linking_or_integration": "separate-process",
-      "platforms": ["mac", "win"],
+      "platforms": [
+        "mac",
+        "win"
+      ],
       "risk": "green",
       "issues": [
         {
@@ -187,7 +230,13 @@
         "url": "https://github.com/AppImage/type2-runtime"
       },
       "license": {
-        "spdx": ["MIT", "LGPL-2.1-only", "BSD-2-Clause", "BSD-3-Clause", "Zlib"],
+        "spdx": [
+          "MIT",
+          "LGPL-2.1-only",
+          "BSD-2-Clause",
+          "BSD-3-Clause",
+          "Zlib"
+        ],
         "raw": "runtime MIT; statically links libfuse 3.15.0 (LGPL-2.1, patched by upstream), squashfuse 0.5.2 (BSD-2-Clause), musl (MIT), zstd (BSD-3-Clause OR GPL-2.0, used as BSD-3-Clause), zlib (Zlib) and mimalloc (MIT)",
         "notice_required": true
       },
@@ -214,9 +263,13 @@
         "url": "https://github.com/open-lavatory/open-lavatory"
       },
       "license": {
-        "spdx": ["LGPL-3.0-only"],
+        "spdx": [
+          "LGPL-3.0-only"
+        ],
         "raw": "LGPL-3.0-only",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": true
       },
       "vendored_path": "src/renderer/vendor/openlv.esm.js",
@@ -241,9 +294,13 @@
         "url": "https://github.com/highlightjs/highlight.js"
       },
       "license": {
-        "spdx": ["BSD-3-Clause"],
+        "spdx": [
+          "BSD-3-Clause"
+        ],
         "raw": "BSD-3-Clause",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": true
       },
       "vendored_path": "src/renderer/vendor/highlight.min.js",
@@ -268,9 +325,13 @@
         "url": "https://github.com/markedjs/marked"
       },
       "license": {
-        "spdx": ["MIT"],
+        "spdx": [
+          "MIT"
+        ],
         "raw": "MIT",
-        "license_files": ["LICENSE.md"],
+        "license_files": [
+          "LICENSE.md"
+        ],
         "notice_required": true
       },
       "vendored_path": "src/renderer/vendor/marked.min.js",
@@ -289,9 +350,14 @@
         "url": "https://github.com/cure53/DOMPurify"
       },
       "license": {
-        "spdx": ["MPL-2.0", "Apache-2.0"],
+        "spdx": [
+          "MPL-2.0",
+          "Apache-2.0"
+        ],
         "raw": "(MPL-2.0 OR Apache-2.0)",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": true
       },
       "vendored_path": "src/renderer/vendor/purify.min.js",
@@ -316,9 +382,13 @@
         "url": "https://github.com/WiseLibs/better-sqlite3"
       },
       "license": {
-        "spdx": ["MIT"],
+        "spdx": [
+          "MIT"
+        ],
         "raw": "MIT",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -342,9 +412,13 @@
         "url": "https://github.com/ghostery/adblocker"
       },
       "license": {
-        "spdx": ["MPL-2.0"],
+        "spdx": [
+          "MPL-2.0"
+        ],
         "raw": "MPL-2.0",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": true
       },
       "bundled_with_app": true,
@@ -368,9 +442,13 @@
         "url": "https://github.com/open-lavatory/open-lavatory"
       },
       "license": {
-        "spdx": ["LGPL-3.0-only"],
+        "spdx": [
+          "LGPL-3.0-only"
+        ],
         "raw": "LGPL-3.0-only",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": true
       },
       "bundled_with_app": true,
@@ -394,9 +472,13 @@
         "url": "https://github.com/open-lavatory/open-lavatory"
       },
       "license": {
-        "spdx": ["LGPL-3.0-only"],
+        "spdx": [
+          "LGPL-3.0-only"
+        ],
         "raw": "LGPL-3.0-only",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": true
       },
       "bundled_with_app": true,
@@ -420,9 +502,13 @@
         "url": "https://github.com/ethers-io/ethers.js"
       },
       "license": {
-        "spdx": ["MIT"],
+        "spdx": [
+          "MIT"
+        ],
         "raw": "MIT",
-        "license_files": ["LICENSE.md"],
+        "license_files": [
+          "LICENSE.md"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -440,9 +526,13 @@
         "url": "https://github.com/megahertz/electron-log"
       },
       "license": {
-        "spdx": ["MIT"],
+        "spdx": [
+          "MIT"
+        ],
         "raw": "MIT",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -460,9 +550,13 @@
         "url": "https://github.com/electron-userland/electron-builder"
       },
       "license": {
-        "spdx": ["MIT"],
+        "spdx": [
+          "MIT"
+        ],
         "raw": "MIT",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -480,9 +574,13 @@
         "url": "https://github.com/corpus-core/c4"
       },
       "license": {
-        "spdx": ["MIT"],
+        "spdx": [
+          "MIT"
+        ],
         "raw": "MIT",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -500,9 +598,13 @@
         "url": "https://github.com/ensdomains/content-hash"
       },
       "license": {
-        "spdx": ["MIT"],
+        "spdx": [
+          "MIT"
+        ],
         "raw": "MIT",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -520,9 +622,13 @@
         "url": "https://github.com/adraffy/ens-normalize.js"
       },
       "license": {
-        "spdx": ["MIT"],
+        "spdx": [
+          "MIT"
+        ],
         "raw": "MIT",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -540,9 +646,13 @@
         "url": "https://github.com/ethersphere/bee-js"
       },
       "license": {
-        "spdx": ["BSD-3-Clause"],
+        "spdx": [
+          "BSD-3-Clause"
+        ],
         "raw": "BSD-3-Clause",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": true
       },
       "bundled_with_app": true,
@@ -560,9 +670,13 @@
         "url": "https://github.com/LedgerHQ/ledger-live"
       },
       "license": {
-        "spdx": ["Apache-2.0"],
+        "spdx": [
+          "Apache-2.0"
+        ],
         "raw": "Apache-2.0",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": true
       },
       "bundled_with_app": true,
@@ -580,9 +694,13 @@
         "url": "https://github.com/LedgerHQ/ledger-live"
       },
       "license": {
-        "spdx": ["Apache-2.0"],
+        "spdx": [
+          "Apache-2.0"
+        ],
         "raw": "Apache-2.0",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": true
       },
       "bundled_with_app": true,
@@ -600,9 +718,13 @@
         "url": "https://github.com/MetaMask/browser-passworder"
       },
       "license": {
-        "spdx": ["ISC"],
+        "spdx": [
+          "ISC"
+        ],
         "raw": "ISC",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -620,9 +742,13 @@
         "url": "https://github.com/safe-global/safe-core-sdk"
       },
       "license": {
-        "spdx": ["MIT"],
+        "spdx": [
+          "MIT"
+        ],
         "raw": "MIT",
-        "license_files": ["LICENSE.md"],
+        "license_files": [
+          "LICENSE.md"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -640,9 +766,13 @@
         "url": "https://github.com/paulmillr/scure-bip39"
       },
       "license": {
-        "spdx": ["MIT"],
+        "spdx": [
+          "MIT"
+        ],
         "raw": "MIT",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -660,9 +790,13 @@
         "url": "https://github.com/x402-foundation/x402"
       },
       "license": {
-        "spdx": ["Apache-2.0"],
+        "spdx": [
+          "Apache-2.0"
+        ],
         "raw": "Apache-2.0",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": true
       },
       "bundled_with_app": true,
@@ -680,9 +814,13 @@
         "url": "https://github.com/x402-foundation/x402"
       },
       "license": {
-        "spdx": ["Apache-2.0"],
+        "spdx": [
+          "Apache-2.0"
+        ],
         "raw": "Apache-2.0",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": true
       },
       "bundled_with_app": true,
@@ -700,9 +838,13 @@
         "url": "https://github.com/paulmillr/micro-key-producer"
       },
       "license": {
-        "spdx": ["MIT"],
+        "spdx": [
+          "MIT"
+        ],
         "raw": "MIT",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -720,9 +862,13 @@
         "url": "https://github.com/moxystudio/node-proper-lockfile"
       },
       "license": {
-        "spdx": ["MIT"],
+        "spdx": [
+          "MIT"
+        ],
         "raw": "MIT",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -740,9 +886,13 @@
         "url": "https://github.com/soldair/node-qrcode"
       },
       "license": {
-        "spdx": ["MIT"],
+        "spdx": [
+          "MIT"
+        ],
         "raw": "MIT",
-        "license_files": ["license"],
+        "license_files": [
+          "license"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -760,7 +910,9 @@
         "url": "https://github.com/v3xlabs/websocket-mqtt"
       },
       "license": {
-        "spdx": ["LGPL-3.0"],
+        "spdx": [
+          "LGPL-3.0"
+        ],
         "raw": "LGPL-3.0",
         "license_files": [],
         "notice_required": true
@@ -786,9 +938,13 @@
         "url": "https://github.com/ethereumjs/ethereumjs-monorepo"
       },
       "license": {
-        "spdx": ["MPL-2.0"],
+        "spdx": [
+          "MPL-2.0"
+        ],
         "raw": "MPL-2.0",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": true
       },
       "bundled_with_app": true,
@@ -812,9 +968,13 @@
         "url": "https://github.com/nodeca/argparse"
       },
       "license": {
-        "spdx": ["Python-2.0"],
+        "spdx": [
+          "Python-2.0"
+        ],
         "raw": "Python-2.0",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": true
       },
       "bundled_with_app": true,
@@ -832,9 +992,13 @@
         "url": "https://github.com/isaacs/sax-js"
       },
       "license": {
-        "spdx": ["BlueOak-1.0.0"],
+        "spdx": [
+          "BlueOak-1.0.0"
+        ],
         "raw": "BlueOak-1.0.0",
-        "license_files": ["LICENSE.md"],
+        "license_files": [
+          "LICENSE.md"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -852,9 +1016,13 @@
         "url": "https://github.com/Microsoft/tslib"
       },
       "license": {
-        "spdx": ["0BSD"],
+        "spdx": [
+          "0BSD"
+        ],
         "raw": "0BSD",
-        "license_files": ["LICENSE.txt"],
+        "license_files": [
+          "LICENSE.txt"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -872,9 +1040,15 @@
         "url": "https://github.com/multiformats/js-multiformats"
       },
       "license": {
-        "spdx": ["Apache-2.0", "MIT"],
+        "spdx": [
+          "Apache-2.0",
+          "MIT"
+        ],
         "raw": "Apache-2.0 OR MIT",
-        "license_files": ["LICENSE-MIT", "LICENSE-APACHE"],
+        "license_files": [
+          "LICENSE-MIT",
+          "LICENSE-APACHE"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -892,9 +1066,14 @@
         "url": "https://github.com/node-hid/node-hid"
       },
       "license": {
-        "spdx": ["MIT", "X11"],
+        "spdx": [
+          "MIT",
+          "X11"
+        ],
         "raw": "(MIT OR X11)",
-        "license_files": ["LICENSE.md"],
+        "license_files": [
+          "LICENSE.md"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -912,9 +1091,13 @@
         "url": "https://github.com/solardev-xyz/freedom-browser/tree/3a8c75e6"
       },
       "license": {
-        "spdx": ["MPL-2.0"],
+        "spdx": [
+          "MPL-2.0"
+        ],
         "raw": "MPL-2.0 (upstream LICENSE); this fork distributes the combination under AGPL-3.0-or-later",
-        "license_files": ["LICENSE (upstream)"],
+        "license_files": [
+          "LICENSE (upstream)"
+        ],
         "notice_required": true
       },
       "bundled_with_app": true,
@@ -938,14 +1121,22 @@
         "url": "https://github.com/handshake-org/hnsd/tree/a5c7c287e848f46d3e97f16b698e2027c8dc96c3"
       },
       "license": {
-        "spdx": ["MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Apache-2.0"],
+        "spdx": [
+          "MIT",
+          "BSD-2-Clause",
+          "BSD-3-Clause",
+          "ISC",
+          "Apache-2.0"
+        ],
         "raw": "hnsd MIT; statically links its vendored libuv (MIT, with BSD-2-Clause, ISC and BSD-3-Clause externally maintained parts) and libsecp256k1 (MIT), and code adapted from easy-ecc (BSD-2-Clause), Picnic (MIT), khash (MIT), poly1305-donna (MIT), chacha20-simple (ISC), RHash (permissive, no notice condition), BLAKE2 (offered as CC0-1.0, OpenSSL or Apache-2.0; used under Apache-2.0), tiny-bignum-c (public domain) and the LND brontide implementation (MIT)",
         "license_files": [
           "hns-bin/linux-x64/licenses/hnsd/ (LICENSE, uv-LICENSE, src-secp256k1-COPYING, BLAKE2 headers, LICENSE-APACHE-2.0, source.tar, hnsd-encrypted.patch)"
         ],
         "notice_required": true
       },
-      "targets": ["linux-x64"],
+      "targets": [
+        "linux-x64"
+      ],
       "artifacts": {
         "hns-bin/linux-x64/hnsd": "d539d508d10773a89f4a4e900b3c2c87b38a130908049d0566a1d03473984a0f"
       },
@@ -975,14 +1166,20 @@
         "url": "https://github.com/pirate-social-club/fingertipd/tree/21f044ebc830eed87e6851ed7216f9590f6f3df3"
       },
       "license": {
-        "spdx": ["MIT", "Apache-2.0", "BSD-3-Clause"],
+        "spdx": [
+          "MIT",
+          "Apache-2.0",
+          "BSD-3-Clause"
+        ],
         "raw": "fingertipd MIT (Copyright (c) 2026 Pirate Social Club); statically links github.com/buffrr/letsdane v0.6.1 (Apache-2.0, no NOTICE file), github.com/miekg/dns v1.1.63 (BSD-3-Clause), golang.org/x/net v0.31.0 and golang.org/x/sys v0.27.0 (BSD-3-Clause, The Go Authors) and the Go 1.26.2 standard library (BSD-3-Clause, The Go Authors)",
         "license_files": [
           "hns-bin/linux-x64/licenses/fingertipd/ (LICENSE-MIT, module LICENSE/COPYRIGHT/PATENTS files, Go 1.26.2 notices)"
         ],
         "notice_required": true
       },
-      "targets": ["linux-x64"],
+      "targets": [
+        "linux-x64"
+      ],
       "artifacts": {
         "hns-bin/linux-x64/fingertipd": "065e4f0d5c118213f09319998c94633033cae7f96dc6d714083208468225f766"
       },
@@ -1012,14 +1209,21 @@
         "url": "https://github.com/v2fly/v2ray-core/releases/download/v5.2.1/v2ray-linux-64.zip"
       },
       "license": {
-        "spdx": ["MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0"],
+        "spdx": [
+          "MIT",
+          "BSD-2-Clause",
+          "BSD-3-Clause",
+          "Apache-2.0"
+        ],
         "raw": "V2Ray MIT (Copyright (c) 2015-2022 V2Fly Community); statically links the Go 1.19.4 standard library (BSD-3-Clause) and 52 Go modules under MIT, BSD-2-Clause, BSD-3-Clause and Apache-2.0, two of which (google.golang.org/grpc and gopkg.in/yaml.v3) ship NOTICE files; the full list is in NOTICES",
         "license_files": [
           "dvpn-bin/linux-x64/licenses/v2ray/ (every embedded module's LICENSE, COPYRIGHT, NOTICE and PATENTS files, v2ray-core's LICENSE, Go 1.19.4 notices)"
         ],
         "notice_required": true
       },
-      "targets": ["linux-x64"],
+      "targets": [
+        "linux-x64"
+      ],
       "artifacts": {
         "dvpn-bin/linux-x64/v2ray": "bf9699e6b3665f749b63bdead2e1a95a00b10d9901a9a952858b9e17d4bc43dd"
       },
@@ -1048,7 +1252,9 @@
         "url": "https://www.npmjs.com/package/agora-rtc-sdk-ng/v/4.24.0"
       },
       "license": {
-        "spdx": ["MIT"],
+        "spdx": [
+          "MIT"
+        ],
         "raw": "MIT",
         "source": "npm registry metadata only: the package.json `license` field of agora-rtc-sdk-ng@4.24.0 (registry integrity sha512-2apG/07EtsuX21ncSF77q+dr6/kDgu9B/RpKtstCtaq46l4/Eraoecewi4zXRUCY3Im+8dzTIXx6jUwyPdxdHQ==). The package ships no licence file, the AgoraIO/agora-rtc-web repository commits none, and the bundle's banner reads only `Copyright AgoraInc.`",
         "license_files": [],
@@ -1128,9 +1334,13 @@
         "url": "https://codeload.github.com/Sentinel-Autonomybuilder/blue-ai-connect/tar.gz/924d472cb8be47b11f2432515f23bd5ea20d297c"
       },
       "license": {
-        "spdx": ["MIT"],
+        "spdx": [
+          "MIT"
+        ],
         "raw": "MIT (Copyright (c) 2026 Norse Labs; the LICENSE adds a line stating it derives from blue-js-sdk)",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -1154,9 +1364,13 @@
         "url": "https://github.com/Sentinel-Autonomybuilder/sentinel-dvpn-sdk"
       },
       "license": {
-        "spdx": ["MIT"],
+        "spdx": [
+          "MIT"
+        ],
         "raw": "MIT (Copyright (c) 2026 Sentinel dVPN Contributors)",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": false
       },
       "bundled_with_app": true,
@@ -1174,7 +1388,9 @@
         "url": "https://github.com/cosmos/cosmjs"
       },
       "license": {
-        "spdx": ["Apache-2.0"],
+        "spdx": [
+          "Apache-2.0"
+        ],
         "raw": "Apache-2.0",
         "license_files": [],
         "notice_required": true
@@ -1200,9 +1416,14 @@
         "url": "https://www.npmjs.com/package/readonly-date-esm"
       },
       "license": {
-        "spdx": ["Apache-2.0"],
+        "spdx": [
+          "Apache-2.0"
+        ],
         "raw": "Apache-2.0",
-        "license_files": ["LICENSE", "NOTICE"],
+        "license_files": [
+          "LICENSE",
+          "NOTICE"
+        ],
         "notice_required": true
       },
       "bundled_with_app": true,
@@ -1226,9 +1447,13 @@
         "url": "https://github.com/motdotla/dotenv"
       },
       "license": {
-        "spdx": ["BSD-2-Clause"],
+        "spdx": [
+          "BSD-2-Clause"
+        ],
         "raw": "BSD-2-Clause",
-        "license_files": ["LICENSE"],
+        "license_files": [
+          "LICENSE"
+        ],
         "notice_required": true
       },
       "bundled_with_app": true,
@@ -1276,7 +1501,9 @@
       "path": "assets/icon.png",
       "type": "asset",
       "license": {
-        "spdx": ["proprietary"],
+        "spdx": [
+          "proprietary"
+        ],
         "raw": "Original work by Freedom Team",
         "notice_required": false
       },
@@ -1294,7 +1521,9 @@
       "path": "assets/adblock/",
       "type": "data",
       "license": {
-        "spdx": ["CC-BY-SA-3.0"],
+        "spdx": [
+          "CC-BY-SA-3.0"
+        ],
         "raw": "GPLv3+ or CC BY-SA 3.0+ (redistributed under CC BY-SA)",
         "notice_required": true
       },
@@ -1312,7 +1541,10 @@
       "path": "assets/adblock/",
       "type": "data",
       "license": {
-        "spdx": ["GPL-3.0-only", "GPL-3.0-or-later"],
+        "spdx": [
+          "GPL-3.0-only",
+          "GPL-3.0-or-later"
+        ],
         "raw": "uBlock filters + Quick fixes (uAssets): GPL-3.0; scriptlets/resources (uBlock Origin src/js/resources): GPL-3.0-or-later",
         "notice_required": true
       },
@@ -1330,7 +1562,9 @@
       "path": "src/renderer/pages/images/",
       "type": "asset",
       "license": {
-        "spdx": ["proprietary"],
+        "spdx": [
+          "proprietary"
+        ],
         "raw": "Original work by Freedom Team",
         "notice_required": false
       },
@@ -1343,7 +1577,9 @@
       "path": "src/renderer/assets/",
       "type": "asset",
       "license": {
-        "spdx": ["UNKNOWN"],
+        "spdx": [
+          "UNKNOWN"
+        ],
         "raw": "Third-party marks of the projects they name; nominative use, no ownership claimed",
         "notice_required": true
       },
@@ -1361,7 +1597,9 @@
       "path": "src/main/myotis/native/",
       "type": "source",
       "license": {
-        "spdx": ["MPL-2.0"],
+        "spdx": [
+          "MPL-2.0"
+        ],
         "raw": "Upstream Freedom sources under MPL-2.0, distributed in this fork's AGPL-3.0-or-later Larger Work (MPL-2.0 section 3.3)",
         "notice_required": false
       },
@@ -1373,7 +1611,9 @@
       "path": "assets/hns/",
       "type": "data",
       "license": {
-        "spdx": ["AGPL-3.0-or-later"],
+        "spdx": [
+          "AGPL-3.0-or-later"
+        ],
         "raw": "The fork's own README.md and hnsd-encrypted launcher script; checkpoint_main.dat holds 150 public Handshake mainnet block headers (348000-348149), chain data with no licence asserted",
         "notice_required": false
       },
@@ -1386,7 +1626,9 @@
       "path": "scripts/jacktrip/",
       "type": "source",
       "license": {
-        "spdx": ["AGPL-3.0-or-later"],
+        "spdx": [
+          "AGPL-3.0-or-later"
+        ],
         "raw": "The fork's own shell script; JackTrip itself is not bundled",
         "notice_required": false
       },
@@ -1402,12 +1644,7 @@
     "unknown": 0,
     "basis": "production npm packages by name@version, as upstream counted them; bundled binaries, vendor bundles and data are recorded individually above"
   },
-  "blockers": [
-    {
-      "component": "Installed package contents",
-      "details": "LICENSE_AUDIT.md, the extraResources classification and the committed helper bytes are reconciled, but no package has been built from this integration tree, so its installed contents have not been listed and compared with the classification. Build the Linux deb, list resources/ and app.asar, and compare; the 2026-10-04 evaluation deb predates the upstream merge and does not count."
-    }
-  ],
+  "blockers": [],
   "resolved_since_last_audit": [
     {
       "kind": "copyleft",
@@ -1456,11 +1693,16 @@
       "component": "Individually held copyright notices (V2Ray modules, Agora bundle)",
       "details": "MIT, BSD and ISC terms require the copyright notice itself to accompany binary redistribution. The Handshake helpers now meet this through the ported hns-bin/linux-x64/licenses/ bundle. For V2Ray's Go modules (twenty of whose copyright lines name individual authors) and the libraries embedded in the Agora bundle (core-js, formdata-polyfill, ua-parser-js 0.7.40, axios; only the first two keep their notices in the file), NOTICES gives the licence, the module or library and where the exact line is published, but not the line, because the workspace rule forbids writing personal names. Resolve by shipping the module archives' own licence files unedited in a dvpn-bin/linux-x64/licenses/ bundle bound by digest, as the HNS bundle does, and the equivalent for Agora's embedded libraries, or by an owner decision.",
       "resolution": "Owner ruling: licence and NOTICE text the licences require is copied verbatim even where it names individual authors; nothing written for the fork names anyone. dvpn-bin/linux-x64/licenses/ now ships every embedded Go module's licence files unedited (72 files, each archive matching the binary's h1 sum), bound by sha256 in source-record.json and checked by licenses-audit.test.js; NOTICES copies each module's copyright lines verbatim and reproduces the licence files of the seven libraries identified in the Agora bundle from their npm packages."
+    },
+    {
+      "kind": "package",
+      "component": "Installed package contents",
+      "details": "The Linux x64 evaluation deb built by the Linux evaluation deb workflow (run 38739559506) from commit c51e4fe01953f088fb2ff068b3e3c47bfa026e57, freedom-browser_0.7.15_amd64.deb with sha256 7a839551324758662fc10eec876d71af089b0b809039dcfa0698ac8c35399b40, was extracted and compared on 2026-10-15. resources/ holds ant-bin, freedom-ipfs-node, radicle-bin, hns-bin, dvpn-bin, jacktrip-scripts, assets, ant.yaml, default-bookmarks.json, LICENSE, NOTICES, apparmor-profile and app.asar(.unpacked), all classified here; there is no myotis-bin, arti-bin, geoip.dat or geosite.dat. hnsd, fingertipd, encrypted-validator.json, PROVENANCE.md and v2ray are byte-identical to the committed files, both licence bundles and LICENSE and NOTICES are identical to the tree, and app.asar carries src/renderer/vendor/AgoraRTC_N-4.24.0.js with sha256 f440fa2d. The control file declares libunbound8 and libc6 (>= 2.36)."
     }
   ],
   "verdict": {
-    "status": "REVIEW_REQUIRED",
-    "message": "Not cleared. The fork's own licence (AGPL-3.0-or-later) is compatible with every shipped component: nothing in the tree is licensed incompatibly, and the LGPL-3.0 OpenLV bundle, the GPL-3.0 uBlock data and the MPL-2.0 upstream code are each handled. Every required third-party notice found is shipped. One item stays open: no package of this tree has been inspected against this inventory."
+    "status": "OK_TO_SHIP",
+    "message": "Cleared for the Linux x64 evaluation deb built from this tree. The fork's own licence (AGPL-3.0-or-later) is compatible with every shipped component, every required third-party notice ships, and a package built from commit c51e4fe0 was inspected against this inventory. This clears licensing for that evaluation build only; it is not a public-release decision, and the fork's use of upstream's product name, app id and icons remains an open fork decision."
   },
   "required_actions": [
     {

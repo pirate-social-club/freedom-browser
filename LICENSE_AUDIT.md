@@ -18,9 +18,9 @@ This revision replaces the short AGPL posture note (2026-05-08) that the upstrea
 
 ## Verdict
 
-Not cleared to ship. Every component in the tree is compatible with distributing the fork under AGPL-3.0-or-later, and every shipped binary, bundle and data file is now classified, attributed and, where it is committed, bound to its exact bytes. One item remains open, and `licenses-audit.json` records it as a blocker.
+Cleared for the Linux x64 evaluation deb. Every component in the tree is compatible with distributing the fork under AGPL-3.0-or-later, and every shipped binary, bundle and data file is classified, attributed and, where it is committed, bound to its exact bytes. `licenses-audit.json` records no blocker.
 
-The open item is the installed package. No package has been built from this integration tree, so its installed contents have not been compared with the classification here.
+A package built from this tree was inspected against this inventory. The Linux x64 evaluation deb built by the Linux evaluation deb workflow (run 38739559506) from commit c51e4fe01953f088fb2ff068b3e3c47bfa026e57, freedom-browser_0.7.15_amd64.deb with sha256 7a839551324758662fc10eec876d71af089b0b809039dcfa0698ac8c35399b40, was extracted and compared on 2026-10-15. resources/ holds ant-bin, freedom-ipfs-node, radicle-bin, hns-bin, dvpn-bin, jacktrip-scripts, assets, ant.yaml, default-bookmarks.json, LICENSE, NOTICES, apparmor-profile and app.asar(.unpacked), all classified here; there is no myotis-bin, arti-bin, geoip.dat or geosite.dat. hnsd, fingertipd, encrypted-validator.json, PROVENANCE.md and v2ray are byte-identical to the committed files, both licence bundles and LICENSE and NOTICES are identical to the tree, and app.asar carries src/renderer/vendor/AgoraRTC_N-4.24.0.js with sha256 f440fa2d. The control file declares libunbound8 and libc6 (>= 2.36). This clears licensing for that evaluation build only. It is not a public-release decision, and the fork's use of upstream's product name, app id and icons remains an open fork decision.
 
 Two earlier items are closed. Copyright notices that name individual authors are now shipped: the workspace owner ruled that licence and NOTICE text the licences require is copied verbatim even where it names people, while nothing the fork writes itself does. The Handshake helpers and V2Ray ship their upstream licence files unedited in `hns-bin/linux-x64/licenses/` and `dvpn-bin/linux-x64/licenses/`, and `NOTICES` reproduces V2Ray's module copyright lines and the licence files of the libraries embedded in the Agora bundle verbatim. The licence terms behind V2Ray's GeoIP data no longer matter, because the data files no longer ship (see V2Ray).
 
@@ -349,7 +349,7 @@ Weak copyleft is present and handled. The thirteen MPL-2.0 packages and the upst
 
 ## Open items
 
-The one blocker in `licenses-audit.json` is the inspection of a package built from this tree. It needs a deb built from this tree, with `resources/` and `app.asar` listed and compared with this inventory, including both licence bundles.
+`licenses-audit.json` records no blocker. The last one, inspecting a package built from this tree, was closed against the deb built from commit c51e4fe0 (see the verdict above).
 
 Two recommended items are not blockers. Agora should be asked for a licence file and a third-party notice list, and libradicle's upstream should be asked to commit its licence texts.
 
@@ -368,7 +368,7 @@ Two recommended items are not blockers. Agora should be asked for a licence file
 - [x] Handshake helpers' upstream notices and hnsd's source shipped unedited, bound by digest
 - [x] V2Ray's module notices shipped unedited and bound by digest, and its and the Agora libraries' copyright lines reproduced in `NOTICES`
 - [x] V2Ray's unused GeoIP/GeoSite data removed, which closes the GeoLite terms question
-- [ ] A package built from this tree inspected against this inventory
+- [x] A package built from this tree inspected against this inventory
 
 ---
 
