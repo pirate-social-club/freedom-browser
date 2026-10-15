@@ -57,22 +57,19 @@ describe('capability binary checks', () => {
   });
 
   test('requires every declared dVPN artifact on Linux x64', () => {
-    const files = capabilityFiles(rootDir, 'dvpn-bin', 'linux-x64', ['v2ray']);
+    // V2Ray alone: Freedom's tunnel config routes by inbound tag only, so the
+    // MaxMind-derived geoip.dat and geosite.dat are not shipped.
+    const files = capabilityFiles(rootDir, 'dvpn-bin', 'linux-x64', []);
     const missing = checkCapabilityBinaries('dvpn', { os: 'linux', arch: 'x64' }, {
       rootDir,
       fsImpl: createFsMock(files),
     });
-    expect(missing).toHaveLength(2);
-    expect(missing.join('\n')).toContain('geoip.dat');
-    expect(missing.join('\n')).toContain('geosite.dat');
+    expect(missing).toHaveLength(1);
+    expect(missing[0]).toContain('v2ray');
   });
 
   test('rejects non-executable supported binaries', () => {
-    const files = capabilityFiles(rootDir, 'dvpn-bin', 'linux-x64', [
-      'v2ray',
-      'geoip.dat',
-      'geosite.dat',
-    ]);
+    const files = capabilityFiles(rootDir, 'dvpn-bin', 'linux-x64', ['v2ray']);
     files[path.join(rootDir, 'dvpn-bin', 'linux-x64', 'v2ray')].mode = 0o644;
     const missing = checkCapabilityBinaries('dvpn', { os: 'linux', arch: 'x64' }, {
       rootDir,
