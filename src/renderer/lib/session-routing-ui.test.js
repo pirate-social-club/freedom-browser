@@ -73,3 +73,24 @@ test('a pending update explains the temporary pause without claiming a failure',
   expect(f.message.textContent).not.toContain('Restart');
   expect(Object.keys(f.api).sort()).toEqual(['getRoutingStatus', 'onRoutingStatusUpdate']);
 });
+
+test('navigation is held only for a blocked UI or a guest known to be blocked', async () => {
+  const f = await fixture();
+  const fresh = { getWebContentsId: () => 21 };
+  const unattached = { getWebContentsId: () => { throw new Error('not attached'); } };
+  // Before any snapshot nothing is held.
+  expect(f.isNavigationBlocked(fresh)).toBe(false);
+  // A guest the snapshot does not list yet (a new background tab) keeps its
+  // first navigation; the notice still covers it.
+  f.push(value(1, policy(true), [{ id: 13, ...policy(true) }]));
+  expect(f.isNavigationBlocked(fresh)).toBe(false);
+  expect(f.isNavigationBlocked(unattached)).toBe(false);
+  expect(f.isSessionRoutingBlocked(fresh)).toBe(true);
+  // A listed guest that is not allowed is held.
+  f.push(value(2, policy(true), [{ id: 21, ...policy(false) }]));
+  expect(f.isNavigationBlocked(fresh)).toBe(true);
+  // A blocked UI session holds every navigation.
+  f.push(value(3, policy(false), [{ id: 21, ...policy(true) }]));
+  expect(f.isNavigationBlocked(fresh)).toBe(true);
+  expect(f.isNavigationBlocked(unattached)).toBe(true);
+});

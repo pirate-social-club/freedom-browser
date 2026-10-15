@@ -13,6 +13,18 @@ export function isSessionRoutingBlocked(webview) {
   return Boolean(snapshot && (!snapshot.ui.allowed || (webview && !guestStatus(webview)?.allowed)));
 }
 
+// Whether a navigation should be held back. Unlike the notice above, a guest
+// the snapshot does not list yet (a tab created a moment ago, or not yet
+// attached) is not held: dropping its first navigation left new background
+// tabs blank, and main's request policy still cancels any request from a
+// session whose routing is not ready.
+export function isNavigationBlocked(webview) {
+  if (!snapshot) return false;
+  if (!snapshot.ui.allowed) return true;
+  const guest = guestStatus(webview);
+  return Boolean(guest && !guest.allowed);
+}
+
 function render() {
   if (!panel) return;
   const guest = guestStatus(activeWebview);

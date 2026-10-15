@@ -1,5 +1,5 @@
 import { normalizeHnsHostInput, parseSpacesRootInput } from './url-utils.js';
-import { isSessionRoutingBlocked, refreshSessionRoutingNotice } from './session-routing-ui.js';
+import { isNavigationBlocked, isSessionRoutingBlocked, refreshSessionRoutingNotice } from './session-routing-ui.js';
 // Navigation, webview, and address bar handling
 import { state, isRadicleDisabledForProfile } from './state.js';
 import { pushDebug } from './debug.js';
@@ -1532,7 +1532,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null, 
   }
 
   navState.pendingHnsUrl = null;
-  if (isSessionRoutingBlocked(webview)) {
+  if (isNavigationBlocked(webview)) {
     refreshSessionRoutingNotice(webview);
     return;
   }

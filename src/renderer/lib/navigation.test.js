@@ -530,6 +530,7 @@ const loadNavigationModule = async (options = {}) => {
   urlUtilsMocks.parseSpacesRootInput = actualUrlUtils.parseSpacesRootInput;
   jest.doMock('./session-routing-ui.js', () => ({
     isSessionRoutingBlocked: () => options.routingBlocked === true,
+    isNavigationBlocked: () => options.routingBlocked === true,
     refreshSessionRoutingNotice: jest.fn(),
   }));
   jest.doMock('./url-utils.js', () => urlUtilsMocks);
