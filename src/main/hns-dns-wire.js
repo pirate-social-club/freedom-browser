@@ -9,7 +9,7 @@ const DNS_TYPE_NSEC3 = 50;
 // wildcard-expanded name returns the signed denial that proves the expansion.
 const DNS_TYPE_PROOF_PROBE = 65280;
 
-function readName(message, start) {
+function readName(message, start, { preserveCase = false } = {}) {
   const labels = [];
   const visited = new Set();
   let offset = start;
@@ -33,7 +33,8 @@ function readName(message, start) {
     if (!length) return { labels, end: end ?? offset };
     size += length + 1;
     if (size > 255 || offset + length > message.length) throw new Error('Invalid DNS name size');
-    labels.push(message.toString('latin1', offset, offset + length).replace(/[A-Z]/g, (c) => c.toLowerCase()));
+    const label = message.toString('latin1', offset, offset + length);
+    labels.push(preserveCase ? label : label.replace(/[A-Z]/g, (c) => c.toLowerCase()));
     offset += length;
   }
 }
@@ -140,17 +141,20 @@ function encodeName(labels) {
 // RDATA names written out in full, everything else byte for byte. RFC 4034
 // forbids compressing the NSEC next name and the RRSIG signer, but resolvers
 // built on hsd do it anyway; validators canonicalize both to uncompressed
-// lowercase before checking a signature, so writing them out changes nothing
-// they verify. A name that runs outside its RDATA refuses the record.
+// lowercase where the canonical form requires it, so writing them out in full
+// changes nothing they verify. Their letters keep their original case: the
+// NSEC next name is not lowercased in canonical form (RFC 6840 section 5.1),
+// so its case is part of what the signature covers. A name that runs outside
+// its RDATA refuses the record.
 function standaloneProofRecord(message, rr) {
   const fixed = message.subarray(rr.data - 10, rr.data - 2); // type, class, TTL
   let rdata;
   if (rr.type === DNS_TYPE_NSEC) {
-    const next = readName(message, rr.data);
+    const next = readName(message, rr.data, { preserveCase: true });
     if (next.end > rr.end) throw new Error('NSEC next name overruns its record');
     rdata = Buffer.concat([encodeName(next.labels), message.subarray(next.end, rr.end)]);
   } else if (rr.type === DNS_TYPE_RRSIG) {
-    const signer = readName(message, rr.data + 18);
+    const signer = readName(message, rr.data + 18, { preserveCase: true });
     if (signer.end >= rr.end) throw new Error('RRSIG signer overruns its record');
     rdata = Buffer.concat([message.subarray(rr.data, rr.data + 18), encodeName(signer.labels), message.subarray(signer.end, rr.end)]);
   } else {

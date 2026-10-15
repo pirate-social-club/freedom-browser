@@ -168,6 +168,16 @@ describe('wildcard proof completion', () => {
     expect(nsec.map((rr) => readNameOf(combined, rr.data).labels.join('.')).sort()).toEqual(['_pirate.8s28', 'ns1.8s28']);
   });
 
+  test('an NSEC next name keeps its letter case when written out in full', () => {
+    const denial = Buffer.from(bytes('proof_a'));
+    const nsec = parseMessage(denial).records.find((rr) => rr.type === 47 && denial[rr.data] !== 0 && (denial[rr.data] & 0xc0) === 0);
+    denial[nsec.data + 2] = denial[nsec.data + 2] & ~0x20; // uppercase one letter of the uncompressed label
+    const combined = appendWildcardProof(bytes('answer_a'), parseMessage(bytes('answer_a')), denial);
+    const moved = parseMessage(combined).records.find((rr) => rr.section === 1 && rr.type === 47 && rr.labels.join('.') === nsec.labels.join('.'));
+    expect(combined.toString('latin1', moved.data + 1, moved.data + 1 + combined[moved.data]))
+      .toBe(denial.toString('latin1', nsec.data + 1, nsec.data + 1 + denial[nsec.data]));
+  });
+
   test('an NSEC whose next name runs outside its record refuses the combination', () => {
     const denial = Buffer.from(bytes('proof_a'));
     const nsec = parseMessage(denial).records.find((rr) => rr.type === 47);
