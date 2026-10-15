@@ -8,6 +8,14 @@ This guide covers local setup, the repository layout, tests, debugging, and deve
 - npm, included with Node.js.
 - Git.
 - Platform build tools required by Electron native modules.
+- On Linux, the udev and libusb development headers for the Ledger USB modules (`usb`, pulled in by `@ledgerhq/hw-transport-node-hid`, is rebuilt from source during `npm ci`). On Debian/Ubuntu:
+
+  ```bash
+  sudo apt install libudev-dev libusb-1.0-0-dev
+  ```
+
+  This is the same pair CI installs in [`install-linux-native-deps`](../.github/actions/install-linux-native-deps/action.yml). Without `libudev-dev`, `npm ci` fails in `electron-builder install-app-deps` with `fatal error: libudev.h: No such file or directory` while building `node_modules/usb`; install the packages and run `npm ci` again.
+
 - Optional, for the bundled Tor client only (`npm run tor:download`): a Rust toolchain at or above the pinned Arti release's MSRV (`MIN_RUST_VERSION` in [`scripts/fetch-arti.js`](../scripts/fetch-arti.js); the script checks before building). Arti is compiled from crates.io rather than downloaded, for the host platform only. On Linux that build also needs OpenSSL development headers, and `libsqlite3-dev` when `pkg-config` is installed; on Windows it needs the x64 MSVC tools (the same developer shell the Myotis supervisor build uses), and the script asks Arti for its `static-sqlite` feature there because Windows ships no system SQLite for `libsqlite3-sys` to link.
 
 With `nvm` installed, select the repository version with:
@@ -30,7 +38,17 @@ npm run myotis:build-supervisor
 npm start
 ```
 
-Swarm and IPFS start automatically by default, while Radicle and Myotis are opt-in under **Settings → Startup**. Install the embedded Radicle addon with `npm run radicle:download` (macOS, Linux, and Windows x64/ARM64), then enable Radicle for the profile under **Settings → Nodes**. Install optional Tor support with `npm run tor:download` (macOS, Linux, and Windows x64 — it compiles Arti for the host), then enable it under **Settings → Experimental**; the Tor rows stay hidden until that binary exists.
+**Linux: `chrome-sandbox` must be setuid root.** On distributions that restrict unprivileged user namespaces through AppArmor (Ubuntu 24.04 and later ship `kernel.apparmor_restrict_unprivileged_userns=1`), Chromium falls back to its SUID sandbox helper, and `npm start` aborts with `The SUID sandbox helper binary was found, but is not configured correctly` and `exited with signal SIGTRAP`. Electron downloads its binary on first launch rather than during `npm ci`, so fetch it first, then hand the helper to root:
+
+```bash
+npx --no install-electron
+sudo chown root:root node_modules/electron/dist/chrome-sandbox
+sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+```
+
+Repeat all three commands after every `npm ci` and every Electron version bump: both discard the binary, and the fresh download is owned by you again. `--no-sandbox` is for throwaway headless runs only — the headless skill in `.claude/skills/run-freedom/`, the packaged CI smoke tests, and the source-tree Playwright e2e runs on Linux use it. The `harness` and `live` projects get it from Playwright's own Electron launcher, which adds it on Linux unless a test opts in with `chromiumSandbox: true`, so `npm run test:e2e` does not exercise the sandbox there. The `packaged` projects bypass that launcher and start the binary themselves, so they only add it when you set `FREEDOM_E2E_NO_SANDBOX=1` (see below) — without it, a packaged run on such a distribution hits the same SUID abort unless that build's own `chrome-sandbox` is setuid root. Don't develop with `--no-sandbox`, because a browser running with the renderer sandbox disabled hides real behaviour.
+
+Swarm and IPFS start automatically by default, while Radicle and Myotis are opt-in under **Settings → Nodes → Startup**. Install the embedded Radicle addon with `npm run radicle:download` (macOS, Linux, and Windows x64/ARM64), then enable Radicle for the profile under **Settings → Nodes**. Install optional Tor support with `npm run tor:download` (macOS, Linux, and Windows x64 — it compiles Arti for the host), then enable it under **Settings → Advanced**; the Tor rows stay hidden until that binary exists.
 
 Myotis also requires its small supervisor built from checked-in source with an
 already installed C compiler: Apple clang/CLT on macOS, a native C compiler on
@@ -58,26 +76,27 @@ Protocol and privileged logic belongs in the main process. The renderer talks to
 
 ## Common npm scripts
 
-| Script                        | Description                                                     |
-| ----------------------------- | --------------------------------------------------------------- |
-| `npm start`                   | Launch Electron in development mode                             |
-| `npm run lint`                | Run ESLint                                                      |
-| `npm test`                    | Run the Jest unit suite                                         |
-| `npm run test:coverage`       | Run Jest with coverage                                          |
-| `npm run test:e2e`            | Run the deterministic Playwright harness suite                  |
-| `npm run test:e2e:live`       | Run live node, protocol, and naming integration tests           |
-| `npm run test:e2e:packaged`   | Smoke-test a packaged build (`FREEDOM_E2E_EXECUTABLE`)          |
-| `npm run test:e2e:tor`        | Run the live Tor `.onion` integration test                      |
-| `npm run check-binaries`      | Validate packaged native binary targets                         |
-| `npm run ant:download`        | Download the pinned Ant binary                                  |
-| `npm run ipfs:download`       | Download the pinned freedom-ipfs native addon                   |
-| `npm run myotis:download`     | Download the pinned Myotis native addon                         |
-| `npm run radicle:download`    | Download the embedded libradicle addon for the current platform |
-| `npm run radicle:build-addon` | Build the libradicle addon from a sibling checkout              |
-| `npm run tor:download`        | Build the Arti Tor binary for the current platform              |
-| `npm run adblock:download`    | Download the packaged ad-blocking lists                         |
-| `npm run ipfs:native:smoke`   | Smoke-test the native IPFS addon and retrieval path             |
-| `npm run ant:smoke-upload`    | Exercise a Swarm buy/upload/download round trip                 |
+| Script                           | Description                                                                        |
+| -------------------------------- | ---------------------------------------------------------------------------------- |
+| `npm start`                      | Launch Electron in development mode                                                |
+| `npm run lint`                   | Run ESLint                                                                         |
+| `npm test`                       | Run the Jest unit suite                                                            |
+| `npm run test:coverage`          | Run Jest with coverage                                                             |
+| `npm run test:e2e`               | Run the deterministic Playwright harness suite                                     |
+| `npm run test:e2e:live`          | Run live node, protocol, and naming integration tests                              |
+| `npm run test:e2e:packaged`      | Smoke-test a packaged build (`FREEDOM_E2E_EXECUTABLE`)                             |
+| `npm run test:e2e:tor`           | Run the live Tor `.onion` integration test                                         |
+| `npm run test:e2e:startup-smoke` | Launch with real nodes and fail if the main process blocks > 1 s in its first 90 s |
+| `npm run check-binaries`         | Validate packaged native binary targets                                            |
+| `npm run ant:download`           | Download the pinned Ant binary                                                     |
+| `npm run ipfs:download`          | Download the pinned freedom-ipfs native addon                                      |
+| `npm run myotis:download`        | Download the pinned Myotis native addon                                            |
+| `npm run radicle:download`       | Download the embedded libradicle addon for the current platform                    |
+| `npm run radicle:build-addon`    | Build the libradicle addon from a sibling checkout                                 |
+| `npm run tor:download`           | Build the Arti Tor binary for the current platform                                 |
+| `npm run adblock:download`       | Download the packaged ad-blocking lists and scriptlet resources                    |
+| `npm run ipfs:native:smoke`      | Smoke-test the native IPFS addon and retrieval path                                |
+| `npm run ant:smoke-upload`       | Exercise a Swarm buy/upload/download round trip                                    |
 
 The scripts in `package.json` are the authoritative list. Destructive reset scripts remove local development data; inspect their targets before using them.
 
@@ -104,9 +123,13 @@ Playwright has four projects:
 | `packaged`      | `npm run test:e2e:packaged` | Runs the release smoke checks (launch, version, persistence) against a built binary instead of the source tree |
 | `packaged-live` | `npm run test:e2e:packaged` | Same built binary without the harness stubs: its bundled nodes really start and navigation really goes out     |
 
-`npm run test:e2e:packaged` runs both packaged projects. They need `FREEDOM_E2E_EXECUTABLE` pointing at that binary and refuse to run without it; add `FREEDOM_E2E_NO_SANDBOX=1` on a headless machine. After `npm run build -- --linux --x64`, that is `FREEDOM_E2E_EXECUTABLE="$PWD/dist/linux-unpacked/freedom" FREEDOM_E2E_NO_SANDBOX=1 xvfb-run -a npm run test:e2e:packaged`; to run only the slow half, call Playwright directly with `npx playwright test --project packaged-live` (adding `--project` to the npm script would union with the two projects it already names). `packaged-live` uses the same per-test scratch data directories as `live`, and skips its Tor check (with the reason) on builds that bundle no Arti binary. The release workflow runs both suites against every artifact it just built — the macOS `.dmg` and `-mac.zip`, the Linux x64/arm64 `.deb` and AppImage, the Windows installer and portable zip (see `agent-playbooks/release-process.md` §6).
+`npm run test:e2e:packaged` runs both packaged projects. They need `FREEDOM_E2E_EXECUTABLE` pointing at that binary and refuse to run without it; add `FREEDOM_E2E_NO_SANDBOX=1` on a headless machine. After `npm run build -- --linux --x64`, that is `FREEDOM_E2E_EXECUTABLE="$PWD/dist/linux-unpacked/freedom" FREEDOM_E2E_NO_SANDBOX=1 xvfb-run -a npm run test:e2e:packaged`; to run only the slow half, call Playwright directly with `npx playwright test --project packaged-live` (adding `--project` to the npm script would union with the two projects it already names). `packaged-live` uses the same per-test scratch data directories as `live`, and skips its Tor check (with the reason) on builds that bundle no Arti binary. Packaged builds ship with the `EnableNodeCliInspectArguments` fuse off, so both projects start the binary themselves with `--remote-debugging-port=0` and attach Playwright over CDP (`test-e2e/packaged-launch.js`) instead of through `_electron.launch`, which needs `--inspect`. Two consequences for packaged specs: there is no `electronApp.evaluate()` in the main process — read main-process facts through the harness's fixed `electronApp.appFacts()` / `electronApp.testOp()` operations instead — and the app only honours `--remote-debugging-port` when `FREEDOM_TEST_USER_DATA` names a scratch profile (`src/main/remote-debugging-gate.js`), which both fixture files always set. The harness itself (`FREEDOM_TEST_MODE=1`, `fixtures.js` only) is honoured by a packaged build only when that same launch also kept `--remote-debugging-port` — a valid port on a scratch `FREEDOM_TEST_USER_DATA` profile, exactly what the launcher passes; set on its own, the variable is ignored by a shipped build (`src/main/test-mode.js`, which also argues why this grants nothing the open debugging port does not already give). The release workflow runs both suites against every artifact it just built — the macOS `.dmg` and `-mac.zip`, the Linux x64/arm64 `.deb` and AppImage, the Windows installer and portable zip (see `agent-playbooks/release-process.md` §6).
 
-All four suites use a temporary Electron `userData` directory and run sequentially. The full CI matrix covers the operating-system-specific and native-node checks that most contributors cannot reproduce locally.
+All four suites use a temporary Electron `userData` directory and run sequentially. No fixture hides the Electron window by default, because a hidden window starves Playwright's click/check actionability waits of animation frames and lets a click on chrome that has just appeared over a page land on the page instead (#479, #536). `FREEDOM_TEST_HIDE_WINDOW=1` still hides it, and every fixture that doesn't pin it passes the caller's environment through — the harness and `live` fixtures (`test-e2e/fixtures.js`, which the packaged specs share, and `test-e2e/live-fixtures.js`) and the profiles and Radicle fixtures (`test-e2e/profiles-fixtures.js`, `test-e2e/radicle-fixtures.js`) — so a run with it set is hidden in all of them: CI's Myotis resolver step (`.github/workflows/ci.yml`) exports it for `test-e2e/live/myotis-ens.spec.js`, which drives no clicks or checks. If a spec run under that variable starts flaking on actionability waits, unset it first. The onboarding, Safe, Safe-phone and remote-signing fixtures pin it to `0`, so an inherited value can't hide their windows. On Linux, run the suites under `xvfb-run -a` so the window lands on a virtual display. The full CI matrix covers the operating-system-specific and native-node checks that most contributors cannot reproduce locally.
+
+`npm run test:e2e:startup-smoke` (`test-e2e/live/startup-responsiveness.spec.js`) is the check for a main-process freeze like #495: it starts the app with real nodes on a fresh profile (`npm run ant:download` first; `xvfb-run -a` on headless Linux), times back-to-back main-process round trips for 90 s, and fails if any exceeds 1 s or the watchdog logged a stall. `FREEDOM_STARTUP_SMOKE_SECONDS` and `FREEDOM_STARTUP_SMOKE_MAX_RTT_MS` override both numbers; the report and the run's `main.log` land in `test-results/`. It is opt-in: the spec skips unless `FREEDOM_STARTUP_SMOKE=1` (the npm script sets it), so a plain `npm run test:e2e:live` doesn't spend 90 s on it. It needs the network, so it runs nightly (`.github/workflows/startup-smoke.yml`, also dispatchable by hand), not on pull requests.
+
+CI does not run the harness project wholesale: each `e2e-*` job in `.github/workflows/ci.yml` names its own list of specs. When you add a `test-e2e/*.spec.js`, add it to the job that fits its area. If it can't run in CI yet, add a `# e2e-not-in-ci: <spec> — <reason>` line to the list above those jobs, with the issue that tracks it. `scripts/ci/e2e-spec-coverage.test.js` fails the `test` job on a spec that is in neither place.
 
 ## Logging and debugging
 
@@ -127,6 +150,8 @@ Useful debugging surfaces:
 - Inspect main-process output in the terminal.
 - Use the webview context menu to open Chromium Developer Tools.
 - Launch with `DEBUG=1 npm start` for verbose console logging.
+- Launch with `FREEDOM_LOG_SYNC=1` when chasing a main-thread hang or a native crash. The log file is written asynchronously by default (#511). Every `warn` and `error` line is still on disk, after everything logged before it, by the time the call that logged it returns, but the `info` lines logged since the last warning can still be queued when the main thread wedges or the process is force-quit, SIGKILLed or segfaults, and never reach the file. This setting writes every line before the next statement runs, as before #511, at a main-thread cost per line.
+- Search the log for `[main] event loop blocked`: the main process's watchdog (`src/main/event-loop-watchdog.js`) writes it when the main thread stalls for 1 s or more, naming any chain-data reads that were running (`chain-data: 100 eth_getLogs via colibri, 22675 ms`). Further stalls within 30 s are folded into one summary line, written once the 30 s pass or when the app quits. Fee quotes (`fee quote`) and transaction broadcasts (`eth_sendRawTransaction`) are named the same way as other chain-data reads; time the machine spends asleep is not reported.
 
 ## Development builds
 

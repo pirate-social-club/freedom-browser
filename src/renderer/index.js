@@ -69,6 +69,7 @@ import { initDownloadsUi, setOnOpenDownloadsPage } from './lib/downloads-ui.js';
 import { initMenuBackdrop } from './lib/menu-backdrop.js';
 import { initLinkStatus } from './lib/link-status.js';
 import { initSitePermissionsUi, closePermissionPopover } from './lib/site-permissions-ui.js';
+import { initPopupBlockerUi, closePopupBlockedPopover } from './lib/popup-blocker-ui.js';
 import { initFindBar } from './lib/find-bar.js';
 import { initPageContextMenu, hidePageContextMenu } from './lib/page-context-menu.js';
 import {
@@ -89,6 +90,7 @@ import { bindHoverTooltip } from './lib/hover-tooltip.js';
 import { initShortcuts } from './lib/shortcuts.js';
 import { initPopoverBounds } from './lib/popover-bounds.js';
 import { onWindowDeactivated } from './lib/window-deactivation.js';
+import { initUpdateStatusUi } from './lib/update-status-ui.js';
 
 const electronAPI = window.electronAPI;
 
@@ -187,6 +189,7 @@ const onAnyMenuOpening = () => {
   hideAutocomplete();
   closeTrustPopover();
   closePermissionPopover();
+  closePopupBlockedPopover();
   closeGithubBridgePanel();
 };
 setOnMenuOpening(onAnyMenuOpening);
@@ -198,10 +201,6 @@ async function initPlatformUI() {
   const platform = await electronAPI.getPlatform();
 
   if (platform === 'linux') {
-    // platform-linux governs the titlebar spacer width (shrinks the 76px macOS
-    // traffic-light gap to 12px), so it applies to Linux regardless of framing.
-    document.body.classList.add('platform-linux');
-
     // The window is only frameless when the user opts in to tabs-in-titlebar;
     // with the OS frame the system provides the controls, so skip the custom ones.
     const settings = await electronAPI.getSettings().catch(() => ({}));
@@ -750,6 +749,7 @@ const closeAllOverlays = () => {
   hideAutocomplete();
   closeTrustPopover();
   closePermissionPopover();
+  closePopupBlockedPopover();
   closeGithubBridgePanel();
 };
 
@@ -854,9 +854,14 @@ window.addEventListener('DOMContentLoaded', async () => {
     closeMenus();
     loadTarget('freedom://settings');
   });
+  initUpdateStatusUi({
+    closeMenus,
+    openSettings: () => loadTarget('freedom://settings/about/updates'),
+  });
   initBookmarks();
   initNavigation(); // Sets up event handler with tabs module
   initSitePermissionsUi(); // Permission prompt + address-bar indicator
+  initPopupBlockerUi(); // Pop-up-blocked address-bar icon (#442)
   initLinkStatus();
   initFindBar({ getActiveWebview }); // In-page find bar (Cmd/Ctrl+F)
   initTabs(); // Creates first tab and starts loading home page

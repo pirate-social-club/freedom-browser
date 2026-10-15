@@ -213,6 +213,9 @@ function loadAntManagerModule(options = {}) {
   const clearService = jest.fn();
   const updateActiveProfileNodeConfig = options.updateActiveProfileNodeConfig || jest.fn();
   const spawnedProcesses = [];
+  const bridge = { url: 'http://127.0.0.1:43210/ant-chain/test-capability',
+    close: jest.fn().mockResolvedValue(), pipeLog: jest.fn() };
+  const startBridge = options.startBridge || jest.fn().mockResolvedValue(bridge);
   const execSync = options.execSync || jest.fn();
   const spawn = jest.fn((binary, args = [], spawnOptions = {}) => {
     const proc = (options.createProcess || createProcessMock)(binary, options.processOptions || {});
@@ -221,9 +224,6 @@ function loadAntManagerModule(options = {}) {
     spawnedProcesses.push(proc);
     return proc;
   });
-  const loadSettings = options.loadSettings || jest.fn(() => ({
-    antNodeMode: options.antNodeMode || 'ultraLight',
-  }));
   const gnosisRpcUrls = options.rpcUrls || ['https://rpc.gnosischain.com'];
   const ethereumRpcUrls = options.ethereumRpcUrls || ['https://ethereum.publicnode.com'];
   const registry = options.registry || {
@@ -268,6 +268,8 @@ function loadAntManagerModule(options = {}) {
     writeFileSync: jest.fn(),
   };
   const httpGet = createHttpGetMock(options.httpResponse);
+  const noteAntApiUrl = jest.fn();
+  const saveSettings = jest.fn(() => true);
   const Socket = createSocketClass(options.portSequence || options.portResolver || false);
   const randomBytes = options.randomBytes || jest.fn(() => Buffer.from('ab'.repeat(32), 'hex'));
 
@@ -276,9 +278,14 @@ function loadAntManagerModule(options = {}) {
     ipcMain,
     BrowserWindow,
     extraMocks: {
+      [require.resolve('./swarm/ant-chain-bridge')]: () => ({ startAntChainBridge: startBridge }),
       child_process: () => ({
         spawn,
         execSync,
+      }),
+      [require.resolve('./settings-store')]: () => ({
+        loadSettings: jest.fn(() => options.settings || {}),
+        saveSettings,
       }),
       crypto: () => ({
         randomBytes,
@@ -291,17 +298,17 @@ function loadAntManagerModule(options = {}) {
         Socket,
       }),
       [require.resolve('./logger')]: () => log,
+      [require.resolve('./swarm/ant-api-guard')]: () => ({ noteAntApiUrl }),
       [require.resolve('./migrate-user-data')]: () => ({
         isBeeDataMigrationPending: options.isBeeDataMigrationPending || jest.fn(() => false),
-      }),
-      [require.resolve('./settings-store')]: () => ({
-        loadSettings,
       }),
       [require.resolve('./networks/network-registry')]: () => registry,
       [require.resolve('./profile-resolver')]: () => ({
         getActiveProfile: jest.fn(() => options.activeProfile || null),
         getReservedProfilePorts: jest.fn(() => new Set(options.reservedPorts || [])),
         updateActiveProfileNodeConfig,
+        updateActiveProfileNodeConfigWhenIdle: jest.fn(async (...args) =>
+          updateActiveProfileNodeConfig(...args)),
       }),
       [require.resolve('./service-registry')]: () => ({
         MODE: {
@@ -323,12 +330,16 @@ function loadAntManagerModule(options = {}) {
         setErrorState,
         clearErrorState,
         clearService,
+        getRegistry: () => ({ ant: { mode: 'bundled' } }),
+        getAntApiUrl: () => null,
       }),
     },
   });
 
   return {
     antBinPath,
+    bridge,
+    startBridge,
     BrowserWindow,
     clearErrorState,
     clearService,
@@ -340,10 +351,11 @@ function loadAntManagerModule(options = {}) {
     httpGet,
     ipcMain,
     keysPath,
-    loadSettings,
     log,
     mod,
+    noteAntApiUrl,
     randomBytes,
+    saveSettings,
     setErrorState,
     setStatusMessage,
     spawn,
@@ -370,8 +382,30 @@ describe('ant-manager', () => {
     ctx.mod.registerAntIpc();
 
     expect([...ctx.ipcMain.handlers.keys()].sort()).toEqual(
-      [IPC.ANT_START, IPC.ANT_STOP, IPC.ANT_GET_STATUS, IPC.ANT_CHECK_BINARY].sort()
+      [
+        IPC.ANT_START,
+        IPC.ANT_STOP,
+        IPC.ANT_GET_STATUS,
+        IPC.ANT_CHECK_BINARY,
+        IPC.ANT_API_GET,
+        IPC.ANT_CACHE_STATUS,
+        IPC.ANT_CACHE_GET_SETTINGS,
+        IPC.ANT_CACHE_SET_SIZE,
+        IPC.ANT_CACHE_CLEAR,
+      ].sort()
     );
+
+    // #579: with the node stopped, Clear cache is off with the reason, and a
+    // clear sent anyway is refused here without reaching any node.
+    await expect(ctx.ipcMain.invoke(IPC.ANT_CACHE_STATUS)).resolves.toMatchObject({
+      state: 'not-running',
+      canClear: false,
+      clearReason: 'Available while the Swarm node is running.',
+    });
+    await expect(ctx.ipcMain.invoke(IPC.ANT_CACHE_CLEAR)).resolves.toEqual({
+      ok: false,
+      error: 'Available while the Swarm node is running.',
+    });
 
     await expect(ctx.ipcMain.invoke(IPC.ANT_GET_STATUS)).resolves.toEqual({
       status: 'stopped',
@@ -393,6 +427,7 @@ describe('ant-manager', () => {
 
     expect(isBeeDataMigrationPending).toHaveBeenCalled();
     expect(ctx.spawn).not.toHaveBeenCalled();
+    expect(ctx.startBridge).not.toHaveBeenCalled();
     expect(ctx.mod.getStatus()).toEqual({
       status: 'error',
       error: expect.stringContaining('identity migration has not completed'),
@@ -412,6 +447,7 @@ describe('ant-manager', () => {
     await ctx.mod.startAnt();
 
     expect(ctx.spawn).not.toHaveBeenCalled();
+    expect(ctx.startBridge).not.toHaveBeenCalled();
     expect(ctx.fsMock.writeFileSync).not.toHaveBeenCalled();
     expect(ctx.mod.getStatus()).toEqual({
       status: 'error',
@@ -466,12 +502,16 @@ describe('ant-manager', () => {
     expect(ctx.spawnedProcesses).toHaveLength(1);
     expect(ctx.spawnedProcesses[0].binary).toBe(ctx.antBinPath);
     expect(ctx.mod.getStatus()).toEqual({ status: 'running', error: null });
+    // Publish setup's fallback rediscovery hold runs from the spawn (#510).
+    expect(ctx.mod.getSpawnedAt()).toEqual(expect.any(Number));
+    expect(ctx.mod.getSpawnedAt()).toBeLessThanOrEqual(Date.now());
 
     const stopPromise = ctx.mod.stopAnt();
     await jest.advanceTimersByTimeAsync(0);
     await flushMicrotasks();
     await stopPromise;
     expect(jest.getTimerCount()).toBe(0);
+    expect(ctx.mod.getSpawnedAt()).toBeNull();
   });
 
   test('reuses an existing daemon and clears the health-check interval on stop', async () => {
@@ -497,12 +537,15 @@ describe('ant-manager', () => {
     await flushMicrotasks();
 
     expect(ctx.spawn).not.toHaveBeenCalled();
+    expect(ctx.startBridge).not.toHaveBeenCalled();
     expect(ctx.mod.getActivePort()).toBe(1633);
     expect(ctx.updateService).toHaveBeenCalledWith('ant', {
       api: 'http://127.0.0.1:1633',
       gateway: 'http://127.0.0.1:1633',
       mode: 'reused',
     });
+    // Not spawned by Freedom: its start time is unknown.
+    expect(ctx.mod.getSpawnedAt()).toBeNull();
     expect(ctx.setStatusMessage).toHaveBeenCalledWith('ant', 'Node: localhost:1633');
     expect(setIntervalSpy).toHaveBeenCalled();
     expect(window.webContents.send).toHaveBeenCalledWith(IPC.ANT_STATUS_UPDATE, {
@@ -569,6 +612,16 @@ describe('ant-manager', () => {
     const configContent = ctx.fsMock.writeFileSync.mock.calls[0][1];
     expect(configContent).toContain('api-addr: 127.0.0.1:11633');
     expect(configContent).toContain('p2p-addr: :12633');
+    // No browser origin may read the node's API — not even `null` (the
+    // chrome's `file:` origin, shared with every data:/sandboxed frame).
+    // The chrome reads it over IPC instead (security audit O-1, #428).
+    expect(configContent).not.toMatch(/cors-allowed-origins/);
+    // The web-content guard learns the port before the node is healthy
+    // (the registry only learns it after), so it is never live unguarded.
+    expect(ctx.noteAntApiUrl).toHaveBeenCalledWith('http://127.0.0.1:11633');
+    expect(ctx.noteAntApiUrl.mock.invocationCallOrder[0]).toBeLessThan(
+      ctx.spawn.mock.invocationCallOrder[0]
+    );
 
     const stopPromise = ctx.mod.stopAnt();
     await jest.advanceTimersByTimeAsync(0);
@@ -703,6 +756,7 @@ describe('ant-manager', () => {
 
     expect(checkedPorts).toEqual([]);
     expect(ctx.spawn).not.toHaveBeenCalled();
+    expect(ctx.startBridge).not.toHaveBeenCalled();
     expect(ctx.mod.getActivePort()).toBe(22633);
     expect(ctx.updateService).toHaveBeenCalledWith('ant', {
       api: 'http://127.0.0.1:22633',
@@ -740,6 +794,7 @@ describe('ant-manager', () => {
     expect(checkedPorts).toEqual([]);
     expect(ctx.httpGet).not.toHaveBeenCalled();
     expect(ctx.spawn).not.toHaveBeenCalled();
+    expect(ctx.startBridge).not.toHaveBeenCalled();
     expect(ctx.mod.getActivePort()).toBeNull();
     expect(ctx.updateService).toHaveBeenCalledWith('ant', {
       api: null,
@@ -749,7 +804,7 @@ describe('ant-manager', () => {
     expect(ctx.setStatusMessage).toHaveBeenCalledWith('ant', 'Node disabled for this profile');
   });
 
-  test('starts a bundled ultra-light daemon on a fallback port and writes ultra-light config', async () => {
+  test('starts the bundled daemon on a fallback port with its write-capable chain transport', async () => {
     jest.useFakeTimers();
 
     const platformMap = {
@@ -764,7 +819,6 @@ describe('ant-manager', () => {
     const configPath = path.join(dataDir, 'config.yaml');
     const keysPath = path.join(dataDir, 'keys');
     const ctx = loadAntManagerModule({
-      antNodeMode: 'ultraLight',
       existsSync: (target) => {
         if (target === antBinPath) return true;
         if (target === dataDir) return false;
@@ -798,16 +852,20 @@ describe('ant-manager', () => {
     await jest.advanceTimersByTimeAsync(1000);
     await flushMicrotasks();
 
-    expect(ctx.loadSettings).toHaveBeenCalled();
     expect(ctx.fsMock.mkdirSync).toHaveBeenCalledWith(ctx.dataDir, { recursive: true });
     expect(ctx.randomBytes).toHaveBeenCalledWith(32);
     // antd self-initializes its identity; Freedom no longer runs an init step.
     expect(ctx.execSync).not.toHaveBeenCalled();
     expect(ctx.spawnedProcesses).toHaveLength(1);
     expect(ctx.spawnedProcesses[0].binary).toBe(ctx.antBinPath);
+    // One mode: the node can always publish, so it always gets the bridge
+    // as its write RPC, and the bridge always forwards its transactions.
+    expect(ctx.startBridge).toHaveBeenCalledWith({ allowBroadcast: true });
     expect(ctx.spawnedProcesses[0].args).toEqual([
       `--config=${ctx.configPath}`,
       '--no-control-socket',
+      `--gnosis-logs-rpc-url=${ctx.bridge.url}`,
+      `--gnosis-rpc-url=${ctx.bridge.url}`,
     ]);
     expect(ctx.mod.getActivePort()).toBe(1634);
     expect(ctx.updateService).toHaveBeenCalledWith('ant', {
@@ -820,8 +878,11 @@ describe('ant-manager', () => {
     const configContent = ctx.fsMock.writeFileSync.mock.calls[0][1];
     expect(configContent).toContain('api-addr: 127.0.0.1:1634');
     expect(configContent).toContain('p2p-addr: :1634');
-    expect(configContent).toContain('swap-enable: false');
-    expect(configContent).toContain('blockchain-rpc-endpoint: ""');
+    // swap-enable follows the antSwapEnable setting, on by default as in
+    // bee (#488); the chain RPC reaches the node only as the bridge flag,
+    // never as a URL on disk.
+    expect(configContent).toMatch(/^swap-enable: true$/m);
+    expect(configContent).not.toContain('blockchain-rpc-endpoint');
     expect(configContent).toContain('resolver-options: "https://ethereum.publicnode.com"');
     expect(configContent).toContain(`data-dir: ${ctx.dataDir}`);
     expect(configContent).toContain(`password: ${'ab'.repeat(32)}`);
@@ -831,16 +892,16 @@ describe('ant-manager', () => {
     await flushMicrotasks();
     await stopPromise;
 
+    expect(ctx.bridge.close).toHaveBeenCalled();
     expect(ctx.spawnedProcesses[0].kills).toContain('SIGTERM');
     expect(ctx.clearService).toHaveBeenCalledWith('ant');
     expect(jest.getTimerCount()).toBe(0);
   });
 
-  test('writes light-node config with the primary Gnosis RPC endpoint', async () => {
+  test('keeps every RPC URL out of the config and resolves ENS over a keyless Ethereum RPC', async () => {
     jest.useFakeTimers();
 
     const ctx = loadAntManagerModule({
-      antNodeMode: 'light',
       rpcUrls: ['https://rpc.gnosischain.com', 'https://backup.gnosis.example'],
       ethereumRpcUrls: ['https://eth.user.example', 'https://ethereum.publicnode.com'],
       portSequence: [false],
@@ -863,11 +924,11 @@ describe('ant-manager', () => {
     await jest.advanceTimersByTimeAsync(1000);
     await flushMicrotasks();
 
-    expect(ctx.registry.getEndpointSources).toHaveBeenCalledWith(100, 'rpc');
-
     const configContent = ctx.fsMock.writeFileSync.mock.calls[0][1];
-    expect(configContent).toContain('swap-enable: true');
-    expect(configContent).toContain('blockchain-rpc-endpoint: "https://rpc.gnosischain.com"');
+    expect(ctx.startBridge).toHaveBeenCalledWith({ allowBroadcast: true });
+    expect(ctx.spawnedProcesses[0].args).toContain(`--gnosis-rpc-url=${ctx.bridge.url}`);
+    expect(configContent).not.toContain(ctx.bridge.url);
+    expect(configContent).not.toContain('rpc.gnosischain.com');
     expect(configContent).toContain('resolver-options: "https://eth.user.example"');
 
     const stopPromise = ctx.mod.stopAnt();
@@ -875,7 +936,7 @@ describe('ant-manager', () => {
     await stopPromise;
   });
 
-  test('prefers keyless Gnosis RPC for Bee over keyed commercial providers', () => {
+  test('prefers a keyless Ethereum RPC for ENS resolution over keyed commercial providers', () => {
     const ctx = loadAntManagerModule({
       registry: {
         getEndpointSources: jest.fn(() => [
@@ -883,25 +944,100 @@ describe('ant-manager', () => {
             id: 'alchemy',
             role: 'rpc',
             keyed: true,
-            coverage: { 100: 'https://gnosis-mainnet.g.alchemy.com/v2/{API_KEY}' },
+            coverage: { 1: 'https://eth-mainnet.g.alchemy.com/v2/{API_KEY}' },
           },
           {
-            id: 'gno-gnosischain',
+            id: 'eth-publicnode',
             role: 'rpc',
             keyed: false,
-            coverage: { 100: 'https://rpc.gnosischain.com' },
+            coverage: { 1: 'https://ethereum.publicnode.com' },
           },
         ]),
         getEndpoints: jest.fn(() => [
-          'https://gnosis-mainnet.g.alchemy.com/v2/redacted',
-          'https://rpc.gnosischain.com',
+          'https://eth-mainnet.g.alchemy.com/v2/redacted',
+          'https://ethereum.publicnode.com',
         ]),
       },
     });
 
-    expect(ctx.mod.getPrimaryGnosisRpcUrl()).toBe('https://rpc.gnosischain.com');
-    expect(ctx.registry.getEndpointSources).toHaveBeenCalledWith(100, 'rpc');
+    expect(ctx.mod.getPrimaryEthereumRpcUrl()).toBe('https://ethereum.publicnode.com');
+    expect(ctx.registry.getEndpointSources).toHaveBeenCalledWith(1, 'rpc');
     expect(ctx.registry.getEndpoints).not.toHaveBeenCalled();
+  });
+
+  // R2-M1 on #588: startAnt returns while antd is still STARTING, so the
+  // cache-size restart waits for the start to settle before judging it.
+  describe('waitForStartSettled', () => {
+    const spawnCtx = () =>
+      loadAntManagerModule({
+        existsSync: (target) => /[\\/]antd(\.exe)?$/.test(target),
+        portSequence: [false],
+        httpResponse: () => ({ statusCode: 500, body: '' }),
+      });
+
+    test('resolves at once when the node is not starting', async () => {
+      const ctx = loadAntManagerModule({ binExists: false });
+      await expect(ctx.mod.waitForStartSettled(10)).resolves.toBeUndefined();
+    });
+
+    test('waits through STARTING and resolves when a spawned antd exits', async () => {
+      const ctx = spawnCtx();
+      await ctx.mod.startAnt();
+      await flushMicrotasks();
+      expect(ctx.spawnedProcesses).toHaveLength(1);
+      expect(ctx.mod.getStatus().status).toBe('starting');
+
+      let settled = false;
+      const wait = ctx.mod.waitForStartSettled(60_000).then(() => {
+        settled = true;
+      });
+      await flushMicrotasks();
+      expect(settled).toBe(false);
+
+      ctx.spawnedProcesses[0].emit('close', 1);
+      await wait;
+      expect(settled).toBe(true);
+      expect(ctx.mod.getStatus()).toEqual({ status: 'stopped', error: 'Exited with code 1' });
+      await ctx.mod.stopAnt();
+    });
+
+    test('gives up after the timeout if the node is still starting', async () => {
+      const ctx = spawnCtx();
+      await ctx.mod.startAnt();
+      await flushMicrotasks();
+      let settled = false;
+      const wait = ctx.mod.waitForStartSettled(500).then(() => {
+        settled = true;
+      });
+      await jest.advanceTimersByTimeAsync(499);
+      expect(settled).toBe(false);
+      await jest.advanceTimersByTimeAsync(1);
+      await wait;
+      expect(ctx.mod.getStatus().status).toBe('starting');
+      const stop = ctx.mod.stopAnt();
+      await jest.advanceTimersByTimeAsync(0);
+      await stop;
+    });
+  });
+
+  test('tells main-process listeners about every status change', async () => {
+    const ctx = loadAntManagerModule({ binExists: false });
+    const listener = jest.fn();
+    const unsubscribe = ctx.mod.onStatusChange(listener);
+
+    await ctx.mod.startAnt();
+    await flushMicrotasks();
+
+    expect(listener.mock.calls.map(([update]) => update.status)).toEqual(['starting', 'error']);
+    expect(listener).toHaveBeenLastCalledWith({
+      status: 'error',
+      error: expect.stringContaining('Ant binary not found'),
+    });
+
+    unsubscribe();
+    listener.mockClear();
+    await ctx.mod.stopAnt();
+    expect(listener).not.toHaveBeenCalled();
   });
 
   test('preserves an existing Bee password when rewriting config', async () => {
@@ -974,6 +1110,7 @@ describe('ant-manager', () => {
     await flushMicrotasks();
 
     expect(ctx.spawn).not.toHaveBeenCalled();
+    expect(ctx.startBridge).not.toHaveBeenCalled();
     expect(ctx.fsMock.writeFileSync).not.toHaveBeenCalled();
     expect(ctx.setStatusMessage).toHaveBeenCalledWith('ant', 'Node failed to start');
     expect(ctx.log.error).toHaveBeenCalledWith(
@@ -982,9 +1119,13 @@ describe('ant-manager', () => {
     );
   });
 
-  test('fails startup when Ant light mode has no configured primary Gnosis RPC', async () => {
+  // Browsing must not depend on a Gnosis RPC: without one the bridge still
+  // starts (its chain reads fail), and the setup screen reports a node that
+  // cannot reach Gnosis Chain rather than a node that will not start.
+  test('starts without a configured Gnosis RPC', async () => {
+    jest.useFakeTimers();
+
     const ctx = loadAntManagerModule({
-      antNodeMode: 'light',
       rpcUrls: [],
       portSequence: [false],
       httpResponse: () => ({
@@ -996,12 +1137,16 @@ describe('ant-manager', () => {
     await ctx.mod.startAnt();
     await flushMicrotasks();
 
-    expect(ctx.spawn).not.toHaveBeenCalled();
-    expect(ctx.setStatusMessage).toHaveBeenCalledWith('ant', 'Node failed to start');
-    expect(ctx.log.error).toHaveBeenCalledWith(
+    expect(ctx.startBridge).toHaveBeenCalledWith({ allowBroadcast: true });
+    expect(ctx.spawn).toHaveBeenCalledTimes(1);
+    expect(ctx.log.error).not.toHaveBeenCalledWith(
       '[Ant] Failed to prepare config:',
-      'No primary Gnosis RPC endpoint configured for Ant light mode'
+      expect.anything()
     );
+
+    const stopPromise = ctx.mod.stopAnt();
+    await jest.advanceTimersByTimeAsync(0);
+    await stopPromise;
   });
 
   test('fails startup when the Bee binary is missing', async () => {
@@ -1018,7 +1163,144 @@ describe('ant-manager', () => {
     await flushMicrotasks();
 
     expect(ctx.spawn).not.toHaveBeenCalled();
+    expect(ctx.startBridge).not.toHaveBeenCalled();
     expect(ctx.setStatusMessage).toHaveBeenCalledWith('ant', 'Node failed to start');
+  });
+
+  // #579: bee's cache-capacity (chunks × 4096), from the antCacheCapacityBytes setting.
+  describe('cache-capacity', () => {
+    const GIB = 1024 * 1024 * 1024;
+    const build = (ctx, extra) =>
+      ctx.mod.buildAntConfigContent({
+        dataDir: '/d',
+        apiPort: 1633,
+        p2pPort: 1634,
+        password: 'pw',
+        resolverRpcEndpoint: 'https://eth.example',
+        ...extra,
+      });
+    const writtenConfig = (ctx) =>
+      ctx.fsMock.writeFileSync.mock.calls.find(([file]) => file === ctx.configPath)?.[1];
+    const startOnce = async (options) => {
+      const ctx = loadAntManagerModule({
+        portSequence: [false, false],
+        httpResponse: () => ({ statusCode: 200, body: { status: 'ok', version: '0.5.60' } }),
+        ...options,
+      });
+      await ctx.mod.startAnt();
+      await flushMicrotasks();
+      await ctx.mod.stopAnt();
+      return ctx;
+    };
+
+    test('writes the size as a chunk count', () => {
+      const ctx = loadAntManagerModule();
+      expect(build(ctx, { cacheCapacityBytes: 512 * 1024 * 1024 })).toMatch(
+        /^cache-capacity: 131072$/m
+      );
+      expect(build(ctx, { cacheCapacityBytes: 16 * GIB })).toMatch(/^cache-capacity: 4194304$/m);
+    });
+
+    test('never writes an unvalidated value: anything else is the 2 GB default', () => {
+      const ctx = loadAntManagerModule();
+      for (const bad of [undefined, 3 * GIB, 'lots', -1, 1.5, '10737418240']) {
+        const content = build(ctx, { cacheCapacityBytes: bad });
+        expect(content).toMatch(/^cache-capacity: 524288$/m);
+        expect(content.match(/^cache-capacity:/gm)).toHaveLength(1);
+      }
+    });
+
+    test('startAnt writes the saved size', async () => {
+      const ctx = await startOnce({ settings: { antCacheCapacityBytes: 5 * GIB } });
+      expect(writtenConfig(ctx)).toMatch(/^cache-capacity: 1310720$/m);
+      expect(ctx.saveSettings).not.toHaveBeenCalled();
+    });
+
+    test('a saved unknown value starts the node at the default, without rewriting it', async () => {
+      const ctx = await startOnce({ settings: { antCacheCapacityBytes: 7 } });
+      expect(writtenConfig(ctx)).toMatch(/^cache-capacity: 524288$/m);
+      expect(ctx.saveSettings).not.toHaveBeenCalled();
+    });
+
+    test('first start of a new profile: 2 GB, saved', async () => {
+      const ctx = await startOnce({ settings: { antCacheCapacityBytes: null } });
+      expect(writtenConfig(ctx)).toMatch(/^cache-capacity: 524288$/m);
+      expect(ctx.saveSettings).toHaveBeenCalledWith({ antCacheCapacityBytes: 2 * GIB });
+    });
+
+    test('first start of a profile with a cache from an older Freedom: keeps 10 GB, saved', async () => {
+      let ctx;
+      ctx = await startOnce({
+        settings: { antCacheCapacityBytes: null },
+        existsSync: (target) => {
+          if (target === ctx?.antBinPath || /ant-bin/.test(target)) return true;
+          return target.endsWith(`ant-data${path.sep}chunks.sqlite`);
+        },
+      });
+      expect(writtenConfig(ctx)).toMatch(/^cache-capacity: 2621440$/m);
+      expect(ctx.saveSettings).toHaveBeenCalledWith({ antCacheCapacityBytes: 10 * GIB });
+    });
+
+    // R1-F1 on #588: before the first start Settings shows what that start
+    // will write, so an upgrader sees 10 GB and can choose 2 GB beforehand.
+    test.each([
+      [true, 10 * GIB],
+      [false, 2 * GIB],
+    ])('Settings before the first start (existing cache: %p) shows %p', async (hasCache, bytes) => {
+      const ctx = loadAntManagerModule({
+        settings: { antCacheCapacityBytes: null },
+        existsSync: (target) => hasCache && target.endsWith(`ant-data${path.sep}chunks.sqlite`),
+      });
+      ctx.mod.registerAntIpc();
+      await expect(ctx.ipcMain.invoke(IPC.ANT_CACHE_GET_SETTINGS)).resolves.toMatchObject({
+        bytes,
+        storedBytes: null,
+      });
+      expect(ctx.saveSettings).not.toHaveBeenCalled();
+    });
+  });
+
+  // #488: bee's swap-enable, written from the antSwapEnable setting.
+  describe('swap-enable', () => {
+    test('writes swap-enable: false when the user switched paying peers off', () => {
+      const ctx = loadAntManagerModule({ settings: { antSwapEnable: false } });
+      const content = ctx.mod.buildAntConfigContent({
+        dataDir: '/d',
+        apiPort: 1633,
+        p2pPort: 1634,
+        password: 'pw',
+        resolverRpcEndpoint: 'https://eth.example',
+        swapEnable: false,
+      });
+      expect(content).toMatch(/^swap-enable: false$/m);
+      expect(content).not.toMatch(/^swap-enable: true$/m);
+    });
+
+    test('startAnt writes the setting into config.yaml', async () => {
+      const ctx = loadAntManagerModule({
+        settings: { antSwapEnable: false },
+        portSequence: [false, false],
+        httpResponse: () => ({ statusCode: 200, body: { status: 'ok', version: '0.5.55' } }),
+      });
+      await ctx.mod.startAnt();
+      await flushMicrotasks();
+      const config = ctx.fsMock.writeFileSync.mock.calls.find(([file]) => file === ctx.configPath);
+      expect(config[1]).toMatch(/^swap-enable: false$/m);
+      await ctx.mod.stopAnt();
+    });
+
+    // Whether the running antd has the switch is read from the node itself
+    // (`GET /node`'s `settlement`, browsing-credit-service.js), not from
+    // `antd --help`: ant-manager only says whether Freedom runs the node.
+    test('a bundled node is managed; an external or disabled profile node is not', () => {
+      expect(loadAntManagerModule().mod.isManagedAntNode()).toBe(true);
+      for (const mode of ['external', 'disabled']) {
+        const ctx = loadAntManagerModule({
+          activeProfile: { metadata: { nodes: { bee: { mode, url: 'http://127.0.0.1:1633' } } } },
+        });
+        expect(ctx.mod.isManagedAntNode()).toBe(false);
+      }
+    });
   });
 
   // Regression guard for issue #90: identity injection must stop a Bee node that
@@ -1090,7 +1372,6 @@ describe('ant-manager', () => {
       jest.useFakeTimers();
 
       const ctx = loadAntManagerModule({
-        antNodeMode: 'ultraLight',
         portSequence: [false],
         // Health never passes, so the node stays in STARTING with its process
         // (and statestore lock) alive — the exact startup-race window.
@@ -1110,8 +1391,53 @@ describe('ant-manager', () => {
       const wasActive = await stopPromise;
 
       expect(wasActive).toBe(true);
+      expect(ctx.bridge.close).toHaveBeenCalled();
       expect(ctx.spawnedProcesses[0].kills).toContain('SIGTERM');
       expect(ctx.mod.getStatus().status).toBe('stopped');
     });
+  });
+});
+
+
+describe('Ant private chain transport lifecycle', () => {
+  afterEach(() => { jest.useRealTimers(); });
+
+  test('a bridge bind failure fails startup without spawning an RPC-only daemon', async () => {
+    const ctx = loadAntManagerModule({
+      startBridge: jest.fn().mockRejectedValue(new Error('bind failed')),
+    });
+    await ctx.mod.startAnt();
+    expect(ctx.spawn).not.toHaveBeenCalled();
+    expect(ctx.mod.getStatus().status).toBe('error');
+  });
+
+  test('stop during bridge startup closes the late bridge without spawning', async () => {
+    let ready, entered;
+    const began = new Promise((resolve) => { entered = resolve; });
+    const startBridge = jest.fn(() => {
+      entered();
+      return new Promise((resolve) => { ready = resolve; });
+    });
+    const ctx = loadAntManagerModule({ startBridge });
+    const starting = ctx.mod.startAnt();
+    await began;
+    await ctx.mod.stopAnt();
+    ready(ctx.bridge);
+    await starting;
+    expect(ctx.bridge.close).toHaveBeenCalled();
+    expect(ctx.spawn).not.toHaveBeenCalled();
+  });
+
+  test('unexpected exit and spawn error revoke their bridge; URLs stay out of logs', async () => {
+    jest.useFakeTimers();
+    const ctx = loadAntManagerModule();
+    await ctx.mod.startAnt();
+    const child = ctx.spawnedProcesses[0];
+    child.emit('error', new Error('could not spawn'));
+    expect(ctx.bridge.close).toHaveBeenCalled();
+    child.emit('close', 1);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(JSON.stringify(ctx.log.info.mock.calls)).not.toContain(ctx.bridge.url);
+    expect(ctx.mod.getStatus().status).toBe('stopped');
   });
 });

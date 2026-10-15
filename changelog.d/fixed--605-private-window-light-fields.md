@@ -1,0 +1,1 @@
+- A private window's address bar, find bar and bookmark fields stay readable with the light theme, no longer light lavender text on a near-white field ([#605](https://github.com/solardev-xyz/freedom-browser/issues/605))

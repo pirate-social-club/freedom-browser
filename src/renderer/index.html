@@ -6,12 +6,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http: https:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* wss:;"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http: https:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* wss:; base-uri 'none';"
     />
     <title>Freedom</title>
     <link rel="stylesheet" href="./styles.css" />
     <link rel="stylesheet" href="./styles/sidebar.css" />
     <link rel="stylesheet" href="styles/session-routing.css" />
+    <!-- Classic (parser-blocking) on purpose: tags <html> with the OS before
+         first paint so per-platform layout never jumps. -->
+    <script src="./platform-init.js"></script>
   </head>
   <body>
     <!-- Download shelf (cards inserted dynamically) -->
@@ -339,6 +342,39 @@
               <div class="permission-popover-title" id="permission-popover-title"></div>
               <div class="permission-popover-list" id="permission-popover-list"></div>
             </div>
+            <!-- Popover behind the pop-up-blocked icon (#442): the popups this
+                 tab's page tried to open without a user gesture, each with an
+                 Open action, plus the per-site "Always allow". -->
+            <div
+              id="popup-blocked-popover"
+              class="permission-popover popup-blocked-popover chrome-popover"
+              role="dialog"
+              aria-labelledby="popup-blocked-title"
+              data-test="popup-blocked-popover"
+              hidden
+            >
+              <div class="permission-popover-title" id="popup-blocked-title">Pop-ups blocked</div>
+              <div class="popup-blocked-origin" id="popup-blocked-origin"></div>
+              <div class="popup-blocked-list" id="popup-blocked-list"></div>
+              <div class="popup-blocked-more hidden" id="popup-blocked-more"></div>
+              <div class="popup-blocked-actions">
+                <button
+                  id="popup-blocked-allow"
+                  class="permission-btn"
+                  type="button"
+                  data-test="popup-blocked-allow"
+                >
+                  Always allow pop-ups on this site
+                </button>
+                <div
+                  class="popup-blocked-allowed hidden"
+                  id="popup-blocked-allowed"
+                  data-test="popup-blocked-allowed"
+                >
+                  Pop-ups are allowed on this site. Remove it in Settings &gt; Privacy and security &gt; Site Permissions.
+                </div>
+              </div>
+            </div>
             <span id="protocol-icon" class="protocol-icon" aria-hidden="true">
               <!-- Swarm icon (official logo) -->
               <svg class="icon-swarm" viewBox="18 34 44 45" fill="currentColor">
@@ -438,6 +474,32 @@
                 <line x1="1" y1="14" x2="7" y2="14" />
                 <line x1="9" y1="8" x2="15" y2="8" />
                 <line x1="17" y1="16" x2="23" y2="16" />
+              </svg>
+            </button>
+            <button
+              id="popup-blocked-indicator"
+              class="icon-btn input-action-btn popup-blocked-indicator hidden"
+              type="button"
+              aria-label="Pop-up blocked"
+              title="Pop-up blocked"
+              aria-haspopup="dialog"
+              aria-expanded="false"
+              aria-controls="popup-blocked-popover"
+              data-test="popup-blocked-indicator"
+            >
+              <!-- A window with a cross: this tab's page had a pop-up blocked -->
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <line x1="3" y1="9" x2="21" y2="9" />
+                <line x1="9.5" y1="12.5" x2="14.5" y2="17.5" />
+                <line x1="14.5" y1="12.5" x2="9.5" y2="17.5" />
               </svg>
             </button>
             <button
@@ -690,13 +752,23 @@
             </span>
           </button>
           <div class="ipfs-info">
-            <div class="ipfs-info-row">
+            <!-- Managed freedom-ipfs node: its own gateway counters. -->
+            <div class="ipfs-info-row ipfs-managed-stat">
               <span class="ipfs-info-label">Active Requests:</span>
               <span id="ipfs-active-requests-count">0</span>
             </div>
-            <div class="ipfs-info-row">
+            <div class="ipfs-info-row ipfs-managed-stat">
               <span class="ipfs-info-label">Session Download:</span>
               <span id="ipfs-data-read"></span>
+            </div>
+            <!-- External node (e.g. Kubo): read off its RPC API (#417). -->
+            <div class="ipfs-info-row ipfs-external-stat">
+              <span class="ipfs-info-label">Connected Peers:</span>
+              <span id="ipfs-peers-count">0</span>
+            </div>
+            <div class="ipfs-info-row ipfs-external-stat">
+              <span class="ipfs-info-label">Bandwidth:</span>
+              <span id="ipfs-bandwidth"></span>
             </div>
             <div class="ipfs-info-row">
               <span class="ipfs-info-label">Version:</span>
@@ -717,6 +789,15 @@
             </span>
           </button>
           <div class="ipfs-info" id="myotis-info">
+            <p
+              id="myotis-upgrade-message"
+              class="myotis-recovery-message myotis-upgrade-message warning"
+              role="status"
+              hidden
+            >
+              <span id="myotis-upgrade-text"></span>
+              <span id="myotis-upgrade-detail" class="myotis-upgrade-detail"></span>
+            </p>
             <p
               id="myotis-recovery-message"
               class="myotis-recovery-message"
@@ -768,6 +849,15 @@
             </span>
           </button>
           <div class="ipfs-info" id="myotis-gnosis-info">
+            <p
+              id="myotis-gnosis-upgrade-message"
+              class="myotis-recovery-message myotis-upgrade-message warning"
+              role="status"
+              hidden
+            >
+              <span id="myotis-gnosis-upgrade-text"></span>
+              <span id="myotis-gnosis-upgrade-detail" class="myotis-upgrade-detail"></span>
+            </p>
             <p
               id="myotis-gnosis-recovery-message"
               class="myotis-recovery-message"
@@ -921,6 +1011,7 @@
             <line x1="4" x2="20" y1="6" y2="6" vector-effect="non-scaling-stroke" />
             <line x1="4" x2="20" y1="18" y2="18" vector-effect="non-scaling-stroke" />
           </svg>
+          <span class="menu-button-badge" id="menu-update-badge" hidden></span>
         </button>
         <div id="menu-dropdown" class="menu-dropdown chrome-popover" role="menu">
           <!-- Group 0: Profiles -->
@@ -1071,8 +1162,20 @@
           <button id="about-btn" class="menu-item" type="button">
             <span class="menu-item-label">About Freedom</span>
           </button>
-          <button id="check-updates-btn" class="menu-item" type="button">
-            <span class="menu-item-label">Check for Updates…</span>
+          <!-- State-driven (#87): lib/update-status-ui.js rewrites the label,
+               the right-hand status and the progress bar from main's update
+               state. -->
+          <button
+            id="check-updates-btn"
+            class="menu-item update-menu-item"
+            type="button"
+            data-update-status="unsupported"
+          >
+            <span class="menu-item-label" id="update-menu-label">Check for Updates…</span>
+            <span class="menu-item-shortcut update-menu-status" id="update-menu-status" hidden></span>
+            <span class="update-menu-progress" id="update-menu-progress" hidden>
+              <span class="update-menu-progress-bar" id="update-menu-progress-bar"></span>
+            </span>
           </button>
         </div>
       </div>
@@ -1473,7 +1576,7 @@
                       <span class="node-card-title">Swarm</span>
                     </div>
                     <div class="node-card-header-right">
-                      <span class="node-card-mode" id="swarm-mode-badge">Ultra-light</span>
+                      <span class="node-card-mode hidden" id="swarm-mode-badge"></span>
                       <span class="node-card-status" id="swarm-status-badge" data-status="stopped"
                         >Stopped</span
                       >
@@ -1481,7 +1584,7 @@
                   </button>
                   <div class="node-card-content" id="swarm-card-content">
                     <!-- Node Wallet -->
-                    <div class="node-info-group" id="swarm-wallet-group">
+                    <div class="node-info-group hidden" id="swarm-wallet-group">
                       <div class="node-section-header">
                         <span class="node-info-label">Node Wallet</span>
                         <code class="node-section-address" id="sidebar-swarm-id"></code>
@@ -1510,11 +1613,7 @@
                         <span class="node-balance-symbol">xDAI</span>
                         <span class="node-balance-value" id="swarm-balance-xdai">--</span>
                       </div>
-                      <div
-                        class="node-balance-row node-balance-clickable"
-                        id="swarm-topup-xbzz"
-                        title="Click to top up"
-                      >
+                      <div class="node-balance-row">
                         <span class="node-balance-symbol">xBZZ</span>
                         <span class="node-balance-value" id="swarm-balance-xbzz">--</span>
                       </div>
@@ -1545,11 +1644,49 @@
                       <div
                         class="node-balance-row node-balance-clickable"
                         id="swarm-topup-chequebook"
-                        title="Click to deposit xBZZ"
+                        title="Chequebook deposit"
                       >
                         <span class="node-balance-symbol">xBZZ</span>
                         <span class="node-balance-value" id="swarm-chequebook-balance">--</span>
                       </div>
+                    </div>
+
+                    <!-- Browsing credit (#488): the chequebook also pays for faster downloads -->
+                    <div class="node-info-group hidden" id="swarm-credit-group">
+                      <div class="node-info-label-row">
+                        <span class="node-info-label">Browsing Credit</span>
+                        <span
+                          class="node-card-status hidden"
+                          id="swarm-credit-tier"
+                          data-status="stopped"
+                        ></span>
+                      </div>
+                      <div class="node-balance-row">
+                        <span class="node-balance-symbol">xBZZ</span>
+                        <span class="node-balance-value" id="swarm-credit-available">--</span>
+                      </div>
+                      <div class="swarm-credit-line hidden" id="swarm-credit-detail"></div>
+                      <div class="swarm-credit-line hidden" id="swarm-credit-spend"></div>
+                      <p class="swarm-credit-status hidden" id="swarm-credit-status"></p>
+                      <div class="node-upgrade-cta hidden" id="swarm-credit-topup-cta">
+                        <button type="button" class="node-upgrade-btn" id="swarm-credit-topup">
+                          <span>Top Up Credit</span>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="m9 18 6-6-6-6" />
+                          </svg>
+                        </button>
+                      </div>
+                      <div class="swarm-credit-toggle-row">
+                        <label class="swarm-credit-toggle-text" for="swarm-credit-switch">
+                          <span class="swarm-credit-toggle-label">Pay peers from the chequebook</span>
+                          <span class="swarm-credit-line" id="swarm-credit-toggle-hint"></span>
+                        </label>
+                        <label class="toggle-switch">
+                          <input type="checkbox" role="switch" id="swarm-credit-switch" disabled />
+                          <span class="toggle-slider"></span>
+                        </label>
+                      </div>
+                      <p class="swarm-credit-note" id="swarm-credit-note"></p>
                     </div>
 
                     <!-- Publisher Identities CTA (visible when identities exist) -->
@@ -3144,148 +3281,169 @@
               </div>
             </div>
 
-            <!-- Publish Setup sub-screen -->
+            <!-- Publish Setup sub-screen: renders the main-process setup state
+                 (src/main/swarm/publish-setup-service.js); see publish-setup.js -->
             <div id="sidebar-publish-setup" class="sidebar-subscreen hidden">
               <div
                 class="subscreen-header"
                 data-back="publish-setup-back"
                 data-title="Publish Setup"
+                data-title-id="publish-setup-title"
               ></div>
 
               <div class="subscreen-content">
-                <p class="publish-setup-intro">Complete these steps to publish content on Swarm.</p>
+                <!-- The site whose publish request brought the user here -->
+                <div class="swarm-connect-note hidden" id="publish-setup-origin">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="16" x2="12" y2="12" />
+                    <line x1="12" y1="8" x2="12.01" y2="8" />
+                  </svg>
+                  <span id="publish-setup-origin-text"></span>
+                </div>
 
-                <div class="publish-setup-checklist" id="publish-setup-checklist">
-                  <div class="publish-step" id="publish-step-fund-xdai" data-status="pending">
-                    <div class="publish-step-indicator">
-                      <span class="publish-step-number">1</span>
-                      <svg
-                        class="publish-step-check"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2.5"
-                      >
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
+                <!-- Why a purchase, extension or top-up could not start -->
+                <div class="stamp-purchase-error hidden" id="publish-setup-error"></div>
+
+                <!-- The node cannot price or buy right now -->
+                <div class="hidden" id="publish-setup-node">
+                  <p class="publish-setup-intro" id="publish-setup-node-text"></p>
+                  <button
+                    type="button"
+                    class="stamp-retry-btn hidden"
+                    id="publish-setup-node-action"
+                  ></button>
+                </div>
+
+                <!-- Pick a plan -->
+                <div class="hidden" id="publish-setup-plans">
+                  <!-- Ant could not finish looking for storage the wallet owns -->
+                  <div class="swarm-connect-note hidden" id="publish-setup-plans-warning">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="8" x2="12" y2="12" />
+                      <line x1="12" y1="16" x2="12.01" y2="16" />
+                    </svg>
+                    <span id="publish-setup-plans-warning-text"></span>
+                  </div>
+                  <p class="publish-setup-intro">
+                    Pick a storage plan. You pay once, in xDAI: your Swarm node swaps it, buys the
+                    storage and sets up its network payments.
+                  </p>
+                  <div class="stamp-presets" id="publish-plan-list">
+                    <!-- Plan buttons inserted dynamically -->
+                  </div>
+                  <div class="stamp-purchase-error hidden" id="publish-plans-error"></div>
+                </div>
+
+                <!-- Already able to publish -->
+                <div class="hidden" id="publish-setup-ready">
+                  <p class="publish-setup-intro" id="publish-setup-ready-text"></p>
+                  <button type="button" class="stamp-purchase-btn" id="publish-setup-manage">
+                    Manage Storage
+                  </button>
+                  <button type="button" class="stamp-retry-btn" id="publish-setup-buy-more">
+                    Buy More Storage
+                  </button>
+                </div>
+
+                <!-- Pay the quoted xDAI to the node -->
+                <div class="hidden" id="publish-setup-pay">
+                  <div class="stamp-cost-section">
+                    <div class="stamp-cost-row">
+                      <span class="stamp-cost-label" id="publish-pay-label"></span>
                     </div>
-                    <div class="publish-step-body">
-                      <div class="publish-step-title">Fund node with xDAI</div>
-                      <div class="publish-step-detail">Needed for gas fees on Gnosis Chain.</div>
-                      <div class="publish-step-meta hidden" id="publish-step-fund-xdai-meta"></div>
-                      <button
-                        type="button"
-                        class="publish-step-btn hidden"
-                        id="publish-step-fund-xdai-btn"
-                      >
-                        Send xDAI
-                      </button>
+                    <div class="stamp-cost-row">
+                      <span class="stamp-cost-label">Send to your Swarm node</span>
+                      <span class="stamp-cost-value" id="publish-pay-amount">--</span>
+                    </div>
+                    <div class="stamp-balance-row">
+                      <span class="stamp-balance" id="publish-pay-balance"></span>
                     </div>
                   </div>
-
-                  <div class="publish-step" id="publish-step-light-mode" data-status="pending">
-                    <div class="publish-step-indicator">
-                      <span class="publish-step-number">2</span>
-                      <svg
-                        class="publish-step-check"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2.5"
-                      >
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    </div>
-                    <div class="publish-step-body">
-                      <div class="publish-step-title">Switch to light mode</div>
-                      <div class="publish-step-detail">
-                        Enables chain participation and uploads.
-                      </div>
-                      <button
-                        type="button"
-                        class="publish-step-btn hidden"
-                        id="publish-step-light-mode-btn"
-                      >
-                        Switch to Light Mode
-                      </button>
-                    </div>
+                  <div class="swarm-connect-note hidden" id="publish-pay-deposit">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="16" x2="12" y2="12" />
+                      <line x1="12" y1="8" x2="12.01" y2="8" />
+                    </svg>
+                    <span id="publish-pay-deposit-text"></span>
                   </div>
 
-                  <div class="publish-step" id="publish-step-chequebook" data-status="pending">
-                    <div class="publish-step-indicator">
-                      <span class="publish-step-number">3</span>
-                      <svg
-                        class="publish-step-check"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2.5"
-                      >
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    </div>
-                    <div class="publish-step-body">
-                      <div class="publish-step-title">Chequebook and postage sync</div>
-                      <div class="publish-step-detail">
-                        Automatic once Ant has xDAI in light mode.
-                      </div>
-                      <div class="publish-step-waiting hidden" id="publish-step-chequebook-waiting">
-                        Initializing&hellip;
-                      </div>
-                    </div>
-                  </div>
+                  <button type="button" class="stamp-purchase-btn" id="publish-pay-wallet">
+                    Pay from Your Freedom Wallet
+                  </button>
+                  <div class="stamp-purchase-error hidden" id="publish-pay-wallet-error"></div>
 
-                  <div class="publish-step" id="publish-step-fund-xbzz" data-status="pending">
-                    <div class="publish-step-indicator">
-                      <span class="publish-step-number">4</span>
-                      <svg
-                        class="publish-step-check"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2.5"
-                      >
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    </div>
-                    <div class="publish-step-body">
-                      <div class="publish-step-title">Acquire xBZZ</div>
-                      <div class="publish-step-detail">Swap xDAI for xBZZ on Gnosis Chain.</div>
-                      <button
-                        type="button"
-                        class="publish-step-btn hidden"
-                        id="publish-step-fund-xbzz-btn"
-                      >
-                        Swap xDAI → xBZZ
-                      </button>
-                    </div>
+                  <p class="publish-pay-anywhere">Or send it from any wallet on Gnosis Chain:</p>
+                  <div class="receive-qr-container">
+                    <img id="publish-pay-qr" class="receive-qr-image" alt="Payment QR code" />
                   </div>
+                  <div class="receive-address-box">
+                    <code class="receive-address" id="publish-pay-address"></code>
+                  </div>
+                  <button type="button" class="receive-copy-btn secondary" id="publish-pay-copy">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                    </svg>
+                    <span>Copy Address</span>
+                  </button>
+                  <p class="receive-helper-text">
+                    Send xDAI on Gnosis Chain only. To pay from another chain or with another token,
+                    use
+                    <button type="button" class="publish-link-btn" id="publish-pay-fund-link">
+                      fund.ethswarm.org</button
+                    >.
+                  </p>
 
-                  <div class="publish-step" id="publish-step-stamps" data-status="pending">
-                    <div class="publish-step-indicator">
-                      <span class="publish-step-number">5</span>
-                      <svg
-                        class="publish-step-check"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2.5"
-                      >
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    </div>
-                    <div class="publish-step-body">
-                      <div class="publish-step-title">Purchase postage stamps</div>
-                      <div class="publish-step-detail">Reserve storage space for your content.</div>
-                      <button
-                        type="button"
-                        class="publish-step-btn hidden"
-                        id="publish-step-stamps-btn"
-                      >
-                        Buy Stamps
-                      </button>
-                    </div>
+                  <div class="stamp-purchase-status" id="publish-pay-status">
+                    Waiting for payment&hellip;
                   </div>
+                  <button type="button" class="stamp-retry-btn" id="publish-pay-cancel">
+                    Cancel
+                  </button>
+                </div>
+
+                <!-- The node is buying -->
+                <div class="hidden" id="publish-setup-executing">
+                  <div class="send-pending-content">
+                    <div class="send-pending-spinner"></div>
+                    <h3 class="send-pending-title" id="publish-executing-title"></h3>
+                    <p class="send-pending-text" id="publish-executing-text"></p>
+                  </div>
+                </div>
+
+                <!-- Finished -->
+                <div class="hidden" id="publish-setup-done">
+                  <p class="publish-setup-intro" id="publish-done-text"></p>
+                  <button type="button" class="stamp-purchase-btn" id="publish-done-manage">
+                    Manage Storage
+                  </button>
+                  <button type="button" class="stamp-retry-btn" id="publish-done-close">
+                    Done
+                  </button>
+                </div>
+
+                <!-- Failed -->
+                <div class="hidden" id="publish-setup-failed">
+                  <div class="swarm-connect-warning hidden" id="publish-failed-uncertain">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path
+                        d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+                      />
+                      <line x1="12" y1="9" x2="12" y2="13" />
+                      <line x1="12" y1="17" x2="12.01" y2="17" />
+                    </svg>
+                    <span id="publish-failed-uncertain-text"></span>
+                  </div>
+                  <div class="stamp-purchase-error" id="publish-failed-text"></div>
+                  <button type="button" class="stamp-purchase-btn" id="publish-failed-retry">
+                    Try Again
+                  </button>
+                  <button type="button" class="stamp-retry-btn" id="publish-failed-cancel">
+                    Cancel
+                  </button>
                 </div>
               </div>
             </div>
@@ -3299,49 +3457,48 @@
               ></div>
 
               <div class="subscreen-content">
-                <!-- Batch list view -->
-                <div id="stamp-list-view">
-                  <div class="stamp-batch-list" id="stamp-batch-list">
-                    <!-- Batch cards inserted dynamically -->
-                  </div>
-                  <button type="button" class="stamp-buy-another-btn" id="stamp-buy-another-btn">
-                    Buy Another Batch
-                  </button>
+                <!-- The chequebook deposit ran dry -->
+                <div class="swarm-connect-warning hidden" id="stamp-deposit-warning">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path
+                      d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+                    />
+                    <line x1="12" y1="9" x2="12" y2="13" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                  </svg>
+                  <span
+                    >Uploads will stall: your node pays other nodes for bandwidth from its
+                    chequebook, and the deposit there is used up.</span
+                  >
                 </div>
+                <button
+                  type="button"
+                  class="stamp-retry-btn stamp-deposit-topup hidden"
+                  id="stamp-deposit-topup"
+                >
+                  Top Up Deposit
+                </button>
 
-                <!-- Purchase form view -->
-                <div id="stamp-purchase-view" class="hidden">
-                  <p class="stamp-manager-intro" id="stamp-purchase-intro">
-                    Purchase a storage batch to publish content on Swarm.
-                  </p>
-
-                  <div class="stamp-presets" id="stamp-presets">
-                    <!-- Preset buttons inserted dynamically -->
-                  </div>
-
-                  <div class="stamp-cost-section hidden" id="stamp-cost-display">
-                    <div class="stamp-cost-row">
-                      <span class="stamp-cost-label">Estimated cost</span>
-                      <span class="stamp-cost-spinner hidden" id="stamp-cost-spinner"
-                        >Estimating&hellip;</span
-                      >
-                      <span class="stamp-cost-value hidden" id="stamp-cost-value">--</span>
-                    </div>
-                    <div class="stamp-balance-row">
-                      <span class="stamp-balance" id="stamp-balance">Balance: --</span>
-                    </div>
-                  </div>
-
-                  <button type="button" class="stamp-purchase-btn" id="stamp-purchase-btn" disabled>
-                    Buy Storage
-                  </button>
-
-                  <div class="stamp-purchase-status hidden" id="stamp-purchase-status"></div>
-                  <div class="stamp-purchase-error hidden" id="stamp-purchase-error"></div>
-                  <button type="button" class="stamp-retry-btn hidden" id="stamp-retry-btn">
-                    Try Again
-                  </button>
+                <!-- Ant is still looking for storage this wallet already owns -->
+                <p class="stamp-manager-intro hidden" id="stamp-scan-status"></p>
+                <!-- Ant could not finish looking for storage the wallet owns -->
+                <div class="swarm-connect-note hidden" id="stamp-scan-warning">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="12" />
+                    <line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                  <span id="stamp-scan-warning-text"></span>
                 </div>
+                <p class="stamp-manager-intro hidden" id="stamp-list-empty">
+                  You have no storage yet. Buy a storage plan to publish on Swarm.
+                </p>
+                <div class="stamp-batch-list" id="stamp-batch-list">
+                  <!-- Batch cards inserted dynamically -->
+                </div>
+                <button type="button" class="stamp-buy-another-btn" id="stamp-buy-another-btn">
+                  Buy More Storage
+                </button>
               </div>
             </div>
 
@@ -3350,41 +3507,61 @@
               <div
                 class="subscreen-header"
                 data-back="chequebook-deposit-back"
-                data-title="Deposit to Chequebook"
+                data-title="Chequebook Deposit"
               ></div>
 
               <div class="subscreen-content">
                 <p class="stamp-manager-intro">
-                  Move xBZZ from your Ant wallet into the chequebook contract for bandwidth
-                  payments.
+                  Your node pays other nodes for bandwidth from its chequebook: for uploads, and for
+                  downloads faster than the free tier. It keeps a small xBZZ deposit there, which
+                  stays yours until it is spent.
                 </p>
 
                 <div class="stamp-cost-section" id="chequebook-balances">
                   <div class="stamp-cost-row">
-                    <span class="stamp-cost-label">Ant wallet xBZZ</span>
-                    <span class="stamp-cost-value" id="chequebook-wallet-bzz">--</span>
-                  </div>
-                  <div class="stamp-cost-row">
-                    <span class="stamp-cost-label">Chequebook xBZZ</span>
+                    <span class="stamp-cost-label">Deposit</span>
                     <span class="stamp-cost-value" id="chequebook-current-bzz">--</span>
                   </div>
+                  <!-- Only for a target-only top-up: an amount deposit is not capped by it. -->
+                  <div class="stamp-cost-row" id="chequebook-target-row">
+                    <span class="stamp-cost-label">Target</span>
+                    <span class="stamp-cost-value" id="chequebook-target-bzz">--</span>
+                  </div>
+                  <!-- An amount deposit swaps this first (see publish-setup-service.js). -->
+                  <div class="stamp-cost-row hidden" id="chequebook-wallet-row">
+                    <span class="stamp-cost-label">Node wallet</span>
+                    <span class="stamp-cost-value" id="chequebook-wallet-xdai">--</span>
+                  </div>
                 </div>
 
-                <div class="stamp-presets" id="chequebook-deposit-presets">
-                  <!-- Preset buttons inserted dynamically -->
+                <p class="stamp-manager-intro" id="chequebook-deposit-text"></p>
+
+                <!-- Any amount (freedom-hq/ant#126); hidden on an older node, which
+                     only tops up to its target. Presets come from browsing-credit.js. -->
+                <div class="hidden" id="chequebook-amount">
+                  <div class="send-field">
+                    <span class="send-label">Add to the deposit</span>
+                    <div class="safe-preset-row" id="chequebook-amount-presets"></div>
+                  </div>
+                  <div class="send-field">
+                    <label class="send-label" for="chequebook-amount-input">Other amount</label>
+                    <input
+                      type="text"
+                      class="send-input"
+                      id="chequebook-amount-input"
+                      inputmode="decimal"
+                      placeholder="xBZZ, from 0.001 to 10"
+                      autocomplete="off"
+                      spellcheck="false"
+                    />
+                    <div class="send-field-error hidden" id="chequebook-amount-error"></div>
+                  </div>
+                  <p class="stamp-manager-intro hidden" id="chequebook-amount-spend"></p>
                 </div>
 
-                <button
-                  type="button"
-                  class="stamp-purchase-btn"
-                  id="chequebook-deposit-btn"
-                  disabled
-                >
-                  Deposit
+                <button type="button" class="stamp-purchase-btn hidden" id="chequebook-deposit-btn">
+                  Top Up Deposit
                 </button>
-
-                <div class="stamp-purchase-status hidden" id="chequebook-deposit-status"></div>
-                <div class="stamp-purchase-error hidden" id="chequebook-deposit-error"></div>
               </div>
             </div>
 

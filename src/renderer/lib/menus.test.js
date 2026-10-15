@@ -73,7 +73,6 @@ const loadMenusModule = async ({
   const printBtn = createElement();
   const devtoolsBtn = createElement();
   const aboutBtn = createElement();
-  const checkUpdatesBtn = createElement();
   const beeMenuButton = createElement();
   const beeMenuDropdown = createElement();
   const webviewElement = createElement();
@@ -169,7 +168,6 @@ const loadMenusModule = async ({
         'print-btn': printBtn,
         'devtools-btn': devtoolsBtn,
         'about-btn': aboutBtn,
-        'check-updates-btn': checkUpdatesBtn,
         'bee-menu-button': beeMenuButton,
         'bee-menu-dropdown': beeMenuDropdown,
         'profile-menu-wrap': profileMenuWrap,
@@ -232,7 +230,6 @@ const loadMenusModule = async ({
       printBtn,
       devtoolsBtn,
       aboutBtn,
-      checkUpdatesBtn,
       beeMenuButton,
       beeMenuDropdown,
       webviewElement,
@@ -331,6 +328,7 @@ describe('menus', () => {
       'bee-peers-count',
       'bee-network-peers',
       'ipfs-active-requests-count',
+      'ipfs-peers-count',
       'myotis-peers-count',
       'myotis-gnosis-peers-count',
       'radicle-peers-count',
@@ -437,7 +435,6 @@ describe('menus', () => {
     elements.devtoolsBtn.handlers.click();
     elements.devtoolsBtn.handlers.click();
     elements.aboutBtn.handlers.click();
-    elements.checkUpdatesBtn.handlers.click();
 
     expect(onNewTab).toHaveBeenCalled();
     expect(mocks.electronAPI.newWindow).toHaveBeenCalled();
@@ -452,7 +449,6 @@ describe('menus', () => {
     expect(webview.openDevTools).toHaveBeenCalled();
     expect(webview.closeDevTools).toHaveBeenCalled();
     expect(mocks.electronAPI.showAbout).toHaveBeenCalled();
-    expect(mocks.electronAPI.checkForUpdates).toHaveBeenCalled();
   });
 
   test('zoom shortcuts share the hamburger buttons code path and keep the readout in sync', async () => {

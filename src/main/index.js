@@ -1,5 +1,24 @@
+// Before anything can queue libuv threadpool work: the pool is sized once,
+// on first use (uv-threadpool.js, #514).
+require('./uv-threadpool').applyThreadpoolSize();
+
 // Set app name early, before electron-log initializes (it uses app name for log path)
-const { app, dialog } = require('electron');
+const { app, dialog, ipcMain } = require('electron');
+
+// Sender checks for every IPC handler (docs/security-audit-electron.md, E-1).
+// Installed before anything below can register a handler, so none escapes it.
+// The logger is resolved lazily: electron-log must not initialise before the
+// app name is set just below.
+require('./ipc-sender-policy').installIpcSenderPolicy(ipcMain, {
+  logger: { warn: (...args) => require('./logger').warn(...args) },
+});
+
+// Packaged builds drop --remote-debugging-port/-pipe unless the launch was
+// pointed at a scratch E2E profile (docs/security-audit-electron.md, O-4).
+// Must run before Chromium starts its DevTools handler; logged further down,
+// once the logger may initialise.
+const removedDebugSwitches = require('./remote-debugging-gate').applyRemoteDebuggingGate({ app });
+
 const appName = app.isPackaged
   ? process.platform === 'linux'
     ? 'freedom'
@@ -18,6 +37,9 @@ let isQuitting = false;
 let browserReady = false;
 let resolveBrowserReady;
 const browserReadyPromise = new Promise((resolve) => { resolveBrowserReady = resolve; });
+// Before any window exists: a source-tree run must not borrow the installed
+// app's WM_CLASS/app_id from package.json's desktopName (issue #142).
+require('./linux-desktop-name').applyLinuxDesktopName(app);
 
 // E2E test mode (Playwright). `FREEDOM_TEST_MODE=1` activates the
 // fixture-driven harness in src/main/test-harness.js (stubbed protocols,
@@ -36,8 +58,15 @@ if (process.env.FREEDOM_TEST_USER_DATA) {
     require('path').join(process.env.FREEDOM_TEST_USER_DATA, 'downloads')
   );
 }
-const TEST_MODE = process.env.FREEDOM_TEST_MODE === '1';
-const { migrateBeeDataToAntData, migrateUserData } = require('./migrate-user-data');
+// Honoured in a packaged build only when the launch also kept a CDP debug port
+// on a scratch profile, i.e. the packaged E2E launcher
+// (docs/security-audit-electron.md, O-4/O-12); see test-mode.js.
+const TEST_MODE = require('./test-mode').isTestModeRequested();
+const {
+  migrateBeeDataToAntData,
+  migrateUserData,
+  purgeSetAsideBeeData,
+} = require('./migrate-user-data');
 if (app.isPackaged && !process.env.FREEDOM_TEST_USER_DATA) {
   migrateUserData({ logger: console });
 }
@@ -125,6 +154,13 @@ app.setAboutPanelOptions({
 
 const log = require('./logger');
 
+if (removedDebugSwitches.length) {
+  log.warn(
+    `[security] Ignored ${removedDebugSwitches.map((name) => `--${name}`).join(', ')}: ` +
+      'remote debugging is only available to E2E runs on a scratch profile'
+  );
+}
+
 // Global error handlers - must be set up early
 process.on('uncaughtException', (error) => {
   log.error('Uncaught exception:', error);
@@ -134,9 +170,23 @@ process.on('unhandledRejection', (reason, _promise) => {
   log.error('Unhandled rejection:', reason);
 });
 
+// Main-process event-loop watchdog (#498): logs `[main] event loop blocked N ms`
+// when the loop stalls for 1 s or more, with the chain-data reads that were
+// running. Started this early so a stall during startup is caught too.
+const { describeChainDataActivity } = require('./networks/chain-data-activity');
+const eventLoopWatchdog = require('./event-loop-watchdog').startEventLoopWatchdog({
+  log,
+  describeActivity: describeChainDataActivity,
+});
+
 const { registerShutdownSignalHandlers } = require('./shutdown-signals');
-const unregisterShutdownSignalHandlers = registerShutdownSignalHandlers({ app, logger: log });
-const { BrowserWindow, protocol, session, ipcMain, webContents } = require('electron');
+const { drainLogFile, flushLogFileSync } = require('./log-file-flush');
+const unregisterShutdownSignalHandlers = registerShutdownSignalHandlers({
+  app,
+  logger: log,
+  beforeForceExit: () => flushLogFileSync(log.transports.file),
+});
+const { BrowserWindow, protocol, session, webContents } = require('electron');
 const { createSessionRoutingTermination } = require('./session-routing-termination');
 const { registerApiRequestDiagnostics, initializeSessionRouting, getProxySessionPolicy,
   setProxySessionPolicyObserver, setProxySessionDispatcherOptions } = require('./network-manager');
@@ -158,6 +208,7 @@ const { watchProfileRegistry } = require('./profile-registry-watcher');
 const { installRequestRewriter } = require('./request-rewriter');
 const { installAdblockInterception, registerAdblockIpc } = require('./adblock/service');
 const { installAdblockUpdater } = require('./adblock/update-scheduler');
+const { installAntApiGuard } = require('./swarm/ant-api-guard');
 const { installX402Interception } = require('./x402/intercept');
 const { registerX402Ipc } = require('./x402/ipc');
 const { registerBzzProtocol } = require('./swarm/bzz-protocol');
@@ -275,7 +326,11 @@ const {
   registerPermissionsIpc,
   clearPrivateDecisions: clearPrivatePermissionDecisions,
 } = require('./permissions/permissions-manager');
+const { registerExternalProtocolIpc } = require('./external-protocol');
+const { registerPopupBlockerIpc } = require('./popup-blocker');
 const { registerSwarmIpc } = require('./swarm/stamp-service');
+const { registerPublishSetupIpc } = require('./swarm/publish-setup-service');
+const { registerBrowsingCreditIpc } = require('./swarm/browsing-credit-service');
 const { registerPublishIpc } = require('./swarm/publish-service');
 const {
   registerPublishHistoryIpc,
@@ -312,9 +367,18 @@ const {
 const { initUpdater } = require('./updater');
 const { setupApplicationMenu, updateTabMenuItems } = require('./menu');
 const { registerWebContentsHandlers } = require('./webcontents-setup');
-const { installTestHarness, registerStubProtocols } = require('./test-harness');
+const { registerClientCertificateHandler } = require('./client-certificate');
+const {
+  installTestHarness,
+  registerStubProtocols,
+  adblockEngineLandingGate,
+} = require('./test-harness');
+// Every chain-data caller above holds the router module object and reads
+// `.request` at call time, so wrapping the export here covers all of them.
+require('./networks/chain-data-activity').instrumentChainDataRouter(
+  require('./networks/chain-data-router')
+);
 
-app.commandLine.appendSwitch('disable-features', 'VizDisplayCompositor');
 log.info('[profile] Active profile:', {
   id: activeProfile.id,
   source: activeProfile.source,
@@ -323,6 +387,8 @@ log.info('[profile] Active profile:', {
 });
 warnAboutLegacyDevData(activeProfile, { logger: log });
 app.on('will-quit', () => {
+  // Writes out any stalls still folded into the watchdog's pending summary.
+  eventLoopWatchdog.stop();
   unregisterShutdownSignalHandlers();
   profileFocusWatcher.stop();
   if (activeProfileLock) {
@@ -333,9 +399,19 @@ app.on('will-quit', () => {
 
 async function bootstrap() {
   await showPreviousRoutingNotice(routingNoticeStore, dialog);
+  // A suspended machine is not a blocked loop: don't report the sleep.
+  // 'suspend' opens the window before the machine sleeps, so the sleep gap is
+  // recognised even when the overdue tick beats 'resume' on wake (Windows),
+  // while a real stall around the sleep is still reported (see the watchdog).
+  const { powerMonitor } = require('electron');
+  powerMonitor.on('suspend', () => eventLoopWatchdog.suspend());
+  powerMonitor.on('resume', () => eventLoopWatchdog.reset());
+
   // Carry the injected Swarm identity from the Bee-era bee-data/ into
   // ant-data/. Must run before the Ant node is started below, or antd
-  // self-generates a throwaway identity on the empty directory.
+  // self-generates a throwaway identity on the empty directory. Its
+  // gigabytes of Bee-only state are only set aside here; they are deleted
+  // off the main thread once the first window has painted (below, #526).
   migrateBeeDataToAntData();
 
   const defaultSession = session.defaultSession;
@@ -381,10 +457,14 @@ async function bootstrap() {
   registerNetworkConfigIpc();
   registerDappPermissionsIpc();
   registerPermissionsIpc();
+  registerExternalProtocolIpc();
+  registerPopupBlockerIpc();
   registerX402Ipc();
   registerOnchainProvenanceIpc();
   paymentHistory.registerPaymentHistoryIpc();
   registerSwarmIpc();
+  registerPublishSetupIpc();
+  registerBrowsingCreditIpc();
   registerPublishIpc();
   registerPublishHistoryIpc();
   registerSwarmPermissionsIpc();
@@ -418,10 +498,15 @@ async function bootstrap() {
   }
   // All consumers register their handlers first, then the dispatcher
   // attaches exactly one Electron listener per event to the session.
+  // First in the chain, so no rewrite or later handler can wave a request
+  // to the local Ant API past it (docs/security-audit-electron.md, O-1).
+  // Runs in test mode too — it is browser policy, like onchain-app-guard.
+  installAntApiGuard();
   installRequestRewriter();
   // After the rewriter (which owns scheme/gateway rewriting) and before
-  // x402, so blocked requests never reach the payment flow.
-  installAdblockInterception();
+  // x402, so blocked requests never reach the payment flow. The landing gate
+  // is null unless the E2E harness armed it for this launch (#538).
+  installAdblockInterception({ engineLandingGate: adblockEngineLandingGate() });
   // Also installs the `onchain-app-guard` onBeforeRequest handler, which keeps
   // web content out of the `web3:` trust gate. Runs unconditionally — the test
   // harness owns the `web3:` bytes in test mode, but the guard is browser
@@ -493,6 +578,7 @@ async function bootstrap() {
   registerPrivateCleanup((partition) => unregisterOnionRoutingSession(partition));
 
   registerWebContentsHandlers();
+  registerClientCertificateHandler();
   setupApplicationMenu();
 
   // Profiles are shared across processes (one process per profile). When any
@@ -536,6 +622,12 @@ async function bootstrap() {
   browserReady = true;
   resolveBrowserReady();
   freedomProtocolHandler.flushPendingUrls();
+  // One-off big deletes wait until the window is up, so an upgrade never
+  // shows up as a slow launch (#526). Interrupted purges (quit before it
+  // finished) are picked up on the next launch.
+  mainWindow.once('ready-to-show', () => {
+    void purgeSetAsideBeeData({ logger: log });
+  });
 
   if (!TEST_MODE) {
     await promptForDefaultExternalCandidates(activeProfile, {
@@ -748,6 +840,7 @@ app.on('before-quit', async (event) => {
 
   const watchdog = setTimeout(() => {
     log.warn('[App] Shutdown watchdog fired; quitting with the wind-down unfinished');
+    flushLogFileSync(log.transports.file);
     shutdownSettled = true;
     app.quit();
   }, SHUTDOWN_WATCHDOG_MS);
@@ -758,6 +851,9 @@ app.on('before-quit', async (event) => {
     // A manager that rejects must not strand the app in a half-quit state.
     log.error('[App] Wind-down failed:', err);
   } finally {
+    // The log file is written asynchronously (#511): write everything still
+    // pending, in order, and make the quit handlers' lines land at once.
+    await drainLogFile(log.transports.file);
     clearTimeout(watchdog);
     shutdownSettled = true;
   }

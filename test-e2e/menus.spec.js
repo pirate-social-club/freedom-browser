@@ -7,7 +7,7 @@
 // the mouse. Chrome closes the open menu on Escape, innermost submenu first,
 // and gives the keyboard back to the button that opened it.
 
-const { test, expect, waitForPopoverFrame, SAMPLE_BZZ_HASH } = require('./fixtures');
+const { test, expect, clickOverGuest, SAMPLE_BZZ_HASH } = require('./fixtures');
 // The permission indicator's popover is the trust popover's sibling on the
 // backdrop-dismissal path (#67), and reaching it needs a real granted
 // permission — the same fixture page and helpers permissions.spec.js drives.
@@ -186,10 +186,9 @@ test('the hamburger lists Downloads directly after History, with its shortcut hi
     });
 
   // The row is in the DOM, but a synthetic click only reaches the chrome once
-  // the frame carrying the menu has gone out — until then the browser routes
-  // it to the `<webview>` behind it (see `waitForPopoverFrame`).
-  await waitForPopoverFrame(window);
-  await window.locator('#downloads-btn').click();
+  // the frame carrying the menu is on screen — until then the browser routes
+  // it to the `<webview>` behind it (see `clickOverGuest`).
+  await clickOverGuest(window.locator('#downloads-btn'));
   await expect.poll(() => menuState(window)).toMatchObject({ hamburger: false });
 
   await expect.poll(activeUrl, { timeout: 10_000 }).toMatch(/pages\/downloads\.html/);
@@ -216,8 +215,7 @@ test('the hamburger lists Downloads directly after History, with its shortcut hi
 
   await window.locator('#menu-button').click();
   await expect.poll(() => menuState(window)).toMatchObject({ hamburger: true });
-  await waitForPopoverFrame(window);
-  await window.locator('#downloads-btn').click();
+  await clickOverGuest(window.locator('#downloads-btn'));
   await expect.poll(activeUrl, { timeout: 10_000 }).toMatch(/pages\/downloads\.html/);
   await expect(tabs).toHaveCount(initialTabs + 1);
 
@@ -545,6 +543,19 @@ const loadGithubRepoPage = async (window, harness) => {
   await input.fill(url);
   await input.press('Enter');
   await expect(window.locator('#github-bridge-btn')).toBeVisible({ timeout: 15_000 });
+  // The button shows as soon as the address commits, before the page itself
+  // does. Wait for the page too: a test that goes on to drive the guest
+  // (`openPageContextMenuInGuest`) needs a visible, loaded webview, and on a
+  // fresh profile with the real filter lists the first page is held until the
+  // first ad-block engine is built (#524) — long after the button is up.
+  await expect
+    .poll(() =>
+      window.evaluate((u) => {
+        const webview = document.querySelector('webview:not(.hidden)');
+        return Boolean(webview) && webview.getURL() === u && !webview.isLoading();
+      }, url)
+    )
+    .toBe(true);
 };
 
 // The panel open *and* the backdrop up — keyboard-driven past the button click

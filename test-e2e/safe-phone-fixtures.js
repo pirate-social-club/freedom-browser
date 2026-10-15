@@ -19,6 +19,7 @@ const identity = require(path.join(repoRoot, 'src', 'main', 'identity'));
 const { createBridgeServer } = require(path.join(repoRoot, 'scripts', 'serve-bridge.js'));
 const { startLocalMqttBroker } = require(path.join(repoRoot, 'test', 'helpers', 'local-mqtt-broker.js'));
 const { WEBRTC_LOCAL_SWITCH } = require('../test/helpers/webrtc');
+const { closeApp } = require('./close-app');
 
 const VAULT_PASSWORD = 'Freedom-E2E-Safe-Phone-2026!';
 const GNOSIS_FORK_URL = 'https://rpc.gnosischain.com';
@@ -33,7 +34,7 @@ const phoneWallet = new Wallet(PHONE_KEY);
 // Second remote owner that is never reachable in the test.
 const DEAD_PHONE_ADDRESS = '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC';
 
-const BUILTIN_GNOSIS_SOURCES = ['gno-gnosischain', 'gno-ankr', 'gno-publicnode', 'gno-drpc-public'];
+const BUILTIN_GNOSIS_SOURCES = ['gno-gnosischain', 'gno-publicnode', 'gno-drpc-public'];
 
 function safePhoneE2eAvailable() {
   if (spawnSync('anvil', ['--version']).status !== 0) return false;
@@ -130,6 +131,16 @@ const test = base.extend({
           'e2e-anvil-gnosis': { role: 'rpc', keyed: false, coverage: { 100: anvil.url } },
         },
         removedSources: BUILTIN_GNOSIS_SOURCES,
+        // Read Gnosis from the fork only. Myotis and Colibri verify against
+        // the *live* chain: their answers are correct there and wrong here
+        // (the fork-funded Safe reads a verified balance of 0), so a
+        // verifying source can never serve a fork. This keeps the
+        // "nothing escapes to the live chain" promise above; it is not
+        // what kept these specs alive — the SIGSEGV they used to hit (#453,
+        // a Colibri receipt lookup trapping in WASM) is fixed in
+        // colibri-runtime.js and pinned by colibri-runtime.test.js under
+        // Electron's full main process.
+        networks: { 100: { access: { readOrder: ['direct'] } } },
       }),
       'utf-8'
     );
@@ -160,7 +171,9 @@ const test = base.extend({
         FREEDOM_IDENTITY_DATA: identityDir,
         FREEDOM_RADICLE_DATA: radicleDir,
         FREEDOM_OPENLV_SIGNALING: services.mqttUrl,
-        FREEDOM_TEST_HIDE_WINDOW: process.env.FREEDOM_E2E_HEADED === '1' ? '0' : '1',
+        // Shown, not hidden: a hidden window starves clicks of frames and
+        // sends them to the <webview> guest (#536, #479; see safe-fixtures.js).
+        FREEDOM_TEST_HIDE_WINDOW: '0',
         ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
         LANG: 'en_US.UTF-8',
       },
@@ -169,11 +182,7 @@ const test = base.extend({
 
     await use(app);
 
-    try {
-      await app.close();
-    } catch {
-      // window already gone
-    }
+    await closeApp(app);
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   },
 

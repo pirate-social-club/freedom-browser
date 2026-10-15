@@ -78,6 +78,10 @@ exposeGuardedBridge('electronAPI', {
   openUrlInNewWindow: (url) => ipcRenderer.send('window:new-with-url', url),
   showAbout: () => ipcRenderer.send('app:show-about'),
   getPlatform: () => ipcRenderer.invoke('window:get-platform'),
+  // Synchronous copy of process.platform for renderer/platform-init.js, which
+  // must tag <html> before first paint (getPlatform() resolves too late for
+  // layout that differs per OS, e.g. the macOS traffic-light spacer).
+  platform: process.platform,
   getWindowButtonLayout: () => ipcRenderer.invoke('window:get-button-layout'),
   getActiveProfile: () => ipcRenderer.invoke('profile:get-active'),
   listProfiles: () => ipcRenderer.invoke('profile:list'),
@@ -119,6 +123,8 @@ exposeGuardedBridge('electronAPI', {
   invalidateTezosDomain: (name) => ipcRenderer.invoke('tezos-domains:invalidate', { name }),
   // History
   getHistory: (options) => ipcRenderer.invoke('history:get', options),
+  // Address-bar suggestion candidates for what the user typed (#503).
+  autocompleteHistory: (query) => ipcRenderer.invoke('history:autocomplete', { query }),
   addHistory: (entry) => ipcRenderer.invoke('history:add', entry),
   removeHistory: (id) => ipcRenderer.invoke('history:remove', id),
   clearHistory: () => ipcRenderer.invoke('history:clear'),
@@ -234,8 +240,16 @@ exposeGuardedBridge('electronAPI', {
     ipcRenderer.on('tab:new-with-url', handler);
     return () => ipcRenderer.removeListener('tab:new-with-url', handler);
   },
+  // Main's popup blocker refused a tab's popup (#442):
+  // {guestId, url, targetName, reuseOnly, origin}. `guestId` is the tab's
+  // webview webContents id; the address-bar icon shows while it is active.
+  onPopupBlocked: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('popups:blocked', handler);
+    return () => ipcRenderer.removeListener('popups:blocked', handler);
+  },
   onOpenPublishSetup: (callback) => {
-    const handler = () => callback();
+    const handler = (_event, target) => callback(target);
     ipcRenderer.on('sidebar:open-publish-setup', handler);
     return () => ipcRenderer.removeListener('sidebar:open-publish-setup', handler);
   },
@@ -346,6 +360,14 @@ exposeGuardedBridge('electronAPI', {
   },
   restartAndInstallUpdate: () => ipcRenderer.send('update:restart-and-install'),
   checkForUpdates: () => ipcRenderer.send('update:check'),
+  // Update state (#87): `getUpdateState` for the first paint, `onUpdateState`
+  // for every change after it (update-state.js documents the snapshot).
+  getUpdateState: () => ipcRenderer.invoke('update:get-state'),
+  onUpdateState: (callback) => {
+    const handler = (_event, state) => callback(state);
+    ipcRenderer.on('update:state', handler);
+    return () => ipcRenderer.removeListener('update:state', handler);
+  },
 });
 
 // Re-dispatch main-process broadcasts as window CustomEvents so existing
@@ -368,6 +390,9 @@ exposeGuardedBridge('ant', {
   stop: () => ipcRenderer.invoke('ant:stop'),
   getStatus: () => ipcRenderer.invoke('ant:getStatus'),
   checkBinary: () => ipcRenderer.invoke('ant:checkBinary'),
+  // Read-only node API (GET, allowlisted endpoints) — the node no longer
+  // accepts the chrome's `file:` origin over CORS.
+  apiGet: (endpoint) => ipcRenderer.invoke('ant:api-get', endpoint),
   onStatusUpdate: (callback) => {
     const handler = (_event, value) => callback(value);
     ipcRenderer.on('ant:statusUpdate', handler);
@@ -402,7 +427,11 @@ exposeGuardedBridge('myotis', {
 exposeGuardedBridge('ipfs', {
   start: () => ipcRenderer.invoke('ipfs:start'),
   stop: () => ipcRenderer.invoke('ipfs:stop'),
-  getStatus: () => ipcRenderer.invoke('ipfs:getStatus'),
+  // `{ nodeStats: true }` also reads an external node's peers/bandwidth (#417).
+  getStatus: (options) =>
+    options?.nodeStats === true
+      ? ipcRenderer.invoke('ipfs:getStatus', { nodeStats: true })
+      : ipcRenderer.invoke('ipfs:getStatus'),
   checkBinary: () => ipcRenderer.invoke('ipfs:checkBinary'),
   onStatusUpdate: (callback) => {
     const handler = (_event, value) => callback(value);
@@ -491,7 +520,12 @@ exposeGuardedBridge('quickUnlock', {
   canUseTouchId: () => ipcRenderer.invoke('quick-unlock:can-use-touch-id'),
   isEnabled: () => ipcRenderer.invoke('quick-unlock:is-enabled'),
   enable: (password) => ipcRenderer.invoke('quick-unlock:enable', password),
+  // Touch ID → main unlocks the vault itself; resolves {success, error?}
+  // only. The stored password never reaches the renderer (audit O-8).
   unlock: () => ipcRenderer.invoke('quick-unlock:unlock'),
+  exportMnemonic: () => ipcRenderer.invoke('quick-unlock:export-mnemonic'),
+  exportPrivateKey: (accountIndex) =>
+    ipcRenderer.invoke('quick-unlock:export-private-key', accountIndex),
   disable: () => ipcRenderer.invoke('quick-unlock:disable'),
 });
 
@@ -523,20 +557,30 @@ exposeGuardedBridge('wallet', {
   getGasPrice: (chainId) => ipcRenderer.invoke('wallet:get-gas-price', chainId),
   buildErc20Data: (to, amount) => ipcRenderer.invoke('wallet:build-erc20-data', to, amount),
   parseAmount: (amount, decimals) => ipcRenderer.invoke('wallet:parse-amount', amount, decimals),
-  sendTransaction: (params, context) =>
-    ipcRenderer.invoke('wallet:send-transaction', params, context),
+  // Signing confirmation (security audit O-7): an approval screen asks main
+  // for a single-use token bound to exactly the request the user confirmed,
+  // and hands it to the signing call as `{ confirmation: token }`.
+  // kind: 'wallet-send' | 'dapp-send' | 'sign-message' | 'sign-typed-data'
+  //       | 'safe-send' | 'safe-message'.
+  confirmSigning: (kind, accountIndex, payload) =>
+    ipcRenderer.invoke('wallet:confirm-signing', kind, accountIndex, payload),
+  sendTransaction: (params, context, authorization) =>
+    ipcRenderer.invoke('wallet:send-transaction', params, context, authorization),
   getTransactionStatus: (txHash, chainId) =>
     ipcRenderer.invoke('wallet:get-transaction-status', txHash, chainId),
   waitForTransaction: (txHash, chainId, confirmations) =>
     ipcRenderer.invoke('wallet:wait-for-transaction', txHash, chainId, confirmations),
 
   // dApp-specific operations (use specific wallet index)
-  dappSendTransaction: (params, walletIndex, context) =>
-    ipcRenderer.invoke('wallet:dapp-send-transaction', params, walletIndex, context),
-  signMessage: (message, walletIndex, permissionKey) =>
-    ipcRenderer.invoke('wallet:sign-message', message, walletIndex, permissionKey),
-  signTypedData: (typedData, walletIndex, permissionKey) =>
-    ipcRenderer.invoke('wallet:sign-typed-data', typedData, walletIndex, permissionKey),
+  // `authorization` is `{ confirmation }` (see confirmSigning) or
+  // `{ autoApprove: permissionKey }`, which main checks against the site's
+  // stored auto-approve policy itself.
+  dappSendTransaction: (params, walletIndex, context, authorization) =>
+    ipcRenderer.invoke('wallet:dapp-send-transaction', params, walletIndex, context, authorization),
+  signMessage: (message, walletIndex, permissionKey, authorization) =>
+    ipcRenderer.invoke('wallet:sign-message', message, walletIndex, permissionKey, authorization),
+  signTypedData: (typedData, walletIndex, permissionKey, authorization) =>
+    ipcRenderer.invoke('wallet:sign-typed-data', typedData, walletIndex, permissionKey, authorization),
 
   // RPC proxy (renderer CSP blocks direct fetch to external endpoints)
   proxyRpc: (rpcUrl, method, params) =>
@@ -551,8 +595,8 @@ exposeGuardedBridge('wallet', {
   activateSafe: (index) => ipcRenderer.invoke('wallet:activate-safe', index),
   // Safe sends (the signing board): every call returns {success, state}
   // where state is the board's render model (null when nothing pending).
-  safeSend: (safeIndex, tx, display, chainId) =>
-    ipcRenderer.invoke('wallet:safe-send', safeIndex, tx, display, chainId),
+  safeSend: (safeIndex, tx, display, chainId, authorization) =>
+    ipcRenderer.invoke('wallet:safe-send', safeIndex, tx, display, chainId, authorization),
   safeSign: (safeIndex, ownerIndex) => ipcRenderer.invoke('wallet:safe-sign', safeIndex, ownerIndex),
   safeExecute: (safeIndex) => ipcRenderer.invoke('wallet:safe-execute', safeIndex),
   safeState: (safeIndex) => ipcRenderer.invoke('wallet:safe-state', safeIndex),
@@ -561,8 +605,8 @@ exposeGuardedBridge('wallet', {
   // SafeMessage sessions (dApp message signing via EIP-1271). start
   // binds the session to the requesting page ({origin, webContentsId})
   // and returns state.token — required by every other call.
-  safeMessageStart: (safeIndex, request, display, requester) =>
-    ipcRenderer.invoke('wallet:safe-message-start', safeIndex, request, display, requester),
+  safeMessageStart: (safeIndex, request, display, requester, authorization) =>
+    ipcRenderer.invoke('wallet:safe-message-start', safeIndex, request, display, requester, authorization),
   safeMessageSign: (safeIndex, ownerIndex, token) =>
     ipcRenderer.invoke('wallet:safe-message-sign', safeIndex, ownerIndex, token),
   safeMessageState: (safeIndex, token) =>
@@ -602,24 +646,41 @@ exposeGuardedBridge('remoteSigner', {
 
 exposeGuardedBridge('swarmNode', {
   getStamps: () => ipcRenderer.invoke('swarm:get-stamps'),
-  getStorageCost: (sizeGB, durationDays) =>
-    ipcRenderer.invoke('swarm:get-storage-cost', sizeGB, durationDays),
-  buyStorage: (sizeGB, durationDays) =>
-    ipcRenderer.invoke('swarm:buy-storage', sizeGB, durationDays),
-  getDurationExtensionCost: (batchId, additionalDays) =>
-    ipcRenderer.invoke('swarm:get-duration-extension-cost', batchId, additionalDays),
-  getSizeExtensionCost: (batchId, newSizeGB) =>
-    ipcRenderer.invoke('swarm:get-size-extension-cost', batchId, newSizeGB),
-  extendStorageDuration: (batchId, additionalDays) =>
-    ipcRenderer.invoke('swarm:extend-storage-duration', batchId, additionalDays),
-  extendStorageSize: (batchId, newSizeGB) =>
-    ipcRenderer.invoke('swarm:extend-storage-size', batchId, newSizeGB),
-  getChequebookBalance: () => ipcRenderer.invoke('swarm:get-chequebook-balance'),
-  depositChequebook: (amountBzz) => ipcRenderer.invoke('swarm:deposit-chequebook', amountBzz),
   publishData: (data) => ipcRenderer.invoke('swarm:publish-data', data),
   publishFile: (filePath) => ipcRenderer.invoke('swarm:publish-file', filePath),
   publishDirectory: (dirPath) => ipcRenderer.invoke('swarm:publish-directory', dirPath),
   getUploadStatus: (tagUid) => ipcRenderer.invoke('swarm:get-upload-status', tagUid),
+});
+
+// Swarm publish setup: the main process owns readiness and the armed storage
+// purchase (src/main/swarm/publish-setup-service.js); the chrome renders it.
+exposeGuardedBridge('publishSetup', {
+  getState: () => ipcRenderer.invoke('swarm:setup-get-state'),
+  // `surface` names what is on screen; the service polls chain-backed data
+  // only while at least one surface watches.
+  watch: (surface, on) => ipcRenderer.invoke('swarm:setup-watch', surface, on),
+  getPlans: () => ipcRenderer.invoke('swarm:setup-get-plans'),
+  getExtendOptions: (batchId, depth) =>
+    ipcRenderer.invoke('swarm:setup-get-extend-options', batchId, depth),
+  arm: (request) => ipcRenderer.invoke('swarm:setup-arm', request),
+  cancel: (opId) => ipcRenderer.invoke('swarm:setup-cancel', opId),
+  // Leave a finished result this window showed; another window's screen may
+  // still have it up, so main drops it only once none does.
+  dismiss: (opId) => ipcRenderer.invoke('swarm:setup-cancel', opId, { dismiss: true }),
+  trackFundingTx: (hash) => ipcRenderer.invoke('swarm:setup-track-funding-tx', hash),
+  restartNode: () => ipcRenderer.invoke('swarm:setup-restart-node'),
+  onState: (callback) => {
+    const handler = (_event, state) => callback(state);
+    ipcRenderer.on('swarm:setup-state', handler);
+    return () => ipcRenderer.removeListener('swarm:setup-state', handler);
+  },
+});
+
+// The node's chequebook as browsing credit and its swap-enable switch
+// (src/main/swarm/browsing-credit-service.js, #488). Chrome only.
+exposeGuardedBridge('browsingCredit', {
+  getState: () => ipcRenderer.invoke('swarm:credit-get-state'),
+  setSwapEnable: (enabled) => ipcRenderer.invoke('swarm:credit-set-swap-enable', enabled),
 });
 
 exposeGuardedBridge('networks', {
@@ -689,14 +750,27 @@ exposeGuardedBridge('sitePermissions', {
   // The address-bar popover lists what applies in THIS window, so its Remove
   // is window-scoped: it lifts the asking window's own run-scoped decision
   // (a private window's partition tier, a normal window's session tier) plus
-  // the shared stored one — never the other scope's (#366). Settings > Site
-  // Permissions goes through webview-preload.js without this marker and stays
-  // profile-wide. Main resolves WHICH window from the IPC sender, never from
-  // here.
+  // the shared stored one — never the other scope's (#366). Settings >
+  // Privacy and security > Site Permissions goes through webview-preload.js
+  // without this marker and stays profile-wide. Main resolves WHICH window
+  // from the IPC sender, never from here.
   revoke: (origin, permission) =>
     ipcRenderer.invoke('permissions:revoke', origin, permission, { scope: 'window' }),
   revokeOrigin: (origin) =>
     ipcRenderer.invoke('permissions:revoke-origin', origin, { scope: 'window' }),
+  // The pop-up-blocked icon's "Always allow pop-ups on this site" (#442).
+  // Recorded as the site's `popups` permission in this window's scope
+  // (persisted from a normal window, partition-only from a private one);
+  // main resolves which window from the IPC sender.
+  allowPopups: (origin) => ipcRenderer.invoke('popups:allow-site', origin),
+});
+
+// External-protocol URLs typed into the address bar (magnet:, mailto:, …).
+// Resolves {opened, reason?}; `opened: false` means "not ours — search it"
+// (no OS handler for the scheme) or a blocked scheme. See #406.
+contextBridge.exposeInMainWorld('externalProtocol', {
+  openFromAddressBar: (url) =>
+    ipcRenderer.invoke('external-protocol:open-from-address-bar', url),
 });
 
 exposeGuardedBridge('dappPermissions', {
@@ -711,8 +785,6 @@ exposeGuardedBridge('dappPermissions', {
     ipcRenderer.invoke('dapp:set-signing-auto-approve', origin, enabled),
   isTransactionAutoApproved: (origin, to, selector, chainId) =>
     ipcRenderer.invoke('dapp:is-tx-auto-approved', origin, to, selector, chainId),
-  addTransactionAutoApprove: (origin, to, selector, chainId) =>
-    ipcRenderer.invoke('dapp:add-tx-auto-approve', origin, to, selector, chainId),
   removeTransactionAutoApprove: (origin, to, selector, chainId) =>
     ipcRenderer.invoke('dapp:remove-tx-auto-approve', origin, to, selector, chainId),
 });
@@ -878,3 +950,24 @@ contextBridge.exposeInMainWorld('jacktrip', guardInternalBridge('jacktrip', {
     return () => ipcRenderer.removeListener('jacktrip:statusUpdate', handler);
   },
 }));
+
+// E2E harness bridge, present only when the main process switched the harness
+// on (src/main/test-mode.js) and said so with TEST_HARNESS_RENDERER_ARG on this
+// window's command line (windows/mainWindow.js); the main-process `test:*`
+// handlers in test-harness.js exist only then too. Not read from
+// FREEDOM_TEST_MODE here: a packaged build ignores that variable on its own. The packaged smoke
+// tests drive the app over CDP, since the EnableNodeCliInspectArguments fuse
+// takes Playwright's main-process evaluate away (test-e2e/packaged-launch.js),
+// and reach the harness through this. A fixed list of named operations, never
+// a generic channel: see appFacts() in test-harness.js for why.
+const TEST_HARNESS_OPS = new Set(['app-facts', 'set-content-fixture']);
+// Keep in sync with TEST_HARNESS_RENDERER_ARG in test-mode.js (a sandboxed
+// preload cannot require it; preload.test.js pins the two together).
+if (process.argv.includes('--freedom-test-harness')) {
+  contextBridge.exposeInMainWorld('freedomTest', {
+    invoke: (op, payload) =>
+      TEST_HARNESS_OPS.has(op)
+        ? ipcRenderer.invoke(`test:${op}`, payload)
+        : Promise.reject(new Error(`Unknown test harness operation: ${op}`)),
+  });
+}

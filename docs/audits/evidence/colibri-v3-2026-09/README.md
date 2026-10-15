@@ -101,3 +101,63 @@ it did not require a verified replacement checkpoint in its success condition.
 
 These checks do not qualify signed installers, other operating systems, native
 Colibri, or long-duration network availability.
+
+## 3.0.1 re-validation — 7 October 2026
+
+Freedom now pins 3.0.1. The package changes only `c4w.js`, `c4w.wasm` and the
+native prebuilds; `package.json` exports, the `node` conditional export and the
+`C4_DISABLE_NATIVE` escape hatch are unchanged. `c4w.wasm` is `86c981e7…`,
+1371514 bytes (3.0.0: `d5d9f3d9…`, 1364256). The verifier-relevant upstream
+changes are lazy-fetching the verified EVM header for `eth_call`
+(corpus-core/colibri-stateless#392), caching light-client updates only once
+finality is proven (#393) and rejecting a short light-client update list (#394).
+#390 also touches the shared `eth_call` verifier and EVM code
+(`verify_call.c`, `call_evmone.c`, `call_ctx.c`, `verify_simulate.c` and the
+evmone C wrapper) to add two opt-in `colibri_simulateTransaction` flags
+(`state_values`, `positions`). Both default off and Freedom sets neither, but
+a regression in `eth_call` verification after 3.0.1 should be checked against
+#390 as well as #392. The rest of the release is the explainer and playground.
+
+- `_c4w_get_current_version_number()` on the shipped 3.0.1 WASM returns 196609,
+  which is what `colibri-runtime.js` encodes from the package version.
+- The offline fixtures above, captured on 3.0.0, still verify on 3.0.1, and
+  every rejection control still rejects (`checkpoint-verifier-worker.test.js`,
+  73 tests).
+- `capture.cjs` (with its version assertion pointed at 3.0.1, not committed)
+  verified live Ethereum (slot 15380480) and Gnosis (slot 30479536) checkpoints
+  through the production worker against a three-authority quorum, advertising
+  client version 196609. Those captures were not kept as fixtures.
+- The real ENS suite passed all six scenarios.
+- Linux x64, Node 24.21.0. The native Myotis recovery campaigns on macOS arm64
+  were not re-run.
+
+## 3.0.2 re-validation — 7 October 2026
+
+Freedom now pins 3.0.2. The package changes only `c4w.wasm` and the native
+prebuilds (and its own version field); `c4w.js`, the `package.json` exports,
+the `node` conditional export, the `C4_DISABLE_NATIVE` escape hatch and the
+MIT `LICENSE` are unchanged. `c4w.wasm` is `d84bac79…`, 1371569 bytes (3.0.1:
+`86c981e7…`, 1371514). The one upstream change is
+corpus-core/colibri-stateless#395 in `header_cache.c`: a header-only update
+freed a cached execution body but kept the pointer, so the next one freed it
+again. In the WASM build that corrupted the heap — repeated `eth_getLogs`
+eventually trapped in `free`, and receipts then failed with a sticky
+`invalid merkle root!`. That is the same instance-poisoning symptom
+`colibri-runtime.js` recovers from by replacing the WASM instance after a
+trap; the recovery stays, since #395 removes one cause, not the trap path.
+
+- `_c4w_get_current_version_number()` on the shipped 3.0.2 WASM returns 196610,
+  which is what `colibri-runtime.js` encodes from the package version.
+- The offline fixtures above, captured on 3.0.0, still verify on 3.0.2, and
+  every rejection control still rejects (`checkpoint-verifier-worker.test.js`
+  and `colibri-runtime.test.js`, 83 tests).
+- `capture.cjs` (with its version assertion pointed at 3.0.2, not committed)
+  verified live Ethereum (slot 15381472) and Gnosis (slot 30481920) checkpoints
+  through the production worker against a three-authority quorum, advertising
+  client version 196610. Those captures were not kept as fixtures.
+- The real ENS suite (`ENS_COLIBRI_E2E=1`) passed all six scenarios, and the
+  live `test-e2e/live/eth-sites.spec.js` cold start (ENS, WNS and GNS sites
+  rendered in the real Electron main process, native addon still disabled)
+  passed on Electron 44.7.0.
+- Linux x64, Node 24.21.0. The native Myotis recovery campaigns on macOS arm64
+  were not re-run.

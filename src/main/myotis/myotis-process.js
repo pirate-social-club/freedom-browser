@@ -31,9 +31,34 @@ function supervisorPath() {
     : path.join(__dirname, '../../..', 'myotis-bin', `${os}-${process.arch}`, binary);
 }
 
+// The engine's fork watch (Myotis v0.1.14+, biafra23/myotis#561): `null`, or
+// what enough distinct peer networks announce about a fork this build's
+// schedule lacks. It is peer-supplied and unverified — upstream derives it
+// from discv5 ENRs and libp2p Status digests, never from anything
+// verification reads — so it is display-only here: nothing in main routes
+// or gates on it. Every field must match upstream's documented shape or the
+// whole advisory is dropped; a partial one would say something nobody sent.
+const ADVISORY_PHASES = new Set(['SCHEDULED', 'ACTIVE']);
+// Seconds since the epoch; 0 = unknown. Year 9999 keeps it a valid Date.
+const MAX_ADVISORY_TIME = 253402300799;
+// Distinct peer networks (IPv4 /24, IPv6 /48) that voted; upstream needs 3.
+const MAX_ADVISORY_PEERS = 100000;
+
+function upgradeAdvisory(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const { phase, activationTime, forkId, observedPeers } = value;
+  if (!ADVISORY_PHASES.has(phase)) return null;
+  if (!Number.isSafeInteger(activationTime) || activationTime < 0 || activationTime > MAX_ADVISORY_TIME) return null;
+  // `0x00000000` = unknown (upstream: a blob-parameter-only fork rotates the
+  // digest to a value this build cannot compute).
+  if (typeof forkId !== 'string' || !/^0x[0-9a-f]{8}$/i.test(forkId)) return null;
+  if (!Number.isSafeInteger(observedPeers) || observedPeers < 1 || observedPeers > MAX_ADVISORY_PEERS) return null;
+  return { phase, activationTime, forkId: forkId.toLowerCase(), observedPeers };
+}
+
 function statusSnapshot(status) {
   const snapshot = {};
-  for (const key of ['beaconState', 'currentPeriod', 'targetPeriod', 'peerCount', 'snapPeers',
+  for (const key of ['beaconState', 'currentPeriod', 'targetPeriod', 'peerCount', 'snapPeers', 'snapServingPeers',
     'finalizedBlockNumber', 'executionBlockNumber', 'wsBoundPeriods', 'running', 'paused',
     'elReaderAvailable', 'elHunting', 'finalizedSlot', 'finalizedRootHex']) {
     const value = status?.[key];
@@ -43,6 +68,8 @@ function statusSnapshot(status) {
   if (typeof status?.optimisticBlockNumber === 'number' && Number.isFinite(status.optimisticBlockNumber)) {
     snapshot.optimisticBlockNumber = status.optimisticBlockNumber;
   }
+  const advisory = upgradeAdvisory(status?.upgradeAdvisory);
+  if (advisory) snapshot.upgradeAdvisory = advisory;
   return snapshot;
 }
 
@@ -55,8 +82,9 @@ function unavailable(message, uncertain = false) {
 }
 
 class MyotisProcess {
-  constructor({ addonPath, network, dataDir, checkpoint = null, onStatus, onUnavailable, onExit, onLifecycle = () => {} }) {
+  constructor({ addonPath, network, dataDir, checkpoint = null, bootEnodes = [], onStatus, onUnavailable, onExit, onLifecycle = () => {} }) {
     this.generation = randomUUID();
+    this.dataDir = dataDir;
     this.onLifecycle = onLifecycle;
     this.lifecycleEvents = new Set();
     this.report('start-attempt');
@@ -103,7 +131,7 @@ class MyotisProcess {
         if (receipt.generation !== this.generation) { this.invalidReceipt(); return; }
         if (receipt.type === 'owned' && !this.owned) {
           this.owned = true;
-          if (!this.stopping) this.send({ type: 'start', addonPath, network, dataDir, checkpoint });
+          if (!this.stopping) this.send({ type: 'start', addonPath, network, dataDir, checkpoint, bootEnodes });
         } else if (receipt.type === 'reaped' && this.owned && !this.terminalReceipt &&
           typeof receipt.forced === 'boolean' &&
           Number.isInteger(receipt.exitCode) && receipt.exitCode >= -1 && receipt.exitCode <= 0xffffffff &&
@@ -164,6 +192,9 @@ class MyotisProcess {
         return;
       }
       this.checkpointSupported = message.checkpointSupported === true;
+      if (Number.isInteger(message.seedPinsCount) && message.seedPinsCount > 0 && message.seedPinsCount <= 64) {
+        this.report('seed-pins', { count: message.seedPinsCount, applied: message.seedPinsApplied === true });
+      }
       this.report('started');
       this.accepting = true;
       this.resolveStart(true);
@@ -256,6 +287,9 @@ class MyotisProcess {
 
   stop() {
     if (this.exited) return Promise.resolve(true);
+    // A previous timeout is not a permanent verdict. Once the supervisor has
+    // actually exited, native locks/receipts can establish the child's exit.
+    if (this.stopping && this.supervisorExit && this.receiptsEnded) return this.recoverExit();
     if (this.stopPromise) return this.stopPromise;
     this.report('stop-requested');
     this.stopping = true;
@@ -282,7 +316,7 @@ class MyotisProcess {
         resolve(true);
       });
     });
-    return this.stopPromise;
+    return this.supervisorExit && this.receiptsEnded ? this.recoverExit() : this.stopPromise;
   }
 
   finishExit() {
@@ -302,7 +336,34 @@ class MyotisProcess {
       this.didExit();
     } else {
       this.fail('Myotis supervisor exit unconfirmed; data directory quarantined');
+      this.recoverExit();
     }
+  }
+
+  recoverExit() {
+    if (this.exited) return Promise.resolve(true);
+    if (!this.supervisorExit || !this.receiptsEnded) return Promise.resolve(false);
+    if (this.recoveryExitPromise) return this.recoveryExitPromise;
+    // Lazy import avoids a module cycle: the helper launcher uses the trusted
+    // supervisor path/environment defined here. It never scans or kills PIDs.
+    const { recoverOwner } = require('./ownership-recovery');
+    const pending = recoverOwner(this.dataDir).then(() => {
+      this.recoveryFailureCode = null;
+      this.report('exit-recovered');
+      this.didExit();
+      return true;
+    }, (error) => {
+      // Keep the helper's verdict so a failed stop can say "restart the
+      // computer" rather than collapsing every refusal into ownership.
+      this.recoveryFailureCode = error?.code === 'CHECKPOINT_REBOOT_REQUIRED'
+        ? 'CHECKPOINT_REBOOT_REQUIRED' : 'CHECKPOINT_OWNERSHIP';
+      return false;
+    });
+    this.recoveryExitPromise = pending;
+    pending.finally(() => {
+      if (this.recoveryExitPromise === pending) this.recoveryExitPromise = null;
+    });
+    return pending;
   }
 
   didExit() {
@@ -326,4 +387,4 @@ class MyotisProcess {
   }
 }
 
-module.exports = { MyotisProcess, childEnvironment, supervisorPath };
+module.exports = { MyotisProcess, childEnvironment, supervisorPath, upgradeAdvisory };

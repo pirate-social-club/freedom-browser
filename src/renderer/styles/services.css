@@ -284,8 +284,17 @@
   color: var(--muted);
 }
 
+/* The IPFS section shows the managed node's counters or an external node's
+   peers/bandwidth, never both (#417). */
+.ipfs-info.external .ipfs-managed-stat,
+.ipfs-info:not(.external) .ipfs-external-stat {
+  display: none;
+}
+
 #ipfs-active-requests-count,
 #ipfs-data-read,
+#ipfs-peers-count,
+#ipfs-bandwidth,
 #ipfs-version-text {
   text-align: right;
 }
@@ -426,6 +435,15 @@
 .myotis-recovery-message.warning {
   border-left: 2px solid var(--warning-fg);
   padding-left: 8px;
+}
+
+/* Fork-watch "update Freedom" notice: the peer-count caveat sits under the
+   sentence as its own line, in the muted secondary tone. */
+.myotis-upgrade-detail {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--muted);
 }
 
 .myotis-checkpoint-retry {

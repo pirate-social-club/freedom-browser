@@ -15,6 +15,11 @@ module.exports = {
   ANT_GET_STATUS: 'ant:getStatus',
   ANT_STATUS_UPDATE: 'ant:statusUpdate',
   ANT_CHECK_BINARY: 'ant:checkBinary',
+  ANT_API_GET: 'ant:api-get',
+  ANT_CACHE_STATUS: 'ant:cache-status',
+  ANT_CACHE_GET_SETTINGS: 'ant:cache-get-settings',
+  ANT_CACHE_SET_SIZE: 'ant:cache-set-size',
+  ANT_CACHE_CLEAR: 'ant:cache-clear',
 
   // IPFS node management
   IPFS_START: 'ipfs:start',
@@ -117,6 +122,7 @@ module.exports = {
   ADBLOCK_ADD_ALLOWLIST_HOST: 'adblock:add-allowlist-host',
   ADBLOCK_REMOVE_ALLOWLIST_HOST: 'adblock:remove-allowlist-host',
   ADBLOCK_COSMETIC: 'adblock:cosmetic',
+  ADBLOCK_SCRIPTLETS: 'adblock:scriptlets',
   // Keyboard shortcuts (Settings > Shortcuts page ↔ main). State/preview
   // are reads; set/reset persist overrides into the settings store, whose
   // SETTINGS_UPDATED broadcast then rebuilds the menu and refreshes the
@@ -125,6 +131,9 @@ module.exports = {
   SHORTCUTS_PREVIEW_BINDING: 'shortcuts:preview-binding',
   SHORTCUTS_SET_OVERRIDE: 'shortcuts:set-override',
   SHORTCUTS_RESET: 'shortcuts:reset',
+  // Settings > Shortcuts arming/disarming a recording, so the browser-process
+  // tab-switch keys (tab-switch-keys.js) let the chord reach the page.
+  SHORTCUTS_SET_RECORDING: 'shortcuts:set-recording',
 
   // Bzz routing (Swarm)
   BZZ_SET_BASE: 'bzz:set-base',
@@ -172,6 +181,10 @@ module.exports = {
 
   // History
   HISTORY_GET: 'history:get',
+  // Bounded queries, answered off the main thread (#503): address-bar
+  // suggestion candidates, and one page of the History page's list.
+  HISTORY_AUTOCOMPLETE: 'history:autocomplete',
+  HISTORY_PAGE: 'history:page',
   HISTORY_ADD: 'history:add',
   HISTORY_REMOVE: 'history:remove',
   HISTORY_CLEAR: 'history:clear',
@@ -341,6 +354,20 @@ module.exports = {
   // Main→renderer broadcast after any decision is recorded or revoked, so
   // the address-bar indicator and the settings page can re-query.
   PERMISSIONS_CHANGED: 'permissions:changed',
+  // Popup blocker for tab webviews (#442), src/main/popup-blocker.js.
+  // Webview preload → main: may this guest open a new tab for the dweb link
+  // it intercepted (gesture consumed if so)? Answers a boolean.
+  POPUPS_CLAIM: 'popups:claim',
+  // Main → the owning window: a popup was blocked
+  // ({guestId, url, targetName, reuseOnly, origin}).
+  POPUPS_BLOCKED: 'popups:blocked',
+  // Chrome → main: "Always allow pop-ups on this site" (origin). Recorded as
+  // the `popups` site permission in the asking window's scope.
+  POPUPS_ALLOW_SITE: 'popups:allow-site',
+  // Address bar → main: open a typed external-protocol URL (magnet:, mailto:,
+  // …) in its OS handler. Answers {opened, reason?}; see
+  // src/main/external-protocol.js (#406).
+  EXTERNAL_PROTOCOL_OPEN_FROM_ADDRESS_BAR: 'external-protocol:open-from-address-bar',
 
   // dApp Permissions
   DAPP_GET_PERMISSION: 'dapp:get-permission',
@@ -351,7 +378,6 @@ module.exports = {
   DAPP_GET_SIGNING_AUTO_APPROVE: 'dapp:get-signing-auto-approve',
   DAPP_SET_SIGNING_AUTO_APPROVE: 'dapp:set-signing-auto-approve',
   DAPP_IS_TX_AUTO_APPROVED: 'dapp:is-tx-auto-approved',
-  DAPP_ADD_TX_AUTO_APPROVE: 'dapp:add-tx-auto-approve',
   DAPP_REMOVE_TX_AUTO_APPROVE: 'dapp:remove-tx-auto-approve',
 
   // dApp Provider (webview ↔ renderer ↔ main)
@@ -381,6 +407,23 @@ module.exports = {
   // Swarm Provider (main-process authority)
   SWARM_PROVIDER_EXECUTE: 'swarm:provider-execute',
   SWARM_PROVIDER_EVENT: 'swarm:provider-event',
+
+  // Swarm publish setup (src/main/swarm/publish-setup-service.js). Chrome
+  // only, except the state read and push, which the internal pages also use.
+  SWARM_SETUP_GET_STATE: 'swarm:setup-get-state',
+  SWARM_SETUP_STATE: 'swarm:setup-state',
+  SWARM_SETUP_WATCH: 'swarm:setup-watch',
+  SWARM_SETUP_GET_PLANS: 'swarm:setup-get-plans',
+  SWARM_SETUP_GET_EXTEND_OPTIONS: 'swarm:setup-get-extend-options',
+  SWARM_SETUP_ARM: 'swarm:setup-arm',
+  SWARM_SETUP_CANCEL: 'swarm:setup-cancel',
+  SWARM_SETUP_TRACK_FUNDING_TX: 'swarm:setup-track-funding-tx',
+  SWARM_SETUP_RESTART_NODE: 'swarm:setup-restart-node',
+
+  // The node's chequebook as browsing credit, and its swap-enable switch
+  // (src/main/swarm/browsing-credit-service.js, #488). Chrome only.
+  SWARM_CREDIT_GET_STATE: 'swarm:credit-get-state',
+  SWARM_CREDIT_SET_SWAP_ENABLE: 'swarm:credit-set-swap-enable',
 
   // Swarm Feed Store
   SWARM_GET_ALL_ORIGINS: 'swarm:get-all-origins',

@@ -28,6 +28,7 @@ const registry = {
     statusMessage: null,
     tempMessage: null,
     tempMessageTimeout: null,
+    errorState: false,
   },
   myotis: {
     api: null,
@@ -36,6 +37,7 @@ const registry = {
     statusMessage: null,
     tempMessage: null,
     tempMessageTimeout: null,
+    errorState: false,
   },
   ant: {
     api: null, // e.g., 'http://127.0.0.1:11633'
@@ -44,6 +46,7 @@ const registry = {
     statusMessage: null,
     tempMessage: null,
     tempMessageTimeout: null,
+    errorState: false,
   },
   radicle: {
     api: null,        // radapi://local while the in-process node is running
@@ -52,6 +55,7 @@ const registry = {
     statusMessage: null,
     tempMessage: null,
     tempMessageTimeout: null,
+    errorState: false,
   },
   tor: {
     socks: null,      // e.g., '127.0.0.1:9150' (Arti SOCKS5 proxy)
@@ -59,6 +63,7 @@ const registry = {
     statusMessage: null,
     tempMessage: null,
     tempMessageTimeout: null,
+    errorState: false,
   },
   hns: {
     api: null,
@@ -118,6 +123,7 @@ function createEmptyServiceState(service) {
       statusMessage: null,
       tempMessage: null,
       tempMessageTimeout: null,
+      errorState: false,
     };
   }
 
@@ -128,6 +134,7 @@ function createEmptyServiceState(service) {
     statusMessage: null,
     tempMessage: null,
     tempMessageTimeout: null,
+    errorState: false,
   };
 }
 
@@ -190,6 +197,7 @@ function setStatusMessage(service, message) {
     registry[service].tempMessageTimeout = null;
   }
   registry[service].tempMessage = null;
+  registry[service].errorState = false;
   registry[service].statusMessage = message;
 
   broadcastRegistryUpdate();
@@ -207,6 +215,7 @@ function setTempStatusMessage(service, message, duration = 8000) {
   }
 
   registry[service].tempMessage = message;
+  registry[service].errorState = false;
   broadcastRegistryUpdate();
 
   // Auto-settle after duration
@@ -231,6 +240,10 @@ function setErrorState(service, message) {
   }
 
   registry[service].tempMessage = message;
+  // Read by pages that must tell "published but not answering" (the health
+  // check's soft-ERROR, which keeps `api`/`gateway` so it can recover in
+  // place) apart from a node that is actually serving.
+  registry[service].errorState = true;
   broadcastRegistryUpdate();
 }
 
@@ -246,6 +259,7 @@ function clearErrorState(service) {
   }
 
   registry[service].tempMessage = null;
+  registry[service].errorState = false;
   broadcastRegistryUpdate();
 }
 

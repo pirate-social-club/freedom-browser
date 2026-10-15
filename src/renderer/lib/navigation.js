@@ -339,7 +339,7 @@ const clearFaviconPairing = (tab) => {
   tab.reportedFavicon = null;
 };
 
-// Experimental opt-in (Settings → Experimental, default off). Mirrors the
+// Experimental opt-in (Settings → Appearance, default off). Mirrors the
 // `showIpfsProgressStatus` setting, seeded in initNavigation and kept live via
 // the `settings:updated` broadcast. While off, the IPFS progress poller never
 // starts, so the link bar stays a pure hover-URL surface.
@@ -1018,7 +1018,7 @@ const syncBzzBase = (nextBase) => {
 // and telling a private-window user with a fully set-up wallet to flip a
 // Settings toggle that is already on leaves them nowhere to go (#240).
 const SEND_FLOW_REFUSAL_MESSAGES = {
-  [SEND_FLOW_DISABLED]: 'Enable Identity & Wallet (Settings → Experimental) to accept tips.',
+  [SEND_FLOW_DISABLED]: 'Enable Identity & Wallet (Settings → Advanced) to accept tips.',
   [SEND_FLOW_PRIVATE]:
     'Wallet is unavailable in private windows. Open a normal window to accept tips.',
   [SEND_FLOW_SETUP]: 'Finish setting up Identity & Wallet to accept tips.',
@@ -1237,8 +1237,9 @@ const startBzzNavigationWithProbe = (webview, target, navState, displayUrl) => {
 // The sub-path becomes the page's fragment, so it has to accept every depth
 // `page-urls.js#getInternalPageName` *emits* — that function is the inverse of
 // this one, and what it emits is what the address bar shows and what a user or
-// a bookmark hands back. A chain detail is `settings.html#chains/1`, shown as
-// `freedom://settings/chains/1`; while this stopped at a single segment the
+// a bookmark hands back. A chain detail is `settings.html#networks/1`, shown as
+// `freedom://settings/networks/1` (the older `chains/1` is a legacy alias the
+// page rewrites to it); while this stopped at a single segment the
 // chrome's own chain-detail URL was not a routable address at all — typing it
 // back navigated nowhere while the bar went on standing over the chain list,
 // the same "URL promises a view that isn't on screen" shape as #280 itself.
@@ -1306,6 +1307,14 @@ export const resumePendingHnsNavigationIfReady = () => {
   }
   return resumed;
 };
+
+// `scheme:rest` with no whitespace — the only shape an external-protocol URL
+// typed into the bar can take. Main makes the real decision; the second
+// pattern just spares the IPC round-trip for schemes the browser handles
+// itself (main would answer `not-external` for them anyway).
+const EXTERNAL_PROTOCOL_INPUT = /^[a-z][a-z0-9+.-]*:\S+$/i;
+const BROWSER_HANDLED_INPUT =
+  /^(?:https?|bzz|ipfs|ipns|web3|ens|rad|freedom|ethereum|file|about|data|blob|javascript|view-source|chrome|devtools):/i;
 
 export const loadTarget = (value, displayOverride = null, targetWebview = null, options = {}) => {
   // `options.allowUnverifiedOnce` — skip the unverified-ENS interstitial
@@ -1397,6 +1406,76 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null, 
     }
     const { pageName, subPath } = internalPageTarget;
     pushDebug(`Routed internal page to its own tab: ${pageName}${subPath ? `/${subPath}` : ''}`);
+    return;
+  }
+
+  // An external-protocol URL typed into the bar (magnet:, mailto:, …) goes to
+  // its OS handler (#406). It has to be claimed ahead of the Swarm branch:
+  // `formatBzzUrl` passes any parseable `scheme:` URL straight to
+  // `webview.loadURL`, where Chromium turns it into an `openExternal` request
+  // attributed to the page on screen — and refused, since the page saw no
+  // click. Main makes the decision: it refuses blocked schemes and, like
+  // Chrome's omnibox, only claims input whose scheme has an OS handler
+  // registered. Anything it declines re-enters this pipeline exactly as
+  // before. Only a real commit of the bar takes this path; a page link goes
+  // through the per-site prompt in main instead.
+  //
+  // It runs *before* the entry bookkeeping below, like the routed-away
+  // internal-page open above: a URL that opens in another app leaves this tab
+  // where it is, so it must not cancel the tab's in-flight Swarm probe or
+  // back/forward traversal mark, nor bump `requestedNavigationSequence` (which
+  // would make a pending traversal refresh stand down). The schemes the
+  // branches below handle are all in BROWSER_HANDLED_INPUT, and a declined
+  // answer re-enters with the bookkeeping intact and reaches them as before
+  // (`continuesNavigation` keeps it from ending a newer draft). The one
+  // piece that does apply is ending the address-bar edit: the user committed
+  // it, wherever it opens.
+  if (
+    options.commitsAddressBar &&
+    !options.externalProtocolChecked &&
+    EXTERNAL_PROTOCOL_INPUT.test(value.trim()) &&
+    !BROWSER_HANDLED_INPUT.test(value.trim()) &&
+    window.externalProtocol?.openFromAddressBar
+  ) {
+    const typed = value.trim();
+    clearAddressBarEdit(navState);
+    // The answer is async: if the user has asked this tab for something else
+    // in the meantime, this navigation is stale and must not act.
+    const requestSequence = navState?.requestedNavigationSequence;
+    const superseded = () => !!navState && navState.requestedNavigationSequence !== requestSequence;
+    const continueAsBefore = (why) => {
+      if (superseded()) return;
+      pushDebug(`[AddressBar] Not opened externally (${why}); continuing`);
+      loadTarget(value, displayOverride, webview, {
+        ...options,
+        continuesNavigation: true,
+        externalProtocolChecked: true,
+      });
+    };
+    window.externalProtocol
+      .openFromAddressBar(typed)
+      .then((result) => {
+        if (!result?.opened) {
+          continueAsBefore(result?.reason || 'declined');
+          return;
+        }
+        pushDebug('[AddressBar] Opened external-protocol URL in its OS handler');
+        if (superseded()) return;
+        // Nothing loads in the tab (Chrome reverts the omnibox the same
+        // way), so the bar goes back to the page the tab is still on.
+        const display = navState.currentPageUrl
+          ? deriveDisplayValue(
+              navState.currentPageUrl,
+              state.bzzRoutePrefix,
+              homeUrlNormalized,
+              state.ipfsRoutePrefix,
+              state.ipnsRoutePrefix,
+              state.radicleApiPrefix
+            )
+          : '';
+        setAddressDisplayForTab(display, targetTabId);
+      })
+      .catch((err) => continueAsBefore(err?.message || String(err)));
     return;
   }
 
@@ -3322,7 +3401,7 @@ export const initNavigation = () => {
           const target = formatOnchainAppUrl(data.args?.[0]?.target);
           if (target) loadTarget(target, null, webview);
         } else if (data.channel === 'onchain:open-rpc-settings') {
-          loadTarget('freedom://settings/rpc', null, webview);
+          loadTarget('freedom://settings/networks/rpc', null, webview);
         } else if (data.channel === 'link:navigate') {
           const payload = data.args?.[0] || {};
           const url = payload.url;
@@ -3363,8 +3442,16 @@ export const initNavigation = () => {
               // same way as a same-tab navigation, AND named targets
               // reuse their existing tab instead of always opening a
               // new one.
+              //
+              // The preload only sends a new-tab disposition after main's
+              // popup blocker let it through (popup-blocker.js, #442); a
+              // gesture-less named-target reuse arrives as
+              // `popups:blocked` instead (popup-blocker-ui.js).
+              // `openerTabId` records which tab opened the named tab, which
+              // is what scopes that gesture-less reuse.
               openInNewTabWithTarget(url, namedTarget, {
                 background: disposition === 'newBackgroundTab',
+                ...(typeof data.tabId === 'number' ? { openerTabId: data.tabId } : {}),
               });
             } else {
               // Same-tab link click: a page-driven commit, so it must not

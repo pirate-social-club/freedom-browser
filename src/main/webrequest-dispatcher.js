@@ -40,7 +40,11 @@
  *
  * Ordinary handlers that throw are logged and skipped; subsequent handlers still
  * run and the request is not cancelled. A buggy consumer must not be
- * able to break the browser's request chain.
+ * able to break the browser's request chain. The exception is an
+ * `onBeforeRequest` handler registered with `{ failClosed: true }` — a
+ * security gate (radapi-guard, onchain-app-guard) whose throw would
+ * otherwise wave through exactly the request it exists to stop; its throw
+ * cancels the request instead (docs/security-audit-electron.md, E-6).
  */
 
 const log = require('./logger');
@@ -71,7 +75,7 @@ const handlers = {
  * @param {string} name - Identifier used for error logging; must be unique
  *   per event so re-registration is loud, not silent.
  * @param {(details: object) => null | undefined | object | Promise<null | undefined | object>} handler
- * @param {{ session?: Electron.Session }} [options] - Optional explicit session scope
+ * @param {{ session?: Electron.Session, failClosed?: boolean }} [options] - Session scope; security handlers may cancel on failure
  */
 function registerWebRequestHandler(event, name, handler, options = {}) {
   if (!Object.hasOwn(handlers, event)) {
@@ -84,7 +88,11 @@ function registerWebRequestHandler(event, name, handler, options = {}) {
   if (handlers[event].some((entry) => entry.name === name)) {
     throw new Error(`webRequest handler '${name}' already registered for ${event}`);
   }
-  handlers[event].push({ name, handler, session: options.session });
+  const { failClosed = false } = options;
+  if (failClosed && event !== 'onBeforeRequest') {
+    throw new Error(`failClosed is only supported for onBeforeRequest (got ${event})`);
+  }
+  handlers[event].push({ name, handler, session: options.session, failClosed });
 }
 
 // The getter is bound to this session at attachment. Consumer errors remain
@@ -134,13 +142,17 @@ function guardedCallback(callback, permitted, result) {
 function makeOnBeforeRequestListener(eventHandlers, getRequestPolicy) {
   return async (details, callback) => {
     const permitted = makeRequestPermit(getRequestPolicy);
-    for (const { name, handler } of eventHandlers) {
+    for (const { name, handler, failClosed } of eventHandlers) {
       if (!permitted()) { callback({ cancel: true }); return; }
       let result;
       try {
         result = await handler(details);
       } catch (err) {
         logHandlerFailure(name, 'onBeforeRequest', err);
+        if (failClosed) {
+          callback({ cancel: true });
+          return;
+        }
         continue;
       }
       if (result && (result.cancel || result.redirectURL)) {

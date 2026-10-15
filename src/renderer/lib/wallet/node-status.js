@@ -2,28 +2,39 @@
  * Node Status Module
  *
  * Node cards, status badges, Swarm balances, and publishing setup CTA.
+ *
+ * The Swarm card renders the main-process publish setup state
+ * (src/main/swarm/publish-setup-service.js): the node's mode, its wallet and
+ * chequebook balances, and whether it can publish. The balances are chain
+ * reads, so the card asks the service to poll them only while it is on
+ * screen.
+ *
+ * Its Browsing Credit group (#488) renders the browsing credit service
+ * (src/main/swarm/browsing-credit-service.js): the chequebook's spendable
+ * balance, the recent spend, whether the node pays peers, and the node's
+ * `swap-enable` switch. It is read on the same on-screen cadence.
  */
 
 import { state } from '../state.js';
-import { formatRawTokenBalance, truncateAddress, isChequebookDeployed } from './wallet-utils.js';
-import { fetchAntJson } from './ant-api.js';
-import {
-  classifySwarmPublishState,
-  normalizeSwarmMode,
-} from './swarm-readiness.js';
+import { truncateAddress } from './wallet-utils.js';
+import { describePublishCta, formatSwarmMode } from './swarm-readiness.js';
 import { openPublishSetup } from './publish-setup.js';
 import { openStampManager } from './stamp-manager.js';
-import { topUpXdai, topUpXbzz } from './funding-actions.js';
+import { topUpXdai } from './funding-actions.js';
 import { openChequebookDeposit } from './chequebook-deposit.js';
 import { openPublisherIdentities } from './publisher-identities.js';
+import { describeBrowsingCredit } from './browsing-credit.js';
 
-const SWARM_REFRESH_MS = 15000;
-const SWARM_STARTUP_REFRESH_MS = 2000;
-const SWARM_STARTUP_MAX_MS = 30000;
+// Share of the Swarm card that must be on screen for it to count as shown.
+const CARD_VISIBLE_RATIO = 0.05;
+// How often the Browsing Credit group re-reads while the card is shown. The
+// service throttles the chain reads behind it to the same pace.
+const CREDIT_REFRESH_MS = 15_000;
 
 // DOM references
 let swarmModeBadge;
 let swarmStatusBadge;
+let swarmCardContent;
 let swarmBalanceXdaiEl;
 let swarmBalanceXbzzEl;
 let swarmWalletGroup;
@@ -35,28 +46,24 @@ let swarmSetupCta;
 let swarmSetupBtn;
 let swarmSetupBtnLabel;
 let swarmSetupHint;
+let creditEls = {};
 
-let desiredSwarmMode = 'ultraLight';
-let actualSwarmMode = null;
-let swarmRefreshInterval = null;
-let swarmStartupTimeout = null;
-let isStartupConverging = false;
-let swarmRuntimeInfo = createEmptySwarmRuntimeInfo();
+let setupState = null;
+let chequebookFullAddress = null;
+let currentCtaTarget = null; // 'setup' | 'storage' | null
+let cardWatched = false;
+let creditState = null;
+let creditTimer = null;
+let creditRequest = 0;
+let toggleInFlight = false;
 
 // Node status tracking
 let nodeStatusUnsubscribers = [];
 
-function createEmptySwarmRuntimeInfo() {
-  return {
-    readiness: null,
-    stamps: [],
-    stampsKnown: false,
-  };
-}
-
 export function initNodeStatus() {
   swarmModeBadge = document.getElementById('swarm-mode-badge');
   swarmStatusBadge = document.getElementById('swarm-status-badge');
+  swarmCardContent = document.getElementById('swarm-card-content');
   swarmBalanceXdaiEl = document.getElementById('swarm-balance-xdai');
   swarmBalanceXbzzEl = document.getElementById('swarm-balance-xbzz');
   swarmWalletGroup = document.getElementById('swarm-wallet-group');
@@ -68,19 +75,33 @@ export function initNodeStatus() {
   swarmSetupBtn = document.getElementById('swarm-setup-btn');
   swarmSetupBtnLabel = document.getElementById('swarm-setup-btn-label');
   swarmSetupHint = document.getElementById('swarm-setup-hint');
+  creditEls = {
+    group: document.getElementById('swarm-credit-group'),
+    tier: document.getElementById('swarm-credit-tier'),
+    available: document.getElementById('swarm-credit-available'),
+    detail: document.getElementById('swarm-credit-detail'),
+    spend: document.getElementById('swarm-credit-spend'),
+    status: document.getElementById('swarm-credit-status'),
+    topUpCta: document.getElementById('swarm-credit-topup-cta'),
+    topUp: document.getElementById('swarm-credit-topup'),
+    toggle: document.getElementById('swarm-credit-switch'),
+    toggleHint: document.getElementById('swarm-credit-toggle-hint'),
+    note: document.getElementById('swarm-credit-note'),
+  };
 
   setupNodeCards();
 
   document.getElementById('swarm-topup-xdai')?.addEventListener('click', () => {
-    topUpXdai();
-  });
-
-  document.getElementById('swarm-topup-xbzz')?.addEventListener('click', () => {
-    topUpXbzz();
+    topUpXdai(setupState?.account?.walletAddress);
   });
 
   document.getElementById('swarm-topup-chequebook')?.addEventListener('click', () => {
     openChequebookDeposit();
+  });
+
+  creditEls.topUp?.addEventListener('click', () => openChequebookDeposit());
+  creditEls.toggle?.addEventListener('change', () => {
+    void handleSwapToggle(creditEls.toggle.checked);
   });
 
   const chequebookCopyBtn = document.getElementById('swarm-chequebook-copy');
@@ -90,9 +111,8 @@ export function initNodeStatus() {
     });
   }
 
-  syncDesiredSwarmMode();
-  window.addEventListener('settings:updated', handleSettingsUpdated);
-
+  subscribeToSetupState();
+  watchCardVisibility();
   subscribeToNodeStatus();
 }
 
@@ -137,51 +157,40 @@ function toggleNodeCard(nodeName) {
   }
 }
 
-function formatSwarmMode(mode) {
-  switch (normalizeSwarmMode(mode)) {
-    case 'full':
-      return 'Full';
-    case 'light':
-      return 'Light';
-    case 'ultraLight':
-      return 'Ultra-light';
-    default:
-      return '--';
-  }
+function subscribeToSetupState() {
+  if (!window.publishSetup) return;
+  window.publishSetup.onState((next) => {
+    setupState = next;
+    updateSwarmUi();
+  });
+  window.publishSetup
+    .getState()
+    .then((initial) => {
+      setupState = initial || setupState;
+      updateSwarmUi();
+    })
+    .catch((err) => console.error('[WalletUI] Failed to read publish setup state:', err));
 }
 
-function getDisplayedSwarmMode() {
-  if (actualSwarmMode) {
-    return actualSwarmMode;
-  }
-
-  if (state.registry?.ant?.mode !== 'reused') {
-    return desiredSwarmMode;
-  }
-
-  return null;
-}
-
-function updateSwarmModeUi() {
-  if (swarmModeBadge) {
-    swarmModeBadge.textContent = formatSwarmMode(getDisplayedSwarmMode());
-  }
-}
-
-async function syncDesiredSwarmMode() {
-  try {
-    const settings = await window.electronAPI?.getSettings?.();
-    desiredSwarmMode = settings?.antNodeMode === 'light' ? 'light' : 'ultraLight';
-  } catch {
-    desiredSwarmMode = 'ultraLight';
-  }
-
-  updateSwarmUi();
-}
-
-function handleSettingsUpdated(event) {
-  desiredSwarmMode = event.detail?.antNodeMode === 'light' ? 'light' : 'ultraLight';
-  updateSwarmUi();
+// The wallet and chequebook balances are RPC reads on the node: ask for them
+// only while the Swarm card is actually on screen (sidebar open, Nodes tab,
+// card expanded).
+function watchCardVisibility() {
+  if (!swarmCardContent || typeof IntersectionObserver !== 'function') return;
+  // A collapsed sidebar is 0 px wide and clips the card rather than hiding
+  // it, which can still count as a zero-area intersection: go by the ratio.
+  const observer = new IntersectionObserver(
+    (entries) => {
+      const visible = entries.some((entry) => entry.intersectionRatio >= CARD_VISIBLE_RATIO);
+      if (visible === cardWatched) return;
+      cardWatched = visible;
+      void window.publishSetup?.watch('node-card', visible);
+      if (visible) startCreditRefresh();
+      else stopCreditRefresh();
+    },
+    { threshold: [0, CARD_VISIBLE_RATIO] }
+  );
+  observer.observe(swarmCardContent);
 }
 
 function subscribeToNodeStatus() {
@@ -189,8 +198,8 @@ function subscribeToNodeStatus() {
   nodeStatusUnsubscribers = [];
 
   if (window.ant?.onStatusUpdate) {
-    const unsubBee = window.ant.onStatusUpdate(({ status, error }) => {
-      updateSwarmStatus(status, error);
+    const unsubBee = window.ant.onStatusUpdate(({ status }) => {
+      updateSwarmStatus(status);
     });
     if (unsubBee) nodeStatusUnsubscribers.push(unsubBee);
   }
@@ -215,8 +224,8 @@ function subscribeToNodeStatus() {
 async function fetchInitialNodeStatus() {
   try {
     if (window.ant?.getStatus) {
-      const { status, error } = await window.ant.getStatus();
-      updateSwarmStatus(status, error);
+      const { status } = await window.ant.getStatus();
+      updateSwarmStatus(status);
     }
 
     if (window.ipfs?.getStatus) {
@@ -249,134 +258,141 @@ function getStatusBadgeState(status) {
   }
 }
 
-function updateSwarmStatus(status, _error) {
+function updateSwarmStatus(status) {
+  const previous = state.currentAntStatus;
   state.currentAntStatus = status;
+  if (status !== previous && cardWatched) void refreshCredit();
 
   if (swarmStatusBadge) {
     const badgeState = getStatusBadgeState(status);
     swarmStatusBadge.textContent = badgeState.text;
     swarmStatusBadge.dataset.status = badgeState.value;
   }
-
-  if (status === 'running') {
-    refreshSwarmRuntimeInfo();
-    startSwarmStartupBurst();
-  } else {
-    stopSwarmRefresh();
-    stopSwarmStartupBurst();
-
-    if (status !== 'starting' && status !== 'stopping') {
-      actualSwarmMode = null;
-      chequebookFullAddress = null;
-      isStartupConverging = false;
-      swarmRuntimeInfo = createEmptySwarmRuntimeInfo();
-    }
-
-    updateSwarmUi();
-  }
-}
-
-function startSwarmStartupBurst() {
-  stopSwarmRefresh();
-  stopSwarmStartupBurst();
-  isStartupConverging = true;
-
-  // Poll fast during startup until state converges
-  swarmRefreshInterval = setInterval(() => {
-    refreshSwarmRuntimeInfo();
-  }, SWARM_STARTUP_REFRESH_MS);
-
-  // After max startup time, switch to steady-state polling
-  swarmStartupTimeout = setTimeout(() => {
-    switchToSteadyStatePolling();
-  }, SWARM_STARTUP_MAX_MS);
-}
-
-function switchToSteadyStatePolling() {
-  isStartupConverging = false;
-  stopSwarmStartupBurst();
-  stopSwarmRefresh();
-  swarmRefreshInterval = setInterval(() => {
-    refreshSwarmRuntimeInfo();
-  }, SWARM_REFRESH_MS);
-}
-
-function stopSwarmRefresh() {
-  if (swarmRefreshInterval) {
-    clearInterval(swarmRefreshInterval);
-    swarmRefreshInterval = null;
-  }
-}
-
-function stopSwarmStartupBurst() {
-  if (swarmStartupTimeout) {
-    clearTimeout(swarmStartupTimeout);
-    swarmStartupTimeout = null;
-  }
-}
-
-async function refreshSwarmRuntimeInfo() {
-  if (state.currentAntStatus !== 'running') {
-    return;
-  }
-
-  try {
-    const [nodeResult, readinessResult, walletResult, stampsResult, chequebookAddrResult, chequebookBalResult] = await Promise.all([
-      fetchAntJson('/node'),
-      fetchAntJson('/readiness'),
-      fetchAntJson('/wallet'),
-      fetchAntJson('/stamps'),
-      fetchAntJson('/chequebook/address'),
-      fetchAntJson('/chequebook/balance'),
-    ]);
-
-    const nodeInfo = nodeResult.ok ? nodeResult.data : null;
-    if (nodeInfo?.beeMode) {
-      actualSwarmMode = normalizeSwarmMode(nodeInfo.beeMode);
-    }
-
-    const stamps = Array.isArray(stampsResult.data?.stamps) ? stampsResult.data.stamps : [];
-    const stampsKnown = Array.isArray(stampsResult.data?.stamps);
-
-    swarmRuntimeInfo = {
-      readiness: { ok: readinessResult.ok },
-      stamps,
-      stampsKnown,
-    };
-
-    // Once stamps are known, startup convergence is complete
-    if (stampsKnown && isStartupConverging) {
-      switchToSteadyStatePolling();
-    }
-
-    if (walletResult.ok && walletResult.data) {
-      updateSwarmWalletBalances(walletResult.data);
-    }
-
-    updateSwarmChequebook(chequebookAddrResult, chequebookBalResult);
-  } catch (err) {
-    console.error('[WalletUI] Failed to refresh Swarm runtime info:', err);
-    swarmRuntimeInfo = createEmptySwarmRuntimeInfo();
-  }
-
-  updateSwarmUi();
 }
 
 function updateSwarmUi() {
-  updateSwarmModeUi();
-  updateSwarmSectionVisibility();
+  const modeLabel = formatSwarmMode(setupState?.nodeMode);
+  if (swarmModeBadge) {
+    swarmModeBadge.textContent = modeLabel || '';
+    swarmModeBadge.classList.toggle('hidden', !modeLabel);
+  }
+  updateSwarmBalances();
   updateSwarmSetupCta();
+  renderCredit();
 }
 
-function updateSwarmSectionVisibility() {
-  const displayMode = normalizeSwarmMode(getDisplayedSwarmMode());
-  const isUltraLight = displayMode === 'ultraLight';
+// ---------------------------------------------------------------------------
+// Browsing credit (#488)
+// ---------------------------------------------------------------------------
 
-  swarmWalletGroup?.classList.toggle('hidden', isUltraLight);
-  // Chequebook visibility is handled by updateSwarmChequebook (only shown when deployed)
+function startCreditRefresh() {
+  stopCreditRefresh();
+  void refreshCredit();
+  creditTimer = setInterval(() => void refreshCredit(), CREDIT_REFRESH_MS);
 }
 
-let currentCtaTarget = 'setup'; // 'setup' or 'storage'
+function stopCreditRefresh() {
+  if (creditTimer) clearInterval(creditTimer);
+  creditTimer = null;
+}
+
+async function refreshCredit() {
+  if (!window.browsingCredit?.getState) return;
+  const request = ++creditRequest;
+  try {
+    const next = await window.browsingCredit.getState();
+    // A read that started before the switch was flipped is older than the
+    // flip's own answer.
+    if (request !== creditRequest || toggleInFlight) return;
+    creditState = next;
+  } catch (err) {
+    console.error('[WalletUI] Failed to read browsing credit:', err);
+  }
+  renderCredit();
+}
+
+async function handleSwapToggle(enabled) {
+  if (!window.browsingCredit?.setSwapEnable || toggleInFlight) return;
+  toggleInFlight = true;
+  creditRequest += 1;
+  // Show the change while the node takes it, with the switch where the user put it.
+  if (creditState) {
+    creditState = {
+      ...creditState,
+      swapEnable: enabled,
+      toggle: { inProgress: true, error: null },
+    };
+  }
+  renderCredit();
+  let result;
+  try {
+    result = await window.browsingCredit.setSwapEnable(enabled);
+  } catch (err) {
+    result = { ok: false, error: err?.message || null };
+  }
+  toggleInFlight = false;
+  if (result?.state) creditState = result.state;
+  if (!result?.ok && creditState) {
+    creditState = {
+      ...creditState,
+      swapEnable: result?.state ? result.state.swapEnable : !enabled,
+      toggle: { inProgress: false, error: result?.error || 'Could not change the setting.' },
+    };
+  }
+  renderCredit();
+}
+
+function setLine(el, text) {
+  if (!el) return;
+  el.textContent = text || '';
+  el.classList.toggle('hidden', !text);
+}
+
+function renderCredit() {
+  // The publish CTA warns when paying peers is off, so it follows the credit.
+  updateSwarmSetupCta();
+  const view = describeBrowsingCredit(creditState, setupState);
+  creditEls.group?.classList.toggle('hidden', !view.visible);
+  if (!view.visible) return;
+
+  if (creditEls.tier) {
+    creditEls.tier.classList.toggle('hidden', !view.tier);
+    creditEls.tier.textContent = view.tier?.text || '';
+    // Reuse the node badge palette: green while paying, grey on the free tier.
+    creditEls.tier.dataset.status = view.tier?.value === 'paying' ? 'running' : 'stopped';
+  }
+  if (creditEls.available) creditEls.available.textContent = view.available;
+  setLine(creditEls.detail, view.detail);
+  setLine(creditEls.spend, view.spend);
+  setLine(creditEls.status, view.status);
+  if (creditEls.status) creditEls.status.dataset.level = view.level;
+  creditEls.topUpCta?.classList.toggle('hidden', !view.showTopUp);
+  if (creditEls.toggle) {
+    creditEls.toggle.checked = view.toggle.checked;
+    creditEls.toggle.disabled = view.toggle.disabled;
+  }
+  if (creditEls.toggleHint) creditEls.toggleHint.textContent = view.toggle.hint;
+  setLine(creditEls.note, view.costNote);
+}
+
+function updateSwarmBalances() {
+  const account = setupState?.account;
+  const hasWallet = Boolean(account && (account.xdai !== null || account.bzz !== null));
+  swarmWalletGroup?.classList.toggle('hidden', !hasWallet);
+  if (swarmBalanceXdaiEl) swarmBalanceXdaiEl.textContent = account?.xdai ?? '--';
+  if (swarmBalanceXbzzEl) swarmBalanceXbzzEl.textContent = account?.bzz ?? '--';
+
+  const chequebook = account?.chequebook;
+  swarmChequebookGroup?.classList.toggle('hidden', !chequebook);
+  chequebookFullAddress = chequebook?.address || null;
+  if (!chequebook) return;
+
+  if (swarmChequebookAddress) {
+    swarmChequebookAddress.textContent = truncateAddress(chequebook.address);
+    swarmChequebookAddress.title = chequebook.address;
+  }
+  if (swarmChequebookBalance) swarmChequebookBalance.textContent = chequebook.deposit ?? '--';
+}
 
 function handleSetupCtaClick() {
   if (!currentCtaTarget) return;
@@ -388,60 +404,13 @@ function handleSetupCtaClick() {
 }
 
 function updateSwarmSetupCta() {
-  const publishState = classifySwarmPublishState({
-    beeStatus: state.currentAntStatus,
-    desiredMode: desiredSwarmMode,
-    actualMode: actualSwarmMode,
-    registryMode: state.registry?.ant?.mode,
-    readiness: swarmRuntimeInfo.readiness,
-    stamps: swarmRuntimeInfo.stamps,
-    stampsKnown: swarmRuntimeInfo.stampsKnown,
-  });
+  const cta = describePublishCta(setupState, creditState);
 
-  const inspectOnly = state.registry?.ant?.mode === 'reused';
-  const beeRunning = state.currentAntStatus === 'running';
-  const isReady = publishState.key === 'ready';
-  const isInitializing = publishState.key === 'initializing';
-
-  const showCta = !inspectOnly && beeRunning;
-
-  if (swarmSetupCta) {
-    swarmSetupCta.classList.toggle('hidden', !showCta);
-  }
-
-  // During startup/sync, show a non-clickable status hint
-  if (isInitializing) {
-    currentCtaTarget = null;
-    if (swarmSetupBtn) swarmSetupBtn.disabled = true;
-    if (swarmSetupBtnLabel) swarmSetupBtnLabel.textContent = 'Checking node status\u2026';
-    if (swarmSetupHint) swarmSetupHint.textContent = '';
-    return;
-  }
-
-  if (swarmSetupBtn) swarmSetupBtn.disabled = false;
-
-  // Switch CTA between setup and storage management
-  if (isReady) {
-    currentCtaTarget = 'storage';
-    if (swarmSetupBtnLabel) swarmSetupBtnLabel.textContent = 'Manage Storage';
-    if (swarmSetupHint) swarmSetupHint.textContent = 'View batches and storage';
-  } else {
-    currentCtaTarget = 'setup';
-    if (swarmSetupBtnLabel) {
-      swarmSetupBtnLabel.textContent = publishState.key === 'browsing-only'
-        ? 'Set Up Publishing'
-        : 'Publishing Setup';
-    }
-    if (swarmSetupHint) {
-      const hints = {
-        'browsing-only': 'Enable uploads and publishing',
-        'no-usable-stamps': 'Stamps needed to publish',
-        'initializing': 'Setup in progress',
-        'error': 'Check node status',
-      };
-      swarmSetupHint.textContent = hints[publishState.key] || '';
-    }
-  }
+  swarmSetupCta?.classList.toggle('hidden', !cta.visible);
+  currentCtaTarget = cta.visible && !cta.disabled ? cta.target : null;
+  if (swarmSetupBtn) swarmSetupBtn.disabled = cta.disabled;
+  if (swarmSetupBtnLabel) swarmSetupBtnLabel.textContent = cta.label;
+  if (swarmSetupHint) swarmSetupHint.textContent = cta.hint;
 
   // Show publisher identities button when identities exist
   updatePublisherIdentitiesButton();
@@ -454,48 +423,6 @@ async function updatePublisherIdentitiesButton() {
     swarmIdentitiesCta.classList.toggle('hidden', !entries || entries.length === 0);
   } catch {
     swarmIdentitiesCta.classList.add('hidden');
-  }
-}
-
-function updateSwarmWalletBalances(walletInfo) {
-  if (swarmBalanceXdaiEl) {
-    swarmBalanceXdaiEl.textContent = formatRawTokenBalance(walletInfo?.nativeTokenBalance, 18);
-  }
-
-  if (swarmBalanceXbzzEl) {
-    swarmBalanceXbzzEl.textContent = formatRawTokenBalance(walletInfo?.bzzBalance, 16);
-  }
-}
-
-let chequebookFullAddress = null;
-
-function updateSwarmChequebook(addrResult, balResult) {
-  const addr = addrResult?.ok ? addrResult.data?.chequebookAddress : null;
-  const isDeployed = isChequebookDeployed(addr);
-
-  if (swarmChequebookGroup) {
-    swarmChequebookGroup.classList.toggle('hidden', !isDeployed);
-  }
-
-  if (!isDeployed) {
-    chequebookFullAddress = null;
-    return;
-  }
-
-  chequebookFullAddress = addr;
-
-  if (swarmChequebookAddress) {
-    swarmChequebookAddress.textContent = truncateAddress(addr);
-    swarmChequebookAddress.title = addr;
-  }
-
-  if (swarmChequebookBalance && balResult?.ok && balResult.data) {
-    // availableBalance is in PLUR (raw xBZZ with 16 decimals)
-    const available = balResult.data.availableBalance;
-    swarmChequebookBalance.textContent = formatRawTokenBalance(
-      typeof available === 'string' ? available : String(available || '0'),
-      16
-    );
   }
 }
 

@@ -59,6 +59,19 @@ describe('evaluation updater policy', () => {
     expect(jest.getTimerCount()).toBe(0);
   });
 
+  test('progress IPC and test events cannot enable checking or installation', async () => {
+    const { mod, ipcMain, updaterFactory } = loadUpdater();
+    const state = mod.getUpdateState();
+    expect(state).toMatchObject({ status: 'unsupported', canCheck: false, percent: null });
+    expect(await ipcMain.invoke('update:get-state')).toEqual(state);
+    for (const event of ['checking', 'available', 'download-progress', 'downloaded', 'error']) {
+      expect(mod.dispatchUpdateEvent(event, { version: '99.0.0', percent: 100 })).toEqual(state);
+    }
+    expect(mod.isUpdateReady()).toBe(false);
+    expect(updaterFactory).not.toHaveBeenCalled();
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
   test('manual checks tolerate a closed window or a failed dialog', async () => {
     const { mod, dialog, updaterFactory, log } = loadUpdater();
     mod.initUpdater({ isDestroyed: () => true });

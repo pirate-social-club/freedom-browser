@@ -6,6 +6,7 @@ describe('MyotisProcess', () => {
   let processClient;
   let fork;
   let callbacks;
+  let recoverOwner;
   beforeEach(() => {
     jest.resetModules();
     jest.useFakeTimers();
@@ -18,10 +19,13 @@ describe('MyotisProcess', () => {
     child.stdin.end = jest.fn();
     fork = jest.fn(() => child);
     jest.doMock('child_process', () => ({ fork }));
+    recoverOwner = jest.fn().mockRejectedValue(new Error('still owned'));
+    jest.doMock('./ownership-recovery', () => ({ recoverOwner }));
     jest.doMock('fs', () => ({ existsSync: () => true, accessSync: jest.fn(), mkdirSync: jest.fn(), constants: { X_OK: 1 } }));
     const { MyotisProcess } = require('./myotis-process');
     callbacks = { onStatus: jest.fn(), onUnavailable: jest.fn(), onExit: jest.fn(), onLifecycle: jest.fn() };
-    processClient = new MyotisProcess({ addonPath: '/addon.node', network: 'mainnet', dataDir: '/data', ...callbacks });
+    processClient = new MyotisProcess({ addonPath: '/addon.node', network: 'mainnet', dataDir: '/data',
+      bootEnodes: [`enode://${'ab'.repeat(64)}@1.2.3.4:30303`], ...callbacks });
   });
   afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); });
   function receipt(type, extra = {}) {
@@ -93,16 +97,50 @@ describe('MyotisProcess', () => {
     await Promise.all(requests);
   });
 
+  test('carries pins through owned startup and reports only bounded application results', () => {
+    const bootEnodes = [`enode://${'ab'.repeat(64)}@1.2.3.4:30303`];
+    receipt('owned');
+    expect(child.send.mock.calls.at(-1)[0]).toMatchObject({ bootEnodes });
+    child.emit('message', { type: 'started', generation: processClient.generation, ok: true,
+      seedPinsCount: 1, seedPinsApplied: true, secret: 'never logged' });
+    expect(callbacks.onLifecycle).toHaveBeenCalledWith({ generation: processClient.generation, event: 'seed-pins', count: 1, applied: true });
+    expect(JSON.stringify(callbacks.onLifecycle.mock.calls)).not.toContain('never logged');
+  });
+
+  test.each([false, 'true', null])('seed application result %p is reported as a refusal, not startup failure', applied => {
+    receipt('owned');
+    child.emit('message', { type: 'started', generation: processClient.generation, ok: true,
+      seedPinsCount: 5, seedPinsApplied: applied });
+    expect(callbacks.onLifecycle).toHaveBeenCalledWith(expect.objectContaining({ event: 'seed-pins', count: 5, applied: false }));
+    expect(processClient.accepting).toBe(true);
+  });
+
+  test.each([0, 65, '5', Infinity])('ignores invalid seed diagnostic count %p', count => {
+    receipt('owned');
+    child.emit('message', { type: 'started', generation: processClient.generation, ok: true,
+      seedPinsCount: count, seedPinsApplied: true });
+    expect(callbacks.onLifecycle.mock.calls.some(([event]) => event.event === 'seed-pins')).toBe(false);
+  });
+
   test('preserves the verified head through the real bounded status snapshot', async () => {
     ready();
     const expected = {
       beaconState: 'SYNCED', currentPeriod: 1400, targetPeriod: 1400,
-      peerCount: 12, snapPeers: 3, finalizedBlockNumber: 25684100,
+      peerCount: 12, snapPeers: 3, snapServingPeers: 1, finalizedBlockNumber: 25684100,
       optimisticBlockNumber: 25684159, elReaderAvailable: true, elHunting: false,
     };
     const status = processClient.request('status');
-    reply(child.send.mock.calls.at(-1)[0], { ...expected, engineLogs: 'private payload' });
+    // ABI 38's snap2ServingPeers is a subset of snapServingPeers (shown
+    // upstream, never gated on): it stays out of the allowlist. A valid
+    // upgradeAdvisory passes through, minus any key upstream doesn't define.
+    const advisory = { phase: 'SCHEDULED', activationTime: 0, forkId: '0x00000000', observedPeers: 3 };
+    reply(child.send.mock.calls.at(-1)[0], { ...expected, engineLogs: 'private payload', snap2ServingPeers: 1,
+      upgradeAdvisory: { ...advisory, message: 'x'.repeat(4096) } });
     await status;
+    expect(callbacks.onStatus).toHaveBeenLastCalledWith({ ...expected, upgradeAdvisory: advisory });
+    const garbage = processClient.request('status');
+    reply(child.send.mock.calls.at(-1)[0], { ...expected, upgradeAdvisory: { ...advisory, phase: 'PANIC' } });
+    await garbage;
     expect(callbacks.onStatus).toHaveBeenLastCalledWith(expected);
     for (const value of ['25684159', Infinity, NaN]) {
       const next = processClient.request('status');
@@ -291,6 +329,42 @@ describe('MyotisProcess', () => {
     expect(callbacks.onExit).not.toHaveBeenCalled();
   });
 
+  test('a later retry rechecks native exit instead of caching a failed stop forever', async () => {
+    ready();
+    child.emit('exit', null, 'SIGKILL'); child.stdout.emit('end');
+    await expect(processClient.stop()).resolves.toBe(false);
+    expect(processClient.exited).toBe(false);
+    recoverOwner.mockResolvedValue();
+    await expect(processClient.stop()).resolves.toBe(true);
+    expect(recoverOwner).toHaveBeenLastCalledWith('/data');
+    expect(processClient.exited).toBe(true);
+    expect(callbacks.onExit).toHaveBeenCalledTimes(1);
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  test('keeps the native helper verdict when exit recovery is refused', async () => {
+    ready();
+    recoverOwner.mockRejectedValue(Object.assign(new Error('reboot'), { code: 'CHECKPOINT_REBOOT_REQUIRED' }));
+    child.emit('exit', null, 'SIGKILL'); child.stdout.emit('end');
+    await expect(processClient.stop()).resolves.toBe(false);
+    expect(processClient.recoveryFailureCode).toBe('CHECKPOINT_REBOOT_REQUIRED');
+    recoverOwner.mockRejectedValue(Object.assign(new Error('owned'), { code: 'CHECKPOINT_OWNERSHIP' }));
+    await expect(processClient.stop()).resolves.toBe(false);
+    expect(processClient.recoveryFailureCode).toBe('CHECKPOINT_OWNERSHIP');
+    recoverOwner.mockRejectedValue(new Error('spawn failed'));
+    await expect(processClient.stop()).resolves.toBe(false);
+    expect(processClient.recoveryFailureCode).toBe('CHECKPOINT_OWNERSHIP');
+  });
+
+  test('reconciles a lost terminal report using native proof after supervisor exit', async () => {
+    ready();
+    recoverOwner.mockResolvedValue();
+    child.emit('exit', 74, null); child.stdout.emit('end');
+    await expect(processClient.stop()).resolves.toBe(true);
+    expect(callbacks.onLifecycle).toHaveBeenCalledWith(expect.objectContaining({ event: 'exit-recovered' }));
+    expect(callbacks.onExit).toHaveBeenCalledTimes(1);
+  });
+
   test('propagates native anchor mismatch as a bounded storage error', () => {
     receipt('owned');
     child.emit('message', { type: 'started', generation: processClient.generation, ok: false, failure: 'anchor-mismatch' });
@@ -379,4 +453,59 @@ describe('MyotisProcess', () => {
     expect(callbacks.onUnavailable).toHaveBeenCalledWith(expect.any(String), 'CHECKPOINT_INSTALLATION');
   });
 
+});
+
+// The fork watch's advisory is peer-reported and unverified; main passes it to
+// the renderer only in upstream's documented shape, all or nothing.
+describe('upgradeAdvisory validation', () => {
+  const { upgradeAdvisory } = require('./myotis-process');
+  const valid = { phase: 'ACTIVE', activationTime: 1791294816, forkId: '0x6C1D9423', observedPeers: 4 };
+
+  test.each([
+    ['scheduled with a known time', { ...valid, phase: 'SCHEDULED' }],
+    ['an unknown time (0)', { ...valid, activationTime: 0 }],
+    ['a blob-parameter-only fork id', { ...valid, forkId: '0x00000000' }],
+    ['the peer bound', { ...valid, observedPeers: 100000 }],
+  ])('accepts %s', (_label, value) => {
+    expect(upgradeAdvisory(value)).toEqual({ ...value, forkId: value.forkId.toLowerCase() });
+  });
+
+  test('keeps only the four upstream keys and normalises the fork id', () => {
+    expect(upgradeAdvisory({ ...valid, message: '<img src=x>', extra: { nested: true } }))
+      .toEqual({ phase: 'ACTIVE', activationTime: 1791294816, forkId: '0x6c1d9423', observedPeers: 4 });
+  });
+
+  test.each([
+    ['null', null],
+    ['undefined', undefined],
+    ['a string', 'ACTIVE'],
+    ['a number', 1],
+    ['an array', [valid]],
+    ['an empty object', {}],
+    ['an unknown phase', { ...valid, phase: 'IMMINENT' }],
+    ['a lower-case phase', { ...valid, phase: 'active' }],
+    ['a missing phase', { ...valid, phase: undefined }],
+    ['a negative time', { ...valid, activationTime: -1 }],
+    ['a fractional time', { ...valid, activationTime: 1.5 }],
+    ['a NaN time', { ...valid, activationTime: NaN }],
+    ['an infinite time', { ...valid, activationTime: Infinity }],
+    ['a string time', { ...valid, activationTime: '1791294816' }],
+    ['a time past year 9999', { ...valid, activationTime: 253402300800 }],
+    ['a millisecond-sized time', { ...valid, activationTime: 1791294816000000 }],
+    ['a short fork id', { ...valid, forkId: '0x1234567' }],
+    ['a long fork id', { ...valid, forkId: '0x123456789' }],
+    ['a fork id without 0x', { ...valid, forkId: '6c1d9423' }],
+    ['a non-hex fork id', { ...valid, forkId: '0x6c1d942g' }],
+    ['an oversized fork id', { ...valid, forkId: `0x${'a'.repeat(1 << 16)}` }],
+    ['a numeric fork id', { ...valid, forkId: 0x6c1d9423 }],
+    ['a fork id with a trailing newline', { ...valid, forkId: '0x6c1d9423\n' }],
+    ['zero peers', { ...valid, observedPeers: 0 }],
+    ['negative peers', { ...valid, observedPeers: -3 }],
+    ['fractional peers', { ...valid, observedPeers: 3.5 }],
+    ['oversized peers', { ...valid, observedPeers: 100001 }],
+    ['string peers', { ...valid, observedPeers: '3' }],
+    ['missing peers', { phase: 'ACTIVE', activationTime: 0, forkId: '0x00000000' }],
+  ])('drops %s', (_label, value) => {
+    expect(upgradeAdvisory(value)).toBeNull();
+  });
 });

@@ -26,6 +26,7 @@ const { startLocalMqttBroker } = require(path.join(repoRoot, 'test', 'helpers', 
 const VAULT_PASSWORD = 'Freedom-E2E-Remote-Signing-2026!';
 
 const { WEBRTC_LOCAL_SWITCH } = require('../test/helpers/webrtc');
+const { closeApp } = require('./close-app');
 
 function startBridgeServer() {
   const server = createBridgeServer();
@@ -96,7 +97,9 @@ const test = base.extend({
         FREEDOM_IDENTITY_DATA: identityDir,
         FREEDOM_RADICLE_DATA: radicleDir,
         FREEDOM_OPENLV_SIGNALING: services.mqttUrl,
-        FREEDOM_TEST_HIDE_WINDOW: process.env.FREEDOM_E2E_HEADED === '1' ? '0' : '1',
+        // Shown, not hidden: a hidden window starves clicks of frames and
+        // sends them to the <webview> guest (#536, #479; see safe-fixtures.js).
+        FREEDOM_TEST_HIDE_WINDOW: '0',
         ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
         LANG: 'en_US.UTF-8',
       },
@@ -105,11 +108,7 @@ const test = base.extend({
 
     await use(app);
 
-    try {
-      await app.close();
-    } catch {
-      // window already gone
-    }
+    await closeApp(app);
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   },
 

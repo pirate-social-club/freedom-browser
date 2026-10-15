@@ -1414,6 +1414,148 @@ describe('navigation', () => {
     });
   });
 
+  // #406: a typed external-protocol URL goes to its OS handler (main decides:
+  // blocklist, and only a scheme the OS has a handler for). Anything main
+  // declines re-enters the ordinary pipeline once — which, with the URL
+  // helpers mocked here, ends in the search fallback.
+  describe('address bar external-protocol URLs', () => {
+    const load = async (result) => {
+      const ctx = await loadNavigationModule();
+      await ctx.mod.initNavigation();
+      await flushMicrotasks();
+      global.window.externalProtocol = {
+        openFromAddressBar: jest.fn(() =>
+          result instanceof Error ? Promise.reject(result) : Promise.resolve(result)
+        ),
+      };
+      return ctx;
+    };
+
+    test('a committed magnet: URL opens in its handler and loads nothing in the tab', async () => {
+      const ctx = await load({ opened: true });
+      const typed = 'magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a';
+      ctx.elements.addressInput.value = typed;
+
+      ctx.mod.loadTarget(`  ${typed} `, null, null, { commitsAddressBar: true });
+      await flushMicrotasks();
+
+      expect(global.window.externalProtocol.openFromAddressBar).toHaveBeenCalledWith(typed);
+      expect(ctx.activeRef.tab.webview.loadURL).not.toHaveBeenCalled();
+      // The bar goes back to the page the tab is still on.
+      expect(ctx.elements.addressInput.value).not.toBe(typed);
+    });
+
+    test('a scheme main will not open (no handler, blocked) continues the ordinary pipeline once', async () => {
+      const ctx = await load({ opened: false, reason: 'no-handler' });
+
+      ctx.mod.loadTarget('define:serendipity', null, null, { commitsAddressBar: true });
+      await flushMicrotasks();
+
+      expect(global.window.externalProtocol.openFromAddressBar).toHaveBeenCalledTimes(1);
+      expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
+        'https://duckduckgo.com/?q=define%3Aserendipity'
+      );
+    });
+
+    test('a failed IPC still continues rather than doing nothing', async () => {
+      const ctx = await load(new Error('boom'));
+
+      ctx.mod.loadTarget('mailto:someone@example.com', null, null, { commitsAddressBar: true });
+      await flushMicrotasks();
+
+      expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
+        'https://duckduckgo.com/?q=mailto%3Asomeone%40example.com'
+      );
+    });
+
+    test('only a commit of the bar itself asks main; other chrome callers are unchanged', async () => {
+      const ctx = await load({ opened: true });
+
+      ctx.mod.loadTarget('mailto:someone@example.com');
+
+      expect(global.window.externalProtocol.openFromAddressBar).not.toHaveBeenCalled();
+      expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
+        'https://duckduckgo.com/?q=mailto%3Asomeone%40example.com'
+      );
+    });
+
+    test('a newer navigation supersedes a pending answer', async () => {
+      const ctx = await load({ opened: false, reason: 'no-handler' });
+
+      ctx.mod.loadTarget('define:serendipity', null, null, { commitsAddressBar: true });
+      ctx.mod.loadTarget('https://newer.example/');
+      await flushMicrotasks();
+
+      expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledTimes(1);
+      expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith('https://newer.example/');
+    });
+
+    // R1-M3: an opened URL leaves the tab where it is, so the entry
+    // bookkeeping of a real navigation (Swarm probe cancel, traversal mark,
+    // requested-navigation counter) must not run for it — only for a
+    // declined one that goes on to navigate the tab.
+    test("an opened URL leaves the tab's Swarm probe, traversal mark and nav counter alone", async () => {
+      const ctx = await load({ opened: true });
+      const { goBackInHistory, consumeHistoryTraversal } = await import('./history-traversal.js');
+      ctx.mod.loadTarget(`bzz://${'a'.repeat(64)}`);
+      await flushMicrotasks();
+      const navState = ctx.activeRef.tab.navigationState;
+      const { webview } = ctx.activeRef.tab;
+      expect(navState.pendingSwarmProbeId).toBe('probe-1');
+      const sequence = navState.requestedNavigationSequence;
+      // A back/forward traversal in flight: its trust-refresh mark must
+      // survive, i.e. `clearHistoryTraversal(webview)` must not run.
+      webview.canGoBack.mockReturnValue(true);
+      expect(goBackInHistory(webview)).toBe(true);
+
+      ctx.mod.loadTarget('magnet:?xt=urn:btih:abc', null, null, { commitsAddressBar: true });
+      await flushMicrotasks();
+
+      expect(ctx.swarmProbeState.cancelCalls).toEqual([]);
+      expect(navState.pendingSwarmProbeId).toBe('probe-1');
+      expect(navState.requestedNavigationSequence).toBe(sequence);
+      expect(consumeHistoryTraversal(webview)).toBe(true);
+    });
+
+    test('a declined URL still runs the entry bookkeeping before navigating', async () => {
+      const ctx = await load({ opened: false, reason: 'no-handler' });
+      const { goBackInHistory, consumeHistoryTraversal } = await import('./history-traversal.js');
+      ctx.mod.loadTarget(`bzz://${'a'.repeat(64)}`);
+      await flushMicrotasks();
+      const navState = ctx.activeRef.tab.navigationState;
+      const { webview } = ctx.activeRef.tab;
+      const sequence = navState.requestedNavigationSequence;
+      webview.canGoBack.mockReturnValue(true);
+      expect(goBackInHistory(webview)).toBe(true);
+
+      ctx.mod.loadTarget('define:serendipity', null, null, { commitsAddressBar: true });
+      await flushMicrotasks();
+
+      expect(ctx.swarmProbeState.cancelCalls).toEqual(['probe-1']);
+      expect(navState.requestedNavigationSequence).toBeGreaterThan(sequence);
+      // …and the tab navigates, superseding the traversal.
+      expect(consumeHistoryTraversal(webview)).toBe(false);
+    });
+
+    test('browser-handled schemes never make the round-trip', async () => {
+      const ctx = await load({ opened: true });
+
+      ctx.mod.loadTarget('https://example.com/', null, null, { commitsAddressBar: true });
+      ctx.mod.loadTarget('about:blank', null, null, { commitsAddressBar: true });
+
+      expect(global.window.externalProtocol.openFromAddressBar).not.toHaveBeenCalled();
+    });
+
+    test('input with spaces is a query, never an external URL', async () => {
+      const ctx = await load({ opened: true });
+
+      ctx.mod.loadTarget('note: buy milk', null, null, { commitsAddressBar: true });
+
+      expect(global.window.externalProtocol.openFromAddressBar).not.toHaveBeenCalled();
+      expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalled();
+    });
+  });
+
   // #325: a chrome-driven `freedom://` navigation is routed by the tab layer
   // first — an open Settings tab is focused instead of duplicated. Before the
   // fix this branch went straight to `webview.loadURL`, so the hamburger menu
@@ -2183,7 +2325,7 @@ describe('navigation', () => {
       await flushMicrotasks();
 
       expect(global.alert).toHaveBeenCalledWith(
-        'Enable Identity & Wallet (Settings → Experimental) to accept tips.'
+        'Enable Identity & Wallet (Settings → Advanced) to accept tips.'
       );
     });
 
@@ -3127,7 +3269,7 @@ describe('navigation', () => {
       });
 
       expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
-        'file:///app/pages/settings.html#rpc'
+        'file:///app/pages/settings.html#networks/rpc'
       );
     });
 
@@ -3161,6 +3303,7 @@ describe('navigation', () => {
       await flushMicrotasks();
 
       expect(ctx.tabsMocks.openInNewTabWithTarget).toHaveBeenCalledWith(rawHref, null, {
+        openerTabId: ctx.activeRef.tab.id,
         background: false,
       });
       expect(ctx.tabsMocks.createTab).not.toHaveBeenCalled();
@@ -3185,6 +3328,27 @@ describe('navigation', () => {
       await flushMicrotasks();
 
       expect(ctx.tabsMocks.openInNewTabWithTarget).toHaveBeenCalledWith(rawHref, 'docs', {
+        openerTabId: ctx.activeRef.tab.id,
+        background: false,
+      });
+    });
+
+    test('ipc-message link:navigate never forwards a page-supplied reuseOnly', async () => {
+      // A gesture-less named-target reuse is decided by main's popup blocker
+      // and arrives as `popups:blocked` (#442); link:navigate is only sent
+      // for an open main allowed, so a reuseOnly flag on it is ignored.
+      const ctx = await setupEnsDispatch();
+      const rawHref = 'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
+
+      ctx.tabsMocks.webviewEventHandler('ipc-message', {
+        tabId: ctx.activeRef.tab.id,
+        channel: 'link:navigate',
+        args: [{ url: rawHref, disposition: 'newTab', target: 'viewer', reuseOnly: true }],
+      });
+      await flushMicrotasks();
+
+      expect(ctx.tabsMocks.openInNewTabWithTarget).toHaveBeenCalledWith(rawHref, 'viewer', {
+        openerTabId: ctx.activeRef.tab.id,
         background: false,
       });
     });
@@ -3205,6 +3369,7 @@ describe('navigation', () => {
       await flushMicrotasks();
 
       expect(ctx.tabsMocks.openInNewTabWithTarget).toHaveBeenCalledWith(rawHref, null, {
+        openerTabId: ctx.activeRef.tab.id,
         background: false,
       });
     });
@@ -3224,6 +3389,7 @@ describe('navigation', () => {
       await flushMicrotasks();
 
       expect(ctx.tabsMocks.openInNewTabWithTarget).toHaveBeenCalledWith(rawHref, null, {
+        openerTabId: ctx.activeRef.tab.id,
         background: true,
       });
       expect(ctx.electronAPI.openUrlInNewWindow).not.toHaveBeenCalled();

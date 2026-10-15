@@ -1,6 +1,6 @@
 const { ethers } = require('ethers');
 const myotis = require('../myotis/myotis-manager');
-const { ccipReadFetch } = require('./ccip-fetch');
+const { ccipReadFetch, isHexData } = require('./ccip-fetch');
 
 // Myotis 0.1.7's ENS API walks the legacy registry. Its generic EVM API
 // verifies arbitrary calls against an attested optimistic root, so use that
@@ -34,7 +34,8 @@ class MyotisProvider extends ethers.AbstractProvider {
     if (rec.status === 'revert' && typeof rec.dataHex === 'string') {
       throw ethers.AbiCoder.getBuiltinCallException('call', tx, rec.dataHex);
     }
-    if (rec.status !== 'ok' || !/^0x(?:[0-9a-fA-F]{2})*$/.test(rec.resultHex)) {
+    // Not a grouped-loop regexp: see VALIDATING THE ANSWER in ccip-fetch.js.
+    if (rec.status !== 'ok' || !isHexData(rec.resultHex)) {
       throw new Error('Myotis Universal Resolver call unavailable');
     }
     return rec.resultHex;
@@ -49,7 +50,7 @@ async function resolveRecord({ method, name, addressHex, coinType = 60n }) {
     isResolverNotFoundError,
   } = require('../ens-resolver');
   const provider = new MyotisProvider();
-  // Generic calls are always optimistic in the pinned addon. Each callback
+  // This provider requests latest (optimistic) state. Each callback
   // is independently verified; never claim finalized or block-pinned results.
   const metadata = { verified: false, blockNumber: null };
   try {

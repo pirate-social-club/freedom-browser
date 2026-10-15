@@ -41,7 +41,6 @@ describe('settings-store', () => {
         enableIdentityWallet: false,
         enableHnsIntegration: true,
         startHnsAtLaunch: true,
-        antNodeMode: 'ultraLight',
         startAntAtLaunch: true,
         startIpfsAtLaunch: true,
         startRadicleAtLaunch: false,
@@ -57,13 +56,14 @@ describe('settings-store', () => {
         showIpfsProgressStatus: false,
       })
     );
+    expect(mod.loadSettings()).not.toHaveProperty('antNodeMode');
     expect(nativeTheme.themeSource).toBe('system');
   });
 
   test('merges persisted settings with defaults and applies the saved theme', () => {
     fs.writeFileSync(
       path.join(userDataDir, 'settings.json'),
-      JSON.stringify({ theme: 'dark', autoUpdate: false, antNodeMode: 'light' }),
+      JSON.stringify({ theme: 'dark', autoUpdate: false }),
       'utf-8'
     );
 
@@ -73,7 +73,6 @@ describe('settings-store', () => {
       expect.objectContaining({
         theme: 'dark',
         autoUpdate: false,
-        antNodeMode: 'light',
         startAntAtLaunch: true,
         showBookmarkBar: false,
       })
@@ -85,36 +84,53 @@ describe('settings-store', () => {
     const settingsPath = path.join(userDataDir, 'settings.json');
     fs.writeFileSync(
       settingsPath,
-      JSON.stringify({ theme: 'dark', beeNodeMode: 'light', startBeeAtLaunch: false }),
+      JSON.stringify({ theme: 'dark', startBeeAtLaunch: false }),
       'utf-8'
     );
 
     const { mod } = loadSettingsStore({ userDataDir });
 
     const loaded = mod.loadSettings();
-    expect(loaded.antNodeMode).toBe('light');
     expect(loaded.startAntAtLaunch).toBe(false);
-    expect(loaded).not.toHaveProperty('beeNodeMode');
     expect(loaded).not.toHaveProperty('startBeeAtLaunch');
 
     // Live file is rewritten with the new keys and no old keys.
     const persisted = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-    expect(persisted.antNodeMode).toBe('light');
     expect(persisted.startAntAtLaunch).toBe(false);
-    expect(persisted).not.toHaveProperty('beeNodeMode');
     expect(persisted).not.toHaveProperty('startBeeAtLaunch');
   });
 
   test('does not overwrite an ant-named key already present when migrating', () => {
     fs.writeFileSync(
       path.join(userDataDir, 'settings.json'),
-      JSON.stringify({ beeNodeMode: 'light', antNodeMode: 'ultraLight' }),
+      JSON.stringify({ startBeeAtLaunch: false, startAntAtLaunch: true }),
       'utf-8'
     );
 
     const { mod } = loadSettingsStore({ userDataDir });
 
-    expect(mod.loadSettings().antNodeMode).toBe('ultraLight');
+    expect(mod.loadSettings().startAntAtLaunch).toBe(true);
+  });
+
+  // The ultra-light/light switch is gone: the node always starts able to
+  // publish. A saved mode, under either name, is dropped from the live file.
+  test.each([
+    [{ antNodeMode: 'light' }],
+    [{ antNodeMode: 'ultraLight' }],
+    [{ beeNodeMode: 'light' }],
+    [{ beeNodeMode: 'light', antNodeMode: 'ultraLight' }],
+  ])('drops the retired Swarm node mode setting %j', (saved) => {
+    const settingsPath = path.join(userDataDir, 'settings.json');
+    fs.writeFileSync(settingsPath, JSON.stringify({ theme: 'dark', ...saved }), 'utf-8');
+
+    const { mod } = loadSettingsStore({ userDataDir });
+
+    const loaded = mod.loadSettings();
+    expect(loaded).not.toHaveProperty('antNodeMode');
+    expect(loaded).not.toHaveProperty('beeNodeMode');
+    expect(loaded.theme).toBe('dark');
+    const persisted = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    expect(persisted).toEqual({ theme: 'dark', autoUpdate: false });
   });
 
   test('removes the obsolete Radicle feature gate without changing startup intent', () => {
@@ -143,7 +159,6 @@ describe('settings-store', () => {
     expect(mod.loadSettings()).toEqual(
       expect.objectContaining({
         theme: 'system',
-        antNodeMode: 'ultraLight',
         autoUpdate: false,
       })
     );
@@ -153,18 +168,20 @@ describe('settings-store', () => {
   test('saveSettings persists a merged payload and updates the theme', () => {
     const { mod, nativeTheme } = loadSettingsStore({ userDataDir });
 
+    // A page still sending the retired mode setting cannot write it back.
     expect(mod.saveSettings({ theme: 'light', autoUpdate: false, antNodeMode: 'light' })).toBe(
       true
     );
 
-    expect(JSON.parse(fs.readFileSync(path.join(userDataDir, 'settings.json'), 'utf-8'))).toEqual(
+    const persisted = JSON.parse(fs.readFileSync(path.join(userDataDir, 'settings.json'), 'utf-8'));
+    expect(persisted).toEqual(
       expect.objectContaining({
         theme: 'light',
         autoUpdate: false,
-        antNodeMode: 'light',
         startAntAtLaunch: true,
       })
     );
+    expect(persisted).not.toHaveProperty('antNodeMode');
     expect(nativeTheme.themeSource).toBe('light');
   });
 
@@ -324,6 +341,24 @@ describe('settings-store', () => {
     expect(persisted).not.toHaveProperty('extra');
   });
 
+  // #579: the Swarm cache size is one of a fixed set; null until chosen.
+  test('the Swarm cache size starts unset and stores only a size Freedom offers', () => {
+    const GIB = 1024 * 1024 * 1024;
+    const { mod } = loadSettingsStore({ userDataDir });
+    const persisted = () =>
+      JSON.parse(fs.readFileSync(path.join(userDataDir, 'settings.json'), 'utf-8'));
+
+    expect(mod.loadSettings().antCacheCapacityBytes).toBeNull();
+
+    expect(mod.saveSettings({ antCacheCapacityBytes: 5 * GIB })).toBe(true);
+    expect(persisted().antCacheCapacityBytes).toBe(5 * GIB);
+
+    for (const bad of [3 * GIB, '1073741824', -1, 1.5, { bytes: GIB }]) {
+      expect(mod.saveSettings({ antCacheCapacityBytes: bad, theme: 'light' })).toBe(true);
+      expect(persisted().antCacheCapacityBytes).toBe(5 * GIB);
+    }
+  });
+
   test('saveSettings rebuilds the adblock engine only when an adblock key changes', () => {
     const refreshEngine = jest.fn(() => Promise.resolve());
     const { mod } = loadSettingsStore({
@@ -406,12 +441,13 @@ describe('settings-store', () => {
   });
 
   test('reverts a stored remap whose chord a newer default has claimed', () => {
+    const chord = process.platform === 'darwin' ? 'Cmd+0' : 'Ctrl+0';
     // Recorded when Ctrl+0 was free — the zoom entries claimed it later, so
     // keeping it would fire two actions on one press.
     fs.writeFileSync(
       path.join(userDataDir, 'settings.json'),
       JSON.stringify({
-        shortcutOverrides: { 'view.focusAddressBar': 'Ctrl+0', 'tab.new': 'Ctrl+Shift+U' },
+        shortcutOverrides: { 'view.focusAddressBar': chord, 'tab.new': 'Ctrl+Shift+U' },
       }),
       'utf-8'
     );
@@ -421,7 +457,7 @@ describe('settings-store', () => {
     expect(mod.loadSettings().shortcutOverrides).toEqual({ 'tab.new': 'Ctrl+Shift+U' });
     expect(mod.getRevertedShortcutOverrides()).toEqual({
       'view.focusAddressBar': {
-        accelerator: 'Ctrl+0',
+        accelerator: chord,
         conflictId: 'page.zoomReset',
         conflict: 'Actual size',
       },
@@ -444,25 +480,26 @@ describe('settings-store', () => {
   });
 
   test('a Reset that hands a default back never drops a sibling remap silently', () => {
+    const chord = process.platform === 'darwin' ? 'Cmd+R' : 'Ctrl+R';
     const { mod, logger } = loadSettingsStore({ userDataDir });
 
     // Two remaps the interactive path allows: Reload moves off Ctrl+R and
     // New Tab takes the freed chord.
     expect(
       mod.saveSettings({
-        shortcutOverrides: { 'page.reload': 'Ctrl+Shift+U', 'tab.new': 'Ctrl+R' },
+        shortcutOverrides: { 'page.reload': 'Ctrl+Shift+U', 'tab.new': chord },
       })
     ).toBe(true);
     expect(mod.loadSettings().shortcutOverrides).toEqual({
       'page.reload': 'Ctrl+Shift+U',
-      'tab.new': 'Ctrl+R',
+      'tab.new': chord,
     });
     expect(mod.getRevertedShortcutOverrides()).toEqual({});
     logger.warn.mockClear();
 
     // Reset on Reload's row — resetOverride saves the map minus that entry.
     // Ctrl+R goes back to Reload, so New Tab's remap cannot stay.
-    expect(mod.saveSettings({ shortcutOverrides: { 'tab.new': 'Ctrl+R' } })).toBe(true);
+    expect(mod.saveSettings({ shortcutOverrides: { 'tab.new': chord } })).toBe(true);
 
     const persisted = JSON.parse(fs.readFileSync(path.join(userDataDir, 'settings.json'), 'utf-8'));
     expect(persisted.shortcutOverrides).toEqual({});
@@ -470,7 +507,7 @@ describe('settings-store', () => {
     // getShortcutState puts the notice on the New Tab row.
     expect(mod.getRevertedShortcutOverrides()).toEqual({
       'tab.new': {
-        accelerator: 'Ctrl+R',
+        accelerator: chord,
         conflictId: 'page.reload',
         conflict: 'Reload this page',
       },
@@ -503,12 +540,12 @@ describe('settings-store', () => {
     await expect(ipcMain.invoke(IPC.SETTINGS_GET)).resolves.toEqual(
       expect.objectContaining({
         theme: 'system',
-        antNodeMode: 'ultraLight',
+        startAntAtLaunch: true,
       })
     );
     await expect(
       ipcMain.handlers.get(IPC.SETTINGS_SAVE)(
-        { sender: host, senderFrame: host.mainFrame }, { theme: 'dark', antNodeMode: 'light' }
+        { sender: host, senderFrame: host.mainFrame }, { theme: 'dark' }
       )
     ).toBe(true);
 

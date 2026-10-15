@@ -1,7 +1,10 @@
 /**
  * Renderer E2E test harness (Playwright integration)
  *
- * Activated only when `process.env.FREEDOM_TEST_MODE === '1'`. The harness
+ * Activated only when `process.env.FREEDOM_TEST_MODE === '1'` — and, in a
+ * packaged build, only when the launch also kept a `--remote-debugging-port`
+ * on a scratch profile, which is how the packaged E2E launcher starts the app
+ * (see test-mode.js and test-e2e/packaged-launch.js). The harness
  * is fully inert otherwise — `installTestHarness` is a no-op when test
  * mode is off, and nothing in this file runs at require time.
  *
@@ -41,7 +44,9 @@ const IPC = require('../shared/ipc-channels');
 const { success, failure } = require('./ipc-contract');
 const { updateService, MODE, setStatusMessage } = require('./service-registry');
 
-const TEST_MODE_ENABLED = process.env.FREEDOM_TEST_MODE === '1';
+// Same rule as index.js's TEST_MODE: the env var, and in a packaged build an
+// honoured CDP debug port as well (docs/security-audit-electron.md, O-4/O-12).
+const TEST_MODE_ENABLED = require('./test-mode').isTestModeRequested();
 
 function isTestMode() {
   return TEST_MODE_ENABLED;
@@ -56,6 +61,10 @@ const probeFixtures = new Map();
 // Records profile "open" launches instead of cold-starting a real second
 // Electron instance. See installProfileLaunchRecorder / profile-launcher.js.
 const profileLaunches = [];
+
+// Update check / install requests recorded instead of run (see
+// installUpdaterRecorder / updater.js).
+const updaterRequests = [];
 
 function resetProfileLaunches() {
   profileLaunches.length = 0;
@@ -78,6 +87,38 @@ const profileDeleteSims = new Map();
 
 function resetProfileDeleteSims() {
   profileDeleteSims.clear();
+}
+
+// External-protocol launches (#406): recorded instead of handed to the OS, and
+// the OS handler lookup answered from here — a CI runner has no magnet:/mailto:
+// handler registered. See src/main/external-protocol.js.
+const externalOpens = [];
+const externalHandlers = new Map();
+
+function installExternalProtocolRecorder() {
+  globalThis.__FREEDOM_TEST_EXTERNAL_PROTOCOL__ = {
+    open: (url) => {
+      externalOpens.push(url);
+      log.info(`[test-harness] recorded external open (${String(url).split(':')[0]}:)`);
+    },
+    appNameFor: (scheme) => externalHandlers.get(scheme) || '',
+  };
+}
+
+// The first ad-block engine's landing gate (#538), armed only for a launch
+// with FREEDOM_TEST_ADBLOCK_ENGINE_GATE=1 (adblock-first-engine.spec.js). The
+// engine is installed before the harness, so index.js asks for the gate here
+// and hands it to installAdblockInterception; the spec opens it through the
+// global shim once the first page is waiting on the hold — an observable
+// state, rather than hoping the window outruns the build.
+let releaseAdblockEngineGate = null;
+
+function adblockEngineLandingGate() {
+  if (!TEST_MODE_ENABLED || process.env.FREEDOM_TEST_ADBLOCK_ENGINE_GATE !== '1') return null;
+  log.info('[test-harness] first ad-block engine waits for the spec to land it');
+  return new Promise((resolve) => {
+    releaseAdblockEngineGate = resolve;
+  });
 }
 
 function resetFixtures() {
@@ -453,6 +494,37 @@ function registerTestOps() {
     ens: [...ensFixtures.keys()],
     probes: [...probeFixtures.keys()],
   }));
+
+  replaceHandler('test:app-facts', () => appFacts(require('electron')));
+}
+
+// Fixed, read-only facts about the running build that the packaged smoke tests
+// assert on. Those tests reach the app over CDP (test-e2e/packaged-launch.js),
+// because the EnableNodeCliInspectArguments fuse is off in packaged builds and
+// Playwright's `electronApp.evaluate()` needs the Node inspector. This op is
+// deliberately a fixed answer rather than an evaluate-anything hook: a generic
+// "run this in main" channel would give back, to anyone who can launch with
+// FREEDOM_TEST_MODE and a debug port, the Node-in-main access the fuse takes
+// away — and test-mode.js's argument that the harness adds nothing beyond the
+// debug port rests on there being no such channel.
+function appFacts({ app, BrowserWindow }) {
+  return {
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    packaged: app.isPackaged,
+    execPath: process.execPath,
+    // Set by the AppImage runtime to the .AppImage file it mounted; null for
+    // every other package. An AppImage's execPath is inside the mount.
+    appImage: process.env.APPIMAGE || null,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+    version: app.getVersion(),
+    name: app.getName(),
+    windows: BrowserWindow.getAllWindows().map((win) => ({
+      title: win.getTitle(),
+      destroyed: win.isDestroyed(),
+    })),
+  };
 }
 
 // Neutralize profile "open"/switch in test mode: opening a profile normally
@@ -483,6 +555,19 @@ function installProfileFocusSimulator() {
 function installProfileDeleteSimulator() {
   globalThis.__FREEDOM_TEST_DELETE_SIM__ = (profileId) =>
     profileDeleteSims.has(profileId) ? { ...profileDeleteSims.get(profileId) } : null;
+}
+
+// Neutralize the updater's user actions in test mode: "Check now" would hit
+// the network (or a native "Updates Managed Elsewhere" dialog, since index.js
+// never starts the updater in test mode) and "Restart to update" would quit
+// the app under test. updater.js checks this global and records instead.
+function installUpdaterRecorder() {
+  globalThis.__FREEDOM_TEST_UPDATER__ = {
+    record: (action) => {
+      updaterRequests.push(action);
+      log.info(`[test-harness] recorded updater request: ${action}`);
+    },
+  };
 }
 
 // Expose a synchronous shim on the main-process global so the Playwright
@@ -530,6 +615,35 @@ function exposeGlobalShim() {
       );
     },
     clearProfileDeleteSims: resetProfileDeleteSims,
+    // External-protocol launches (see installExternalProtocolRecorder).
+    externalOpens: () => [...externalOpens],
+    setExternalHandler: (scheme, appName) => {
+      if (appName) externalHandlers.set(scheme, appName);
+      else externalHandlers.delete(scheme);
+    },
+    // Update state (#87). `dispatchUpdate` drives the real state machine in
+    // updater.js through the same entry point electron-updater's events use
+    // (e.g. { type: 'supported' }, { type: 'progress', percent: 42 }), so the
+    // broadcast and every renderer surface behave exactly as in a real run.
+    dispatchUpdate: (event) => {
+      require('./updater').dispatchUpdateEvent(event);
+      return require('./updater').getUpdateState();
+    },
+    updateState: () => require('./updater').getUpdateState(),
+    // First ad-block engine (#538, see adblockEngineLandingGate): how many
+    // requests/lookups the first-engine hold has caught so far, and the call
+    // that lets the gated engine land. Returns whether a gate was open.
+    adblockFirstEngineHold: () => require('./adblock/service')._firstEngineHoldForTests(),
+    landAdblockEngine: () => {
+      const release = releaseAdblockEngineGate;
+      releaseAdblockEngineGate = null;
+      release?.();
+      return Boolean(release);
+    },
+    updaterRequests: () => [...updaterRequests],
+    clearUpdaterRequests: () => {
+      updaterRequests.length = 0;
+    },
     state: () => ({
       content: [...contentFixtures.keys()],
       ens: [...ensFixtures.keys()],
@@ -555,6 +669,8 @@ function installTestHarness({ defaultSession }) {
   installProfileLaunchRecorder();
   installProfileFocusSimulator();
   installProfileDeleteSimulator();
+  installExternalProtocolRecorder();
+  installUpdaterRecorder();
   exposeGlobalShim();
   return true;
 }
@@ -562,10 +678,12 @@ function installTestHarness({ defaultSession }) {
 module.exports = {
   isTestMode,
   installTestHarness,
+  adblockEngineLandingGate,
   // Exposed so private-window sessions (created after startup) get the same
   // fixture-driven protocol stubs as the default session in test mode. The
   // fixture maps are shared module state, so per-session registration is all
   // that's needed. No-op guard lives in the caller (only invoked when
   // isTestMode()).
   registerStubProtocols,
+  appFacts,
 };

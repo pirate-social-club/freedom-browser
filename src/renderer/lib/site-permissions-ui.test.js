@@ -28,10 +28,28 @@ describe('site-permissions-ui helpers', () => {
       expect(permissionLabel('clipboard-read')).toBe('Clipboard reading');
       expect(permissionLabel('geolocation')).toBe('Location');
       expect(permissionLabel('midi')).toBe('MIDI devices');
+      // The pop-up-blocked icon's "Always allow" (#442).
+      expect(permissionLabel('popups')).toBe('Pop-ups');
     });
 
     test('falls back to the raw key for unknown permissions', () => {
       expect(permissionLabel('somefuturething')).toBe('somefuturething');
+    });
+  });
+
+  // #406: external-protocol decisions are keyed `external:<scheme>`.
+  describe('external-protocol keys', () => {
+    test('label and phrase are built from the scheme', () => {
+      expect(permissionLabel('external:magnet')).toBe('Open magnet: links');
+      expect(describePermissionRequest(['external:mailto'])).toBe(
+        'open mailto: links in another app'
+      );
+    });
+
+    test('the phrase names the OS handler when main knows it', () => {
+      expect(describePermissionRequest(['external:magnet'], 'Transmission')).toBe(
+        'open magnet: links in Transmission'
+      );
     });
   });
 
@@ -418,8 +436,9 @@ describe('site-permissions-ui popover revoke label', () => {
     getDisplayUrlForWebview.mockReturnValue('');
   });
 
-  // #226: the popover said 'Reset' while Settings > Site Permissions says
-  // 'Remove' / 'Remove site' / 'Remove all' for the same action.
+  // #226: the popover said 'Reset' while Settings > Privacy and security >
+  // Site Permissions says 'Remove' / 'Remove site' / 'Remove all' for the
+  // same action.
   test("each row's revoke button says Remove, matching Settings", async () => {
     // Let the indicator refresh kicked off by init resolve.
     await Promise.resolve();

@@ -130,9 +130,20 @@ function loadWebviewPreloadModule(options = {}) {
     matchMedia: jest.fn(() => prefersDarkQuery),
     fetch: windowFetch,
   };
+  // A main frame is its own top; `options.subframe` models an iframe, whose
+  // top is some other (cross-origin) window.
+  global.window.top = options.subframe === true ? {} : global.window;
+  // `options.parent` models a same-origin parent window (about:blank/srcdoc
+  // frames match on it); otherwise a sub-frame's parent is its top.
+  global.window.parent = options.parent || global.window.top;
+  // The document's origin (about:blank/srcdoc inherit their creator's).
+  if (options.origin !== undefined) global.origin = options.origin;
   global.location = location;
   global.navigator = {
     clipboard,
+    // `navigator.userActivation`, when a spec models one (the dweb-link
+    // new-tab gate reads `isActive`).
+    ...(options.userActivation ? { userActivation: options.userActivation } : {}),
   };
   // The theme bootstrap falls back to observing `document` when <html> does
   // not exist yet at document-start.
@@ -157,7 +168,14 @@ function loadWebviewPreloadModule(options = {}) {
     ipcRenderer,
   }));
 
-  require(require.resolve('./webview-preload'));
+  // `options.argv` models the renderer's command line (the #512 boot switch).
+  const originalArgv = process.argv;
+  if (options.argv) process.argv = options.argv;
+  try {
+    require(require.resolve('./webview-preload'));
+  } finally {
+    process.argv = originalArgv;
+  }
 
   return {
     clipboard,
@@ -227,7 +245,11 @@ describe('webview-preload', () => {
       ['listProfiles', [], IPC.PROFILE_LIST, []],
       ['getServiceRegistry', [], IPC.SERVICE_REGISTRY_GET, []],
       ['getMyotisStatus', [], IPC.MYOTIS_GET_STATUS, []],
-      ['openPublishSetup', [], IPC.SIDEBAR_OPEN_PUBLISH_SETUP, []],
+      ['openPublishSetup', [], IPC.SIDEBAR_OPEN_PUBLISH_SETUP, ['setup']],
+      ['openPublishSetup', ['storage'], IPC.SIDEBAR_OPEN_PUBLISH_SETUP, ['storage']],
+      // Anything else a page passes falls back to the setup screen.
+      ['openPublishSetup', ['javascript:alert(1)'], IPC.SIDEBAR_OPEN_PUBLISH_SETUP, ['setup']],
+      ['getPublishSetupState', [], IPC.SWARM_SETUP_GET_STATE, []],
       ['getBookmarks', [], IPC.BOOKMARKS_GET, []],
       ['openInNewTab', ['https://example.com'], IPC.OPEN_URL_IN_NEW_TAB, ['https://example.com']],
       [
@@ -286,6 +308,7 @@ describe('webview-preload', () => {
       ],
       ['checkRadicleBinary', [], IPC.RADICLE_CHECK_BINARY, []],
       ['checkTorBinary', [], IPC.TOR_CHECK_BINARY, []],
+      ['getUpdateState', [], 'update:get-state', []],
     ];
 
     for (const [method, args, channel, expectedArgs] of mutationCases) {
@@ -293,6 +316,51 @@ describe('webview-preload', () => {
       await exposures.freedomAPI[method](...args);
       expect(ipcRenderer.invoke).toHaveBeenCalledWith(channel, ...expectedArgs);
     }
+
+    // Settings → About Freedom → Updates actions (#87) are fire-and-forget sends.
+    exposures.freedomAPI.checkForUpdates();
+    expect(ipcRenderer.send).toHaveBeenCalledWith('update:check');
+    exposures.freedomAPI.restartToUpdate();
+    expect(ipcRenderer.send).toHaveBeenCalledWith('update:restart-and-install');
+  });
+
+  test('update state and actions are settings-only (#87)', async () => {
+    const { exposures, ipcRenderer } = loadWebviewPreloadModule({
+      location: {
+        href: 'file:///app/pages/history.html',
+        protocol: 'file:',
+        pathname: '/app/pages/history.html',
+      },
+    });
+
+    for (const method of ['getUpdateState', 'checkForUpdates', 'restartToUpdate']) {
+      await expect(exposures.freedomAPI[method]()).rejects.toThrow(
+        'freedomAPI profile changes are only available on settings'
+      );
+    }
+    expect(ipcRenderer.invoke).not.toHaveBeenCalledWith('update:get-state');
+    expect(ipcRenderer.send).not.toHaveBeenCalledWith('update:check');
+    expect(ipcRenderer.send).not.toHaveBeenCalledWith('update:restart-and-install');
+  });
+
+  test('onUpdateState forwards the update-state broadcast and unsubscribes (#87)', () => {
+    const { exposures, ipcRenderer } = loadWebviewPreloadModule({
+      location: {
+        href: 'file:///app/pages/settings.html',
+        protocol: 'file:',
+        pathname: '/app/pages/settings.html',
+      },
+    });
+    const callback = jest.fn();
+
+    const unsubscribe = exposures.freedomAPI.onUpdateState(callback);
+    ipcRenderer.emit('update:state', { status: 'downloading', percent: 42 });
+    expect(callback).toHaveBeenCalledWith({ status: 'downloading', percent: 42 });
+
+    unsubscribe();
+    callback.mockClear();
+    ipcRenderer.emit('update:state', { status: 'ready' });
+    expect(callback).not.toHaveBeenCalled();
   });
 
   test('blocks profile mutation methods on other internal pages', async () => {
@@ -348,6 +416,20 @@ describe('webview-preload', () => {
     pagehideHandler();
     callback.mockClear();
     ipcRenderer.emit('settings:updated', { theme: 'light' });
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  test('onPublishSetupState forwards the setup state push', () => {
+    const { exposures, ipcRenderer } = loadWebviewPreloadModule();
+    const callback = jest.fn();
+
+    const unsubscribe = exposures.freedomAPI.onPublishSetupState(callback);
+    ipcRenderer.emit(IPC.SWARM_SETUP_STATE, { readiness: { ok: false, key: 'needs-storage' } });
+    expect(callback).toHaveBeenCalledWith({ readiness: { ok: false, key: 'needs-storage' } });
+
+    unsubscribe();
+    callback.mockClear();
+    ipcRenderer.emit(IPC.SWARM_SETUP_STATE, { readiness: { ok: true } });
     expect(callback).not.toHaveBeenCalled();
   });
 
@@ -909,7 +991,7 @@ describe('webview-preload', () => {
     });
   });
 
-  test('forwards a named target so the renderer can reuse the named tab', () => {
+  test('forwards a named target so the renderer can reuse the named tab', async () => {
     // P3 from the round-4 review: without forwarding `target`, a
     // `<a target="docs" href="ipfs://...">` click hits the unconditional
     // newTab branch in the renderer and silently loses the named-tab
@@ -923,6 +1005,8 @@ describe('webview-preload', () => {
         protocol: 'file:',
         pathname: '/app/pages/links.html',
       },
+      // Main's popup blocker lets it through (an internal page is exempt).
+      invokeResponses: { 'popups:claim': true },
     });
     const anchor = {
       tagName: 'A',
@@ -941,10 +1025,12 @@ describe('webview-preload', () => {
       shiftKey: false,
       altKey: false,
       defaultPrevented: false,
+      isTrusted: true,
       preventDefault: jest.fn(),
     };
 
     documentCaptureHandlers.click(event);
+    await flushTimers();
 
     expect(event.preventDefault).toHaveBeenCalled();
     // Named target → newTab disposition (Chromium's window.open semantics
@@ -958,7 +1044,7 @@ describe('webview-preload', () => {
     });
   });
 
-  test('resolves modifiers into Chrome dispositions (background tab, foreground tab, new window)', () => {
+  test('resolves modifiers into Chrome dispositions (background tab, foreground tab, new window)', async () => {
     const makeAnchor = (target = '') => ({
       tagName: 'A',
       getAttribute: jest.fn((name) => {
@@ -1050,7 +1136,10 @@ describe('webview-preload', () => {
     ];
 
     for (const { label, dispatchEvent, overrides, target = '', expected } of cases) {
-      const { documentCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule();
+      const { documentCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+        // New-tab dispositions are popups: main's popup blocker allows this one.
+        invokeResponses: { 'popups:claim': true },
+      });
       const event = {
         target: makeAnchor(target),
         button: 0,
@@ -1059,10 +1148,13 @@ describe('webview-preload', () => {
         shiftKey: false,
         altKey: false,
         defaultPrevented: false,
+        // A real click or middle-click: new-tab dispositions need a gesture.
+        isTrusted: true,
         preventDefault: jest.fn(),
         ...overrides,
       };
       documentCaptureHandlers[dispatchEvent](event);
+      await flushTimers();
       expect(event.preventDefault).toHaveBeenCalled();
       // `label` names the failing case in the assertion message.
       expect({ label, ...ipcRenderer.sendToHost.mock.calls[0][1] }).toEqual({
@@ -1073,6 +1165,127 @@ describe('webview-preload', () => {
       });
       expect(ipcRenderer.sendToHost.mock.calls[0][0]).toBe('link:navigate');
     }
+  });
+
+  // docs/security-audit-electron.md, O-12: a page must not be able to open
+  // dweb tabs with a scripted `anchor.click()` — the popup-blocker rule
+  // Chromium applies to `target="_blank"`.
+  describe("new-tab dispositions go through main's popup blocker", () => {
+    const HREF = 'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
+    const blankAnchor = (target = '_blank') => ({
+      tagName: 'A',
+      getAttribute: jest.fn((name) => {
+        if (name === 'href') return HREF;
+        if (name === 'target') return target;
+        return null;
+      }),
+      parentElement: global.document.body,
+    });
+    const click = (anchor, overrides = {}) => ({
+      target: anchor,
+      button: 0,
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      defaultPrevented: false,
+      isTrusted: false,
+      preventDefault: jest.fn(),
+      ...overrides,
+    });
+    const claims = (ipcRenderer) =>
+      ipcRenderer.invoke.mock.calls.filter(([ch]) => ch === 'popups:claim');
+    const opens = (ipcRenderer) =>
+      ipcRenderer.sendToHost.mock.calls.filter(([ch]) => ch === 'link:navigate');
+
+    test('opens the tab only once main allows it', async () => {
+      const { documentCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+        invokeResponses: { 'popups:claim': true },
+      });
+      const event = click(blankAnchor());
+      documentCaptureHandlers.click(event);
+      // Cancelled synchronously, so Chromium never opens it itself.
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(opens(ipcRenderer)).toHaveLength(0);
+      expect(claims(ipcRenderer)).toEqual([
+        ['popups:claim', { url: HREF, targetName: null, reuseOnly: false }],
+      ]);
+      await flushTimers();
+      expect(opens(ipcRenderer)).toEqual([
+        ['link:navigate', { url: HREF, disposition: 'newTab', target: '_blank' }],
+      ]);
+    });
+
+    test.each([
+      ['refused', { 'popups:claim': false }],
+      ['unanswered', { 'popups:claim': undefined }],
+    ])('opens nothing when main has %s it (main reports the blocked popup)', async (_l, res) => {
+      const { documentCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+        invokeResponses: res,
+      });
+      for (const extra of [{}, { ctrlKey: true }, { shiftKey: true }, { button: 1 }]) {
+        const event = click(blankAnchor(), extra);
+        documentCaptureHandlers[extra.button === 1 ? 'auxclick' : 'click'](event);
+        expect(event.preventDefault).toHaveBeenCalled();
+      }
+      await flushTimers();
+      expect(claims(ipcRenderer)).toHaveLength(4);
+      expect(opens(ipcRenderer)).toHaveLength(0);
+    });
+
+    test('a failed claim opens nothing and does not throw', async () => {
+      const { documentCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+        invokeResponses: { 'popups:claim': Promise.reject(new Error('gone')) },
+      });
+      documentCaptureHandlers.click(click(blankAnchor(), { isTrusted: true }));
+      await flushTimers();
+      expect(opens(ipcRenderer)).toHaveLength(0);
+    });
+
+    // One notion of a gesture (#442): the preload keeps no activation budget
+    // of its own — trusted or not, every new-tab activation is main's call,
+    // where the gesture is spent once for any popup or external-app launch.
+    test('asks main for every new-tab activation, trusted or scripted', async () => {
+      const { documentCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+        invokeResponses: { 'popups:claim': true },
+        userActivation: { isActive: true, hasBeenActive: true },
+      });
+      documentCaptureHandlers.click(click(blankAnchor(), { isTrusted: true }));
+      documentCaptureHandlers.click(click(blankAnchor()));
+      documentCaptureHandlers.click(click(blankAnchor(), { ctrlKey: true }));
+      expect(claims(ipcRenderer)).toHaveLength(3);
+    });
+
+    test('marks only a plain named-target activation reuse-only', () => {
+      const { documentCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule();
+      documentCaptureHandlers.click(click(blankAnchor('viewer')));
+      documentCaptureHandlers.click(click(blankAnchor('viewer'), { ctrlKey: true }));
+      documentCaptureHandlers.click(
+        click(blankAnchor('viewer'), { ctrlKey: true, shiftKey: true })
+      );
+      documentCaptureHandlers.click(click(blankAnchor('viewer'), { shiftKey: true }));
+      documentCaptureHandlers.auxclick(click(blankAnchor('viewer'), { button: 1 }));
+      expect(claims(ipcRenderer).map(([, req]) => [req.targetName, req.reuseOnly])).toEqual([
+        ['viewer', true],
+        ['viewer', false],
+        ['viewer', false],
+        ['viewer', false],
+        ['viewer', false],
+      ]);
+    });
+
+    test('a same-tab click navigates without asking (no more than setting location)', () => {
+      const { documentCaptureHandlers, ipcRenderer } = loadWebviewPreloadModule({
+        userActivation: { isActive: false, hasBeenActive: false },
+      });
+      documentCaptureHandlers.click(click(blankAnchor('')));
+      expect(claims(ipcRenderer)).toHaveLength(0);
+      expect(ipcRenderer.sendToHost).toHaveBeenCalledWith('link:navigate', {
+        url: HREF,
+        disposition: 'currentTab',
+        target: null,
+      });
+    });
   });
 
   test('ignores non-dweb anchor clicks', () => {
@@ -1472,6 +1685,64 @@ describe('webview-preload private windows', () => {
   });
 });
 
+// #432: internal pages run `script-src 'self'`, so an inline <script> shim
+// injected into them is refused by their CSP and only logs a violation. They
+// reach main through freedomAPI and have no use for window.swarm /
+// window.radicle, so those two DOM-injected shims are skipped there — and
+// still injected into every web page.
+describe('webview-preload page-world shims on internal pages', () => {
+  beforeEach(() => {
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    global.window = originalWindow;
+    global.document = originalDocument;
+    global.navigator = originalNavigator;
+    global.location = originalLocation;
+    global.MutationObserver = originalMutationObserver;
+    jest.restoreAllMocks();
+  });
+
+  // Source of every <script> actually inserted into the page.
+  const injectedScripts = (location) => {
+    const head = { firstChild: null, insertBefore: jest.fn() };
+    loadWebviewPreloadModule({
+      location,
+      documentOverrides: {
+        createElement: jest.fn(() => ({ remove: jest.fn(), textContent: '' })),
+        head,
+        readyState: 'complete',
+      },
+    });
+    return head.insertBefore.mock.calls.map(([script]) => script.textContent);
+  };
+
+  test('a web page gets the window.swarm and window.radicle shims', () => {
+    const sources = injectedScripts({
+      href: 'https://dapp.example/',
+      protocol: 'https:',
+      pathname: '/',
+    });
+    expect(sources.some((source) => source.includes('FREEDOM_SWARM_REQUEST'))).toBe(true);
+    expect(sources.some((source) => source.includes('FREEDOM_RADICLE_REQUEST'))).toBe(true);
+  });
+
+  test.each(['history.html', 'settings.html', 'error.html'])(
+    'internal page %s gets no inline shim at all',
+    (file) => {
+      const sources = injectedScripts({
+        href: `file:///app/pages/${file}`,
+        protocol: 'file:',
+        pathname: `/app/pages/${file}`,
+      });
+      expect(sources).toEqual([]);
+    }
+  );
+});
+
 // #233: internal pages used to follow the OS colour scheme only, so a dark app
 // on a light desktop rendered a dark toolbar over white pages. The preload now
 // resolves Settings > Appearance at document-start and stamps the answer on
@@ -1608,5 +1879,717 @@ describe('webview-preload internal-page theme', () => {
     expect(ipcRenderer.sendSync).not.toHaveBeenCalledWith(IPC.GET_THEME);
     expect(documentElement.setAttribute).not.toHaveBeenCalled();
     expect(ipcRenderer.listeners.get(IPC.SETTINGS_UPDATED)).toBeUndefined();
+  });
+});
+
+// #410: filter-list scriptlets (`youtube.com##+js(json-prune, …)`) must run in
+// the page's main world before any page script, in the main frame and in
+// sub-frames — and a sub-frame gets nothing else from this preload.
+describe('webview-preload adblock scriptlets', () => {
+  const webLocation = {
+    href: 'https://www.youtube.com/watch?v=x',
+    protocol: 'https:',
+    pathname: '/watch',
+  };
+  const SCRIPT = 'window.__freedomScriptletRan = true;';
+
+  beforeEach(() => {
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    global.window = originalWindow;
+    global.document = originalDocument;
+    global.navigator = originalNavigator;
+    global.location = originalLocation;
+    global.MutationObserver = originalMutationObserver;
+    delete global.origin;
+    jest.restoreAllMocks();
+  });
+
+  const scriptletCalls = (contextBridge) =>
+    contextBridge.executeInMainWorld.mock.calls.filter(([{ func }]) =>
+      String(func).includes(SCRIPT)
+    );
+
+  test('asks the main process synchronously first, then runs the code in the main world', () => {
+    const { contextBridge, ipcRenderer } = loadWebviewPreloadModule({
+      location: webLocation,
+      syncResponses: { [IPC.ADBLOCK_SCRIPTLETS]: { script: SCRIPT } },
+    });
+
+    // Before every other sync lookup, so nothing precedes it at document start.
+    expect(ipcRenderer.sendSync.mock.calls[0]).toEqual([
+      IPC.ADBLOCK_SCRIPTLETS,
+      { url: webLocation.href },
+    ]);
+    expect(scriptletCalls(contextBridge)).toHaveLength(1);
+    // …and the scriptlets are the first thing executed in the main world.
+    expect(String(contextBridge.executeInMainWorld.mock.calls[0][0].func)).toContain(SCRIPT);
+  });
+
+  test('injects nothing when the engine returns no script', () => {
+    const { contextBridge, ipcRenderer } = loadWebviewPreloadModule({
+      location: webLocation,
+      syncResponses: { [IPC.ADBLOCK_SCRIPTLETS]: { script: '' } },
+    });
+    expect(ipcRenderer.sendSync).toHaveBeenCalledWith(IPC.ADBLOCK_SCRIPTLETS, expect.any(Object));
+    expect(scriptletCalls(contextBridge)).toHaveLength(0);
+  });
+
+  test.each([
+    ['an internal page', 'file:///app/pages/history.html', 'file:', '/app/pages/history.html'],
+    ['a Swarm page', 'bzz://abc/index.html', 'bzz:', '/index.html'],
+    ['an IPFS page', 'ipfs://bafy/index.html', 'ipfs:', '/index.html'],
+  ])('never asks for scriptlets on %s', (_label, href, protocol, pathname) => {
+    const { contextBridge, ipcRenderer } = loadWebviewPreloadModule({
+      location: { href, protocol, pathname },
+      syncResponses: { [IPC.ADBLOCK_SCRIPTLETS]: { script: SCRIPT } },
+    });
+    expect(ipcRenderer.sendSync).not.toHaveBeenCalledWith(
+      IPC.ADBLOCK_SCRIPTLETS,
+      expect.anything()
+    );
+    expect(scriptletCalls(contextBridge)).toHaveLength(0);
+  });
+
+  test('no answer from the main process leaves the rest of the preload working', () => {
+    const { contextBridge } = loadWebviewPreloadModule({ location: webLocation });
+    // sendSync returned undefined — nothing injected, providers still installed.
+    expect(scriptletCalls(contextBridge)).toHaveLength(0);
+    expect(contextBridge.exposeInMainWorld).toHaveBeenCalled();
+  });
+
+  test('a sub-frame gets its scriptlets and nothing else', () => {
+    const { contextBridge, ipcRenderer, documentHandlers, windowCaptureHandlers } =
+      loadWebviewPreloadModule({
+        location: {
+          href: 'https://www.youtube-nocookie.com/embed/x',
+          protocol: 'https:',
+          pathname: '/embed/x',
+        },
+        subframe: true,
+        syncResponses: { [IPC.ADBLOCK_SCRIPTLETS]: { script: SCRIPT } },
+      });
+
+    expect(scriptletCalls(contextBridge)).toHaveLength(1);
+    // No wallet provider, no freedomAPI, no other IPC, no listeners.
+    expect(contextBridge.executeInMainWorld).toHaveBeenCalledTimes(1);
+    expect(contextBridge.exposeInMainWorld).not.toHaveBeenCalled();
+    expect(ipcRenderer.sendSync).toHaveBeenCalledTimes(1);
+    expect(ipcRenderer.invoke).not.toHaveBeenCalled();
+    expect(ipcRenderer.on).not.toHaveBeenCalled();
+    expect(Object.keys(documentHandlers)).toHaveLength(0);
+    expect(Object.keys(windowCaptureHandlers)).toHaveLength(0);
+  });
+
+  // Same-origin inheriting documents: a page can reach into these
+  // (`iframe.contentWindow.JSON.parse`), so they get the scriptlets of the
+  // document they inherit from, matched on its URL.
+  test.each([
+    ['about:blank', 'about:blank', 'about:'],
+    ['about:srcdoc', 'about:srcdoc', 'about:'],
+    ['a blob: document', 'blob:https://www.youtube.com/0b3c', 'blob:'],
+  ])('%s inherits its same-origin parent’s scriptlets', (_label, href, protocol) => {
+    const parent = {
+      origin: 'https://www.youtube.com',
+      location: { href: webLocation.href, protocol: 'https:' },
+    };
+    parent.parent = parent;
+    const { contextBridge, ipcRenderer } = loadWebviewPreloadModule({
+      location: { href, protocol, pathname: '' },
+      subframe: true,
+      parent,
+      origin: 'https://www.youtube.com',
+      syncResponses: { [IPC.ADBLOCK_SCRIPTLETS]: { script: SCRIPT } },
+    });
+    expect(ipcRenderer.sendSync).toHaveBeenCalledWith(IPC.ADBLOCK_SCRIPTLETS, {
+      url: webLocation.href,
+    });
+    expect(scriptletCalls(contextBridge)).toHaveLength(1);
+  });
+
+  test('about:blank nested in about:blank walks up to the web document', () => {
+    const top = {
+      origin: 'https://www.youtube.com',
+      location: { href: webLocation.href, protocol: 'https:' },
+    };
+    top.parent = top;
+    const middle = {
+      origin: 'https://www.youtube.com',
+      location: { href: 'about:blank', protocol: 'about:' },
+      parent: top,
+    };
+    const { ipcRenderer } = loadWebviewPreloadModule({
+      location: { href: 'about:blank', protocol: 'about:', pathname: 'blank' },
+      subframe: true,
+      parent: middle,
+      origin: 'https://www.youtube.com',
+    });
+    expect(ipcRenderer.sendSync).toHaveBeenCalledWith(IPC.ADBLOCK_SCRIPTLETS, {
+      url: webLocation.href,
+    });
+  });
+
+  test('an about:blank frame whose parent is another origin matches on its own origin', () => {
+    const parent = {
+      origin: 'https://blog.test',
+      get location() {
+        throw new Error('SecurityError: cross-origin');
+      },
+    };
+    parent.parent = parent;
+    const { ipcRenderer } = loadWebviewPreloadModule({
+      location: { href: 'about:blank', protocol: 'about:', pathname: 'blank' },
+      subframe: true,
+      parent,
+      origin: 'https://www.youtube.com',
+    });
+    expect(ipcRenderer.sendSync).toHaveBeenCalledWith(IPC.ADBLOCK_SCRIPTLETS, {
+      url: 'https://www.youtube.com/',
+    });
+  });
+
+  test('an opaque-origin about:blank/srcdoc frame (sandboxed, data:) asks for nothing', () => {
+    const { ipcRenderer } = loadWebviewPreloadModule({
+      location: { href: 'about:srcdoc', protocol: 'about:', pathname: 'srcdoc' },
+      subframe: true,
+      origin: 'null',
+      syncResponses: { [IPC.ADBLOCK_SCRIPTLETS]: { script: SCRIPT } },
+    });
+    expect(ipcRenderer.sendSync).not.toHaveBeenCalledWith(
+      IPC.ADBLOCK_SCRIPTLETS,
+      expect.anything()
+    );
+  });
+
+  test('an about:blank frame inheriting an internal page’s origin asks for nothing', () => {
+    const { ipcRenderer } = loadWebviewPreloadModule({
+      location: { href: 'about:blank', protocol: 'about:', pathname: 'blank' },
+      subframe: true,
+      origin: 'file://',
+    });
+    expect(ipcRenderer.sendSync).not.toHaveBeenCalledWith(
+      IPC.ADBLOCK_SCRIPTLETS,
+      expect.anything()
+    );
+  });
+
+  test('a main frame still installs everything else after its scriptlets', () => {
+    const { contextBridge } = loadWebviewPreloadModule({
+      location: webLocation,
+      syncResponses: { [IPC.ADBLOCK_SCRIPTLETS]: { script: SCRIPT } },
+    });
+    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledWith('freedomAPI', expect.any(Object));
+    // Scriptlets + the ethereum provider.
+    expect(contextBridge.executeInMainWorld).toHaveBeenCalledTimes(2);
+  });
+});
+
+// The about:blank child-realm hook (inheritScriptletsIntoChildRealms) runs in
+// the page's main world and fires only when the page later reads
+// `iframe.contentWindow` — after page scripts have run. So it must not call
+// anything the page can replace in between. Two real V8 realms (node:vm)
+// stand in for the parent page and its about:blank child.
+describe('webview-preload adblock scriptlets: child-realm hook vs. a hostile page', () => {
+  const vm = require('node:vm');
+  const SCRIPT = 'window.__freedomScriptletRan = (window.__freedomScriptletRan || 0) + 1;';
+
+  afterEach(() => {
+    global.window = originalWindow;
+    global.document = originalDocument;
+    global.navigator = originalNavigator;
+    global.location = originalLocation;
+    global.MutationObserver = originalMutationObserver;
+    jest.restoreAllMocks();
+  });
+
+  function bundleSource() {
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    const { contextBridge } = loadWebviewPreloadModule({
+      location: {
+        href: 'https://www.youtube.com/watch?v=x',
+        protocol: 'https:',
+        pathname: '/watch',
+      },
+      syncResponses: { [IPC.ADBLOCK_SCRIPTLETS]: { script: SCRIPT } },
+    });
+    return String(contextBridge.executeInMainWorld.mock.calls[0][0].func);
+  }
+
+  function makeRealms() {
+    const child = vm.createContext({});
+    vm.runInContext(
+      `var window = globalThis; var location = { href: 'about:blank' };
+       function HTMLIFrameElement() {}
+       var nativeGet = function () { return null; };
+       Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
+         configurable: true, enumerable: true, get: nativeGet,
+       });`,
+      child
+    );
+    const parent = vm.createContext({ __child: vm.runInContext('globalThis', child) });
+    vm.runInContext(
+      `var window = globalThis;
+       var location = { href: 'https://www.youtube.com/watch?v=x' };
+       function HTMLIFrameElement() {}
+       Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
+         configurable: true, enumerable: true, get() { return __child; },
+       });`,
+      parent
+    );
+    return { parent, child };
+  }
+
+  test.each([
+    ['an untouched page', ''],
+    ['String.prototype.startsWith replaced', 'String.prototype.startsWith = () => false;'],
+    ['String replaced', 'String = () => "https://evil.test/";'],
+    ['the Array iterator replaced', 'Array.prototype[Symbol.iterator] = function* () {};'],
+  ])('patches a same-origin about:blank child with %s', (_label, sabotage) => {
+    const src = bundleSource();
+    const { parent, child } = makeRealms();
+    vm.runInContext(`(${src})()`, parent);
+    // The parent's own scriptlets ran at install time.
+    expect(vm.runInContext('window.__freedomScriptletRan', parent)).toBe(1);
+    // Page script runs, then reaches into the child.
+    vm.runInContext(`${sabotage}\n new HTMLIFrameElement().contentWindow;`, parent);
+    expect(vm.runInContext('window.__freedomScriptletRan', child)).toBe(1);
+    // …and the hooks were installed in the child too, for nesting.
+    expect(
+      vm.runInContext(
+        "Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow').get !== nativeGet",
+        child
+      )
+    ).toBe(true);
+    // Adopted once per realm.
+    vm.runInContext('new HTMLIFrameElement().contentWindow;', parent);
+    expect(vm.runInContext('window.__freedomScriptletRan', child)).toBe(1);
+  });
+
+  // window[i] / frames[i] (#414): no accessor to hook, so every DOM insertion
+  // API is wrapped to adopt the inserting document's new frames right after
+  // the call. The parent realm models a Node whose appendChild "creates" the
+  // child frame, reachable only by index.
+  function makeFramesRealms() {
+    const { child } = makeRealms();
+    const parent = vm.createContext({ __child: vm.runInContext('globalThis', child) });
+    vm.runInContext(
+      `var window = globalThis;
+       var location = { href: 'https://www.youtube.com/watch?v=x' };
+       var frameCount = 0;
+       Object.defineProperty(globalThis, 'length', {
+         configurable: true, enumerable: true, get() { return frameCount; }, set(v) {},
+       });
+       Object.defineProperty(globalThis, '0', {
+         configurable: true, get() { return frameCount ? __child : undefined; },
+       });
+       function Document() {}
+       Object.defineProperty(Document.prototype, 'defaultView', {
+         configurable: true, enumerable: true, get() { return window; },
+       });
+       var document = new Document();
+       function Node() {}
+       Object.defineProperty(Node.prototype, 'ownerDocument', {
+         // Brand-checked like the real one: a non-node (HTMLOptionsCollection) throws.
+         configurable: true, enumerable: true,
+         get() { if (!(this instanceof Node)) throw new TypeError('Illegal invocation'); return document; },
+       });
+       Node.prototype.appendChild = function appendChild(node) { frameCount = 1; return node; };
+       function Range() {}
+       function HTMLTableElement() {}
+       Object.setPrototypeOf(HTMLTableElement.prototype, Node.prototype);
+       Object.defineProperty(HTMLTableElement.prototype, 'caption', {
+         configurable: true, enumerable: true, get() { return null; }, set(v) { frameCount = 1; },
+       });
+       // Not a node: the window comes from the element it inserted.
+       function HTMLOptionsCollection() {}
+       HTMLOptionsCollection.prototype.add = function add(element) { frameCount = 1; };`,
+      parent
+    );
+    return { parent, child };
+  }
+
+  test.each([
+    ['an untouched page', ''],
+    [
+      'window.length shadowed',
+      "Object.defineProperty(window, 'length', { value: 0, configurable: true });",
+    ],
+    ['WeakSet.prototype.has replaced', 'WeakSet.prototype.has = () => true;'],
+    ['Reflect.apply replaced', 'Reflect.apply = () => {};'],
+    ['the Array iterator replaced', 'Array.prototype[Symbol.iterator] = function* () {};'],
+  ])('patches a child reached only as window[i] with %s', (_label, sabotage) => {
+    const src = bundleSource();
+    const { parent, child } = makeFramesRealms();
+    vm.runInContext(`(${src})()`, parent);
+    expect(vm.runInContext('window.__freedomScriptletRan', parent)).toBe(1);
+    // The wrapper keeps the native's result and name.
+    expect(
+      vm.runInContext(
+        `${sabotage}\n var n = {}; [new Node().appendChild(n) === n, Node.prototype.appendChild.name]`,
+        parent
+      )
+    ).toEqual([true, 'appendChild']);
+    expect(vm.runInContext('window.__freedomScriptletRan', child)).toBe(1);
+    // Seen once: later insertions don't re-run it.
+    vm.runInContext('new Node().appendChild({});', parent);
+    expect(vm.runInContext('window.__freedomScriptletRan', child)).toBe(1);
+  });
+
+  test.each([
+    ['the table caption setter', 'new HTMLTableElement().caption = new Node();'],
+    ['HTMLOptionsCollection#add', 'new HTMLOptionsCollection().add(new Node());'],
+  ])('patches a child inserted through %s', (_label, insert) => {
+    const src = bundleSource();
+    const { parent, child } = makeFramesRealms();
+    vm.runInContext(`(${src})()`, parent);
+    vm.runInContext(insert, parent);
+    expect(vm.runInContext('window.__freedomScriptletRan', child)).toBe(1);
+  });
+
+  // R1-M2: anti-adblock scripts fingerprint hot DOM methods by `length` and
+  // by whether they print as [native code].
+  test('wrappers keep the native length and print as the native', () => {
+    const src = bundleSource();
+    const { parent } = makeFramesRealms();
+    const shape = `[
+      Node.prototype.appendChild.length,
+      Function.prototype.toString.call(Node.prototype.appendChild),
+      String(Object.getOwnPropertyDescriptor(HTMLTableElement.prototype, 'caption').set),
+      Function.prototype.toString.toString(),
+      Function.prototype.toString.length,
+      Function.prototype.toString.name,
+      Object.getOwnPropertyDescriptor(Function.prototype, 'toString').enumerable,
+    ]`;
+    const before = vm.runInContext(shape, parent);
+    vm.runInContext('var appendChildBefore = Node.prototype.appendChild;', parent);
+    vm.runInContext(`(${src})()`, parent);
+    // Sanity: the method really was replaced, it just doesn't show.
+    expect(vm.runInContext('Node.prototype.appendChild === appendChildBefore', parent)).toBe(false);
+    expect(vm.runInContext(shape, parent)).toEqual(before);
+    expect(before[0]).toBe(1);
+    // Ordinary functions still print their own source.
+    expect(vm.runInContext('String(function f(a) { return a; })', parent)).toBe(
+      'function f(a) { return a; }'
+    );
+    // Non-functions still throw, as the native does (a TypeError from the
+    // parent realm, so matched on the message).
+    expect(() => vm.runInContext('Function.prototype.toString.call({})', parent)).toThrow(
+      /requires that 'this' be a Function/
+    );
+  });
+
+  test('wrappers installed in an adopted child print as the child’s natives', () => {
+    const src = bundleSource();
+    const { parent, child } = makeFramesRealms();
+    vm.runInContext(
+      `function Node() {}
+       Node.prototype.appendChild = function appendChild(node) { return node; };
+       var nativeAppend = Node.prototype.appendChild;`,
+      child
+    );
+    const shape = `[Node.prototype.appendChild.length, String(Node.prototype.appendChild)]`;
+    const before = vm.runInContext(shape, child);
+    vm.runInContext(`(${src})()`, parent);
+    vm.runInContext('new Node().appendChild({});', parent);
+    expect(vm.runInContext('window.__freedomScriptletRan', child)).toBe(1);
+    expect(vm.runInContext('Node.prototype.appendChild === nativeAppend', child)).toBe(false);
+    expect(vm.runInContext(shape, child)).toEqual(before);
+  });
+
+  // R2-M1: custom-element reactions run inside the native insertion, after
+  // the frame exists but before the wrapper's sweep. The fake registry reads
+  // the callbacks off the prototype at define time, like the real one, and
+  // the fake appendChild runs the stored connectedCallback before returning.
+  function makeCustomElementRealms() {
+    const realms = makeFramesRealms();
+    vm.runInContext(
+      `function CustomElementRegistry() { this.defs = {}; }
+       CustomElementRegistry.prototype.define = function define(name, ctor, options) {
+         var p = ctor.prototype;
+         this.defs[name] = { ctor: ctor, connected: p.connectedCallback,
+           attributeChanged: p.attributeChangedCallback,
+           formAssociated: ctor.formAssociated ? p.formAssociatedCallback : undefined,
+           formDisabled: ctor.formAssociated ? p.formDisabledCallback : undefined };
+       };
+       var customElements = new CustomElementRegistry();
+       Node.prototype.appendChild = function appendChild(node) {
+         frameCount = 1;
+         var def = node.__def && customElements.defs[node.__def];
+         if (def && def.formAssociated) def.formAssociated.call(node, this);
+         if (def && def.formDisabled) def.formDisabled.call(node, true);
+         if (def && def.connected) def.connected.call(node);
+         return node;
+       };`,
+      realms.parent
+    );
+    return realms;
+  }
+
+  test('a custom element connectedCallback run by the insertion sees an adopted frame', () => {
+    const src = bundleSource();
+    const { parent, child } = makeCustomElementRealms();
+    vm.runInContext(`(${src})()`, parent);
+    const result = vm.runInContext(
+      `function Base() {}
+       Base.prototype = Object.create(Node.prototype);
+       Base.prototype.connectedCallback = function connectedCallback() {
+         // What the page's callback would find in window[i] right now.
+         seenInCallback = window[0].__freedomScriptletRan;
+       };
+       function XA() {}
+       XA.prototype = Object.create(Base.prototype);
+       var ownBefore = Object.getOwnPropertyDescriptor(XA.prototype, 'connectedCallback');
+       customElements.define('x-a', XA);
+       var el = new XA(); el.__def = 'x-a';
+       new Node().appendChild(el);
+       [
+         seenInCallback,
+         // The prototype is left exactly as the page made it…
+         Object.getOwnPropertyDescriptor(XA.prototype, 'connectedCallback') === ownBefore,
+         XA.prototype.connectedCallback === Base.prototype.connectedCallback,
+         // …no callback is invented where the class has none…
+         customElements.defs['x-a'].attributeChanged,
+         // …and the stored callback prints as the page's own.
+         String(customElements.defs['x-a'].connected) === String(Base.prototype.connectedCallback),
+         customElements.defs['x-a'].connected.name,
+         String(CustomElementRegistry.prototype.define).includes('this.defs'),
+         CustomElementRegistry.prototype.define.length,
+       ]`,
+      parent
+    );
+    expect(result).toEqual([1, true, true, undefined, true, 'connectedCallback', true, 3]);
+    expect(vm.runInContext('window.__freedomScriptletRan', child)).toBe(1);
+  });
+
+  // R3-M1: inserting a form-associated element into a <form> / disabled
+  // <fieldset> runs formAssociatedCallback / formDisabledCallback in the
+  // same [CEReactions] scope as connectedCallback.
+  test('form-associated callbacks run by the insertion see an adopted frame', () => {
+    const src = bundleSource();
+    const { parent, child } = makeCustomElementRealms();
+    vm.runInContext(`(${src})()`, parent);
+    const result = vm.runInContext(
+      `seen = [];
+       function XF() {}
+       XF.formAssociated = true;
+       XF.prototype = Object.create(Node.prototype);
+       XF.prototype.formAssociatedCallback = function formAssociatedCallback(form) {
+         seen.push(['assoc', window[0].__freedomScriptletRan]);
+       };
+       XF.prototype.formDisabledCallback = function formDisabledCallback(disabled) {
+         seen.push(['disabled', window[0].__freedomScriptletRan]);
+       };
+       var ownAssoc = XF.prototype.formAssociatedCallback;
+       var ownDisabled = XF.prototype.formDisabledCallback;
+       customElements.define('x-f', XF);
+       var el = new XF(); el.__def = 'x-f';
+       new Node().appendChild(el);
+       [
+         seen,
+         XF.prototype.formAssociatedCallback === ownAssoc,
+         XF.prototype.formDisabledCallback === ownDisabled,
+         customElements.defs['x-f'].formAssociated.length,
+         customElements.defs['x-f'].formDisabled.name,
+       ]`,
+      parent
+    );
+    expect(result).toEqual([
+      [
+        ['assoc', 1],
+        ['disabled', 1],
+      ],
+      true,
+      true,
+      1,
+      'formDisabledCallback',
+    ]);
+    expect(vm.runInContext('window.__freedomScriptletRan', child)).toBe(1);
+  });
+
+  // R3-M2: the lent callback is only on the prototype for define()'s own
+  // duration — a getter define() consults sees it, code after doesn't.
+  test('lent callbacks are visible only while define() runs', () => {
+    const src = bundleSource();
+    const { parent } = makeCustomElementRealms();
+    vm.runInContext(
+      `var nativeDefine = CustomElementRegistry.prototype.define;
+       CustomElementRegistry.prototype.define = function define(name, ctor, options) {
+         duringDefine = ctor.observedAttributes;
+         return nativeDefine.call(this, name, ctor, options);
+       };`,
+      parent
+    );
+    vm.runInContext(`(${src})()`, parent);
+    const result = vm.runInContext(
+      `function XO() {}
+       XO.prototype.connectedCallback = function connectedCallback() {};
+       var orig = XO.prototype.connectedCallback;
+       Object.defineProperty(XO, 'observedAttributes', {
+         get: function () { return XO.prototype.connectedCallback === orig; },
+       });
+       customElements.define('x-o', XO);
+       [duringDefine, XO.prototype.connectedCallback === orig]`,
+      parent
+    );
+    expect(result).toEqual([false, true]);
+  });
+
+  test('define restores an own callback and still registers a frozen class', () => {
+    const src = bundleSource();
+    const { parent } = makeCustomElementRealms();
+    vm.runInContext(`(${src})()`, parent);
+    const result = vm.runInContext(
+      `function XB() {}
+       XB.prototype.connectedCallback = function connectedCallback() {};
+       var own = XB.prototype.connectedCallback;
+       customElements.define('x-b', XB);
+       function XC() {}
+       XC.prototype.connectedCallback = function connectedCallback() {};
+       Object.freeze(XC.prototype);
+       customElements.define('x-c', XC);
+       [
+         XB.prototype.connectedCallback === own,
+         Object.getOwnPropertyDescriptor(XB.prototype, 'connectedCallback').enumerable,
+         customElements.defs['x-b'].connected !== own,
+         customElements.defs['x-c'].connected === XC.prototype.connectedCallback,
+       ]`,
+      parent
+    );
+    expect(result).toEqual([true, true, true, true]);
+  });
+
+  test('a throwing insertion still throws, and still sweeps', () => {
+    const src = bundleSource();
+    const { parent, child } = makeFramesRealms();
+    vm.runInContext(
+      `Node.prototype.appendChild = function appendChild() { frameCount = 1; throw new Error('boom'); };`,
+      parent
+    );
+    vm.runInContext(`(${src})()`, parent);
+    expect(() => vm.runInContext('new Node().appendChild({});', parent)).toThrow('boom');
+    expect(vm.runInContext('window.__freedomScriptletRan', child)).toBe(1);
+  });
+
+  // #512: the per-load constants come with the renderer's command line, so a
+  // page load no longer waits on the main thread for them.
+  describe('boot switch', () => {
+    const SOURCE = '/* provider source from the boot switch */';
+    const INFO = {
+      name: 'Freedom',
+      icon: 'data:image/png;base64,AA==',
+      rdns: 'baby.freedom.browser',
+    };
+    const bootArg = (boot) =>
+      '--freedom-webview-boot=' + Buffer.from(JSON.stringify(boot), 'utf-8').toString('base64');
+    const normalBoot = {
+      isPrivate: false,
+      internalPages,
+      ethereum: { info: INFO, source: SOURCE },
+    };
+    const dapp = { href: 'https://dapp.example/', protocol: 'https:', pathname: '/' };
+    const providerCalls = (contextBridge) =>
+      contextBridge.executeInMainWorld.mock.calls.filter(([{ func }]) =>
+        String(func).includes('__FREEDOM_PROVIDER_CONFIG__')
+      );
+    const configOf = (call) =>
+      JSON.parse(/__FREEDOM_PROVIDER_CONFIG__ = (\{.*\});\n/.exec(String(call[0].func))[1]);
+    const STATIC_CHANNELS = [
+      IPC.PRIVATE_IS_PRIVATE,
+      IPC.GET_ETHEREUM_INJECT_SOURCE,
+      IPC.GET_INTERNAL_PAGES,
+    ];
+
+    test('a page load makes none of the static sync calls and still gets its provider', () => {
+      const { contextBridge, ipcRenderer } = loadWebviewPreloadModule({
+        location: dapp,
+        argv: ['electron', bootArg(normalBoot)],
+      });
+      for (const channel of STATIC_CHANNELS) {
+        expect(ipcRenderer.sendSync).not.toHaveBeenCalledWith(channel);
+      }
+      const calls = providerCalls(contextBridge);
+      expect(calls).toHaveLength(1);
+      expect(String(calls[0][0].func)).toContain(SOURCE);
+      const config = configOf(calls[0]);
+      expect(config).toEqual({ ...INFO, uuid: expect.any(String) });
+      expect(config.uuid).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+      );
+    });
+
+    test('every page load gets its own provider uuid', () => {
+      const uuids = [1, 2].map(
+        () =>
+          configOf(
+            providerCalls(
+              loadWebviewPreloadModule({ location: dapp, argv: ['electron', bootArg(normalBoot)] })
+                .contextBridge
+            )[0]
+          ).uuid
+      );
+      expect(uuids[0]).not.toBe(uuids[1]);
+    });
+
+    test("'<' in a provider field cannot close the fallback <script> tag", () => {
+      const { contextBridge } = loadWebviewPreloadModule({
+        location: dapp,
+        argv: [
+          'electron',
+          bootArg({
+            ...normalBoot,
+            ethereum: { info: { ...INFO, name: '</script>' }, source: SOURCE },
+          }),
+        ],
+      });
+      const func = String(providerCalls(contextBridge)[0][0].func);
+      expect(func).not.toContain('</script>');
+      expect(configOf(providerCalls(contextBridge)[0]).name).toBe('</script>');
+    });
+
+    test('internal pages are recognised from the boot switch', () => {
+      const { exposures, ipcRenderer } = loadWebviewPreloadModule({
+        argv: ['electron', bootArg(normalBoot)],
+      });
+      expect(ipcRenderer.sendSync).not.toHaveBeenCalledWith(IPC.GET_INTERNAL_PAGES);
+      expect(exposures.freedomAPI).toBeDefined();
+    });
+
+    test('a private boot installs no provider and asks main for nothing static', () => {
+      const { contextBridge, ipcRenderer } = loadWebviewPreloadModule({
+        location: dapp,
+        argv: ['electron', bootArg({ isPrivate: true, internalPages })],
+        // Were the preload to ask anyway, main would say "not private".
+        isPrivateWindow: false,
+      });
+      for (const channel of STATIC_CHANNELS) {
+        expect(ipcRenderer.sendSync).not.toHaveBeenCalledWith(channel);
+      }
+      expect(providerCalls(contextBridge)).toHaveLength(0);
+      expect(ipcRenderer.on.mock.calls.map(([c]) => c)).not.toContain('dapp:provider-response');
+    });
+
+    test.each([
+      ['no switch', ['electron']],
+      ['two switches', ['electron', bootArg(normalBoot), bootArg(normalBoot)]],
+      ['not base64 JSON', ['electron', '--freedom-webview-boot=%%%']],
+      ['no private flag', ['electron', bootArg({ internalPages, ethereum: normalBoot.ethereum })]],
+      ['no provider source', ['electron', bootArg({ isPrivate: false, internalPages })]],
+    ])('%s: falls back to the sync IPC', (_label, argv) => {
+      const { ipcRenderer } = loadWebviewPreloadModule({
+        location: dapp,
+        argv,
+        isPrivateWindow: true,
+      });
+      expect(ipcRenderer.sendSync).toHaveBeenCalledWith(IPC.PRIVATE_IS_PRIVATE);
+      expect(ipcRenderer.sendSync).toHaveBeenCalledWith(IPC.GET_INTERNAL_PAGES);
+      // Private, per main: the provider source is not even fetched.
+      expect(ipcRenderer.sendSync).not.toHaveBeenCalledWith(IPC.GET_ETHEREUM_INJECT_SOURCE);
+    });
   });
 });

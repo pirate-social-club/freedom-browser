@@ -2,12 +2,15 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const lockfile = require('proper-lockfile');
+const fsOffload = require('./fs-offload');
+const { UPDATER_LOCK_DIR, UPDATER_LOCK_TARGET } = require('./updater-owner-lock');
 
 const PROFILE_REGISTRY_FILE = 'profile-registry.json';
 const PROFILE_META_FILE = 'profile.json';
 const RADICLE_SHORT_HOME_DIR = 'R';
 const PROFILE_CATALOG_LOCK_TARGET = 'profile-registry.write-lock-target';
 const PROFILE_CATALOG_LOCK_DIR = 'profile-registry.write.lock';
+const PROFILES_DIR = 'Profiles';
 const DEFAULT_PROFILE_ID = 'default';
 const DEFAULT_CATALOG_LOCK_STALE_MS = 30000;
 const DEFAULT_CATALOG_LOCK_UPDATE_MS = 10000;
@@ -347,14 +350,114 @@ function acquireCatalogWriteLock(paths, options = {}) {
   throw new Error('Failed to acquire profile catalog lock');
 }
 
+// Lock dirs currently held by an in-process withCatalogWriteLockAsync holder,
+// and the tail of each dir's in-process async queue. The catalog lock itself is
+// cross-process (proper-lockfile's mkdir lock); these only coordinate callers
+// inside *this* process, which would otherwise contend with each other through
+// the same on-disk lock.
+const asyncCatalogLockHolders = new Set();
+const asyncCatalogLockQueues = new Map();
+
+function createCatalogLockBusyError() {
+  return Object.assign(
+    new Error(
+      'The profile catalog is busy with another update (such as a profile deletion). Try again in a moment.'
+    ),
+    { code: 'ELOCKED' }
+  );
+}
+
 function withCatalogWriteLock(appRoot, fn, options = {}) {
   const paths = ensureCatalogLockTarget(appRoot);
+  // An async holder in this process (a profile deletion awaiting a multi-GB
+  // rm) can only make progress while the event loop runs. Retrying here would
+  // Atomics.wait the main thread, starving the very holder we are waiting on
+  // until the retries run out, so fail fast instead.
+  if (asyncCatalogLockHolders.has(paths.lockDir)) {
+    throw createCatalogLockBusyError();
+  }
   const release = acquireCatalogWriteLock(paths, options);
 
   try {
     return fn();
   } finally {
     release();
+  }
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function acquireCatalogWriteLockAsync(paths, options = {}) {
+  const retryOptions = normalizeCatalogLockRetries(options.retries);
+
+  for (let attempt = 0; attempt <= retryOptions.retries; attempt += 1) {
+    try {
+      return await lockfile.lock(paths.targetPath, {
+        lockfilePath: paths.lockDir,
+        realpath: false,
+        stale: options.staleMs ?? DEFAULT_CATALOG_LOCK_STALE_MS,
+        update: options.updateMs ?? DEFAULT_CATALOG_LOCK_UPDATE_MS,
+      });
+    } catch (error) {
+      if (error?.code !== 'ELOCKED' || attempt >= retryOptions.retries) {
+        throw error;
+      }
+      const ms = getCatalogLockRetryDelay(retryOptions, attempt);
+      if (ms) await delay(ms);
+    }
+  }
+
+  throw new Error('Failed to acquire profile catalog lock');
+}
+
+// Async twin of withCatalogWriteLock for critical sections that do slow I/O
+// (recursive deletes of node data) under the lock. Same cross-process lock,
+// same retry budget, but every wait yields the event loop instead of blocking
+// it. Holding the lock across awaits also lets proper-lockfile's mtime-refresh
+// timer run, so a long section no longer looks stale (and stealable) to other
+// processes after DEFAULT_CATALOG_LOCK_STALE_MS the way a long synchronous one
+// did. In-process async callers queue behind each other; in-process sync
+// callers fail fast while an async holder is active (see withCatalogWriteLock).
+async function withCatalogWriteLockAsync(appRoot, fn, options = {}) {
+  const paths = ensureCatalogLockTarget(appRoot);
+  const previous = asyncCatalogLockQueues.get(paths.lockDir) || Promise.resolve();
+  let releaseQueue;
+  const current = new Promise((resolve) => {
+    releaseQueue = resolve;
+  });
+  const tail = previous.then(() => current);
+  asyncCatalogLockQueues.set(paths.lockDir, tail);
+
+  try {
+    await previous;
+    const release = await acquireCatalogWriteLockAsync(paths, options);
+    asyncCatalogLockHolders.add(paths.lockDir);
+    try {
+      return await fn();
+    } finally {
+      asyncCatalogLockHolders.delete(paths.lockDir);
+      await release();
+    }
+  } finally {
+    releaseQueue();
+    if (asyncCatalogLockQueues.get(paths.lockDir) === tail) {
+      asyncCatalogLockQueues.delete(paths.lockDir);
+    }
+  }
+}
+
+// Resolve once no in-process withCatalogWriteLockAsync holder (or queued async
+// caller) is left for this catalog. A sync withCatalogWriteLock call made right
+// after this resolves — in the same tick, with no await in between — cannot hit
+// the in-process fast-fail above. Used by short sync writers that would rather
+// wait out a long async section (a profile deletion) than fail, e.g. Ant/Tor
+// persisting a fallback port mid-start.
+async function waitForCatalogWriteLockIdle(appRoot) {
+  const { lockDir } = getCatalogLockPaths(appRoot);
+  while (asyncCatalogLockHolders.has(lockDir) || asyncCatalogLockQueues.has(lockDir)) {
+    await asyncCatalogLockQueues.get(lockDir);
   }
 }
 
@@ -384,7 +487,7 @@ function getProfileDir(appRoot, profileId, options = {}) {
   if (profileId === DEFAULT_PROFILE_ID && options.defaultProfileDir) {
     return options.defaultProfileDir;
   }
-  return path.join(appRoot, 'Profiles', profileId);
+  return path.join(appRoot, PROFILES_DIR, profileId);
 }
 
 function getProfileRadicleDataDir(appRoot, record, options = {}) {
@@ -437,7 +540,7 @@ function allocateSlot(catalog, profileId) {
 }
 
 function getProfilesRoot(appRoot) {
-  return path.join(appRoot, 'Profiles');
+  return path.join(appRoot, PROFILES_DIR);
 }
 
 function listProfileDirs(appRoot) {
@@ -642,19 +745,70 @@ function assertProfileDeletable(appRoot, catalog, id) {
     throw new Error(`Profile not found: ${id}`);
   }
 
+  // The invariant is "never leave the app with zero profiles", not "never
+  // delete the profile whose id is `default`" (#124). A caller that also
+  // refuses the active profile can never reach this with a single profile, but
+  // the catalog enforces it itself so no caller can bypass it.
+  if (catalog.profiles.length <= 1) {
+    throw new Error('The last remaining profile cannot be deleted');
+  }
+
   const record = catalog.profiles[recordIndex];
   const displayName = record.displayName || displayNameFromId(record.id);
 
   const resolvedAppRoot = path.resolve(appRoot);
   const resolvedProfileDir = path.resolve(record.dir);
+  // Packaged builds keep the default profile in the app data root itself (it
+  // adopted the pre-profiles userData in place — see resolveProfile's
+  // defaultProfileDir), so that one record legitimately equals the root. It is
+  // deleted entry-by-entry instead (removeDefaultProfileDataFromAppRoot); every
+  // other record must live strictly inside the root.
+  const sharesAppRoot =
+    resolvedProfileDir === resolvedAppRoot && record.id === DEFAULT_PROFILE_ID;
   if (
-    resolvedProfileDir === resolvedAppRoot ||
-    !resolvedProfileDir.startsWith(`${resolvedAppRoot}${path.sep}`)
+    !sharesAppRoot &&
+    (resolvedProfileDir === resolvedAppRoot ||
+      !resolvedProfileDir.startsWith(`${resolvedAppRoot}${path.sep}`))
   ) {
     throw new Error('Refusing to delete a profile outside the app data root');
   }
 
-  return { recordIndex, record, displayName, resolvedProfileDir };
+  return { recordIndex, record, displayName, resolvedProfileDir, sharesAppRoot };
+}
+
+// Top-level entries of the app data root that belong to the app as a whole
+// rather than to the default profile stored alongside them in a packaged build:
+// the catalog and its write lock, every other profile's directory, the short
+// Radicle homes, the cross-profile updater ownership lock, and electron-log's
+// default `logs/` dir (its default path does not follow userData, so every
+// profile writes there — see logger.js). Removing any of these while another
+// profile runs would break it; the updater lock in particular is live.
+const APP_ROOT_SHARED_ENTRIES = new Set([
+  PROFILE_REGISTRY_FILE,
+  PROFILE_CATALOG_LOCK_TARGET,
+  PROFILE_CATALOG_LOCK_DIR,
+  PROFILES_DIR,
+  RADICLE_SHORT_HOME_DIR,
+  UPDATER_LOCK_TARGET,
+  UPDATER_LOCK_DIR,
+  'logs',
+]);
+
+function isAppRootSharedEntry(name) {
+  // writeJsonAtomic's in-flight `profile-registry.json.<pid>.tmp`.
+  return APP_ROOT_SHARED_ENTRIES.has(name) || name.startsWith(`${PROFILE_REGISTRY_FILE}.`);
+}
+
+// Delete a packaged default profile whose data lives directly in the app data
+// root: remove every top-level entry except the app-wide ones above. The root
+// itself (and so every other profile) survives.
+async function removeDefaultProfileDataFromAppRoot(appRoot) {
+  const resolvedAppRoot = path.resolve(appRoot);
+  for (const name of await fs.promises.readdir(resolvedAppRoot)) {
+    if (isAppRootSharedEntry(name)) continue;
+    const target = assertPathInside(resolvedAppRoot, path.join(resolvedAppRoot, name), 'profile data');
+    await fsOffload.removePath(target, { recursive: true, force: true });
+  }
 }
 
 function assertDisplayNameConfirmation(expectedDisplayName, displayName) {
@@ -670,28 +824,49 @@ function assertDisplayNameConfirmation(expectedDisplayName, displayName) {
 // delete re-validates under the catalog write lock — this only gates the quit.
 function validateProfileDeletion(appRoot, profileId, expectedDisplayName) {
   const id = sanitizeProfileId(profileId);
-  if (id === DEFAULT_PROFILE_ID) {
-    throw new Error('The default profile cannot be deleted');
-  }
-
   const catalog = loadCatalog(appRoot);
   const { displayName } = assertProfileDeletable(appRoot, catalog, id);
   assertDisplayNameConfirmation(expectedDisplayName, displayName);
 }
 
-function deleteProfile(appRoot, profileId, expectedDisplayName, options = {}) {
-  const id = sanitizeProfileId(profileId);
-  if (id === DEFAULT_PROFILE_ID) {
-    throw new Error('The default profile cannot be deleted');
-  }
+// Must match profile-paths.js's RADICLE_STAGING_INFIX (not imported: that
+// module pulls in electron).
+const RADICLE_STAGING_INFIX = '.migrating-';
 
-  return withCatalogWriteLock(appRoot, () => {
+async function removeRadicleStagingSiblings(radicleDir, radicleRoot) {
+  const parent = path.dirname(radicleDir);
+  const prefix = `${path.basename(radicleDir)}${RADICLE_STAGING_INFIX}`;
+  let names;
+  try {
+    names = await fs.promises.readdir(parent);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue;
+    const target = assertPathInside(radicleRoot, path.join(parent, name), 'Radicle data');
+    await fsOffload.removePath(target, { recursive: true, force: true });
+  }
+}
+
+// Async: a profile's node data can be several GB, so the recursive deletes run
+// off the main thread (fs-offload) while it keeps serving. Ordering is
+// unchanged — catalog entry removed and saved first, then the profile dir, then
+// the Radicle short home — and all of it still happens under the cross-process
+// catalog write lock, so no other process can allocate the freed slot (and
+// inherit a half-deleted Radicle home) until the deletes have finished.
+async function deleteProfile(appRoot, profileId, expectedDisplayName, options = {}) {
+  const id = sanitizeProfileId(profileId);
+
+  return withCatalogWriteLockAsync(appRoot, async () => {
     const catalog = loadCatalog(appRoot);
-    const { recordIndex, record, displayName, resolvedProfileDir } = assertProfileDeletable(
-      appRoot,
-      catalog,
-      id
-    );
+    const {
+      recordIndex,
+      record,
+      displayName,
+      resolvedProfileDir,
+      sharesAppRoot,
+    } = assertProfileDeletable(appRoot, catalog, id);
     assertDisplayNameConfirmation(expectedDisplayName, displayName);
     if (options.isProfileLocked?.(record)) {
       throw new Error(`Profile is currently open: ${displayName}`);
@@ -699,7 +874,11 @@ function deleteProfile(appRoot, profileId, expectedDisplayName, options = {}) {
 
     catalog.profiles.splice(recordIndex, 1);
     saveCatalog(appRoot, catalog);
-    fs.rmSync(resolvedProfileDir, { recursive: true, force: true });
+    if (sharesAppRoot) {
+      await removeDefaultProfileDataFromAppRoot(appRoot);
+    } else {
+      await fsOffload.removePath(resolvedProfileDir, { recursive: true, force: true });
+    }
 
     /*
      * IMPORTANT: Radicle data is the managed-node exception to the normal
@@ -718,7 +897,11 @@ function deleteProfile(appRoot, profileId, expectedDisplayName, options = {}) {
         ? path.join(path.dirname(appRoot), RADICLE_SHORT_HOME_DIR)
         : path.join(appRoot, RADICLE_SHORT_HOME_DIR);
       const resolvedRadicleDir = assertPathInside(radicleRoot, radicleDir, 'Radicle data');
-      fs.rmSync(resolvedRadicleDir, { recursive: true, force: true });
+      await fsOffload.removePath(resolvedRadicleDir, { recursive: true, force: true });
+      // Also any staging copy an interrupted legacy `radicle-data/` carry-over
+      // left next to it (profile-paths.js, `<slot>.migrating-<pid>-<ts>`) —
+      // otherwise its GBs outlive the profile.
+      await removeRadicleStagingSiblings(resolvedRadicleDir, radicleRoot);
     }
 
     return {
@@ -954,6 +1137,7 @@ module.exports = {
   PROFILE_CATALOG_LOCK_TARGET,
   PROFILE_META_FILE,
   PROFILE_REGISTRY_FILE,
+  PROFILES_DIR,
   allocateSlot,
   createProfile,
   createProfileMetadata,
@@ -979,4 +1163,6 @@ module.exports = {
   validateProfileDeletion,
   writeProfileMetadata,
   withCatalogWriteLock,
+  withCatalogWriteLockAsync,
+  waitForCatalogWriteLockIdle,
 };

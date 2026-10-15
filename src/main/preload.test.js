@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const IPC = require('../shared/ipc-channels');
 const {
   createContextBridgeMock,
@@ -85,7 +87,7 @@ describe('preload', () => {
       beeApiEnv: 'http://127.0.0.1:1700',
     });
 
-    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledTimes(33);
+    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledTimes(Object.keys(exposures).length);
     expect(Object.keys(exposures)).toEqual([
       'nodeConfig',
       'internalPages',
@@ -103,11 +105,14 @@ describe('preload', () => {
       'ledger',
       'remoteSigner',
       'swarmNode',
+      'publishSetup',
+      'browsingCredit',
       'networks',
       'payments',
       'tokens',
       'rpcManager',
       'sitePermissions',
+      'externalProtocol',
       'dappPermissions',
       'swarmPermissions',
       'swarmManifest',
@@ -127,6 +132,8 @@ describe('preload', () => {
       openlvSignaling: null,
     });
     expect(exposures.internalPages).toBe(internalPages);
+    // Read synchronously by renderer/platform-init.js before first paint.
+    expect(exposures.electronAPI.platform).toBe(process.platform);
 
     const invokeCases = [
       [exposures.electronAPI, 'setBzzBase', [11, 'http://127.0.0.1:1633/bzz/hash/'], IPC.BZZ_SET_BASE, [{ webContentsId: 11, baseUrl: 'http://127.0.0.1:1633/bzz/hash/' }]],
@@ -140,6 +147,7 @@ describe('preload', () => {
       [exposures.electronAPI, 'createProfile', [{ displayName: 'Work' }], IPC.PROFILE_CREATE, [{ displayName: 'Work' }]],
       [exposures.electronAPI, 'openProfile', ['work'], IPC.PROFILE_OPEN, [{ id: 'work' }]],
       [exposures.electronAPI, 'getSettings', [], IPC.SETTINGS_GET, []],
+      [exposures.electronAPI, 'getUpdateState', [], 'update:get-state', []],
       [exposures.electronAPI, 'saveSettings', [{ theme: 'dark' }], IPC.SETTINGS_SAVE, [{ theme: 'dark' }]],
       [exposures.electronAPI, 'getBookmarks', [], IPC.BOOKMARKS_GET, []],
       [exposures.electronAPI, 'addBookmark', [{ label: 'Example', target: 'https://example.com' }], IPC.BOOKMARKS_ADD, [{ label: 'Example', target: 'https://example.com' }]],
@@ -211,9 +219,21 @@ describe('preload', () => {
       // marker here and resolves the window itself from the IPC sender.
       [exposures.sitePermissions, 'revoke', ['https://example.com', 'camera'], IPC.PERMISSIONS_REVOKE, ['https://example.com', 'camera', { scope: 'window' }]],
       [exposures.sitePermissions, 'revokeOrigin', ['https://example.com'], IPC.PERMISSIONS_REVOKE_ORIGIN, ['https://example.com', { scope: 'window' }]],
+      [exposures.externalProtocol, 'openFromAddressBar', ['magnet:?xt=a'], IPC.EXTERNAL_PROTOCOL_OPEN_FROM_ADDRESS_BAR, ['magnet:?xt=a']],
       [exposures.payments, 'getRecent', [{ limit: 10 }], IPC.PAYMENTS_GET_RECENT, [{ limit: 10 }]],
       [exposures.payments, 'getById', [7], IPC.PAYMENTS_GET_BY_ID, [7]],
       [exposures.payments, 'getCount', [{ kind: 'x402' }], IPC.PAYMENTS_GET_COUNT, [{ kind: 'x402' }]],
+      [exposures.publishSetup, 'getState', [], IPC.SWARM_SETUP_GET_STATE, []],
+      [exposures.publishSetup, 'watch', ['node-card', true], IPC.SWARM_SETUP_WATCH, ['node-card', true]],
+      [exposures.publishSetup, 'getPlans', [], IPC.SWARM_SETUP_GET_PLANS, []],
+      [exposures.publishSetup, 'getExtendOptions', ['ab'.repeat(32), 20], IPC.SWARM_SETUP_GET_EXTEND_OPTIONS, ['ab'.repeat(32), 20]],
+      [exposures.publishSetup, 'arm', [{ kind: 'buy', planId: 'starter' }], IPC.SWARM_SETUP_ARM, [{ kind: 'buy', planId: 'starter' }]],
+      [exposures.publishSetup, 'cancel', [7], IPC.SWARM_SETUP_CANCEL, [7]],
+      [exposures.publishSetup, 'dismiss', [7], IPC.SWARM_SETUP_CANCEL, [7, { dismiss: true }]],
+      [exposures.publishSetup, 'trackFundingTx', ['0x' + '1'.repeat(64)], IPC.SWARM_SETUP_TRACK_FUNDING_TX, ['0x' + '1'.repeat(64)]],
+      [exposures.publishSetup, 'restartNode', [], IPC.SWARM_SETUP_RESTART_NODE, []],
+      [exposures.browsingCredit, 'getState', [], IPC.SWARM_CREDIT_GET_STATE, []],
+      [exposures.browsingCredit, 'setSwapEnable', [false], IPC.SWARM_CREDIT_SET_SWAP_ENABLE, [false]],
     ];
 
     for (const [target, method, args, channel, expectedArgs] of invokeCases) {
@@ -288,12 +308,16 @@ describe('preload', () => {
       [exposures.electronAPI, 'onOpenFindBar', IPC.FIND_IN_PAGE_OPEN, [], []],
       [exposures.electronAPI, 'onToggleBookmarkBar', IPC.BOOKMARKS_TOGGLE_BAR, [], []],
       [exposures.electronAPI, 'onUpdateNotification', 'show-update-notification', [{ version: '1.2.3' }], [{ version: '1.2.3' }]],
+      [exposures.electronAPI, 'onUpdateState', 'update:state', [{ status: 'downloading', percent: 42 }], [{ status: 'downloading', percent: 42 }]],
       [exposures.sitePermissions, 'onPromptRequest', IPC.PERMISSIONS_PROMPT_REQUEST, [{ id: 1, origin: 'https://example.com', keys: ['camera'], guestId: 7 }], [{ id: 1, origin: 'https://example.com', keys: ['camera'], guestId: 7 }]],
       [exposures.sitePermissions, 'onPromptCancel', IPC.PERMISSIONS_PROMPT_CANCEL, [{ id: 1 }], [{ id: 1 }]],
       [exposures.sitePermissions, 'onOsDenied', IPC.PERMISSIONS_OS_DENIED, [{ origin: 'https://example.com', permissions: ['camera'] }], [{ origin: 'https://example.com', permissions: ['camera'] }]],
       [exposures.sitePermissions, 'onChanged', IPC.PERMISSIONS_CHANGED, [{}], [{}]],
       [exposures.githubBridge, 'onProgress', IPC.GITHUB_BRIDGE_PROGRESS, [{ step: 'cloning' }], [{ step: 'cloning' }]],
       [exposures.serviceRegistry, 'onUpdate', IPC.SERVICE_REGISTRY_UPDATE, [{ ant: { mode: 'bundled' } }], [{ ant: { mode: 'bundled' } }]],
+      [exposures.publishSetup, 'onState', IPC.SWARM_SETUP_STATE, [{ readiness: { ok: true } }], [{ readiness: { ok: true } }]],
+      // The settings and publish-page deep links say which screen to open.
+      [exposures.electronAPI, 'onOpenPublishSetup', IPC.SIDEBAR_OPEN_PUBLISH_SETUP, ['storage'], ['storage']],
       [exposures.radicleProvider, 'onEvent', IPC.RADICLE_PROVIDER_EVENT, [{ event: 'seedStatus', origin: 'rad://repo', data: { state: 'fetching' } }], [{ event: 'seedStatus', origin: 'rad://repo', data: { state: 'fetching' } }]],
     ];
 
@@ -376,5 +400,61 @@ describe('preload', () => {
 
     expect(callback).not.toHaveBeenCalled();
     cleanup();
+  });
+
+  describe('E2E harness bridge (freedomTest)', () => {
+    const { TEST_HARNESS_RENDERER_ARG } = require('./test-mode');
+    const originalArgv = process.argv;
+    const originalTestMode = process.env.FREEDOM_TEST_MODE;
+    const withArg = () => {
+      process.argv = [...originalArgv, TEST_HARNESS_RENDERER_ARG];
+    };
+    afterEach(() => {
+      process.argv = originalArgv;
+      if (originalTestMode === undefined) delete process.env.FREEDOM_TEST_MODE;
+      else process.env.FREEDOM_TEST_MODE = originalTestMode;
+    });
+
+    test('keys on the same renderer argument test-mode.js hands the chrome window', () => {
+      // preload.js cannot require test-mode.js (sandboxed), so it spells the
+      // argument out; this pins the two copies together.
+      const source = fs.readFileSync(path.join(__dirname, 'preload.js'), 'utf8');
+      expect(source).toContain(`process.argv.includes('${TEST_HARNESS_RENDERER_ARG}')`);
+    });
+
+    test('is absent without the renderer argument, whatever FREEDOM_TEST_MODE says', () => {
+      // The env var is the main process's input, not the renderer's: a packaged
+      // build ignores it on its own (test-mode.js), so the bridge must too.
+      for (const value of [undefined, '', '0', 'true', '1']) {
+        if (value === undefined) delete process.env.FREEDOM_TEST_MODE;
+        else process.env.FREEDOM_TEST_MODE = value;
+        const { exposures } = loadPreloadModule();
+        expect(exposures).not.toHaveProperty('freedomTest');
+      }
+    });
+
+    test('in test mode, forwards only its named operations to test:* channels', async () => {
+      withArg();
+      const { exposures, ipcRenderer } = loadPreloadModule({
+        invokeResponses: { 'test:app-facts': { packaged: true } },
+      });
+      expect(Object.keys(exposures.freedomTest)).toEqual(['invoke']);
+
+      await expect(exposures.freedomTest.invoke('app-facts')).resolves.toEqual({ packaged: true });
+      expect(ipcRenderer.invoke).toHaveBeenLastCalledWith('test:app-facts', undefined);
+
+      const fixture = { url: 'bzz://x/', body: '<p>' };
+      await exposures.freedomTest.invoke('set-content-fixture', fixture);
+      expect(ipcRenderer.invoke).toHaveBeenLastCalledWith('test:set-content-fixture', fixture);
+
+      // Not a generic channel: anything else is refused before it reaches IPC,
+      // including real test:* handlers the bridge does not list and non-test
+      // channels spelled to look like one.
+      ipcRenderer.invoke.mockClear();
+      for (const op of ['reset-fixtures', 'set-ens-fixture', '../wallet:send-transaction', '']) {
+        await expect(exposures.freedomTest.invoke(op)).rejects.toThrow(/Unknown test harness/);
+      }
+      expect(ipcRenderer.invoke).not.toHaveBeenCalled();
+    });
   });
 });

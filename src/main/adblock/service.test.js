@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -22,7 +23,20 @@ jest.mock('../settings-store', () => ({
 // exercises (the service catches the failure). Tests that need the Swarm
 // update layer point this at a fake userData dir.
 const mockElectron = { userData: null };
+const mockIpcMain = {
+  handlers: {},
+  listeners: {},
+  handle(channel, fn) {
+    this.handlers[channel] = fn;
+  },
+  on(channel, fn) {
+    this.listeners[channel] = fn;
+  },
+};
 jest.mock('electron', () => ({
+  get ipcMain() {
+    return mockIpcMain;
+  },
   get app() {
     if (!mockElectron.userData) throw new Error('electron unavailable');
     return { getPath: () => mockElectron.userData, isPackaged: false };
@@ -30,15 +44,28 @@ jest.mock('electron', () => ({
 }));
 
 const dispatcherMock = require('../webrequest-dispatcher');
+const { netGatewayFetch } = require('../ipfs/gateway-transport');
+const { FakeClientRequest } = require('../../../test/helpers/fake-electron-net');
 const { loadSettings } = require('../settings-store');
+const engineBuildHost = require('./engine-build-host');
+const log = require('../logger');
+const IPC = require('../../shared/ipc-channels');
 const {
   installAdblockInterception,
+  registerAdblockIpc,
+  _setFirstEngineHoldForTests,
+  _firstEngineHoldForTests,
+  isEngineReady,
   adblockRequestForDispatch,
   getCosmeticFilters,
+  getScriptlets,
+  stripTrustedScriptlets,
   refreshEngine,
   cleanupAdblockWebContents,
   setAllowlistedHosts,
   getAdblockStatus,
+  getEnabledCategories,
+  getEnabledFeedCategories,
   _resetAdblockForTests,
 } = require('./service');
 
@@ -159,6 +186,31 @@ describe('adblockRequestForDispatch', () => {
     expect(
       adblockRequestForDispatch(makeDetails({ url: 'https://ads.tracker.test/acceptable/x.js' }))
     ).toBe(null);
+  });
+
+  // R1-M2 on #462: CCIP-Read gateways (and the external IPFS gateway) are
+  // dialled with `net.request`, so they reach this handler with no
+  // webContents. They are the app's own requests, not page subresources — a
+  // filter list must not be able to break ENS resolution.
+  test("never cancels the app's own gateway dial, even to a listed URL", async () => {
+    const url = 'https://telemetry.test/0xresolver/0xdata.json';
+    const own = { url, resourceType: 'other', webContentsId: undefined, referrer: '' };
+    // Control: the same unattributed request is blocked when nothing dialled it.
+    expect(adblockRequestForDispatch(own)).toEqual({ cancel: true });
+    let request;
+    const pending = netGatewayFetch(
+      url,
+      {},
+      {
+        requestImpl: (options) => (request = new FakeClientRequest(options)),
+      }
+    );
+    expect(adblockRequestForDispatch(own)).toBe(null);
+    // A tab's own request for that URL is still filtered meanwhile.
+    expect(adblockRequestForDispatch(makeDetails({ url }))).toEqual({ cancel: true });
+    request.emit('error', new Error('net::ERR_FAILED'));
+    await pending.catch(() => {});
+    expect(adblockRequestForDispatch(own)).toEqual({ cancel: true });
   });
 
   test('never cancels main-frame navigation, even to a listed host', () => {
@@ -393,22 +445,21 @@ describe('refreshEngine', () => {
   test('a slower earlier build cannot overwrite a newer one (settings race)', async () => {
     // Settings changes fire refreshEngine() without awaiting each other.
     // Build #1 sees cookies enabled and is made artificially slow (its
-    // cookies-list read blocks on a gate); build #2 sees them disabled
-    // again. However the two interleave, the engine must end up
-    // reflecting the newest settings: cookies not blocked. Caching is off
-    // so both builds really parse list text.
+    // worker build is held on a gate until it would otherwise be stale);
+    // build #2 sees them disabled again. However the two interleave, the
+    // engine must end up reflecting the newest settings: cookies not
+    // blocked. Caching is off so both builds really parse list text.
     _resetAdblockForTests();
     installAdblockInterception({ artifactsDir, cacheDir: null });
 
-    const realReadFile = fs.promises.readFile;
-    let releaseCookiesRead;
-    const gate = new Promise((resolve) => (releaseCookiesRead = resolve));
-    const readFileSpy = jest
-      .spyOn(fs.promises, 'readFile')
-      .mockImplementation(async (file, ...args) => {
-        if (String(file).includes('easylist-cookies')) await gate;
-        return realReadFile(file, ...args);
-      });
+    const realBuild = engineBuildHost.buildEngine;
+    let releaseCookiesBuild;
+    const gate = new Promise((resolve) => (releaseCookiesBuild = resolve));
+    const buildSpy = jest.spyOn(engineBuildHost, 'buildEngine').mockImplementation(async (job) => {
+      const result = await realBuild(job);
+      if (job.lists.some((list) => list.category === 'cookies')) await gate;
+      return result;
+    });
 
     try {
       loadSettings.mockReturnValue({ ...DEFAULT_TEST_SETTINGS, adblockCookies: true });
@@ -419,10 +470,10 @@ describe('refreshEngine', () => {
 
       // Give any ungated build time to finish, then unblock the slow one.
       await new Promise((resolve) => setTimeout(resolve, 50));
-      releaseCookiesRead();
+      releaseCookiesBuild();
       await Promise.all([first, second]);
     } finally {
-      readFileSpy.mockRestore();
+      buildSpy.mockRestore();
     }
 
     navigateTab(7, 'https://news.example/story');
@@ -539,6 +590,843 @@ describe('artifact layers', () => {
     await buildWithLayers({ adblockCookies: true });
     const status = getAdblockStatus();
     expect(status.listsVersion).toBe('2026-08-01');
+    expect(status.listsResolved).toBe(true);
     expect(Object.keys(status.categories).sort()).toEqual(['ads', 'cookies', 'privacy']);
+  });
+
+  test('reports lists as not yet resolved before the first build', () => {
+    _resetAdblockForTests();
+    expect(getAdblockStatus()).toMatchObject({ listsResolved: false, listsVersion: null });
+  });
+});
+
+// #410: `##+js(...)` scriptlets, from a resources file named by the manifest.
+describe('scriptlets', () => {
+  // The shape @ghostery's Resources.parse reads (uBlock's scriptlets in
+  // resources.json form). Each scriptlet records the args it was called with
+  // on globalThis.__marks, so a test can execute what getScriptlets returns.
+  const record = (fnName, tag) =>
+    `function ${fnName}(a) { (globalThis.__marks = globalThis.__marks || []).push('${tag}:' + a); }`;
+  const RESOURCES = {
+    scriptlets: [
+      { name: 'mark.js', aliases: ['mk.js'], body: record('mark', 'mark'), dependencies: [] },
+      {
+        name: 'trusted-mark.js',
+        aliases: [],
+        body: record('trustedMark', 'trusted'),
+        dependencies: [],
+        requiresTrust: true,
+      },
+      // Trust-requiring without the `trusted-` prefix (uBlock has these, e.g.
+      // prevent-clipboard-write.js): only the resources file says so.
+      {
+        name: 'quiet-power.js',
+        aliases: ['qp.js'],
+        body: record('quietPower', 'quiet'),
+        dependencies: [],
+        requiresTrust: true,
+      },
+    ],
+    redirects: [],
+  };
+  const RULES = [
+    'video.test##+js(mark, hello)',
+    'video.test##+js(trusted-mark, t)',
+    'video.test##+js(qp, q)',
+  ];
+
+  let dir;
+  let cacheDir;
+
+  const sha256 = (text) => crypto.createHash('sha256').update(text).digest('hex');
+
+  // `resourcesSha` overrides the digest the manifest claims (default: the
+  // file's real one).
+  function writeArtifacts({ resources = RESOURCES, withResources = true, resourcesSha } = {}) {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adblock-scriptlets-'));
+    const manifest = {
+      version: '2026-09-23',
+      categories: {
+        ads: { file: 'easylist.txt' },
+        ublock: { file: 'ublock-filters.txt' },
+        privacy: { file: 'easyprivacy.txt' },
+      },
+    };
+    // EasyList carries the same rules on another host, to show which ones an
+    // untrusted list keeps.
+    fs.writeFileSync(
+      path.join(dir, 'easylist.txt'),
+      RULES.map((r) => r.replace('video.test', 'easy.test')).join('\n')
+    );
+    fs.writeFileSync(path.join(dir, 'ublock-filters.txt'), RULES.join('\n'));
+    fs.writeFileSync(path.join(dir, 'easyprivacy.txt'), '||telemetry.test^');
+    if (withResources) {
+      const text = JSON.stringify(resources);
+      fs.writeFileSync(path.join(dir, 'resources.json'), text);
+      manifest.resources = {
+        file: 'resources.json',
+        version: 'v-test',
+        sha256: resourcesSha || sha256(text),
+      };
+    }
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest));
+  }
+
+  async function install(options = {}) {
+    _resetAdblockForTests();
+    installAdblockInterception({ artifactsDir: dir, ...options });
+    await refreshEngine();
+  }
+
+  // Run what the preload would hand executeInMainWorld; return the marks.
+  function run(script) {
+    delete globalThis.__marks;
+    new Function(script)();
+    const marks = globalThis.__marks || [];
+    delete globalThis.__marks;
+    return marks;
+  }
+
+  beforeEach(async () => {
+    writeArtifacts();
+    await install();
+    navigateTab(9, 'https://video.test/watch');
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    if (cacheDir) fs.rmSync(cacheDir, { recursive: true, force: true });
+    cacheDir = null;
+  });
+
+  // The first engine of a session builds in a worker (#512). Requests and
+  // scriptlet/cosmetic lookups arriving meanwhile used to queue behind the
+  // main-thread parse; they now wait for the engine instead of going through
+  // unfiltered. `firstBuild` holds the worker build on a gate.
+  function gateBuilds() {
+    const realBuild = engineBuildHost.buildEngine;
+    let open;
+    const gate = new Promise((resolve) => (open = resolve));
+    let markStarted;
+    const started = new Promise((resolve) => (markStarted = resolve));
+    const spy = jest.spyOn(engineBuildHost, 'buildEngine').mockImplementation(async (job) => {
+      markStarted();
+      const result = await realBuild(job);
+      await gate;
+      return result;
+    });
+    return { open, started, spy };
+  }
+
+  const askScriptlets = (url) => {
+    const event = { sender: { id: 9 } };
+    mockIpcMain.listeners[IPC.ADBLOCK_SCRIPTLETS](event, { url });
+    return event;
+  };
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+  test('during the first engine build, requests and lookups wait for the engine', async () => {
+    const build = gateBuilds();
+    try {
+      _resetAdblockForTests();
+      registerAdblockIpc();
+      installAdblockInterception({ artifactsDir: dir, cacheDir: null });
+      await build.started;
+      navigateTab(9, 'https://video.test/watch');
+
+      const held = adblockRequestForDispatch(
+        makeDetails({ url: 'https://telemetry.test/t.js', webContentsId: 9 })
+      );
+      expect(typeof held?.then).toBe('function');
+      const scriptlets = askScriptlets('https://video.test/watch');
+      const cosmetic = mockIpcMain.handlers[IPC.ADBLOCK_COSMETIC](
+        { sender: { id: 9 } },
+        { url: 'https://video.test/watch', initial: true }
+      );
+      await settle();
+      expect('returnValue' in scriptlets).toBe(false); // the frame is still blocked
+
+      build.open();
+      await expect(held).resolves.toEqual({ cancel: true });
+      await settle();
+      expect(run(scriptlets.returnValue.script).length).toBeGreaterThan(0);
+      await expect(cosmetic).resolves.toEqual(expect.objectContaining({ active: true }));
+    } finally {
+      build.open();
+      build.spy.mockRestore();
+    }
+  });
+
+  // #538: the E2E harness's landing gate. The build runs, but its engine is
+  // swapped in only once the gate opens, so a spec can see the first page
+  // waiting on the hold before letting the engine land.
+  test('an engine landing gate keeps the built first engine out until it opens', async () => {
+    const realBuild = engineBuildHost.buildEngine;
+    let markBuilt;
+    const built = new Promise((resolve) => (markBuilt = resolve));
+    const spy = jest.spyOn(engineBuildHost, 'buildEngine').mockImplementation(async (job) => {
+      const result = await realBuild(job);
+      markBuilt();
+      return result;
+    });
+    let open;
+    const gate = new Promise((resolve) => (open = resolve));
+    try {
+      _resetAdblockForTests();
+      registerAdblockIpc();
+      installAdblockInterception({ artifactsDir: dir, cacheDir: null, engineLandingGate: gate });
+      await built;
+      await settle();
+      expect(isEngineReady()).toBe(false);
+      expect(_firstEngineHoldForTests()).toEqual({ holding: true, held: 0 });
+
+      navigateTab(9, 'https://video.test/watch');
+      const held = adblockRequestForDispatch(
+        makeDetails({ url: 'https://telemetry.test/t.js', webContentsId: 9 })
+      );
+      expect(typeof held?.then).toBe('function');
+      expect(_firstEngineHoldForTests()).toEqual({ holding: true, held: 1 });
+
+      open();
+      await expect(held).resolves.toEqual({ cancel: true });
+      expect(isEngineReady()).toBe(true);
+      expect(_firstEngineHoldForTests()).toEqual({ holding: false, held: 1 });
+    } finally {
+      open();
+      spy.mockRestore();
+    }
+  });
+
+  test('a rebuild over a live engine holds nothing: the old engine keeps answering', async () => {
+    const build = gateBuilds();
+    try {
+      const rebuilt = refreshEngine();
+      await build.started;
+      expect(
+        adblockRequestForDispatch(
+          makeDetails({ url: 'https://telemetry.test/t.js', webContentsId: 9 })
+        )
+      ).toEqual({ cancel: true });
+      build.open();
+      await rebuilt;
+    } finally {
+      build.open();
+      build.spy.mockRestore();
+    }
+  });
+
+  test('the hold is bounded: a slow first build lets requests through unfiltered', async () => {
+    const build = gateBuilds();
+    try {
+      _resetAdblockForTests();
+      _setFirstEngineHoldForTests(30);
+      registerAdblockIpc();
+      installAdblockInterception({ artifactsDir: dir, cacheDir: null });
+      await build.started;
+      const held = adblockRequestForDispatch(
+        makeDetails({ url: 'https://telemetry.test/t.js', webContentsId: 9 })
+      );
+      const scriptlets = askScriptlets('https://video.test/watch');
+      await expect(held).resolves.toBe(null);
+      await settle();
+      expect(scriptlets.returnValue).toEqual({ script: '' });
+      // Once the hold has lapsed, later requests do not wait at all.
+      expect(adblockRequestForDispatch(makeDetails({ webContentsId: 9 }))).toBe(null);
+      build.open();
+      await refreshEngine();
+      expect(
+        adblockRequestForDispatch(
+          makeDetails({ url: 'https://telemetry.test/t.js', webContentsId: 9 })
+        )
+      ).toEqual({ cancel: true });
+    } finally {
+      build.open();
+      build.spy.mockRestore();
+    }
+  });
+
+  // #524: the hold is one budget for the session. A build that starts with
+  // still no engine — the first one failed after the hold lapsed, and a
+  // settings change queued another — must not hold pages for a second full
+  // timeout.
+  test('the hold budget is per session: a second engine-less build holds nothing once it lapsed', async () => {
+    const realBuild = engineBuildHost.buildEngine;
+    let openFirst;
+    const firstGate = new Promise((resolve) => (openFirst = resolve));
+    let openSecond;
+    const secondGate = new Promise((resolve) => (openSecond = resolve));
+    let secondStarted;
+    const second = new Promise((resolve) => (secondStarted = resolve));
+    let firstStarted;
+    const first = new Promise((resolve) => (firstStarted = resolve));
+    let calls = 0;
+    const spy = jest.spyOn(engineBuildHost, 'buildEngine').mockImplementation(async (job) => {
+      calls += 1;
+      if (calls === 1) {
+        firstStarted();
+        await firstGate;
+        throw new Error('first build failed');
+      }
+      secondStarted();
+      const result = await realBuild(job);
+      await secondGate;
+      return result;
+    });
+    const warn = jest.spyOn(log, 'warn').mockImplementation(() => {});
+    try {
+      _resetAdblockForTests();
+      _setFirstEngineHoldForTests(30);
+      registerAdblockIpc();
+      installAdblockInterception({ artifactsDir: dir, cacheDir: null });
+      await first;
+      const held = adblockRequestForDispatch(
+        makeDetails({ url: 'https://telemetry.test/t.js', webContentsId: 9 })
+      );
+      expect(typeof held?.then).toBe('function');
+      await expect(held).resolves.toBe(null);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(/not ready after \d+ ms; 1 request\(s\)\/lookup\(s\) held/)
+      );
+
+      const rebuilt = refreshEngine();
+      openFirst();
+      await second;
+      // Still no engine, but the budget is spent: answer now, unfiltered.
+      expect(
+        adblockRequestForDispatch(
+          makeDetails({ url: 'https://telemetry.test/t.js', webContentsId: 9 })
+        )
+      ).toBe(null);
+      const scriptlets = askScriptlets('https://video.test/watch');
+      expect(scriptlets.returnValue).toEqual({ script: '' });
+
+      openSecond();
+      await rebuilt;
+      expect(
+        adblockRequestForDispatch(
+          makeDetails({ url: 'https://telemetry.test/t.js', webContentsId: 9 })
+        )
+      ).toEqual({ cancel: true });
+    } finally {
+      openFirst();
+      openSecond();
+      spy.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  test('a later engine-less build only holds for what is left of the budget', async () => {
+    const realBuild = engineBuildHost.buildEngine;
+    let calls = 0;
+    let openFirst;
+    const firstGate = new Promise((resolve) => (openFirst = resolve));
+    let firstStarted;
+    const first = new Promise((resolve) => (firstStarted = resolve));
+    let openSecond;
+    const secondGate = new Promise((resolve) => (openSecond = resolve));
+    let secondStarted;
+    const second = new Promise((resolve) => (secondStarted = resolve));
+    const spy = jest.spyOn(engineBuildHost, 'buildEngine').mockImplementation(async (job) => {
+      calls += 1;
+      if (calls === 1) {
+        // The first build holds a request for ~120 ms, then finds nothing
+        // to compile (no engine, no timeout).
+        firstStarted();
+        await firstGate;
+        return { bytes: null, warnings: [], inWorker: true };
+      }
+      secondStarted();
+      const result = await realBuild(job);
+      await secondGate;
+      return result;
+    });
+    const warn = jest.spyOn(log, 'warn').mockImplementation(() => {});
+    const info = jest.spyOn(log, 'info').mockImplementation(() => {});
+    try {
+      _resetAdblockForTests();
+      _setFirstEngineHoldForTests(200);
+      registerAdblockIpc();
+      installAdblockInterception({ artifactsDir: dir, cacheDir: null });
+      await first;
+      const firstHeld = adblockRequestForDispatch(
+        makeDetails({ url: 'https://telemetry.test/t.js', webContentsId: 9 })
+      );
+      expect(typeof firstHeld?.then).toBe('function');
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      openFirst();
+      await expect(firstHeld).resolves.toBe(null);
+      // Let install's own build settle (its release is logged synchronously).
+      const holdLogged = () =>
+        [...warn.mock.calls, ...info.mock.calls].some(([line]) => /first-engine hold/.test(line));
+      for (let i = 0; i < 400 && !holdLogged(); i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      // The build ended without an engine: say so, not "released" as if the
+      // engine had landed (R1-M2).
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /first-engine hold ended after \d+ ms with no engine built; 1 request\(s\)\/lookup\(s\) held released unfiltered/
+        )
+      );
+      expect(info).not.toHaveBeenCalledWith(expect.stringMatching(/first-engine hold released/));
+
+      // Idle time between builds does not spend the budget (R1-M1): after
+      // another 150 ms, ~80 ms of it are still left.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const rebuilt = refreshEngine();
+      await second;
+      const startedWaiting = Date.now();
+      const held = adblockRequestForDispatch(
+        makeDetails({ url: 'https://telemetry.test/t.js', webContentsId: 9 })
+      );
+      expect(typeof held?.then).toBe('function');
+      await expect(held).resolves.toBe(null);
+      // ~80 ms left of 200, not a fresh 200.
+      expect(Date.now() - startedWaiting).toBeLessThan(150);
+      openSecond();
+      await rebuilt;
+    } finally {
+      openFirst();
+      openSecond();
+      spy.mockRestore();
+      warn.mockRestore();
+      info.mockRestore();
+    }
+  });
+
+  // R2-M1: every category unticked is a supported configuration, not an
+  // engine still on its way — no hold is armed, nothing waits, and no
+  // "hold ended with no engine built" warning is logged for it.
+  test('no hold is armed when every category is unticked', async () => {
+    const realBuild = engineBuildHost.buildEngine;
+    let openGate;
+    const gate = new Promise((resolve) => (openGate = resolve));
+    let started;
+    const building = new Promise((resolve) => (started = resolve));
+    const spy = jest.spyOn(engineBuildHost, 'buildEngine').mockImplementation(async (job) => {
+      started(job);
+      await gate;
+      return realBuild(job);
+    });
+    const warn = jest.spyOn(log, 'warn').mockImplementation(() => {});
+    const info = jest.spyOn(log, 'info').mockImplementation(() => {});
+    try {
+      loadSettings.mockReturnValue({
+        ...DEFAULT_TEST_SETTINGS,
+        adblockAds: false,
+        adblockPrivacy: false,
+        adblockCookies: false,
+        adblockAnnoyances: false,
+      });
+      _resetAdblockForTests();
+      _setFirstEngineHoldForTests(200);
+      registerAdblockIpc();
+      installAdblockInterception({ artifactsDir: dir, cacheDir: null });
+      const job = await building;
+      expect(job.lists).toEqual([]);
+      // Mid-build, a request answers synchronously instead of being held.
+      expect(
+        adblockRequestForDispatch(
+          makeDetails({ url: 'https://telemetry.test/t.js', webContentsId: 9 })
+        )
+      ).toBe(null);
+      openGate();
+      await refreshEngine();
+      const holdLines = [...warn.mock.calls, ...info.mock.calls].filter(([line]) =>
+        /hold/.test(line)
+      );
+      expect(holdLines).toEqual([]);
+    } finally {
+      openGate();
+      spy.mockRestore();
+      warn.mockRestore();
+      info.mockRestore();
+    }
+  });
+
+  // R1-M1: an engine landing refills the budget, so an engine-less rebuild
+  // later in the session (every category unticked, then one re-ticked) holds
+  // like the first one did, however long ago that was.
+  test('the hold budget is refilled once an engine lands', async () => {
+    const realBuild = engineBuildHost.buildEngine;
+    let calls = 0;
+    let openThird;
+    const thirdGate = new Promise((resolve) => (openThird = resolve));
+    let thirdStarted;
+    const third = new Promise((resolve) => (thirdStarted = resolve));
+    // A hold starts before buildEngine() is called and lasts until it
+    // returns, so a real build inside a hold races it against the 100 ms
+    // budget below, and on a loaded machine the build lost: 15 of 16 parallel
+    // runs failed (#535). Neither hold races anything now. Build 1 always
+    // outlasts the budget, so its hold always times out and spends all of it;
+    // build 3 hands back build 1's engine once the test opens the gate, so the
+    // hold under test lasts exactly as long as the test keeps the gate shut.
+    // Only the refill can then give build 3 a budget at all.
+    let firstBuild;
+    const spy = jest.spyOn(engineBuildHost, 'buildEngine').mockImplementation(async (job) => {
+      calls += 1;
+      // 1: install's build lands an engine. 2: the lists resolve to nothing
+      // (bytes: null), so the engine is dropped. 3: rebuilt, slowly.
+      if (calls === 2) return { bytes: null, warnings: [], inWorker: true };
+      if (calls === 3) {
+        thirdStarted();
+        await thirdGate;
+        return firstBuild;
+      }
+      firstBuild = await realBuild(job);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return firstBuild;
+    });
+    const info = jest.spyOn(log, 'info').mockImplementation(() => {});
+    const warn = jest.spyOn(log, 'warn').mockImplementation(() => {});
+    try {
+      _resetAdblockForTests();
+      _setFirstEngineHoldForTests(100);
+      registerAdblockIpc();
+      installAdblockInterception({ artifactsDir: dir, cacheDir: null });
+      await refreshEngine(); // install's build lands, then this one drops it
+      expect(
+        adblockRequestForDispatch(
+          makeDetails({ url: 'https://telemetry.test/t.js', webContentsId: 9 })
+        )
+      ).toBe(null);
+      // Build 1's hold timed out on purpose (see above) and said so; the
+      // assertions at the end are about build 3's hold only.
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/not ready after/));
+      info.mockClear();
+      warn.mockClear();
+      // Longer than the whole budget since the first hold started.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      const rebuilt = refreshEngine();
+      await third;
+      const held = adblockRequestForDispatch(
+        makeDetails({ url: 'https://telemetry.test/t.js', webContentsId: 9 })
+      );
+      expect(typeof held?.then).toBe('function');
+      openThird();
+      await expect(held).resolves.toEqual({ cancel: true });
+      await rebuilt;
+      expect(info).not.toHaveBeenCalledWith(expect.stringMatching(/hold budget spent/));
+      expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/not ready after/));
+    } finally {
+      openThird();
+      spy.mockRestore();
+      info.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  test('returns runnable code for the frame host, trusted scriptlets included for uBlock lists', () => {
+    const { script } = getScriptlets({ url: 'https://video.test/watch', sourceId: 9 });
+    expect(run(script).sort()).toEqual(['mark:hello', 'quiet:q', 'trusted:t']);
+  });
+
+  test('strips trust-requiring scriptlets from every other list', () => {
+    navigateTab(9, 'https://easy.test/');
+    const { script } = getScriptlets({ url: 'https://easy.test/', sourceId: 9 });
+    expect(run(script)).toEqual(['mark:hello']);
+  });
+
+  test('one throwing scriptlet does not stop the others', () => {
+    writeArtifacts({
+      resources: {
+        ...RESOURCES,
+        scriptlets: [
+          ...RESOURCES.scriptlets,
+          {
+            name: 'boom.js',
+            aliases: [],
+            body: 'function boom() { throw new Error("x"); }',
+            dependencies: [],
+          },
+        ],
+      },
+    });
+    fs.writeFileSync(
+      path.join(dir, 'ublock-filters.txt'),
+      ['video.test##+js(boom)', 'video.test##+js(mark, after)'].join('\n')
+    );
+    return install().then(() => {
+      const { script } = getScriptlets({ url: 'https://video.test/', sourceId: 9 });
+      expect(run(script)).toEqual(['mark:after']);
+    });
+  });
+
+  test('a host without rules gets nothing', () => {
+    expect(getScriptlets({ url: 'https://plain.test/', sourceId: 9 })).toEqual({ script: '' });
+  });
+
+  test('a sub-frame is matched on its own host', () => {
+    // Tab on some other site, frame on video.test (an embedded player).
+    navigateTab(9, 'https://blog.test/post');
+    const { script } = getScriptlets({ url: 'https://video.test/embed/x', sourceId: 9 });
+    expect(run(script)).toContain('mark:hello');
+  });
+
+  test('respects the master toggle', () => {
+    loadSettings.mockReturnValue({ ...DEFAULT_TEST_SETTINGS, adblockEnabled: false });
+    expect(getScriptlets({ url: 'https://video.test/watch', sourceId: 9 })).toEqual({
+      script: '',
+    });
+  });
+
+  test('the uBlock list follows the "Block ads" toggle', async () => {
+    loadSettings.mockReturnValue({ ...DEFAULT_TEST_SETTINGS, adblockAds: false });
+    await refreshEngine();
+    expect(getScriptlets({ url: 'https://video.test/watch', sourceId: 9 })).toEqual({
+      script: '',
+    });
+  });
+
+  test("is off for an allowlisted tab, keyed on the tab's top-level host", () => {
+    setAllowlistedHosts(['video.test']);
+    expect(getScriptlets({ url: 'https://video.test/watch', sourceId: 9 })).toEqual({
+      script: '',
+    });
+    // A sub-frame of an allowlisted tab is spared too.
+    setAllowlistedHosts(['blog.test']);
+    navigateTab(9, 'https://blog.test/post');
+    expect(getScriptlets({ url: 'https://video.test/embed/x', sourceId: 9 })).toEqual({
+      script: '',
+    });
+  });
+
+  test.each(['file:///app/pages/home.html', 'bzz://abc/', 'ipfs://bafy/', 'wss://video.test/'])(
+    'never answers for %s',
+    (url) => {
+      expect(getScriptlets({ url, sourceId: 9 })).toEqual({ script: '' });
+    }
+  );
+
+  test('without a resources file the engine still blocks, with no scriptlets', async () => {
+    writeArtifacts({ withResources: false });
+    await install();
+    navigateTab(9, 'https://video.test/watch');
+    expect(getScriptlets({ url: 'https://video.test/watch', sourceId: 9 })).toEqual({
+      script: '',
+    });
+    expect(
+      adblockRequestForDispatch(makeDetails({ url: 'https://telemetry.test/p', webContentsId: 9 }))
+    ).toEqual({ cancel: true });
+  });
+
+  test('an unparsable resources file degrades the same way', async () => {
+    writeArtifacts();
+    fs.writeFileSync(path.join(dir, 'resources.json'), '{not json');
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf-8'));
+    manifest.resources.sha256 = sha256('{not json');
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest));
+    await install();
+    expect(getScriptlets({ url: 'https://video.test/watch', sourceId: 9 })).toEqual({
+      script: '',
+    });
+  });
+
+  test('a resources file matching its manifest digest is loaded', () => {
+    // The default fixture: manifest sha256 is the file's real digest.
+    const { script } = getScriptlets({ url: 'https://video.test/watch', sourceId: 9 });
+    expect(run(script)).toContain('mark:hello');
+  });
+
+  test('a resources file that fails its digest check is not loaded', async () => {
+    writeArtifacts({ resourcesSha: 'f'.repeat(64) });
+    await install();
+    navigateTab(9, 'https://video.test/watch');
+    expect(getScriptlets({ url: 'https://video.test/watch', sourceId: 9 })).toEqual({
+      script: '',
+    });
+    // Blocking is unaffected.
+    expect(
+      adblockRequestForDispatch(makeDetails({ url: 'https://telemetry.test/p', webContentsId: 9 }))
+    ).toEqual({ cancel: true });
+  });
+
+  // A landed update layer in a fake userData over `dir` as the bundled floor.
+  // `resources` is written as the update's resources.json (omitted: missing);
+  // `claimedSha` is what its manifest says (default: the real digest).
+  async function withUpdateLayer({ resources, claimedSha }, body) {
+    const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'adblock-userdata-'));
+    const updated = path.join(userData, 'adblock', 'updated');
+    fs.mkdirSync(updated, { recursive: true });
+    let sha = claimedSha;
+    if (resources !== undefined) {
+      const text = JSON.stringify(resources);
+      fs.writeFileSync(path.join(updated, 'resources.json'), text);
+      sha = sha || sha256(text);
+    }
+    fs.writeFileSync(
+      path.join(updated, 'manifest.json'),
+      JSON.stringify({
+        version: '2026-10-01',
+        categories: {},
+        resources: { file: 'resources.json', version: 'v-upd', sha256: sha || 'a'.repeat(64) },
+      })
+    );
+    mockElectron.userData = userData;
+    process.env.FREEDOM_ADBLOCK_DIR = dir;
+    try {
+      await body(updated);
+    } finally {
+      mockElectron.userData = null;
+      delete process.env.FREEDOM_ADBLOCK_DIR;
+      fs.rmSync(userData, { recursive: true, force: true });
+    }
+  }
+
+  async function installLayered() {
+    _resetAdblockForTests();
+    installAdblockInterception({ cacheDir });
+    await refreshEngine();
+    navigateTab(9, 'https://video.test/watch');
+  }
+
+  const engineCaches = () => fs.readdirSync(cacheDir).filter((f) => f.startsWith('engine-'));
+
+  test('an unreadable updated resources file falls back to the bundled copy, cached', async () => {
+    // A landed update names its own resources.json, but the file is missing:
+    // the bundled floor's resources still serve the scriptlets.
+    cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adblock-cache-'));
+    await withUpdateLayer({}, async () => {
+      await installLayered();
+      expect(
+        run(getScriptlets({ url: 'https://video.test/watch', sourceId: 9 }).script).sort()
+      ).toEqual(['mark:hello', 'quiet:q', 'trusted:t']);
+      // Keyed on the bundled file actually used, so the next start is a hit.
+      expect(engineCaches()).toHaveLength(1);
+      const [cached] = engineCaches();
+      await installLayered();
+      expect(engineCaches()).toEqual([cached]);
+    });
+  });
+
+  test('an updated resources file failing its digest falls back to the bundled copy', async () => {
+    cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adblock-cache-'));
+    const evil = {
+      ...RESOURCES,
+      scriptlets: RESOURCES.scriptlets.map((s) =>
+        s.name === 'mark.js' ? { ...s, body: record('mark', 'evil') } : s
+      ),
+    };
+    await withUpdateLayer({ resources: evil, claimedSha: 'b'.repeat(64) }, async () => {
+      await installLayered();
+      const marks = run(getScriptlets({ url: 'https://video.test/watch', sourceId: 9 }).script);
+      expect(marks).toContain('mark:hello');
+      expect(marks.join()).not.toContain('evil');
+    });
+  });
+
+  test('a valid updated resources file wins over the bundled one', async () => {
+    const newer = {
+      ...RESOURCES,
+      scriptlets: RESOURCES.scriptlets.map((s) =>
+        s.name === 'mark.js' ? { ...s, body: record('mark', 'upd') } : s
+      ),
+    };
+    cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adblock-cache-'));
+    await withUpdateLayer({ resources: newer }, async () => {
+      await installLayered();
+      expect(run(getScriptlets({ url: 'https://video.test/watch', sourceId: 9 }).script)).toContain(
+        'upd:hello'
+      );
+    });
+  });
+
+  test('repairing the updated file under the same manifest claim is a cache miss', async () => {
+    // A fallback build is keyed on the bundled bytes it used, not on the
+    // update's claim — or it would keep serving after the update file lands.
+    const newer = {
+      ...RESOURCES,
+      scriptlets: RESOURCES.scriptlets.map((s) =>
+        s.name === 'mark.js' ? { ...s, body: record('mark', 'upd') } : s
+      ),
+    };
+    const newerText = JSON.stringify(newer);
+    cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adblock-cache-'));
+    await withUpdateLayer({ claimedSha: sha256(newerText) }, async (updated) => {
+      await installLayered();
+      expect(run(getScriptlets({ url: 'https://video.test/watch', sourceId: 9 }).script)).toContain(
+        'mark:hello'
+      );
+      fs.writeFileSync(path.join(updated, 'resources.json'), newerText);
+      await installLayered();
+      expect(run(getScriptlets({ url: 'https://video.test/watch', sourceId: 9 }).script)).toContain(
+        'upd:hello'
+      );
+    });
+  });
+
+  test('with no usable resources file anywhere the scriptlet-less engine is cached', async () => {
+    cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adblock-cache-'));
+    writeArtifacts({ resourcesSha: 'c'.repeat(64) });
+    await install({ cacheDir });
+    expect(engineCaches()).toHaveLength(1);
+    const [cached] = engineCaches();
+    // Repairing the file (manifest and bytes agree again) is a different
+    // engine, with scriptlets.
+    fs.rmSync(dir, { recursive: true, force: true });
+    writeArtifacts();
+    await install({ cacheDir });
+    navigateTab(9, 'https://video.test/watch');
+    expect(engineCaches()).not.toEqual([cached]);
+    expect(run(getScriptlets({ url: 'https://video.test/watch', sourceId: 9 }).script)).toContain(
+      'mark:hello'
+    );
+  });
+
+  test('scriptlets survive the serialized engine cache; the key is the file digest, not the manifest claim', async () => {
+    cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adblock-cache-'));
+    await install({ cacheDir });
+    const [first] = engineCaches();
+
+    // Cache hit: drop the list file; scriptlets still come out of the cache.
+    fs.rmSync(path.join(dir, 'ublock-filters.txt'));
+    await install({ cacheDir });
+    navigateTab(9, 'https://video.test/watch');
+    expect(run(getScriptlets({ url: 'https://video.test/watch', sourceId: 9 }).script)).toContain(
+      'mark:hello'
+    );
+    expect(engineCaches()).toEqual([first]);
+
+    // New resource bytes (with a matching manifest digest) are a new engine.
+    fs.rmSync(dir, { recursive: true, force: true });
+    writeArtifacts({
+      resources: { ...RESOURCES, redirects: [], scriptlets: RESOURCES.scriptlets.slice(0, 2) },
+    });
+    await install({ cacheDir });
+    expect(engineCaches()).toHaveLength(1);
+    expect(engineCaches()[0]).not.toBe(first);
+  });
+
+  test('the uBlock list is enabled with "Block ads" but never requested from the feed', () => {
+    expect(getEnabledCategories()).toEqual(['ads', 'ublock', 'privacy']);
+    expect(getEnabledFeedCategories()).toEqual(['ads', 'privacy']);
+  });
+});
+
+describe('stripTrustedScriptlets', () => {
+  test('drops trusted-* injections, keeps exceptions and everything else', () => {
+    const text = [
+      'a.test##+js(trusted-set-constant, x, 1)',
+      'a.test##+js(trusted-anything-new)',
+      'a.test#@#+js(trusted-set-constant, x, 1)',
+      'a.test##+js(set-constant, x, 1)',
+      'a.test##.ad',
+      '||ads.test^',
+    ].join('\n');
+    expect(stripTrustedScriptlets(text, new Set()).split('\n')).toEqual([
+      '',
+      '',
+      'a.test#@#+js(trusted-set-constant, x, 1)',
+      'a.test##+js(set-constant, x, 1)',
+      'a.test##.ad',
+      '||ads.test^',
+    ]);
+  });
+
+  test('uses the resources file for trust-requiring names without the prefix', () => {
+    expect(
+      stripTrustedScriptlets('a.test##+js(qp, 1)\nb.test##+js(mark)', new Set(['qp'])).split('\n')
+    ).toEqual(['', 'b.test##+js(mark)']);
   });
 });

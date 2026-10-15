@@ -7,13 +7,13 @@ const http = require('http');
 const https = require('https');
 const net = require('net');
 const IPC = require('../shared/ipc-channels');
-const { loadSettings } = require('./settings-store');
 const registry = require('./networks/network-registry');
+const { startAntChainBridge } = require('./swarm/ant-chain-bridge');
 const { getAntDataDir } = require('./profile-paths');
 const {
   getActiveProfile,
   getReservedProfilePorts,
-  updateActiveProfileNodeConfig,
+  updateActiveProfileNodeConfigWhenIdle,
 } = require('./profile-resolver');
 const {
   MODE,
@@ -24,6 +24,10 @@ const {
   clearErrorState,
   clearService,
 } = require('./service-registry');
+const { noteAntApiUrl } = require('./swarm/ant-api-guard');
+const { antApiGet } = require('./swarm/ant-api-chrome');
+const { loadSettings, saveSettings } = require('./settings-store');
+const antCache = require('./swarm/ant-cache');
 
 // States
 const STATUS = {
@@ -37,17 +41,22 @@ const STATUS = {
 let currentState = STATUS.STOPPED;
 let lastError = null;
 let antProcess = null;
+// When the current antProcess was spawned (ms), for getSpawnedAt.
+let antSpawnedAt = null;
 let healthCheckInterval = null;
 let pendingStart = false;
 let forceKillTimeout = null;
+let chainBridge = null;
+let startGeneration = 0;
+const statusListeners = new Set();
+
+function closeChainBridge(bridge = chainBridge) {
+  if (chainBridge === bridge) chainBridge = null;
+  return bridge ? bridge.close() : Promise.resolve();
+}
 
 const CONFIG_FILE = 'config.yaml';
-const ANT_NODE_MODE = {
-  ULTRA_LIGHT: 'ultraLight',
-  LIGHT: 'light',
-};
 const ETHEREUM_CHAIN_ID = 1;
-const GNOSIS_CHAIN_ID = 100;
 const DEFAULT_ANT_RESOLVER_RPC_URL = 'https://ethereum.publicnode.com';
 
 // Identity injection flag - when true, require pre-injected keys before start.
@@ -165,18 +174,11 @@ function getHttpClient(rawUrl) {
   return rawUrl.startsWith('https:') ? https : http;
 }
 
-function persistManagedAntPorts(updates) {
-  const result = updateActiveProfileNodeConfig('bee', updates);
+async function persistManagedAntPorts(updates) {
+  const result = await updateActiveProfileNodeConfigWhenIdle('bee', updates);
   if (result) {
     log.info('[Ant] Persisted managed profile ports:', updates);
   }
-}
-
-function getConfiguredAntNodeMode() {
-  const settings = loadSettings();
-  return settings?.antNodeMode === ANT_NODE_MODE.LIGHT
-    ? ANT_NODE_MODE.LIGHT
-    : ANT_NODE_MODE.ULTRA_LIGHT;
 }
 
 function getPrimaryKeylessRpcUrl(chainId) {
@@ -192,41 +194,108 @@ function getPrimaryKeylessRpcUrl(chainId) {
   return typeof primaryUrl === 'string' && primaryUrl.trim() ? primaryUrl.trim() : null;
 }
 
-function getPrimaryGnosisRpcUrl() {
-  return getPrimaryKeylessRpcUrl(GNOSIS_CHAIN_ID);
-}
-
 function getPrimaryEthereumRpcUrl() {
   return getPrimaryKeylessRpcUrl(ETHEREUM_CHAIN_ID) || DEFAULT_ANT_RESOLVER_RPC_URL;
 }
 
+// No `cors-allowed-origins`: nothing in a browser origin may read the API.
+// The chrome reaches the node over IPC (`ant:api-get`) and the main process
+// over Node's fetch, neither of which is subject to CORS. The old `"null"`
+// entry, there for the chrome's `file:` origin, also let every `data:` frame
+// and sandboxed iframe read API responses (security audit O-1, #428).
+//
+// No `blockchain-rpc-endpoint` either. The node reaches Gnosis Chain only
+// through the chain bridge, whose URL startAnt passes as `--gnosis-rpc-url`
+// (antd lets the flag win over the YAML key), so no RPC URL, keyed or not,
+// lands on disk.
+//
+// `swap-enable` is bee's node-wide switch for paying peers with cheques from
+// the chequebook, downloads and uploads alike (#488; Ant's side is
+// freedom-hq/ant#126). It comes from the `antSwapEnable` setting, default on
+// as in bee and Ant. Ant releases from before the switch parse the key and
+// ignore it, so it is always written. Releases with the switch also flip it
+// live over `PUT /v0/settlement/swap`, which is not persisted: this key is
+// what makes the next start match (browsing-credit-service.js).
+//
+// `cache-capacity` is bee's cache size key, a chunk count (× 4096 bytes), which
+// Ant reads from the file since v0.5.60 (#579). It is used rather than antd's
+// `--disk-cache-max-gb` flag because that flag only takes whole GiB, so it
+// can't say 512 MB, and because the size then lives in the one file Freedom
+// already regenerates every start. The value always comes from the fixed set
+// in swarm/ant-cache.js — anything else resolves to the default there — since
+// Ant refuses to start on a malformed one.
 function buildAntConfigContent({
-  dataDir, apiPort, p2pPort, password, nodeMode, blockchainRpcEndpoint, resolverRpcEndpoint,
+  dataDir,
+  apiPort,
+  p2pPort,
+  password,
+  resolverRpcEndpoint,
+  swapEnable = true,
+  cacheCapacityBytes = antCache.DEFAULT_CACHE_BYTES,
 }) {
-  const isLightNode = nodeMode === ANT_NODE_MODE.LIGHT;
-
   return `# Ant node configuration (bee-compatible keys)
 api-addr: 127.0.0.1:${apiPort}
 p2p-addr: :${p2pPort}
-swap-enable: ${isLightNode ? 'true' : 'false'}
 mainnet: true
 full-node: false
-blockchain-rpc-endpoint: ${isLightNode ? `"${blockchainRpcEndpoint}"` : '""'}
-cors-allowed-origins: "null"
+swap-enable: ${swapEnable ? 'true' : 'false'}
 skip-postage-snapshot: true
 resolver-options: "${resolverRpcEndpoint}"
 storage-incentives-enable: false
+cache-capacity: ${antCache.cacheCapacityChunks(cacheCapacityBytes)}
 data-dir: ${dataDir}
 password: ${password}
 `;
 }
 
-function ensureConfig(
-  dataDir,
-  apiPort,
-  nodeMode = ANT_NODE_MODE.ULTRA_LIGHT,
-  p2pPort = DEFAULTS.ant.p2pPort
-) {
+function isSwapEnabledSetting() {
+  return loadSettings().antSwapEnable !== false;
+}
+
+// Whether this profile's node already has a cache from an older Freedom. The
+// Settings view asks the same question, so it shows what the first start
+// will write (R1-F1 on #588).
+function hasExistingCacheFile(dataDir) {
+  try {
+    return Boolean(dataDir) && fs.existsSync(path.join(dataDir, 'chunks.sqlite'));
+  } catch {
+    return false;
+  }
+}
+
+// The cache size for this start (see chooseCacheBytes): the saved choice, or
+// on a profile's first start with this setting, 10 GB if its node already has
+// a cache from an older Freedom (Ant's old default) and the default otherwise.
+function resolveCacheCapacityBytes(dataDir) {
+  const { bytes, save } = antCache.chooseCacheBytes({
+    stored: loadSettings().antCacheCapacityBytes,
+    hasExistingCache: hasExistingCacheFile(dataDir),
+  });
+  if (save) {
+    log.info(`[Ant] Swarm cache size set to ${antCache.formatCacheBytes(bytes)} on first start`);
+    saveSettings({ antCacheCapacityBytes: bytes });
+  }
+  return bytes;
+}
+
+/**
+ * Whether Freedom runs this node itself (its bundled antd, its generated
+ * config.yaml). A reused, external or disabled node is `false`: its own
+ * configuration decides whether it pays peers, so the Browsing Credit switch
+ * leaves it alone. Whether the running antd has the switch at all is read from
+ * the node itself (`GET /node`'s `settlement`, browsing-credit-service.js).
+ */
+function isManagedAntNode() {
+  return !(
+    currentMode === MODE.REUSED ||
+    currentMode === MODE.EXTERNAL ||
+    currentMode === MODE.DISABLED ||
+    isExternalAntConfig() ||
+    isDisabledAntConfig()
+  );
+}
+
+function ensureConfig(dataDir, apiPort, p2pPort = DEFAULTS.ant.p2pPort) {
   const configPath = path.join(dataDir, CONFIG_FILE);
   const crypto = require('crypto');
 
@@ -261,11 +330,7 @@ function ensureConfig(
     password = crypto.randomBytes(32).toString('hex');
   }
 
-  const blockchainRpcEndpoint = nodeMode === ANT_NODE_MODE.LIGHT ? getPrimaryGnosisRpcUrl() : null;
   const resolverRpcEndpoint = getPrimaryEthereumRpcUrl();
-  if (nodeMode === ANT_NODE_MODE.LIGHT && !blockchainRpcEndpoint) {
-    throw new Error('No primary Gnosis RPC endpoint configured for Ant light mode');
-  }
 
   // Always write config with current port
   // Note: Newer Ant versions don't have separate debug-api-addr, debug endpoints are on main API
@@ -274,17 +339,13 @@ function ensureConfig(
     apiPort,
     p2pPort,
     password,
-    nodeMode,
-    blockchainRpcEndpoint,
     resolverRpcEndpoint,
+    swapEnable: isSwapEnabledSetting(),
+    cacheCapacityBytes: resolveCacheCapacityBytes(dataDir),
   });
 
   fs.writeFileSync(configPath, configContent);
-  log.info(
-    `[Ant] Config written at ${configPath} with API:${apiPort} P2P:${p2pPort} mode:${nodeMode}${
-      blockchainRpcEndpoint ? ` rpc:${blockchainRpcEndpoint}` : ''
-    }`
-  );
+  log.info(`[Ant] Config written at ${configPath} with API:${apiPort} P2P:${p2pPort}`);
 
   // Identity handling. Unlike bee, antd has no `init` subcommand: when an
   // injected Web3 v3 keystore exists at `keys/swarm.key` antd loads its
@@ -310,6 +371,32 @@ function updateState(newState, error = null) {
   for (const win of windows) {
     win.webContents.send(IPC.ANT_STATUS_UPDATE, { status: currentState, error: lastError });
   }
+  for (const listener of statusListeners) {
+    try {
+      listener({ status: currentState, error: lastError });
+    } catch (err) {
+      log.error('[Ant] Status listener failed:', err);
+    }
+  }
+}
+
+/**
+ * Main-process subscribers to node status changes (the publish setup
+ * service). Returns an unsubscribe function.
+ */
+function onStatusChange(listener) {
+  statusListeners.add(listener);
+  return () => statusListeners.delete(listener);
+}
+
+/**
+ * When the bundled node Freedom is running was spawned (ms since epoch), or
+ * null for a reused, external, disabled or stopped node. Publish setup
+ * measures its fallback rediscovery hold from this (#510), not from when it
+ * first happened to look.
+ */
+function getSpawnedAt() {
+  return antProcess && currentMode === MODE.BUNDLED ? antSpawnedAt : null;
 }
 
 /**
@@ -480,6 +567,7 @@ async function startExternalAnt(config) {
   }
 
   currentApiUrl = apiUrl;
+  noteAntApiUrl(currentApiUrl);
   currentApiPort = getPortFromUrl(apiUrl);
   currentMode = MODE.EXTERNAL;
 
@@ -522,6 +610,7 @@ async function startAnt() {
   }
 
   pendingStart = false;
+  const generation = ++startGeneration;
   updateState(STATUS.STARTING);
 
   const profileConfig = getProfileAntConfig();
@@ -546,10 +635,13 @@ async function startAnt() {
   // Step 1: Legacy/profile-dir launches may still opt into a system daemon.
   const existing = managedProfileNode ? { found: false } : await detectExistingDaemon();
 
+  if (generation !== startGeneration) return;
+
   if (existing.found) {
     // Reuse existing daemon
     currentApiPort = existing.port;
     currentApiUrl = `http://127.0.0.1:${currentApiPort}`;
+    noteAntApiUrl(currentApiUrl);
     currentMode = MODE.REUSED;
 
     updateService('ant', {
@@ -646,8 +738,12 @@ async function startAnt() {
 
   if (managedProfileNode && (apiPort !== configuredApiPort || p2pPort !== configuredP2pPort)) {
     try {
-      persistManagedAntPorts({ apiPort, p2pPort });
+      // Waits out an in-process async catalog write (a profile deletion)
+      // rather than failing on it; the generation check below covers a stop
+      // that lands meanwhile.
+      await persistManagedAntPorts({ apiPort, p2pPort });
     } catch (err) {
+      if (generation !== startGeneration) return;
       log.error('[Ant] Failed to persist managed profile ports:', err.message);
       updateState(STATUS.ERROR, 'Failed to save Ant port assignment');
       setStatusMessage('ant', 'Node failed to start');
@@ -655,14 +751,16 @@ async function startAnt() {
     }
   }
 
+  if (generation !== startGeneration) return;
+
   currentApiPort = apiPort;
   currentApiUrl = `http://127.0.0.1:${currentApiPort}`;
+  noteAntApiUrl(currentApiUrl);
   currentMode = MODE.BUNDLED;
 
-  const configuredNodeMode = getConfiguredAntNodeMode();
   let configPath;
   try {
-    configPath = ensureConfig(dataDir, apiPort, configuredNodeMode, p2pPort);
+    configPath = ensureConfig(dataDir, apiPort, p2pPort);
   } catch (err) {
     log.error('[Ant] Failed to prepare config:', err.message);
     updateState(STATUS.ERROR, err.message);
@@ -685,23 +783,46 @@ async function startAnt() {
    * the node through the HTTP API, not antctl, so the managed desktop node does
    * not need a control socket at all. Keeping the socket disabled avoids adding
    * a second profile-owned short-home exception like Radicle's.
+   *
+   * The node always gets a write-capable chain transport: there is no
+   * browse-only mode to switch out of before publishing. The bridge's URL
+   * carries a capability path only this spawn knows, and the only
+   * transactions it forwards are signed ones for Gnosis Chain (chain 100).
    */
+  let bridge;
+  try {
+    bridge = await startAntChainBridge({ allowBroadcast: true });
+    if (generation !== startGeneration) {
+      await bridge.close();
+      return;
+    }
+    chainBridge = bridge;
+  } catch {
+    if (generation !== startGeneration) return;
+    updateState(STATUS.ERROR, 'Could not start the local Ant chain transport');
+    setStatusMessage('ant', 'Node failed to start');
+    return;
+  }
   const args = [`--config=${configPath}`, '--no-control-socket'];
 
-  log.info(`[Ant] Starting: ${binPath} ${args.join(' ')}`);
+  log.info(`[Ant] Starting: ${binPath} ${args.join(' ')} (private chain transport)`);
+  args.push(`--gnosis-logs-rpc-url=${bridge.url}`, `--gnosis-rpc-url=${bridge.url}`);
 
   try {
     antProcess = spawn(binPath, args);
+    antSpawnedAt = Date.now();
+    const child = antProcess;
 
-    antProcess.stdout.on('data', (data) => {
-      log.info(`[Ant stdout]: ${data}`);
+    bridge.pipeLog(child.stdout, (line) => {
+      log.info(`[Ant stdout]: ${line}`);
     });
-
-    antProcess.stderr.on('data', (data) => {
-      log.error(`[Ant stderr]: ${data}`);
+    bridge.pipeLog(child.stderr, (line) => {
+      log.error(`[Ant stderr]: ${line}`);
     });
 
     antProcess.on('close', (code) => {
+      void closeChainBridge(bridge);
+      if (antProcess !== child) return;
       log.info(`[Ant] Process exited with code ${code}`);
       antProcess = null;
 
@@ -733,6 +854,8 @@ async function startAnt() {
     });
 
     antProcess.on('error', (err) => {
+      void closeChainBridge(bridge);
+      if (antProcess !== child) return;
       log.error('[Ant] Failed to start process:', err);
       updateState(STATUS.ERROR, err.message);
       setStatusMessage('ant', 'Node failed to start');
@@ -742,12 +865,17 @@ async function startAnt() {
     let attempts = 0;
     const maxAttempts = 60;
     const pollInterval = setInterval(async () => {
-      if (currentState === STATUS.STOPPED || currentState === STATUS.ERROR) {
+      if (generation !== startGeneration || antProcess !== child ||
+          currentState === STATUS.STOPPED || currentState === STATUS.ERROR) {
         clearInterval(pollInterval);
         return;
       }
 
       const isHealthy = await checkHealth();
+      if (generation !== startGeneration || antProcess !== child) {
+        clearInterval(pollInterval);
+        return;
+      }
       if (isHealthy) {
         clearInterval(pollInterval);
 
@@ -779,6 +907,7 @@ async function startAnt() {
       }
     }, 1000);
   } catch (err) {
+    await closeChainBridge(bridge);
     updateState(STATUS.ERROR, err.message);
     setStatusMessage('ant', 'Node failed to start');
   }
@@ -786,6 +915,8 @@ async function startAnt() {
 
 // Stop Ant and return a Promise that resolves when the process exits
 function stopAnt() {
+  ++startGeneration;
+  const bridgeClosed = closeChainBridge();
   return new Promise((resolve) => {
     pendingStart = false;
 
@@ -849,7 +980,7 @@ function stopAnt() {
 
     // Try graceful shutdown via SIGTERM
     antProcess.kill('SIGTERM');
-  });
+  }).then(() => bridgeClosed);
 }
 
 function checkBinary() {
@@ -900,6 +1031,102 @@ function registerAntIpc() {
 
   ipcMain.handle(IPC.ANT_CHECK_BINARY, () => {
     return { available: checkBinary() };
+  });
+
+  // Chrome-only (no webview tier in ipc-sender-policy.js): read-only node
+  // API access for the chrome's status/wallet screens. See ant-api-chrome.js.
+  ipcMain.handle(IPC.ANT_API_GET, (_event, endpoint) => antApiGet(endpoint));
+
+  // Settings page only (SETTINGS tier in ipc-sender-policy.js): Settings →
+  // Nodes → Swarm cache's usage line, read from `/v0/cache` (or `/debugstore`
+  // on a node without it) here rather than by widening the chrome's endpoint
+  // allowlist (#579), and the cache's two writes, clear and resize, which the
+  // chrome's allowlist never gets. Web content reaches neither these nor the
+  // node's API (ant-api-guard.js).
+  const cacheService = antCache.createAntCacheService({
+    getNodeStatus: getStatus,
+    getApiBase: () => require('./service-registry').getAntApiUrl(),
+    getSpawnedAt,
+    getDataDir: () => (getSpawnedAt() ? getAntDataPath() : null),
+  });
+  // The usage line, with whether Clear cache is on offer and why not.
+  const getCacheStatus = async () => {
+    const usage = await cacheService.getStatus();
+    return { ...usage, ...antCache.clearAvailability(usage, getCacheSettingsView()) };
+  };
+  ipcMain.handle(IPC.ANT_CACHE_STATUS, () => getCacheStatus());
+
+  // Settings page only too: the cache size picker, and applying a size, which
+  // the node Freedom runs takes live (`PUT /v0/cache/capacity`, Ant v0.5.61+).
+  ipcMain.handle(IPC.ANT_CACHE_GET_SETTINGS, () => getCacheSettingsView());
+  ipcMain.handle(IPC.ANT_CACHE_SET_SIZE, (_event, bytes) =>
+    antCache.applyCacheSize(bytes, {
+      getView: getCacheSettingsView,
+      save: (size) => saveSettings({ antCacheCapacityBytes: size }),
+      isNodeActive: isBundledNodeActive,
+      setLiveCapacity: (size) => cacheService.setCapacity(size),
+      waitForNodeSettled: () => waitForStartSettled(),
+      isNodeRunning: () => currentState === STATUS.RUNNING && currentMode === MODE.BUNDLED,
+    })
+  );
+
+  // Settings page only: Clear cache (`POST /v0/cache/clear`, Ant v0.5.61+),
+  // which keeps pinned and published content. Checked again here rather than
+  // trusting the button's state, and one clear at a time: a second request
+  // while one runs gets the same answer.
+  let clearInFlight = null;
+  ipcMain.handle(IPC.ANT_CACHE_CLEAR, () => {
+    clearInFlight ||= (async () => {
+      const { canClear, clearReason } = await getCacheStatus();
+      if (!canClear) return { ok: false, error: clearReason };
+      return cacheService.clearCache();
+    })().finally(() => {
+      clearInFlight = null;
+    });
+    return clearInFlight;
+  });
+}
+
+// Startup polls health for up to 60s before giving up with ERROR; leave room
+// for the port and config steps before the spawn.
+const START_SETTLE_TIMEOUT_MS = 90_000;
+
+/**
+ * Resolves once the node is no longer STARTING (RUNNING, ERROR or STOPPED),
+ * or after `timeoutMs`.
+ */
+function waitForStartSettled(timeoutMs = START_SETTLE_TIMEOUT_MS) {
+  if (currentState !== STATUS.STARTING) return Promise.resolve();
+  return new Promise((resolve) => {
+    let unsubscribe = () => {};
+    const timer = setTimeout(() => {
+      unsubscribe();
+      resolve();
+    }, timeoutMs);
+    unsubscribe = onStatusChange(({ status }) => {
+      if (status === STATUS.STARTING) return;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve();
+    });
+  });
+}
+
+// The node Freedom spawned is up or coming up, so a new cache size applies live.
+function isBundledNodeActive() {
+  return (
+    (currentState === STATUS.RUNNING || currentState === STATUS.STARTING) &&
+    currentMode === MODE.BUNDLED
+  );
+}
+
+function getCacheSettingsView() {
+  return antCache.cacheSettingsView({
+    stored: loadSettings().antCacheCapacityBytes,
+    hasExistingCache: hasExistingCacheFile(getAntDataPath()),
+    profileMode: getProfileAntConfig()?.mode || null,
+    registryMode: require('./service-registry').getRegistry().ant?.mode || null,
+    nodeActive: isBundledNodeActive(),
   });
 }
 
@@ -953,12 +1180,14 @@ module.exports = {
   stopAnt,
   getActivePort,
   getStatus,
+  onStatusChange,
+  waitForStartSettled,
+  getSpawnedAt,
   getAntDataPath,
   setUseInjectedIdentity,
   hasInjectedKeys,
-  ANT_NODE_MODE,
-  getConfiguredAntNodeMode,
-  getPrimaryGnosisRpcUrl,
   getPrimaryEthereumRpcUrl,
+  isManagedAntNode,
+  buildAntConfigContent,
   STATUS,
 };

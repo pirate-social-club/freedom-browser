@@ -894,6 +894,44 @@ describe('tabs ui behavior', () => {
     expect(lastWindowLoad.mod.getActiveTab()).toBeNull();
   });
 
+  // #580: a page's `window.close()` makes the <webview> fire `close`, and
+  // Electron destroys the guest right after while leaving the element up.
+  test('a page that closes itself closes its tab, and the window with its last tab', async () => {
+    const { mod, electronAPI, createdWebviews } = await loadTabsModule();
+    await mod.initTabs();
+    const popup = mod.createTab('https://popup.example');
+    const popupWebview = createdWebviews[createdWebviews.length - 1];
+    expect(mod.getTabs()).toHaveLength(2);
+
+    popupWebview.dispatch('close');
+    expect(mod.getTabs().map((tab) => tab.id)).not.toContain(popup.id);
+    expect(mod.getTabs()).toHaveLength(1);
+    expect(electronAPI.closeWindow).not.toHaveBeenCalled();
+
+    createdWebviews[0].dispatch('close');
+    expect(mod.getTabs()).toHaveLength(0);
+    expect(electronAPI.closeWindow).toHaveBeenCalledTimes(1);
+  });
+
+  test('a tab whose guest is already destroyed still closes', async () => {
+    const { mod, electronAPI, createdWebviews } = await loadTabsModule();
+    await mod.initTabs();
+    const onlyTab = mod.getActiveTab();
+    const deadWebview = createdWebviews[0];
+    // What every <webview> method does once its guest is gone.
+    deadWebview.isDevToolsOpened = jest.fn(() => {
+      throw new Error('Invalid guestInstanceId: 4');
+    });
+    deadWebview.closeDevTools = jest.fn(() => {
+      throw new Error('Invalid guestInstanceId: 4');
+    });
+
+    expect(() => mod.closeTab(onlyTab.id)).not.toThrow();
+    expect(mod.getTabs()).toHaveLength(0);
+    expect(deadWebview.parentNode).toBeFalsy();
+    expect(electronAPI.closeWindow).toHaveBeenCalledTimes(1);
+  });
+
   test('wires context menu, keyboard shortcuts, and ipc entrypoints', async () => {
     jest.useFakeTimers();
 
@@ -1679,6 +1717,166 @@ describe('tabs ui behavior', () => {
     const reused = mod.openInNewTabWithTarget('ipfs://three', 'foo');
     expect(reused.id).toBe(opened.id);
     expect(mod.getTabs()).toHaveLength(3);
+  });
+
+  // O-12: a named-target dweb link the page activated without a gesture may
+  // re-navigate the tab that already carries the name — in place, without
+  // switching to it — but may never open one, and only from the tab that
+  // opened it (or the named tab itself): an unrelated tab can't tab-nab it.
+  test('a reuseOnly open navigates an existing named tab in place and never creates one', async () => {
+    jest.useFakeTimers();
+    const { mod } = await loadTabsModule();
+    const onLoadTarget = jest.fn();
+    mod.setLoadTargetHandler(onLoadTarget);
+    await mod.initTabs();
+    const home = mod.getActiveTab();
+
+    // No tab named "viewer" yet: nothing opens, nothing loads.
+    expect(
+      mod.openInNewTabWithTarget('ipfs://one', 'viewer', { reuseOnly: true, openerTabId: home.id })
+    ).toBeNull();
+    jest.runOnlyPendingTimers();
+    expect(mod.getTabs()).toHaveLength(1);
+    expect(onLoadTarget).not.toHaveBeenCalled();
+
+    // A gesture in `home` opened the named tab; the user went back to `home`.
+    const viewer = mod.openInNewTabWithTarget('ipfs://one', 'viewer', { openerTabId: home.id });
+    jest.runOnlyPendingTimers();
+    mod.switchTab(home.id);
+    onLoadTarget.mockClear();
+
+    const reused = mod.openInNewTabWithTarget('ipfs://two', 'viewer', {
+      reuseOnly: true,
+      openerTabId: home.id,
+    });
+    jest.runOnlyPendingTimers();
+    expect(reused.id).toBe(viewer.id);
+    expect(mod.getTabs()).toHaveLength(2);
+    expect(mod.getActiveTab().id).toBe(home.id);
+    expect(onLoadTarget).toHaveBeenCalledWith('ipfs://two', null, viewer.webview, {
+      pageInitiated: true,
+    });
+
+    // The named tab may re-target itself.
+    onLoadTarget.mockClear();
+    expect(
+      mod.openInNewTabWithTarget('ipfs://self', 'viewer', {
+        reuseOnly: true,
+        openerTabId: viewer.id,
+      }).id
+    ).toBe(viewer.id);
+    expect(onLoadTarget).toHaveBeenCalledWith('ipfs://self', null, viewer.webview, {
+      pageInitiated: true,
+    });
+
+    // Once that tab is closed the name is gone, and the open is refused again.
+    mod.closeTab(viewer.id);
+    expect(
+      mod.openInNewTabWithTarget('ipfs://three', 'viewer', {
+        reuseOnly: true,
+        openerTabId: home.id,
+      })
+    ).toBeNull();
+    expect(mod.getTabs()).toHaveLength(1);
+  });
+
+  // #442: a page's window-open reaches the chrome as `tab:new-with-url` naming
+  // the opener guest, so a named tab it opens records its opener tab — the only
+  // tab a later gesture-less (reuse-only) open of that name may come from.
+  test('tab:new-with-url records the opener guest of a named tab for reuse-only opens', async () => {
+    jest.useFakeTimers();
+    const { mod, electronHandlers } = await loadTabsModule();
+    const onLoadTarget = jest.fn();
+    mod.setLoadTargetHandler(onLoadTarget);
+    await mod.initTabs();
+    const home = mod.getActiveTab();
+    home.webview.getWebContentsId = () => 501;
+    expect(mod.getTabByGuestId(501)).toBe(home);
+    expect(mod.getTabByGuestId(999)).toBeNull();
+    expect(mod.getTabByGuestId(undefined)).toBeNull();
+
+    electronHandlers.newTabWithUrl('https://site.example/v1', 'viewer', { openerGuestId: 501 });
+    jest.runOnlyPendingTimers();
+    const viewer = mod.getActiveTab();
+    expect(viewer.id).not.toBe(home.id);
+    mod.switchTab(home.id);
+    const reused = mod.openInNewTabWithTarget('https://site.example/v2', 'viewer', {
+      reuseOnly: true,
+      openerTabId: home.id,
+    });
+    expect(reused?.id).toBe(viewer.id);
+
+    // Without the opener (a chrome-initiated open) the name has no opener, so
+    // a gesture-less reuse is refused.
+    electronHandlers.newTabWithUrl('https://site.example/d1', 'docs', {});
+    jest.runOnlyPendingTimers();
+    mod.switchTab(home.id);
+    expect(
+      mod.openInNewTabWithTarget('https://site.example/d2', 'docs', {
+        reuseOnly: true,
+        openerTabId: home.id,
+      })
+    ).toBeNull();
+  });
+
+  // R4-F1: the name is window-wide, so without an opener scope an unrelated
+  // site in another tab could silently re-navigate the named tab in the
+  // background (no switch, nothing visible changes).
+  test('a reuseOnly open from an unrelated tab, or with no opener, never re-navigates a named tab', async () => {
+    jest.useFakeTimers();
+    const { mod } = await loadTabsModule();
+    const onLoadTarget = jest.fn();
+    mod.setLoadTargetHandler(onLoadTarget);
+    await mod.initTabs();
+    const dappA = mod.getActiveTab();
+    const viewer = mod.openInNewTabWithTarget('ipfs://a-content', 'viewer', {
+      openerTabId: dappA.id,
+    });
+    jest.runOnlyPendingTimers();
+    const siteB = mod.createTab('https://b.example/');
+    jest.runOnlyPendingTimers();
+    onLoadTarget.mockClear();
+
+    expect(
+      mod.openInNewTabWithTarget('ipfs://phish', 'viewer', {
+        reuseOnly: true,
+        openerTabId: siteB.id,
+      })
+    ).toBeNull();
+    expect(mod.openInNewTabWithTarget('ipfs://phish', 'viewer', { reuseOnly: true })).toBeNull();
+    jest.runOnlyPendingTimers();
+    expect(onLoadTarget).not.toHaveBeenCalled();
+    expect(mod.getTabs()).toHaveLength(3);
+
+    // A named tab created without an opener (chrome / `tab:new-with-url`) has
+    // no gesture-less reuse at all.
+    const other = mod.openInNewTabWithTarget('https://x.example/', 'other');
+    jest.runOnlyPendingTimers();
+    onLoadTarget.mockClear();
+    expect(
+      mod.openInNewTabWithTarget('ipfs://phish', 'other', {
+        reuseOnly: true,
+        openerTabId: dappA.id,
+      })
+    ).toBeNull();
+    expect(onLoadTarget).not.toHaveBeenCalled();
+    expect(other).toBeTruthy();
+
+    // A new tab taking over the name (Ctrl+click from B) moves the opener to B:
+    // A's gesture-less link no longer reaches it, B's does.
+    const takeover = mod.openInNewTabWithTarget('ipfs://b-content', 'viewer', {
+      background: true,
+      openerTabId: siteB.id,
+    });
+    jest.runOnlyPendingTimers();
+    expect(
+      mod.openInNewTabWithTarget('ipfs://x', 'viewer', { reuseOnly: true, openerTabId: dappA.id })
+    ).toBeNull();
+    expect(
+      mod.openInNewTabWithTarget('ipfs://y', 'viewer', { reuseOnly: true, openerTabId: siteB.id })
+        .id
+    ).toBe(takeover.id);
+    expect(viewer).toBeTruthy();
   });
 
   // #303: the main process forwards the disposition Chromium derived from the

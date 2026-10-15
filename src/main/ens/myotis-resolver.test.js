@@ -40,11 +40,27 @@ const address = '0x2222222222222222222222222222222222222222';
 const offchain = new ethers.Interface([
   'error OffchainLookup(address sender,string[] urls,bytes callData,bytes4 callbackFunction,bytes extraData)',
 ]);
+const {
+  FakeClientRequest,
+  createNetMock,
+  emitResponse,
+} = require('../../../test/helpers/fake-electron-net');
+const electron = require('electron');
+// CCIP gateways are dialled through Electron `net` (#359), so that is what
+// stands in for them here; `gateway` counts the dials.
 const gateway = jest.fn();
-const originalFetch = global.fetch;
+const originalNetRequest = electron.net.request;
+// One gateway answer, delivered asynchronously the way Chromium delivers it.
+const netAnswer = (respond) => (options) => {
+  const request = new FakeClientRequest(options);
+  setImmediate(() => respond(request));
+  return request;
+};
 function offchainResult(sender = UR) {
   return {
     status: 'revert',
+    blockNumber: 26000000,
+    verified: false,
     dataHex: offchain.encodeErrorResult('OffchainLookup', [
       sender,
       ['https://ccip.example/{data}'],
@@ -57,6 +73,8 @@ function offchainResult(sender = UR) {
 function addressResult(multicoin = false) {
   return {
     status: 'ok',
+    blockNumber: 26000000,
+    verified: false,
     resultHex: abi.encode(
       ['bytes', 'address'],
       [abi.encode([multicoin ? 'bytes' : 'address'], [address]), UR]
@@ -66,13 +84,15 @@ function addressResult(multicoin = false) {
 beforeEach(() => {
   mockCall.mockReset();
   mockEpoch.mockReset().mockReturnValue(0);
-  gateway
-    .mockReset()
-    .mockImplementation(async () => new Response(JSON.stringify({ data: '0xcafe' })));
-  global.fetch = gateway;
+  gateway.mockReset();
+  const net = createNetMock((request) =>
+    emitResponse(request, { chunks: [JSON.stringify({ data: '0xcafe' })] })
+  );
+  gateway.mockImplementation(net.request);
+  electron.net.request = gateway;
 });
 afterEach(() => {
-  global.fetch = originalFetch;
+  electron.net.request = originalNetRequest;
 });
 
 test('calls the canonical Universal Resolver through the verified EVM, including chain-specific calldata', async () => {
@@ -86,6 +106,7 @@ test('calls the canonical Universal Resolver through the verified EVM, including
     blockNumber: null,
   });
   const request = mockCall.mock.calls[0][0];
+  expect(request.block).toBe('latest');
   expect(request.to.toLowerCase()).toBe(UR.toLowerCase());
   const [, data] = abi.decode(['bytes', 'bytes'], '0x' + request.data.slice(10));
   expect(data.slice(0, 10)).toBe('0xf1cb7e06');
@@ -139,6 +160,8 @@ test('propagates unavailability and malformed responses instead of treating them
 test('requests the chain-specific primary name via UR.reverse', async () => {
   mockCall.mockResolvedValue({
     status: 'ok',
+    blockNumber: 26000000,
+    verified: false,
     resultHex: abi.encode(['string', 'address', 'address'], ['base.eth', UR, UR]),
   });
   expect(
@@ -160,18 +183,28 @@ test('uses POST gateways and advances past invalid responses', async () => {
     '0xdead',
   ]);
   mockCall.mockResolvedValueOnce({ status: 'revert', dataHex }).mockResolvedValue(addressResult());
-  gateway.mockImplementationOnce(async () => new Response('{"data":"0xodd"}'));
+  gateway.mockImplementationOnce(
+    netAnswer((request) => emitResponse(request, { chunks: ['{"data":"0xodd"}'] }))
+  );
   expect((await resolveRecord({ method: 'addr', name: 'test.eth' })).addressHex).toBe(address);
-  expect(gateway.mock.calls[1][1]).toMatchObject({
+  expect(gateway.mock.calls[1][0]).toMatchObject({
     method: 'POST',
-    body: JSON.stringify({ sender: UR.toLowerCase(), data: '0xbeef' }),
+    url: 'https://good.example/query',
   });
+  expect(Buffer.concat(gateway.mock.results[1].value.written).toString('utf8')).toBe(
+    JSON.stringify({ sender: UR.toLowerCase(), data: '0xbeef' })
+  );
 });
 
 test('rejects oversized gateway responses before executing a callback', async () => {
   mockCall.mockResolvedValue(offchainResult());
   gateway.mockImplementation(
-    async () => new Response('large', { headers: { 'content-length': String(5 * 1024 * 1024) } })
+    netAnswer((request) =>
+      emitResponse(request, {
+        headers: { 'content-length': String(5 * 1024 * 1024) },
+        chunks: ['large'],
+      })
+    )
   );
   await expect(resolveRecord({ method: 'addr', name: 'test.eth' })).rejects.toThrow();
   expect(mockCall).toHaveBeenCalledTimes(1);

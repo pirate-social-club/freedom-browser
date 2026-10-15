@@ -8,7 +8,7 @@
 // Chromium computed — in both themes, because the address bar's old
 // light-theme rule was what removed its indicator entirely.
 
-const { test, expect } = require('./fixtures');
+const { test, expect, clickOverGuest } = require('./fixtures');
 
 // The four surfaces the issue names — address bar, find bar, bookmark modal,
 // sidebar inputs — sampled across the three sidebar field classes that used
@@ -158,8 +158,13 @@ test('a mouse-clicked select gets the same ring as a text field', async ({ windo
 
   const select = window.locator('#connect-ledger-scheme');
   await expect(select).toBeVisible();
-  const box = await select.boundingBox();
-  await window.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  // The select has just been moved over the tab's `<webview>`, so a click at
+  // that point can still go to the guest (`clickOverGuest`); it is still one
+  // real mouse click that has to focus it.
+  await clickOverGuest(select);
+  await expect
+    .poll(() => window.evaluate(() => document.activeElement?.id))
+    .toBe('connect-ledger-scheme');
 
   const ring = await window.evaluate(() => {
     const el = document.getElementById('connect-ledger-scheme');

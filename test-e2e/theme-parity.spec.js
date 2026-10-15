@@ -30,6 +30,7 @@
 // than guessed at, so a surface cannot go quietly unchecked either way.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const { test, expect } = require('./fixtures');
@@ -433,7 +434,14 @@ test.afterAll(() => {
 // ---------------------------------------------------------------------------
 // The surfaces, all reached through recipes.js.
 
-/** Settings sections worth walking; `ens` is the one #224 lived on. */
+/**
+ * Settings sections worth walking; `ens` is the one #224 lived on. These are
+ * the pre-#268 names, which still resolve — `ens` to Networks with Name
+ * Resolution brought up, `permissions` to Privacy and security with Site
+ * Permissions brought up, `chains` to the top of Networks — so the surface
+ * labels in the baseline did not have to move. Since #268 the `permissions`
+ * view also has Ad Blocking's panel on screen above Site Permissions.
+ */
 const SETTINGS_SECTIONS = ['appearance', 'nodes', 'ens', 'permissions', 'shortcuts', 'chains'];
 
 /** Internal pages, by the URL that reaches them and the file they render in. */
@@ -445,6 +453,26 @@ const INTERNAL_PAGES = [
   { name: 'profiles', url: 'freedom://profiles', file: '/pages/profiles.html' },
   { name: 'links', url: 'freedom://links', file: '/pages/links.html' },
 ];
+
+// Settings > Privacy and security shows Ad Blocking, which looks different
+// with and without filter lists on disk: without them its rows are dimmed and
+// a "cannot run" status line appears (#274). CI's per-PR job has no lists and
+// the nightly's full run downloads them, so the same baseline failed one or
+// the other. Pin the no-lists state, the one with the recorded gaps, with an
+// empty FREEDOM_ADBLOCK_DIR (as settings-adblock.spec.js does). The updater's
+// own dir is under the per-test scratch profile, so that is empty too.
+let previousAdblockDir;
+test.beforeAll(() => {
+  previousAdblockDir = process.env.FREEDOM_ADBLOCK_DIR;
+  process.env.FREEDOM_ADBLOCK_DIR = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'freedom-e2e-theme-no-lists-')
+  );
+});
+test.afterAll(() => {
+  fs.rmSync(process.env.FREEDOM_ADBLOCK_DIR, { recursive: true, force: true });
+  if (previousAdblockDir === undefined) delete process.env.FREEDOM_ADBLOCK_DIR;
+  else process.env.FREEDOM_ADBLOCK_DIR = previousAdblockDir;
+});
 
 for (const theme of ['dark', 'light']) {
   test.describe(`theme parity: ${theme}`, () => {
@@ -504,6 +532,34 @@ for (const theme of ['dark', 'light']) {
       await closeMenus(window);
     });
 
+    // #605: a private window keeps its dark plum chrome in both themes, but
+    // light-theme.css painted its text fields near-white under the private
+    // palette's light lavender text, so a typed URL measured about 1.4:1 on
+    // the light theme. The address bar is checked focused with typed text and
+    // again unfocused behind the find bar; the bookmark dialog covers the
+    // modal fields.
+    test(
+      declare(`private window fields render legibly in ${theme}`),
+      async ({ electronApp, window }) => {
+        test.setTimeout(180_000);
+        const pw = await recipes.privateWindow({ app: electronApp, win: window });
+        const ctx = { app: electronApp, win: pw };
+        const check = (label, opts) => assertSurface(pw, { label, theme, ...opts });
+
+        await pw.click('[data-test="address-input"]');
+        await pw.keyboard.type('https://example.com/typed');
+        await check('private address bar typing', { minSamples: 2 });
+
+        await recipes.findBar(ctx);
+        await check('private find bar', { minSamples: 2 });
+        await pw.keyboard.press('Escape');
+
+        await pw.click('[data-test="add-bookmark-btn"]');
+        await pw.waitForSelector('#add-bookmark-modal[open]');
+        await check('private bookmark dialog', { minSamples: 2 });
+      }
+    );
+
     test(
       declare(`wallet and permission subscreens render legibly in ${theme}`),
       async ({ electronApp, window }) => {
@@ -528,6 +584,11 @@ for (const theme of ['dark', 'light']) {
         await recipes.dappTxApproval(ctx);
         await check('dApp transaction approval', { minSamples: 2 });
         await recipes.dappSign(ctx);
+        // The pointer is still where the send flow's Confirm click left it,
+        // which since #606 gave Sign Message's actions their top margin is
+        // over the Sign button: its `:hover` opacity would be measured
+        // instead of its resting colours.
+        await window.mouse.move(0, 0);
         await check('dApp sign', { minSamples: 2 });
         await recipes.dappConnect(ctx);
         await check('dApp connect', { minSamples: 2 });

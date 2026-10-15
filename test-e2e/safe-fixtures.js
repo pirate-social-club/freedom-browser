@@ -17,6 +17,7 @@ const fs = require('fs');
 
 const repoRoot = path.resolve(__dirname, '..');
 const identity = require(path.join(repoRoot, 'src', 'main', 'identity'));
+const { closeApp } = require('./close-app');
 
 const VAULT_PASSWORD = 'Freedom-E2E-Safe-2026!';
 const GNOSIS_FORK_URL = 'https://rpc.gnosischain.com';
@@ -25,17 +26,32 @@ const ANVIL_URL = `http://127.0.0.1:${ANVIL_PORT}`;
 
 // Builtin keyless Gnosis rpc sources to remove so nothing escapes to the
 // live chain (keyed sources resolve to nothing without API keys).
-const BUILTIN_GNOSIS_SOURCES = ['gno-gnosischain', 'gno-ankr', 'gno-publicnode', 'gno-drpc-public'];
+const BUILTIN_GNOSIS_SOURCES = ['gno-gnosischain', 'gno-publicnode', 'gno-drpc-public'];
 
-/** anvil present + fork RPC reachable — mirrors the jest fork-test gate. */
+/**
+ * anvil present + fork RPC reachable — mirrors the jest fork-test gate.
+ *
+ * With FREEDOM_SAFE_E2E_REQUIRED=1 (the `e2e-safe` CI job) a missing
+ * prerequisite throws instead of skipping: a skipped spec reports green, so a
+ * broken foundry install or an unreachable fork RPC would otherwise turn the
+ * job into a silent no-op.
+ */
 function safeE2eAvailable() {
-  if (spawnSync('anvil', ['--version']).status !== 0) return false;
-  const probe = spawnSync('curl', [
-    '-sf', '-m', '10', '-X', 'POST', GNOSIS_FORK_URL,
-    '-H', 'Content-Type: application/json',
-    '-d', '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}',
-  ]);
-  return probe.status === 0;
+  let missing = null;
+  if (spawnSync('anvil', ['--version']).status !== 0) {
+    missing = 'anvil (foundry) is not on PATH';
+  } else {
+    const probe = spawnSync('curl', [
+      '-sf', '-m', '10', '-X', 'POST', GNOSIS_FORK_URL,
+      '-H', 'Content-Type: application/json',
+      '-d', '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}',
+    ]);
+    if (probe.status !== 0) missing = `the fork RPC ${GNOSIS_FORK_URL} is unreachable`;
+  }
+  if (missing && process.env.FREEDOM_SAFE_E2E_REQUIRED === '1') {
+    throw new Error(`Safe E2E required but ${missing}`);
+  }
+  return !missing;
 }
 
 async function rpc(method, params = []) {
@@ -113,6 +129,16 @@ const test = base.extend({
           'e2e-anvil-gnosis': { role: 'rpc', keyed: false, coverage: { 100: anvil.url } },
         },
         removedSources: BUILTIN_GNOSIS_SOURCES,
+        // Read Gnosis from the fork only. Myotis and Colibri verify against
+        // the *live* chain: their answers are correct there and wrong here
+        // (the fork-funded Safe reads a verified balance of 0), so a
+        // verifying source can never serve a fork. This keeps the
+        // "nothing escapes to the live chain" promise above; it is not
+        // what kept these specs alive — the SIGSEGV they used to hit (#453,
+        // a Colibri receipt lookup trapping in WASM) is fixed in
+        // colibri-runtime.js and pinned by colibri-runtime.test.js under
+        // Electron's full main process.
+        networks: { 100: { access: { readOrder: ['direct'] } } },
       }),
       'utf-8'
     );
@@ -143,7 +169,19 @@ const test = base.extend({
         FREEDOM_TEST_USER_DATA: userDataDir,
         FREEDOM_IDENTITY_DATA: identityDir,
         FREEDOM_RADICLE_DATA: radicleDir,
-        FREEDOM_TEST_HIDE_WINDOW: process.env.FREEDOM_E2E_HEADED === '1' ? '0' : '1',
+        // Shown, not hidden (#536; the onboarding fixture's #479 is the same
+        // bug). A never-shown window has no steady frame clock: probed
+        // 2026-10 under xvfb, the hidden window ran requestAnimationFrame at
+        // ~1 fps (60 fps shown), and on CI it intermittently stops. The
+        // sidebar opens by widening over the area the tab's <webview> had,
+        // and the browser routes a click by hit-testing the compositor's
+        // last *presented* frame (see clickOverGuest in fixtures.js), so
+        // with no new frame a click on #wallet-selector-btn can still go to
+        // the guest: Playwright's in-renderer checks pass, the click
+        // returns, and the selector never opens. Looped on CI 2026-10-06, retries
+        // off: a cold first launch failed that way 16 times in 40 hidden and
+        // 0 in 40 shown. '0' explicitly, so an inherited =1 can't re-hide it.
+        FREEDOM_TEST_HIDE_WINDOW: '0',
         ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
         LANG: 'en_US.UTF-8',
       },
@@ -152,11 +190,7 @@ const test = base.extend({
 
     await use(app);
 
-    try {
-      await app.close();
-    } catch {
-      // window already gone
-    }
+    await closeApp(app);
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   },
 

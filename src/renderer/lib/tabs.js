@@ -103,6 +103,16 @@ const tabState = {
 // Used to reuse tabs when links specify target="mywindow"
 const namedTargets = new Map();
 
+// Target name -> id of the tab whose page opened the named tab (O-12). A
+// gesture-less `reuseOnly` open may only re-navigate a named tab from the tab
+// that opened it (or from the named tab itself), the way Chromium resolves a
+// window name only within the opener's browsing context group: an unrelated
+// site in another tab must not be able to re-navigate someone else's named tab
+// in the background just by knowing (or guessing) its name. Absent entry (the
+// tab was opened by the chrome, or by a `tab:new-with-url` that carried no
+// opener) means no gesture-less reuse at all — fail closed.
+const namedTargetOpeners = new Map();
+
 // Stack of recently closed tabs for Ctrl+Shift+T (reopen closed tab)
 const closedTabsStack = [];
 const MAX_CLOSED_TABS = 20;
@@ -265,6 +275,22 @@ export const getTabIdForWebview = (webview) => {
   if (raw === undefined) return null;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : null;
+};
+
+// The tab whose webview is guest webContents `guestId`, or null. Main names
+// a tab by its guest's webContents id (a blocked popup, a window-open's
+// opener); a webview that is not attached yet has no id and never matches.
+export const getTabByGuestId = (guestId) => {
+  if (typeof guestId !== 'number') return null;
+  return (
+    tabState.tabs.find((t) => {
+      try {
+        return t.webview?.getWebContentsId?.() === guestId;
+      } catch {
+        return false;
+      }
+    }) || null
+  );
 };
 
 // True when `tabId` matches the currently active tab. Used by async
@@ -1002,6 +1028,17 @@ const createWebview = (tabId, initialUrl) => {
         onWebviewEvent('ipc-message', { tabId, channel: event.channel, args: event.args });
       }
     },
+    // The page closed itself: a `window.close()` Blink allowed (a window a
+    // script opened, or one whose history holds a single entry — Chrome's
+    // rule, decided in the guest before this event fires). Electron destroys
+    // the guest webContents right after it but leaves the <webview> element
+    // and its tab in place, a tab with no page behind it. Chrome closes the
+    // tab (and a popup window with it, the last tab closing the window), so
+    // do the same. Without this, a popup that closed itself — popupcheck.com's
+    // all do, 1.4 s after opening — stayed up as a dead tab (#580).
+    close: () => {
+      closeTab(tabId);
+    },
     'update-target-url': (event) => {
       // Gate at the tab edge (same shape as `link-status:zone`) so the
       // link-status module never sees background-tab hover events. Empty
@@ -1571,9 +1608,18 @@ export const closeTab = (tabId) => {
     }
   }
 
-  // Close DevTools before removing webview (prevents crash)
-  if (tab.webview?.isDevToolsOpened?.()) {
-    tab.webview.closeDevTools();
+  // Close DevTools before removing webview (prevents crash). Every <webview>
+  // method throws once the guest is gone ("Invalid guestInstanceId") — which
+  // is the state a page that called `window.close()` leaves it in — and a
+  // throw here would abort the close half-way, leaving a tab neither its
+  // close button nor Cmd/Ctrl+W can remove (#580). A guest that is gone has
+  // no DevTools to close, so carry on.
+  try {
+    if (tab.webview?.isDevToolsOpened?.()) {
+      tab.webview.closeDevTools();
+    }
+  } catch {
+    // Guest already destroyed.
   }
 
   // Cancel the phantom-abort safety-net timers if they're still pending —
@@ -1613,6 +1659,7 @@ export const closeTab = (tabId) => {
   for (const [targetName, tid] of namedTargets) {
     if (tid === tabId) {
       namedTargets.delete(targetName);
+      namedTargetOpeners.delete(targetName);
       break;
     }
   }
@@ -1953,14 +2000,25 @@ export const switchTab = (tabId, options = {}) => {
  *
  * @param {string} url - target URL
  * @param {string|null} targetName - HTML `target` attribute, if any
- * @param {{ background?: boolean }} [options] - opening disposition
+ * `options.reuseOnly` (a named-target open the popup blocker refused for want
+ * of a user gesture, see popup-blocker-ui.js) only re-navigates the tab already
+ * carrying `targetName`, in place and without switching to it: no gesture is
+ * needed to navigate an existing named browsing context, but one is needed to
+ * create a tab or to take focus. With no such tab, nothing opens. It is also
+ * scoped to `options.openerTabId`, the tab the link was clicked in: only the
+ * tab that opened the named tab (or the named tab itself) may re-navigate it
+ * this way — see `namedTargetOpeners`.
+ *
+ * @param {{ background?: boolean, reuseOnly?: boolean, openerTabId?: number }} [options]
+ *   opening disposition, and the tab the request came from (dweb links only)
  * @returns {object|null} the (possibly new) tab, or null on noop
  */
 // Parse a `freedom://<page>[/<sub-path>]` URL into `{ pageName, subPath }` when
 // `<page>` is a recognised internal page, else null. A sub-path of any depth is
-// accepted (e.g. `freedom://settings/profile`, `freedom://settings/chains/1`) so
-// deep links still resolve to the page's singleton tab — the sub-path routes the
-// (possibly reused) tab to the right section. It is as deep as the page's own
+// accepted (e.g. `freedom://settings/profile`,
+// `freedom://settings/networks/1`) so deep links still resolve to the page's
+// singleton tab — the sub-path routes the (possibly reused) tab to the right
+// section. It is as deep as the page's own
 // fragment because that is what `page-urls.js#getInternalPageName` emits for it,
 // and that is what the address bar shows and a bookmark hands back; stopping at
 // one segment made the chrome's own chain-detail URL unroutable (#280). Keep in
@@ -1980,6 +2038,31 @@ const freedomInternalPageTarget = (url) => {
 export const openInNewTabWithTarget = (url, targetName, options = {}) => {
   if (!url) return null;
   const background = !!options.background;
+
+  if (options.reuseOnly) {
+    const existingTabId = targetName ? namedTargets.get(targetName) : undefined;
+    const existingTab =
+      existingTabId === undefined ? null : tabState.tabs.find((t) => t.id === existingTabId);
+    if (!existingTab) {
+      pushDebug(`Blocked gesture-less open of target "${targetName}": ${url}`);
+      return null;
+    }
+    const openerTabId = options.openerTabId;
+    const related =
+      openerTabId !== undefined &&
+      openerTabId !== null &&
+      (openerTabId === existingTabId || namedTargetOpeners.get(targetName) === openerTabId);
+    if (!related) {
+      pushDebug(
+        `Blocked gesture-less re-navigation of target "${targetName}" from unrelated tab ${openerTabId}: ${url}`
+      );
+      return null;
+    }
+    pushDebug(`Re-navigating tab ${existingTabId} for target "${targetName}": ${url}`);
+    // Page-driven: it must not discard an address-bar edit in that tab (#305).
+    if (onLoadTarget) onLoadTarget(url, null, existingTab.webview, { pageInitiated: true });
+    return existingTab;
+  }
 
   // EVERY freedom:// internal page (profiles, history, settings, …) is treated
   // as a singleton: an untargeted open focuses the existing tab instead of
@@ -2024,6 +2107,7 @@ export const openInNewTabWithTarget = (url, targetName, options = {}) => {
       return existingTab;
     }
     namedTargets.delete(targetName);
+    namedTargetOpeners.delete(targetName);
   }
 
   pushDebug(`Opening new tab with URL: ${url}${targetName ? ` (target: ${targetName})` : ''}`);
@@ -2040,6 +2124,13 @@ export const openInNewTabWithTarget = (url, targetName, options = {}) => {
 
   if (targetName && newTab) {
     namedTargets.set(targetName, newTab.id);
+    // A fresh tab taking over the name also takes a fresh opener: the tab the
+    // link was clicked in, or none (chrome/main-process opens carry no opener).
+    if (typeof options.openerTabId === 'number') {
+      namedTargetOpeners.set(targetName, options.openerTabId);
+    } else {
+      namedTargetOpeners.delete(targetName);
+    }
   }
 
   return newTab;
@@ -2307,7 +2398,14 @@ export const initTabs = async () => {
       electronAPI?.openUrlInNewWindow?.(url);
       return;
     }
-    openInNewTabWithTarget(url, targetName || null, { background: !!options?.background });
+    // A page's window-open names its tab (`openerGuestId`), so a named target
+    // it opens records that tab as the name's opener — the only tab a later
+    // gesture-less reuse of the name may come from (#442).
+    const opener = getTabByGuestId(options?.openerGuestId);
+    openInNewTabWithTarget(url, targetName || null, {
+      background: !!options?.background,
+      ...(opener ? { openerTabId: opener.id } : {}),
+    });
   });
 
   electronAPI?.onNavigateToUrl?.((url) => {
@@ -2470,7 +2568,9 @@ export const initTabs = async () => {
         addressInput.select();
       }
     }
-    // Next tab (Ctrl+PageDown; aliases Ctrl+Tab, Cmd+Shift+])
+    // Next tab (Ctrl+PageDown; aliases Ctrl+Tab, Cmd+Shift+]). Next/Previous
+    // are normally claimed in the main process before this listener sees
+    // them (tab-switch-keys.js, #556); this stays as the chrome's fallback.
     if (matchesShortcut(event, 'tab.next')) {
       event.preventDefault();
       switchToNextTab();

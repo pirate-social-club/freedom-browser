@@ -3,6 +3,7 @@ const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { loadSettings } = require('../settings-store');
+const { TEST_HARNESS_RENDERER_ARG } = require('../test-mode');
 
 let currentWindowTitle = 'Freedom';
 
@@ -39,9 +40,14 @@ function createMainWindow(initialUrl = null, options = {}) {
   // `frame` can't change on a live window, so this is read once at creation.
   const linuxFrameless = isLinux && loadSettings().tabsInTitlebar === true;
 
-  // Headless E2E: keep the window hidden so a local test run doesn't pop a
-  // window or steal focus. The renderer still loads and is fully driveable via
-  // Playwright (DOM/JS), it just never paints to screen.
+  // Opt-in test switch: keep the window hidden. The renderer still loads and
+  // is driveable via Playwright (DOM/JS), but a never-shown window has no
+  // reliable frame clock (~1 fps or none under xvfb), so Playwright's
+  // click/check actionability waits can stall and a click can land on the
+  // page under freshly-shown chrome (#479, #536). No e2e fixture sets this;
+  // several pin it to '0'. Only ci.yml's Myotis live step exports it, for a
+  // spec that never clicks. To avoid a popped-up window locally, run the
+  // suites under `xvfb-run -a` instead of setting this.
   const hideWindow = process.env.FREEDOM_TEST_HIDE_WINDOW === '1';
 
   const window = new BrowserWindow({
@@ -65,11 +71,27 @@ function createMainWindow(initialUrl = null, options = {}) {
     ...(linuxFrameless && { frame: false }),
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload.js'),
+      // Pinned explicitly rather than left to Electron's defaults, so a
+      // future default change or a stray option can't silently weaken the
+      // renderer that holds the privileged preload API
+      // (docs/security-audit-electron.md, E-4).
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      nodeIntegrationInWorker: false,
+      nodeIntegrationInSubFrames: false,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false,
       webviewTag: true,
-      enableRemoteModule: false,
+      // Tells preload.js to expose the E2E harness bridge. Decided here, from
+      // test-mode.js's verdict, rather than by the preload reading
+      // FREEDOM_TEST_MODE itself: a packaged build honours that variable only
+      // under an honoured CDP debug port (docs/security-audit-electron.md,
+      // O-4/O-12), which the renderer cannot see.
+      ...(require('../test-harness').isTestMode() && {
+        additionalArguments: [TEST_HARNESS_RENDERER_ARG],
+      }),
     },
   });
 
@@ -128,7 +150,6 @@ function createMainWindow(initialUrl = null, options = {}) {
     mainWindows.delete(window);
   });
 
-
   // Close renderer menus when window loses focus (e.g., clicking system menu)
   window.on('blur', () => {
     window.webContents.send('menus:close');
@@ -176,6 +197,24 @@ function focusBrowserWindow(window) {
         window.flashFrame(true);
         window.once('focus', () => window.flashFrame(false));
       }
+    } else if (process.platform === 'linux') {
+      // Warm profile switch: this process was asked to focus by a file
+      // request from another profile's process, not by input it received, so
+      // an X11 window manager with focus-stealing prevention may refuse a bare
+      // focus() and mark the window "demands attention" instead (GNOME turns
+      // that into a "'Freedom' is ready" notification). Same always-on-top
+      // nudge the cold-start path uses in ready-to-show. Deliberately no
+      // flashFrame() fallback here: on Linux that *sets* demands-attention,
+      // i.e. it would post the very notification this is trying to avoid.
+      // Unproven, kept for parity with cold start: headless mutter 50.1 on
+      // X11 (probed 2026-10, PR #470) accepted a bare focus() here too, so this
+      // only matters for stricter WMs (e.g. KWin focus-stealing "medium"/
+      // "high"), which nobody has tested. Wayland-native windows ignore it, and
+      // that is where #142 still reproduces: raising another process's window
+      // needs an xdg-activation token, which Electron can't mint or pass on.
+      window.setAlwaysOnTop(true);
+      window.focus();
+      window.setAlwaysOnTop(false);
     }
   } catch {
     // Best-effort only; BrowserWindow.focus() below is the real fallback.
@@ -219,6 +258,7 @@ function getMainWindows() {
 
 module.exports = {
   createMainWindow,
+  focusBrowserWindow,
   focusOrCreateMainWindow,
   setWindowTitle,
   getWindowTitle,

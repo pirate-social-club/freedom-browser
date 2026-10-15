@@ -14,13 +14,15 @@ const { getMyotisDataDir } = require('../profile-paths');
 
 const { MyotisProcess } = require('./myotis-process');
 const checkpointStore = require('./checkpoint-store');
+const seedPins = require('./seed-pins');
 const { acquireCheckpoint } = require('./checkpoint-verifier');
-const MYOTIS_VERSION = '0.1.11';
+const MYOTIS_VERSION = '0.1.14';
 const AVAILABILITY_POLL_MS = 1000;
 const STATUS_FRESH_MS = 6000;
 const STATUS_REQUEST_MS = 10000;
 const RECOVERY_COOLDOWN_MS = 15000;
 const RECOVERY_RETRY_MS = [15000, 60000];
+const RECOVERY_BACKGROUND_RETRY_MS = 5 * 60 * 1000;
 const RECOVERY_NOTICE_MS = 60 * 1000;
 const SYNC_NOTICE_MS = 5 * 60 * 1000;
 
@@ -275,14 +277,21 @@ function startRecoveryNotice(instance, reset = false) {
 }
 
 function storageFailureReason(error) {
-  return ({ CHECKPOINT_OWNERSHIP: 'ownership', CHECKPOINT_STORAGE: 'storage',
+  return ({ CHECKPOINT_REBOOT_REQUIRED: 'reboot-required', CHECKPOINT_OWNERSHIP: 'ownership', CHECKPOINT_STORAGE: 'storage',
     CHECKPOINT_STORAGE_IO: 'storage-io' })[error.code] || 'startup';
 }
 
-function failRecovery(instance, reason, retry = false) {
+// `background` keeps retrying slowly after the fast schedule runs out. Only
+// checkpoint *acquisition* failures (a source outage) opt in: they cost a few
+// requests each. A checkpoint that verified and imported but still reports a
+// stale anchor must stay bounded — every retry of that path creates a new
+// verified generation and restarts the native child.
+function failRecovery(instance, reason, retry = false, { background = false } = {}) {
   if (!instance.wanted || shuttingDown || instance.stopping) return;
   clearRecoveryTimer(instance);
-  const delay = retry ? RECOVERY_RETRY_MS[instance.recoveryAttempt - 1] : null;
+  const delay = retry
+    ? (RECOVERY_RETRY_MS[instance.recoveryAttempt - 1] ?? (background ? RECOVERY_BACKGROUND_RETRY_MS : null))
+    : null;
   const token = instance.lifecycleToken;
   instance.recovery = {
     phase: delay ? 'waiting' : 'blocked', reason,
@@ -292,6 +301,7 @@ function failRecovery(instance, reason, retry = false) {
   };
   if (!delay) clearRecoveryNotice(instance);
   instance.lastError = null;
+  log.warn(`[myotis] ${instance.name} recovery ${JSON.stringify(instance.recovery)}`);
   publishAvailability(instance, false, 'checkpoint-recovery-failed');
   publishStatus(publicStatus(instance.chainId));
   if (delay) {
@@ -338,7 +348,8 @@ function observeSync(instance, status) {
   }
   const finished = canFinishRecovery(instance, status);
   const ready = finished && status.running === true && status.paused !== true &&
-    status.elReaderAvailable === true && status.elHunting === false && status.snapPeers > 0;
+    status.elReaderAvailable === true && status.elHunting === false &&
+    typeof status.snapServingPeers === 'number' && status.snapServingPeers > 0;
   if ((finished && instance.recovery?.phase === 'restarting') ||
       (ready && instance.recovery?.reason === 'stalled')) {
     clearRecoveryTimer(instance);
@@ -363,7 +374,15 @@ async function launchClient(instance, token) {
     network: instance.name,
     dataDir: instance.storage.dataDir,
     checkpoint: instance.storage.checkpoint,
-    onLifecycle: (event) => log.info(`[myotis] ${instance.name} lifecycle ${JSON.stringify(event)}`),
+    bootEnodes: seedPins.select(seedPins.load(instance.name)),
+    onLifecycle: (event) => {
+      if (event.event === 'seed-pins') {
+        const message = `[myotis] ${instance.name} seed pins (${event.count}) ${event.applied ? 'applied' : 'refused'}`;
+        if (event.applied) log.info(message);
+        else log.warn(message);
+      }
+      log.info(`[myotis] ${instance.name} lifecycle ${JSON.stringify(event)}`);
+    },
     onStatus: (status) => {
       if (instance.client !== client || !currentRun(instance, token)) return;
       instance.lastStatus = status;
@@ -424,14 +443,22 @@ function recoverCheckpoint(instance, { resetAttempts = false } = {}) {
   const controller = new AbortController();
   instance.recoveryController = controller;
   instance.recoveryAttempt += 1;
+  log.info(`[myotis] ${instance.name} checkpoint attempt ${instance.recoveryAttempt}`);
   instance.recovery = { phase: 'checking', reason: null, attempt: instance.recoveryAttempt,
     nextRetryAt: null, canRetry: false };
   publishAvailability(instance, false, 'checkpoint-recovery', true);
   publishStatus(publicStatus(instance.chainId));
   const pending = (async () => {
     try {
-      const checkpoint = await acquireCheckpoint(instance.chainId, { signal: controller.signal });
+      const checkpoint = await acquireCheckpoint(instance.chainId, {
+        signal: controller.signal,
+        onDiagnostic: (diagnostic) => {
+          if (currentRun(instance, token) && !controller.signal.aborted)
+            log.info(`[myotis] checkpoint source ${JSON.stringify({ ...diagnostic, attempt: instance.recoveryAttempt })}`);
+        },
+      });
       if (!currentRun(instance, token) || controller.signal.aborted) return false;
+      log.info(`[myotis] ${instance.name} checkpoint attempt ${instance.recoveryAttempt} verified`);
       instance.recovery = { ...instance.recovery, phase: 'restarting' };
       publishStatus(publicStatus(instance.chainId));
       const previous = instance.client;
@@ -441,7 +468,7 @@ function recoverCheckpoint(instance, { resetAttempts = false } = {}) {
         instance.retiring = null;
         if (!currentRun(instance, token)) return false;
         if (!exited || !previous.exited) {
-          failRecovery(instance, 'ownership');
+          failRecovery(instance, stopFailureReason(previous));
           return false;
         }
       }
@@ -464,11 +491,11 @@ function recoverCheckpoint(instance, { resetAttempts = false } = {}) {
         CHECKPOINT_QUORUM_UNAVAILABLE: 'quorum-unavailable',
         CHECKPOINT_QUORUM_CONFLICT: 'quorum-conflict',
         CHECKPOINT_MISMATCH: 'mismatch', CHECKPOINT_CLOCK: 'clock',
-        CHECKPOINT_STORAGE: 'storage', CHECKPOINT_STORAGE_IO: 'storage-io', CHECKPOINT_OWNERSHIP: 'ownership', CHECKPOINT_STALE: 'stale',
+        CHECKPOINT_STORAGE: 'storage', CHECKPOINT_STORAGE_IO: 'storage-io', CHECKPOINT_REBOOT_REQUIRED: 'reboot-required', CHECKPOINT_OWNERSHIP: 'ownership', CHECKPOINT_STALE: 'stale',
         CHECKPOINT_INCOMPATIBLE: 'unsupported',
       };
       const retry = ['CHECKPOINT_UNAVAILABLE', 'CHECKPOINT_QUORUM_UNAVAILABLE', 'CHECKPOINT_RACE', 'CHECKPOINT_STALE'].includes(error.code);
-      failRecovery(instance, reasons[error.code] || 'unavailable', retry);
+      failRecovery(instance, reasons[error.code] || 'unavailable', retry, { background: retry });
       return false;
     }
   })();
@@ -480,6 +507,12 @@ function recoverCheckpoint(instance, { resetAttempts = false } = {}) {
     }
   });
   return pending;
+}
+
+// A stop that could not confirm the old child's exit stays blocked; when the
+// native helper said only a computer restart can prove it, say so.
+function stopFailureReason(client) {
+  return client?.recoveryFailureCode === 'CHECKPOINT_REBOOT_REQUIRED' ? 'reboot-required' : 'ownership';
 }
 
 // Ordinary process or peer failures do not require a different checkpoint.
@@ -505,7 +538,7 @@ function restartOwnedState(instance, { repair = false } = {}) {
         instance.retiring = null;
         if (!currentRun(instance, token)) return false;
         if (!exited || !previous.exited) {
-          failRecovery(instance, 'ownership');
+          failRecovery(instance, stopFailureReason(previous));
           return false;
         }
       }
@@ -585,13 +618,13 @@ function getStatus(chainId = 1) {
 
 // Ready = the verified read path can actually serve: beacon SYNCED, the EL
 // reader up (and not hunting for a servable head context — first reads
-// during a hunt fail on the cold context), and at least one snap-capable
-// peer held. Callers treat not-ready as "skip myotis, use the next tier" —
+// during a hunt fail on the cold context), and at least one peer covering
+// the anchored head and not read-benched. Callers treat not-ready as "skip myotis, use the next tier" —
 // never as an error.
 function updateReadiness(instance, s) {
   const ready = Boolean(
     !instance.recovery && canFinishRecovery(instance, s) && s && s.running === true && s.paused !== true && s.beaconState === 'SYNCED' && s.elReaderAvailable === true && s.elHunting === false &&
-    typeof s.snapPeers === 'number' && s.snapPeers > 0
+    typeof s.snapServingPeers === 'number' && s.snapServingPeers > 0
   );
   publishAvailability(instance, ready, ready ? 'ready' : 'not-ready');
   return ready;
@@ -650,14 +683,34 @@ async function ethCall({ from = '', to, data = '0x', value = '0', block = 'lates
   return verifiedRequest(instance, 'call', [from, to, data, value, block]);
 }
 
+// ABI 35: the whole JSON-RPC transaction object. The engine applies every
+// field (gas, fees, nonce, accessList, authorizationList, chainId, type) or
+// refuses the request as a permanent -32602; nothing is dropped on the way.
+async function ethCallTx({ tx, block = 'latest', chainId = 1 }) {
+  const instance = runningInstance(chainId);
+  return verifiedRequest(instance, 'callTx', [JSON.stringify(tx), block, '']);
+}
+
 async function getAccount(address, chainId = 1) {
   const instance = runningInstance(chainId);
   return verifiedRequest(instance, 'account', [address]);
 }
 
-async function estimateGas({ from = '', to, data = '0x', value = '0', chainId = 1 }) {
+async function getCode(address, chainId = 1) {
   const instance = runningInstance(chainId);
-  return verifiedRequest(instance, 'gas', [from, to, data, value]);
+  return verifiedRequest(instance, 'code', [address, 'latest']);
+}
+
+async function getStorageAt(address, position, chainId = 1) {
+  const instance = runningInstance(chainId);
+  return verifiedRequest(instance, 'storage', [address, position, 'latest']);
+}
+
+// ABI 34: same transaction object as ethCallTx. The older from/to/data/value
+// estimate under-estimates anything carrying an access or authorization list.
+async function estimateGas({ tx, block = 'latest', chainId = 1 }) {
+  const instance = runningInstance(chainId);
+  return verifiedRequest(instance, 'estimateTx', [JSON.stringify(tx), block, '']);
 }
 
 async function feeEstimate(chainId = 1) {
@@ -665,9 +718,25 @@ async function feeEstimate(chainId = 1) {
   return verifiedRequest(instance, 'fee');
 }
 
+const MAX_REJECTION_REASON = 300;
+
+// ABI 36: the engine judged the transaction on freshly verified state (sender
+// cannot pay, or its nonce is used) and did NOT broadcast it. That is a
+// definite answer, not an uncertain outcome: geth's txpool verdict under -32000.
+function broadcastRejected(result) {
+  const reason = typeof result.reason === 'string' && result.reason.trim()
+    ? result.reason.trim().replace(/\s+/g, ' ').slice(0, MAX_REJECTION_REASON)
+    : 'transaction rejected before broadcast';
+  const error = new Error(reason);
+  error.code = -32000;
+  error.myotisRefusal = 'rejected';
+  return error;
+}
+
 async function sendRawTransaction(rawTransaction, chainId = 1) {
   const instance = runningInstance(chainId);
   const result = await instance.client.request('broadcast', [rawTransaction]);
+  if (result && !result.error && result.status === 'rejected') throw broadcastRejected(result);
   if (!result || result.error || ['error', 'unavailable'].includes(result.status) || !(result.txHash || result.result)) {
     const error = new Error('Myotis broadcast outcome uncertain; reconcile the original signed transaction');
     error.code = 'MYOTIS_BROADCAST_UNCERTAIN';
@@ -738,7 +807,7 @@ function publicStatus(chainId = 1) {
     supported,
     available,
     version: MYOTIS_VERSION,
-    abi: 29,
+    abi: 38,
     chainId: instance.chainId,
     network: instance.name,
     displayName: instance.displayName,
@@ -757,6 +826,7 @@ function publicStatus(chainId = 1) {
       },
       beaconState: instance.lastStatus?.beaconState,
       peerCount: instance.lastStatus?.peerCount,
+      upgradeAdvisory: instance.lastStatus?.upgradeAdvisory ?? null,
     };
   }
   const error = instance.lastError;
@@ -779,7 +849,11 @@ function publicStatus(chainId = 1) {
     targetPeriod: s.targetPeriod,
     peerCount: s.peerCount,
     snapPeers: s.snapPeers,
+    snapServingPeers: s.snapServingPeers,
     finalizedBlockNumber: s.finalizedBlockNumber,
+    // Display-only (validated in myotis-process.js); readiness and routing
+    // never read it — see docs/myotis-process-isolation.md.
+    upgradeAdvisory: s.upgradeAdvisory ?? null,
     uptimeSeconds: Math.round((Date.now() - instance.startedAt) / 1000),
   };
 }
@@ -800,7 +874,7 @@ function retryCheckpoint(event, chainId = 1) {
   if (!recoveryWindow(event)) throw new Error('Myotis recovery is only available from the browser Nodes menu');
   const instance = instanceFor(chainId);
   if (instance.wanted && instance.recovery?.canRetry && !instance.stopping) {
-    if (['startup', 'stalled', 'storage', 'storage-io', 'ownership'].includes(instance.recovery.reason))
+    if (['startup', 'stalled', 'storage', 'storage-io', 'ownership', 'reboot-required'].includes(instance.recovery.reason))
       restartOwnedState(instance);
     else recoverCheckpoint(instance, { resetAttempts: true });
   }
@@ -834,7 +908,8 @@ async function recoveryHelp(event, chainId = 1) {
   const status = publicStatus(chainId);
   const reason = status.recovery?.reason;
   const guidance = {
-    ownership: 'Close other Freedom instances, then choose Retry sync in Nodes. If it still cannot confirm that the previous node stopped, contact Freedom support with the details below. Restarting the computer may stop a leftover process, but cannot clear an unconfirmed ownership record. Do not delete the sync folder or ownership files to force a restart.',
+    'reboot-required': 'Save your work, restart the computer, then reopen Freedom. Freedom has recorded the interrupted node state and will recover after it confirms a new system boot. Old sync data will be kept. Restarting Freedom alone is not enough.',
+    ownership: 'Close other Freedom instances, then choose Retry sync in Nodes. Freedom will tell you if a computer restart is needed to recover the node. If it still cannot confirm that the previous node stopped (for example, sync data on a network drive), contact Freedom support with the details below. Do not delete the sync folder or ownership files to force a restart.',
     storage: 'Choose Repair sync data in Nodes to start again while keeping the old data. If repair fails, contact Freedom support with the details below. Repair cannot bypass an unconfirmed node exit or unsafe filesystem entries.',
     'storage-io': 'Check free disk space and that Freedom can write to its data folder, then choose Retry sync in Nodes. If this keeps happening, contact Freedom support with the details below.',
     installation: 'Update or reinstall Freedom from its official release. Your profile does not need to be deleted. If this keeps happening, contact Freedom support with the details below.',
@@ -842,7 +917,7 @@ async function recoveryHelp(event, chainId = 1) {
   }[reason];
   if (!guidance) return;
   // Deliberately bounded: no paths, profile identifiers, wallet data or logs.
-  const details = `Myotis ${MYOTIS_VERSION} / ABI 29\nNetwork: ${status.displayName}\nPlatform: ${process.platform}-${process.arch}\nFailure: ${reason}\nAddon found: ${status.available}\nCheckpoint verification: required`;
+  const details = `Myotis ${MYOTIS_VERSION} / ABI 32\nNetwork: ${status.displayName}\nPlatform: ${process.platform}-${process.arch}\nFailure: ${reason}\nAddon found: ${status.available}\nCheckpoint verification: required`;
   const { dialog, clipboard } = require('electron');
   const { response } = await dialog.showMessageBox(win, {
     type: 'info', title: `${status.displayName} sync help`, message: 'Help with sync recovery',
@@ -896,6 +971,9 @@ module.exports = {
   resolveAddress,
   resolveReverse,
   ethCall,
+  ethCallTx,
+  getCode,
+  getStorageAt,
   getAccount,
   estimateGas,
   feeEstimate,

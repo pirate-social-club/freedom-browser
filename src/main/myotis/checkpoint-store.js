@@ -3,6 +3,7 @@ const { constants } = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { validateCheckpoint } = require('./checkpoint-verifier');
+const { recoverOwner } = require('./ownership-recovery');
 
 const SCHEMA_VERSION = 1;
 const POINTER = 'verified-sync.json';
@@ -10,11 +11,11 @@ const GENERATIONS = 'verified-sync';
 const OWNER = '.freedom-myotis-owner';
 // Match both native supervisors, whose receipt generation permits every
 // lowercase UUID-shaped value, not just UUIDv4 storage generation identifiers.
-const RETIRED_OWNER = /^v1 retired [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\n$/;
+const TERMINAL_OWNER = /^v1 (retired|rebooted|orphaned) [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\n$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function classifyStorageError(error) {
-  if (error.code === 'CHECKPOINT_OWNERSHIP') return error;
+  if (['CHECKPOINT_OWNERSHIP', 'CHECKPOINT_REBOOT_REQUIRED'].includes(error.code)) return error;
   if (['ENOSPC', 'EDQUOT', 'EACCES', 'EPERM', 'EROFS', 'EIO', 'EMFILE', 'ENFILE'].includes(error.code)) {
     const failure = new Error('Could not access Myotis sync storage');
     failure.code = 'CHECKPOINT_STORAGE_IO';
@@ -41,7 +42,8 @@ function ownershipError() {
 // a new data directory. Native code writes retired only after waiting for its
 // direct child. This is a durable-record gate, not a PID probe or a substitute
 // for the browser profile lock and the supervisor's kernel ownership lock.
-async function requireRetiredOwner(dataDir) {
+// Native rebooted/orphaned receipts permit replacement only, never snapshot reuse.
+async function readTerminalOwner(dataDir) {
   const filename = path.join(dataDir, OWNER);
   let before;
   try {
@@ -52,7 +54,7 @@ async function requireRetiredOwner(dataDir) {
   }
   let handle;
   try {
-    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size !== 48) {
+    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || ![48, 49].includes(before.size)) {
       throw ownershipError();
     }
     handle = await fs.open(
@@ -63,22 +65,32 @@ async function requireRetiredOwner(dataDir) {
     if (
       !opened.isFile() ||
       opened.nlink !== 1 ||
-      opened.size !== 48 ||
+      ![48, 49].includes(opened.size) ||
       opened.dev !== before.dev ||
       opened.ino !== before.ino
     )
       throw ownershipError();
-    const bytes = Buffer.alloc(49);
+    const bytes = Buffer.alloc(50);
     const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
-    if (bytesRead !== 48 || !RETIRED_OWNER.test(bytes.toString('utf8', 0, bytesRead))) {
+    if (![48, 49].includes(bytesRead) || !TERMINAL_OWNER.test(bytes.toString('utf8', 0, bytesRead))) {
       throw ownershipError();
     }
     const after = await handle.stat();
-    if (after.size !== 48 || after.nlink !== 1) throw ownershipError();
+    if (after.size !== bytesRead || after.nlink !== 1) throw ownershipError();
+    return !bytes.toString('utf8', 0, bytesRead).startsWith('v1 retired ');
   } catch {
     throw ownershipError();
   } finally {
     if (handle) await handle.close();
+  }
+}
+
+async function requireRetiredOwner(dataDir) {
+  try { return await readTerminalOwner(dataDir); } catch (error) {
+    if (error.code !== 'CHECKPOINT_OWNERSHIP') throw error;
+    await recoverOwner(dataDir);
+    // Read the durable result again, including file type/identity checks.
+    return readTerminalOwner(dataDir);
   }
 }
 
@@ -88,22 +100,22 @@ async function directory(filename, create = false) {
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw storageError();
 }
 
-async function readBytes(filename) {
+async function readBytes(filename, maxBytes = 16384) {
   const stat = await fs.lstat(filename);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16384) throw storageError();
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxBytes) throw storageError();
   const handle = await fs.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
   try {
     const opened = await handle.stat();
-    if (!opened.isFile() || opened.size > 16384 || opened.dev !== stat.dev || opened.ino !== stat.ino)
+    if (!opened.isFile() || opened.size > maxBytes || opened.dev !== stat.dev || opened.ino !== stat.ino)
       throw storageError();
-    const bytes = Buffer.alloc(16385);
+    const bytes = Buffer.alloc(maxBytes + 1);
     let bytesRead = 0;
     while (bytesRead < bytes.length) {
       const chunk = await handle.read(bytes, bytesRead, bytes.length - bytesRead, bytesRead);
       if (chunk.bytesRead === 0) break;
       bytesRead += chunk.bytesRead;
     }
-    if (bytesRead > 16384) throw storageError();
+    if (bytesRead > maxBytes) throw storageError();
     return bytes.subarray(0, bytesRead);
   } finally {
     await handle.close();
@@ -160,7 +172,8 @@ async function requireCurrentOwnerRetired(baseDir, chainId) {
 
 // Repair cannot trust the pointer to identify the previous native child.
 // Inspect every generation, including orphans. Unknown entries and any active
-// or quarantined owner refuse repair; no ownership receipt is ever rewritten.
+// or quarantined owner refuse repair unless native exit proof permits
+// replacement. JavaScript never rewrites an ownership receipt.
 async function requireAllOwnersRetired(baseDir) {
   await directory(baseDir);
   await requireRetiredOwner(baseDir);
@@ -174,6 +187,48 @@ async function requireAllOwnersRetired(baseDir) {
   }
 }
 
+// Peer lists are discovery hints, not authenticated sync state. Prefer the
+// pointed-to generation, then fall back per file to the legacy layout. Never
+// guess an orphan generation when a damaged pointer is being repaired.
+async function inheritPeerCaches(baseDir, chainId, dataDir) {
+  const sources = [];
+  try {
+    const pointer = await readJson(path.join(baseDir, POINTER));
+    validateIdentity(pointer, chainId);
+    const previous = path.join(baseDir, GENERATIONS, pointer.generation);
+    await directory(previous);
+    sources.push(previous);
+  } catch { /* Missing or damaged hints do not prevent a fresh generation. */ }
+  sources.push(baseDir);
+  const suffix = chainId === 100 ? '-gnosis' : '';
+  for (const name of [`peers${suffix}.cache`, `cl-peers${suffix}.cache`]) {
+    for (const source of sources) {
+      try {
+        // Bound untrusted cache input; readBytes rejects symlinks/non-files and
+        // checks the opened inode. Exclusive creation never replaces a cache.
+        const bytes = await readBytes(path.join(source, name), 4 * 1024 * 1024);
+        const target = path.join(dataDir, name);
+        const handle = await fs.open(target, 'wx', 0o600);
+        try {
+          await handle.writeFile(bytes);
+          await handle.sync();
+          await handle.close();
+        } catch (error) {
+          // We created this file: never leave a truncated cache behind, so the
+          // next source (or none) is used instead of a partial one.
+          await handle.close().catch(() => {});
+          await fs.rm(target, { force: true }).catch(() => {});
+          throw error;
+        }
+        break;
+      } catch (error) {
+        if (error.code === 'EEXIST') break;
+        // Best effort, including permissions/I/O failures and absent files.
+      }
+    }
+  }
+}
+
 async function createState(baseDir, chainId, checkpoint = null, repair = false) {
   await prepareBase(baseDir, chainId);
   const checkOwners = () => repair ? requireAllOwnersRetired(baseDir) : requireCurrentOwnerRetired(baseDir, chainId);
@@ -182,16 +237,20 @@ async function createState(baseDir, chainId, checkpoint = null, repair = false) 
   const generation = randomUUID();
   const dataDir = path.join(baseDir, GENERATIONS, generation);
   await fs.mkdir(dataDir, { mode: 0o700 });
+  await inheritPeerCaches(baseDir, chainId, dataDir);
   const record = {
     schemaVersion: SCHEMA_VERSION,
     chainId,
     generation,
+    // Persisted checkpoint contract, unchanged since ABI 26. Keep writing the
+    // v0.1.11 host marker; the exact loaded engine ABI is checked in the child.
     nativeCheckpointApi: 29,
     origin: checkpoint ? 'verified' : 'bundled',
     checkpoint: checkpoint ? JSON.parse(JSON.stringify(checkpoint)) : null,
   };
   // This immutable anchor belongs to exactly one native state generation.
-  // Old directories are retained; recovery never edits or copies old snapshots.
+  // Old directories stay intact. Only peer lists are inherited above; native
+  // snapshots and anchor markers are never copied into the new generation.
   await writeJson(path.join(dataDir, 'anchor.json'), record);
   const temporary = path.join(baseDir, `verified-sync-${randomUUID()}.tmp`);
   await writeJson(temporary, { schemaVersion: SCHEMA_VERSION, chainId, generation });
@@ -216,11 +275,15 @@ async function loadOrCreateState(baseDir, chainId) {
     validateIdentity(pointer, chainId);
     const dataDir = path.join(baseDir, GENERATIONS, pointer.generation);
     await directory(dataDir);
-    await requireRetiredOwner(dataDir);
+    if (await requireRetiredOwner(dataDir)) {
+      // Exit proof does not prove a completed snapshot write. Preserve this
+      // generation and start from a fresh anchor, inheriting only peer hints.
+      return await createState(baseDir, chainId);
+    }
     const record = await readJson(path.join(dataDir, 'anchor.json'));
     validateIdentity(record, chainId);
     if (record.generation !== pointer.generation ||
-        (record.nativeCheckpointApi !== undefined && record.nativeCheckpointApi !== 29)) throw storageError();
+        (record.nativeCheckpointApi !== undefined && ![26, 29].includes(record.nativeCheckpointApi))) throw storageError();
     if (record.origin === 'verified')
       validateCheckpoint(record.checkpoint, chainId, { fresh: false });
     else if (record.origin !== 'bundled' || record.checkpoint !== null) throw storageError();

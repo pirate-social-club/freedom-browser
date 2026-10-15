@@ -11,10 +11,28 @@ const fsp = require('fs/promises');
 const path = require('path');
 const { ipcMain, dialog, BrowserWindow } = require('electron');
 const { getBee, selectBestBatch, toHex } = require('./swarm-service');
+const { noUsableBatchError, isNoUsableBatchError } = require('./batch-errors');
 const { addEntry, updateEntry } = require('./publish-history');
 const { isPrivateWebContents } = require('../private/private-windows');
 const { createProfileTempDir } = require('../profile-paths');
+const fsOffload = require('../fs-offload');
 const log = require('electron-log');
+const { isBatchNotYetKnownError, BATCH_NOT_YET_KNOWN_MESSAGE } = require('./ant-storage-api');
+
+// What the user reads when a publish fails. A batch bought moments ago that
+// storer peers have not synced yet gets a "try again shortly" sentence
+// instead of the node's raw pushsync error.
+function describePublishError(err) {
+  return isBatchNotYetKnownError(err?.message) ? BATCH_NOT_YET_KNOWN_MESSAGE : err?.message;
+}
+
+// The failed-publish IPC result. `needsStorage` tells freedom://publish to
+// offer the publish setup: no batch had room for the upload.
+function publishFailure(err) {
+  const failure = { success: false, error: describePublishError(err) };
+  if (isNoUsableBatchError(err)) failure.needsStorage = true;
+  return failure;
+}
 
 // Sentinel for user-initiated publishes (text/file/directory triggered from
 // the freedom://publish UI). dApp-driven publishes pass their actual origin.
@@ -69,7 +87,7 @@ async function publishData(data, options = {}) {
   const batchId = options.batchId || await selectBestBatch(sizeEstimate);
 
   if (!batchId) {
-    throw new Error('No usable postage batch available. Purchase stamps first.');
+    throw noUsableBatchError();
   }
 
   // Use file.upload so the content gets a manifest and is browsable via bzz://
@@ -92,7 +110,7 @@ async function publishFile(filePath, options = {}) {
   const batchId = options.batchId || await selectBestBatch(stat.size);
 
   if (!batchId) {
-    throw new Error('No usable postage batch available. Purchase stamps first.');
+    throw noUsableBatchError();
   }
 
   const stream = fs.createReadStream(filePath);
@@ -123,7 +141,7 @@ async function publishDirectory(dirPath, options = {}) {
   const batchId = options.batchId || await selectBestBatch(totalSize);
 
   if (!batchId) {
-    throw new Error('No usable postage batch available. Purchase stamps first.');
+    throw noUsableBatchError();
   }
 
   // Use explicit indexDocument if provided, otherwise auto-detect index.html
@@ -167,7 +185,7 @@ async function publishFilesFromContent(files, options = {}) {
     });
   } finally {
     try {
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      await fsOffload.removePath(tempDir, { recursive: true, force: true });
     } catch (err) {
       log.error('[PublishService] Failed to clean up temp dir:', err.message);
     }
@@ -259,7 +277,7 @@ function registerPublishIpc() {
     } catch (err) {
       log.error('[PublishService] Failed to publish data:', err.message);
       updateEntry(historyEntry.id, { status: 'failed', errorMessage: err.message });
-      return { success: false, error: err.message };
+      return publishFailure(err);
     }
   });
 
@@ -285,7 +303,7 @@ function registerPublishIpc() {
     } catch (err) {
       log.error('[PublishService] Failed to publish file:', err.message);
       updateEntry(historyEntry.id, { status: 'failed', errorMessage: err.message });
-      return { success: false, error: err.message };
+      return publishFailure(err);
     }
   });
 
@@ -311,7 +329,7 @@ function registerPublishIpc() {
     } catch (err) {
       log.error('[PublishService] Failed to publish directory:', err.message);
       updateEntry(historyEntry.id, { status: 'failed', errorMessage: err.message });
-      return { success: false, error: err.message };
+      return publishFailure(err);
     }
   });
 
