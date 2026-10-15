@@ -3,7 +3,8 @@ const https = require('https');
 const net = require('net');
 const { randomInt } = require('crypto');
 const {
-  MAX_DNS_MESSAGE, parseQuery, isLocalQuestion, validateResponse, questionResponse, udpResponse,
+  MAX_DNS_MESSAGE, parseMessage, parseQuery, isLocalQuestion, validateResponse, questionResponse, udpResponse,
+  needsWildcardProof, buildWildcardProofQuery, appendWildcardProof,
 } = require('./hns-dns-wire');
 
 const ENCRYPTED_RESOLVER = 'https://dns.pirate.sc/dns-query';
@@ -133,6 +134,25 @@ function createHnsEncryptedRelay({ rootAddr, onFailure = () => {}, request = htt
     });
   }
 
+  // dns.pirate.sc answers wildcard-expanded names (member hosts and their
+  // _443._tcp TLSA) without the NSEC records that prove the expansion, which
+  // the validator needs (RFC 4035 section 5.3.4). Fetch the signed denial for
+  // that name over the same encrypted exchange, so the same deadline,
+  // cancellation and refusal of foreign root authority apply, and hand both
+  // to hnsd/libunbound together. Authentication stays entirely there.
+  async function completeWildcardProof(query, reply) {
+    const parsed = parseMessage(reply);
+    if (!needsWildcardProof(reply, parsed)) return reply;
+    const proofMessage = buildWildcardProofQuery(query, randomInt(65536));
+    const proof = await exchange(proofMessage, parseQuery(proofMessage), false);
+    try {
+      return appendWildcardProof(reply, parsed, proof);
+    } catch {
+      // An unusable denial leaves the answer unproven; the validator refuses it.
+      return reply;
+    }
+  }
+
   async function answer(message, stream = false) {
     const query = parseQuery(message);
     if (query.question.klass === 4 && (query.question.type !== 16 ||
@@ -140,7 +160,9 @@ function createHnsEncryptedRelay({ rootAddr, onFailure = () => {}, request = htt
       throw new Error('Unsupported local metadata query');
     }
     try {
-      const reply = await exchange(message, query, isLocalQuestion(query));
+      const local = isLocalQuestion(query);
+      let reply = await exchange(message, query, local);
+      if (!local) reply = await completeWildcardProof(query, reply);
       if (!active || failed) throw new Error('HNS generation retired');
       return stream ? reply : udpResponse(reply, message, query);
     } catch {

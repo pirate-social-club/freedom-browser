@@ -24,6 +24,11 @@ const output = path.resolve(process.argv[3]);
 const TLD = 'transport-fixture';
 const CHILD = `site.${TLD}`;
 const HOST = `app.${CHILD}`;
+// A member host that exists only through the *.CHILD wildcard, like a Pirate
+// member under *.8s28: its A and _443._tcp TLSA answers are wildcard
+// expansions, and the encrypted resolver omits the NSEC that proves them.
+const MEMBER = `member.${CHILD}`;
+const PROOF_PROBE = 65280;
 const TTL = 60;
 const observed = [];
 const results = {};
@@ -78,19 +83,34 @@ function ds(owner, key) {
   return Buffer.concat([header, crypto.createHash('sha256').update(name(owner)).update(key.dnskey).digest()]);
 }
 
-function signedSet(owner, type, data, key, signer) {
+// `signedOwner` is the name the signature covers. For a wildcard expansion it
+// is the wildcard itself (RFC 4035 section 5.3.2), while the records carry the
+// expanded owner and the RRSIG label count omits the asterisk.
+function signedSet(owner, type, data, key, signer, { signedOwner = owner, expired = false } = {}) {
+  const now = Math.floor(Date.now() / 1000);
   const header = Buffer.alloc(18);
-  header.writeUInt16BE(type); header[2] = 13; header[3] = owner.split('.').filter(Boolean).length;
+  header.writeUInt16BE(type); header[2] = 13;
+  header[3] = signedOwner.split('.').filter((label) => label && label !== '*').length;
   header.writeUInt32BE(TTL, 4);
-  header.writeUInt32BE(Math.floor(Date.now() / 1000) + 3600, 8);
-  header.writeUInt32BE(Math.floor(Date.now() / 1000) - 60, 12);
+  // Expired well beyond libunbound's clock-skew allowance (at least an hour).
+  header.writeUInt32BE(expired ? now - 2 * 86400 : now + 3600, 8);
+  header.writeUInt32BE(expired ? now - 3 * 86400 : now - 60, 12);
   header.writeUInt16BE(key.tag, 16);
   const prefix = Buffer.concat([header, name(signer)]);
-  const rrset = [...data].sort(Buffer.compare).map((value) => record(owner, type, value, 1, TTL));
-  const signature = crypto.sign('sha256', Buffer.concat([prefix, ...rrset]), {
+  const signed = [...data].sort(Buffer.compare).map((value) => record(signedOwner, type, value, 1, TTL));
+  const signature = crypto.sign('sha256', Buffer.concat([prefix, ...signed]), {
     key: key.key, dsaEncoding: 'ieee-p1363',
   });
+  const rrset = [...data].sort(Buffer.compare).map((value) => record(owner, type, value, 1, TTL));
   return [...rrset, record(owner, 46, Buffer.concat([prefix, signature]), 1, TTL)];
+}
+
+// NSEC RDATA: the next owner in canonical order, then the type bitmap.
+function nsec(owner, next, types, options) {
+  const bits = Buffer.alloc(32);
+  for (const type of types) bits[type >> 3] |= 0x80 >> (type & 7);
+  let used = 32; while (used > 1 && bits[used - 1] === 0) used -= 1;
+  return signedSet(owner, 47, [Buffer.concat([name(next), Buffer.from([0, used]), bits.subarray(0, used)])], childKey, CHILD, options);
 }
 
 const paddedKeys = [tldKey.dnskey, ...Array.from({ length: 70 }, (_, i) => testKey(i + 10).dnskey)];
@@ -101,6 +121,24 @@ const childDs = signedSet(CHILD, 43, [ds(CHILD, childKey)], tldKey, TLD);
 const address = signedSet(HOST, 1, [Buffer.from([192, 0, 2, 42])], childKey, CHILD);
 const ipv6 = signedSet(HOST, 28, [Buffer.from('20010db8000000000000000000000042', 'hex')], childKey, CHILD);
 const tlsa = signedSet(`_443._tcp.${HOST}`, 52, [Buffer.concat([Buffer.from([3, 1, 1]), Buffer.alloc(32, 42)])], childKey, CHILD);
+const memberAddress = signedSet(MEMBER, 1, [Buffer.from([192, 0, 2, 77])], childKey, CHILD, { signedOwner: `*.${CHILD}` });
+const memberTlsa = signedSet(`_443._tcp.${MEMBER}`, 52, [Buffer.concat([Buffer.from([3, 1, 1]), Buffer.alloc(32, 77)])], childKey, CHILD,
+  { signedOwner: `*.${CHILD}` });
+// The zone's NSEC chain in canonical order: CHILD, *.CHILD, app.CHILD,
+// _443._tcp.app.CHILD. The last link covers member.CHILD, which is the proof
+// that no closer name exists; the wildcard's own link names its types.
+const covering = (options) => nsec(`_443._tcp.${HOST}`, CHILD, [46, 47, 52], options);
+const wildcardLink = nsec(`*.${CHILD}`, HOST, [1, 46, 47, 52]);
+const apexLink = nsec(CHILD, `*.${CHILD}`, [2, 6, 46, 47, 48]); // covers nothing a member could be
+function memberDenial(mode) {
+  if (mode === 'wildcard-no-proof') return [];
+  if (mode === 'wildcard-unrelated-proof') return apexLink;
+  if (mode === 'wildcard-expired-proof') return [...covering({ expired: true }), ...wildcardLink];
+  const proof = covering().map((rr) => Buffer.from(rr));
+  if (mode === 'wildcard-forged-proof') proof.at(-1)[proof.at(-1).length - 1] ^= 1;
+  return [...proof, ...wildcardLink];
+}
+const WILDCARD_MODES = ['wildcard-no-proof', 'wildcard-valid', 'wildcard-forged-proof', 'wildcard-expired-proof', 'wildcard-unrelated-proof'];
 
 async function reservePort() {
   const server = net.createServer();
@@ -162,6 +200,17 @@ async function generation(mode) {
       if (host === HOST && q.type === 1) records = address;
       if (host === HOST && q.type === 28) records = ipv6;
       if (host === `_443._tcp.${HOST}` && q.type === 52) records = tlsa;
+      if (host === MEMBER && q.type === 1) records = memberAddress;
+      if (host === `_443._tcp.${MEMBER}` && q.type === 52) records = memberTlsa;
+      if ([MEMBER, `_443._tcp.${MEMBER}`].includes(host) && q.type === PROOF_PROBE) {
+        const denial = memberDenial(mode);
+        queueMicrotask(() => {
+          const incoming = new PassThrough(); incoming.statusCode = 200;
+          incoming.headers = { 'content-type': 'application/dns-message' };
+          callback(incoming); incoming.end(response(message, [[], denial, []], 0x8180));
+        });
+        return;
+      }
       if (mode === 'bad-dnskey' && host === TLD && q.type === 48) records.at(-1)[records.at(-1).length - 1] ^= 1;
       if (mode === 'bad-address' && host === HOST && q.type === 1) {
         records = address.map((rr) => Buffer.from(rr)); records.at(-1)[records.at(-1).length - 1] ^= 1;
@@ -185,16 +234,38 @@ async function generation(mode) {
   const args = ['-n', `127.0.0.1:${rootPort}`, '-r', `127.0.0.1:${recursivePort}`, '-u', path.join(dir, 'validator.conf'), '-p', '1', '-x', dir];
   const log = fs.openSync(path.join(dir, 'native.log'), 'wx', 0o600);
   const child = spawn(binary, args, { stdio: ['ignore', log, log] }); children.add(child); fs.closeSync(log);
+  const wildcard = WILDCARD_MODES.includes(mode);
   let answer;
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    try { answer = parseMessage(await udpExchange(validatedQuery(HOST, mode === 'large-final' ? 28 : 1), recursivePort, 12000)); break; }
-    catch { if (child.exitCode !== null) throw new Error('Native validator exited'); await pause(100); }
+    try {
+      answer = parseMessage(await udpExchange(validatedQuery(wildcard ? MEMBER : HOST, mode === 'large-final' ? 28 : 1), recursivePort, 12000));
+      break;
+    } catch { if (child.exitCode !== null) throw new Error('Native validator exited'); await pause(100); }
   }
   assert(answer, 'Native validator never answered');
   results[mode] = { passed: false, flags: answer.flags, remote_queries: observed.filter((entry) => entry.mode === mode).length,
     relay_tcp_connections: tcpConnections[mode] || 0,
     intermediate_dnskey_bytes: response(query(TLD, 48), [tldKeys, [], []]).length, production_udp_client_refused: false };
-  if (mode === 'valid') {
+  if (wildcard) {
+    const tls = parseMessage(await udpExchange(validatedQuery(`_443._tcp.${MEMBER}`, 52), recursivePort, 12000));
+    results[mode].tlsa_flags = tls.flags;
+    results[mode].proof_queries = observed.filter((entry) => entry.mode === mode && entry.type === PROOF_PROBE).length;
+    assert(results[mode].proof_queries > 0, 'The relay must fetch the wildcard proof');
+    if (mode === 'wildcard-valid') {
+      for (const [reply, type] of [[answer, 1], [tls, 52]]) {
+        assert.equal(reply.flags & 15, 0, `Proven wildcard ${type} must resolve`);
+        assert(reply.flags & 0x20, `Proven wildcard ${type} must be locally validated`);
+        assert(reply.records.some((rr) => rr.type === type), `Missing validated wildcard ${type}`);
+      }
+    } else {
+      // No proof, a forged or expired signature over it, or a validly signed
+      // NSEC that does not cover the member name: the validator refuses.
+      for (const [reply, type] of [[answer, 1], [tls, 52]]) {
+        assert.equal(reply.flags & 15, 2, `Unproven wildcard ${type} must SERVFAIL (${mode})`);
+        assert(!reply.records.some((rr) => rr.type === type), `Unproven wildcard ${type} must carry no data (${mode})`);
+      }
+    }
+  } else if (mode === 'valid') {
     assert(response(query(TLD, 48), [tldKeys, [], []]).length > 4096);
     assert(tcpConnections[mode] > 0, 'Large intermediate DNSKEY must use relay TCP');
     assert.equal(answer.flags & 15, 0); assert(answer.flags & 0x20, 'Locally validated answer must have AD');
@@ -247,7 +318,7 @@ async function main() {
   fs.mkdirSync(output, { recursive: true });
   assert(Object.keys(os.networkInterfaces()).every((entry) => entry === 'lo'), 'Fixture requires loopback-only network namespace');
   try {
-    for (const mode of ['valid', 'bad-dnskey', 'bad-address', 'large-final']) await generation(mode);
+    for (const mode of ['valid', 'bad-dnskey', 'bad-address', 'large-final', ...WILDCARD_MODES]) await generation(mode);
     await custody();
   } finally {
     try {

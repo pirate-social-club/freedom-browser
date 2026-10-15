@@ -131,4 +131,83 @@ describe('encrypted HNS relay', () => {
     const reply = await truncated; udp.close();
     expect(reply.readUInt16BE(2) & 0x220).toBe(0x200);
   });
+
+  describe('wildcard proof completion', () => {
+    // Real dns.pirate.sc exchanges for a member host under the *.8s28 wildcard.
+    const wire = require('../../test/helpers/hns-wildcard-wire.json').exchanges;
+    const { parseMessage, DNS_TYPE_PROOF_PROBE } = require('./hns-dns-wire');
+    const hex = (key, part) => Buffer.from(wire[key][part], 'hex');
+    // Answers the relay's queries with the captured responses, re-addressed to
+    // the ID each query actually carried.
+    const resolver = (overrides = {}) => (message) => {
+      const asked = parseQuery(message);
+      const host = asked.question.labels.join('.');
+      const key = asked.question.type === DNS_TYPE_PROOF_PROBE
+        ? (host.startsWith('_443') ? 'proof_tlsa' : 'proof_a')
+        : { 'membertest.8s28': 'answer_a', '_443._tcp.membertest.8s28': 'answer_tlsa', 'app.8s28': 'answer_plain' }[host];
+      if (key in overrides) return overrides[key](message);
+      const body = Buffer.from(hex(key, 'response'));
+      body.writeUInt16BE(asked.id, 0);
+      return body;
+    };
+    const nsec = (message) => parseMessage(message).records.filter((rr) => rr.section === 1 && rr.type === 47);
+
+    test.each([['answer_a'], ['answer_tlsa']])('%s: one denial fetch over the same encrypted exchange, and its NSEC proof reaches the validator', async (key) => {
+      const { request } = await setup(resolver());
+      const reply = await relay.answer(hex(key, 'query'), true);
+      expect(request).toHaveBeenCalledTimes(2);
+      const probe = parseQuery(request.mock.results[1].value.end.mock.calls[0][0]);
+      expect(probe.question).toEqual({ ...parseQuery(hex(key, 'query')).question, type: DNS_TYPE_PROOF_PROBE });
+      expect(request.mock.calls[1][0]).toBe(ENCRYPTED_RESOLVER);
+      expect(nsec(reply).map((rr) => rr.labels.join('.')).sort()).toEqual(['*.8s28', '_443._tcp.app.8s28']);
+      expect(reply.readUInt16BE(2) & 0x20).toBe(0); // still no AD from the remote
+    });
+
+    test('an explicit record is passed through without a second request', async () => {
+      const { request } = await setup(resolver());
+      const reply = await relay.answer(hex('answer_plain', 'query'), true);
+      expect(request).toHaveBeenCalledTimes(1);
+      const expected = Buffer.from(hex('answer_plain', 'response'));
+      expected.writeUInt16BE(expected.readUInt16BE(2) & ~0x20, 2); // the remote's AD is never passed on
+      expect(reply.equals(expected)).toBe(true);
+    });
+
+    test('a denial asserting root authority retires the generation like any bad remote reply', async () => {
+      const { onFailure } = await setup(resolver({
+        proof_a: (message) => response(message, [[], [record('', 46, Buffer.alloc(30))], []]),
+      }));
+      await expect(relay.answer(hex('answer_a', 'query'), true)).rejects.toThrow();
+      expect(onFailure).toHaveBeenCalledWith('encrypted_dns_transport_failed');
+      expect(relay.isActive()).toBe(false);
+    });
+
+    test('a denial with no usable proof leaves the answer unproven for the validator to refuse', async () => {
+      const { request } = await setup(resolver({
+        proof_a: (message) => response(message, [[], [], []], 0x8180),
+      }));
+      const reply = await relay.answer(hex('answer_a', 'query'), true);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(nsec(reply)).toEqual([]);
+    });
+
+    test('a stalled denial fetch is bounded by the deadline', async () => {
+      const { onFailure } = await setup(resolver({ proof_a: () => null }));
+      await expect(relay.answer(hex('answer_a', 'query'), true)).rejects.toThrow();
+      expect(onFailure).toHaveBeenCalledWith('encrypted_dns_transport_failed');
+    });
+
+    test('closing the generation during the denial fetch refuses the answer', async () => {
+      let release;
+      await setup(resolver({ proof_a: (message) => new Promise((resolve) => {
+        release = () => { const body = Buffer.from(hex('proof_a', 'response')); body.writeUInt16BE(parseQuery(message).id, 0); resolve(body); };
+      }) }));
+      const pending = relay.answer(hex('answer_a', 'query'), true);
+      const refused = expect(pending).rejects.toThrow();
+      while (!release) await new Promise((resolve) => setImmediate(resolve));
+      await relay.close();
+      await refused;
+      release(); await new Promise((resolve) => setImmediate(resolve));
+      expect(relay.isActive()).toBe(false);
+    });
+  });
 });
