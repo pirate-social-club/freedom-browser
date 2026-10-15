@@ -142,16 +142,21 @@ const WILDCARD_MODES = ['wildcard-no-proof', 'wildcard-valid', 'wildcard-compres
   'wildcard-expired-proof', 'wildcard-unrelated-proof'];
 const PROVEN_WILDCARD_MODES = ['wildcard-valid', 'wildcard-compressed-proof'];
 
-// dns.pirate.sc compresses NSEC next names, which RFC 4034 forbids. Rewrite the
-// covering NSEC's next name (CHILD) as a pointer to that name inside the
-// question, so the relay's decompression is proven end to end in libunbound.
+// dns.pirate.sc compresses NSEC next names, which RFC 4034 forbids, pointing
+// into the denial's own authority section. Rewrite the covering NSEC's next
+// name (CHILD) as a pointer to the zone-name suffix of that NSEC's own owner.
+// The positive answer holds different bytes at that offset, so a record moved
+// without decompression would name the wrong successor and fail: only real
+// decompression in the relay lets libunbound validate this mode.
 function compressCoveringNext(body) {
   const parsed = parseMessage(body);
   const target = name(CHILD);
-  const at = body.indexOf(target, 12);
-  assert(at >= 12 && at < parsed.questionEnd, 'Question must contain the zone name');
-  const rr = parsed.records.find((entry) => entry.type === 47 && entry.labels.join('.') === `_443._tcp.${HOST}`);
+  const owner = `_443._tcp.${HOST}`;
+  const rr = parsed.records.find((entry) => entry.type === 47 && entry.labels.join('.') === owner);
   assert(rr && body.subarray(rr.data, rr.data + target.length).equals(target), 'Covering NSEC must start with its next name');
+  const ownerStart = rr.data - 10 - name(owner).length;
+  const at = ownerStart + name(owner).length - target.length;
+  assert(at > parsed.questionEnd && body.subarray(at, at + target.length).equals(target), 'Owner must end in the zone name');
   const length = Buffer.alloc(2); length.writeUInt16BE(rr.end - rr.data - target.length + 2);
   const compressed = Buffer.concat([body.subarray(0, rr.data - 2), length, Buffer.from([0xc0 | (at >> 8), at & 0xff]),
     body.subarray(rr.data + target.length)]);
