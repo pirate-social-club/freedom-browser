@@ -168,6 +168,32 @@ describe('wildcard proof completion', () => {
     expect(nsec.map((rr) => readNameOf(combined, rr.data).labels.join('.')).sort()).toEqual(['_pirate.8s28', 'ns1.8s28']);
   });
 
+  test('additional records that could point into the inserted bytes are not carried over', () => {
+    // The answer gains two glue records after its OPT; the second owner points
+    // back at the first, a position after the insertion point.
+    const answer = bytes('answer_a');
+    const parsed = parseMessage(answer);
+    const glueStart = answer.length;
+    const glue = Buffer.concat([
+      Buffer.from([4, ...Buffer.from('glue'), 4, ...Buffer.from('8s28'), 0]), Buffer.from('0001000100000e10000400000001', 'hex'),
+      Buffer.from([0xc0 | (glueStart >> 8), glueStart & 0xff]), Buffer.from('0001000100000e10000400000002', 'hex'),
+    ]);
+    const withGlue = Buffer.concat([answer, glue]);
+    withGlue.writeUInt16BE(answer.readUInt16BE(10) + 2, 10);
+    const before = parseMessage(withGlue);
+    expect(before.records.filter((rr) => rr.section === 2 && rr.type === 1).map((rr) => rr.labels.join('.')))
+      .toEqual(['glue.8s28', 'glue.8s28']);
+    const combined = appendWildcardProof(withGlue, before, bytes('proof_a'));
+    const after = parseMessage(combined);
+    expect(after.records.filter((rr) => rr.section === 2).map((rr) => rr.type)).toEqual([41]);
+    // Answer section and the OPT record are unchanged byte for byte.
+    const answerBytes = (message, p) => p.records.filter((rr) => rr.section === 0)
+      .map((rr) => message.subarray(rr.data - 10, rr.end).toString('hex'));
+    expect(answerBytes(combined, after)).toEqual(answerBytes(answer, parsed));
+    const optOf = (message, p) => p.records.filter((rr) => rr.type === 41).map((rr) => message.subarray(rr.data - 10, rr.end).toString('hex'));
+    expect(optOf(combined, after)).toEqual(optOf(answer, parsed));
+  });
+
   test('an NSEC next name keeps its letter case when written out in full', () => {
     const denial = Buffer.from(bytes('proof_a'));
     const nsec = parseMessage(denial).records.find((rr) => rr.type === 47 && denial[rr.data] !== 0 && (denial[rr.data] & 0xc0) === 0);

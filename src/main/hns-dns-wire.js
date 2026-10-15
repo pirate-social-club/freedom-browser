@@ -205,25 +205,33 @@ function buildWildcardProofQuery(query, id) {
  * judged here: hnsd/libunbound still verify every signature and whether the
  * proof covers the name, so a missing, forged, expired or unrelated proof is
  * refused there. Every name in a moved record is written out in full, so no
- * compression pointer refers into the other packet.
+ * compression pointer refers into the other packet. The additional section
+ * keeps only its OPT record, which carries no names: a later record's
+ * backward pointer to a position after the insertion point would otherwise
+ * land inside the inserted bytes and silently rename it, and a resolver may
+ * omit additional data anyway.
  */
 function appendWildcardProof(message, parsed, proof, proofParsed = parseMessage(proof)) {
   const denial = (rr) => rr.section === 1 && rr.klass === 1;
-  const records = proofParsed.records.filter((rr) => denial(rr) && (rr.type === DNS_TYPE_NSEC || rr.type === DNS_TYPE_NSEC3));
-  const owners = new Set(records.map((rr) => `${rr.type}:${rr.labels.join('.')}`));
+  const records = new Set(proofParsed.records.filter((rr) => denial(rr) &&
+    (rr.type === DNS_TYPE_NSEC || rr.type === DNS_TYPE_NSEC3)));
+  const owners = new Set([...records].map((rr) => `${rr.type}:${rr.labels.join('.')}`));
   // Only the signatures over those denial records, at their owners.
-  const signatures = proofParsed.records.filter((rr) => denial(rr) && rr.type === DNS_TYPE_RRSIG &&
-    owners.has(`${proof.readUInt16BE(rr.data)}:${rr.labels.join('.')}`));
-  const encoded = proofParsed.records.filter((rr) => records.includes(rr) || signatures.includes(rr))
+  const signatures = new Set(proofParsed.records.filter((rr) => denial(rr) && rr.type === DNS_TYPE_RRSIG &&
+    owners.has(`${proof.readUInt16BE(rr.data)}:${rr.labels.join('.')}`)));
+  const encoded = proofParsed.records.filter((rr) => records.has(rr) || signatures.has(rr))
     .map((rr) => standaloneProofRecord(proof, rr));
   if (!encoded.length) return message;
-  // Insert after the last authority record. Compression pointers only point
-  // backwards, so every record after the insertion point stays valid.
+  // Header, question, answer and authority stay byte for byte; nothing before
+  // the insertion point moves, so their backward pointers stay valid.
   const authorityEnd = parsed.records.filter((rr) => rr.section <= 1)
     .reduce((end, rr) => Math.max(end, rr.end), parsed.questionEnd);
-  const combined = Buffer.concat([message.subarray(0, authorityEnd), ...encoded, message.subarray(authorityEnd)]);
+  const opt = parsed.records.filter((rr) => rr.section === 2 && rr.type === DNS_TYPE_OPT)
+    .map((rr) => Buffer.concat([Buffer.from([0]), message.subarray(rr.data - 10, rr.end)]));
+  const combined = Buffer.concat([message.subarray(0, authorityEnd), ...encoded, ...opt]);
   if (combined.length > MAX_DNS_MESSAGE) return message;
   combined.writeUInt16BE(message.readUInt16BE(8) + encoded.length, 8);
+  combined.writeUInt16BE(opt.length, 10);
   parseMessage(combined);
   return combined;
 }

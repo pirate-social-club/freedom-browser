@@ -138,7 +138,26 @@ function memberDenial(mode) {
   if (mode === 'wildcard-forged-proof') proof.at(-1)[proof.at(-1).length - 1] ^= 1;
   return [...proof, ...wildcardLink];
 }
-const WILDCARD_MODES = ['wildcard-no-proof', 'wildcard-valid', 'wildcard-forged-proof', 'wildcard-expired-proof', 'wildcard-unrelated-proof'];
+const WILDCARD_MODES = ['wildcard-no-proof', 'wildcard-valid', 'wildcard-compressed-proof', 'wildcard-forged-proof',
+  'wildcard-expired-proof', 'wildcard-unrelated-proof'];
+const PROVEN_WILDCARD_MODES = ['wildcard-valid', 'wildcard-compressed-proof'];
+
+// dns.pirate.sc compresses NSEC next names, which RFC 4034 forbids. Rewrite the
+// covering NSEC's next name (CHILD) as a pointer to that name inside the
+// question, so the relay's decompression is proven end to end in libunbound.
+function compressCoveringNext(body) {
+  const parsed = parseMessage(body);
+  const target = name(CHILD);
+  const at = body.indexOf(target, 12);
+  assert(at >= 12 && at < parsed.questionEnd, 'Question must contain the zone name');
+  const rr = parsed.records.find((entry) => entry.type === 47 && entry.labels.join('.') === `_443._tcp.${HOST}`);
+  assert(rr && body.subarray(rr.data, rr.data + target.length).equals(target), 'Covering NSEC must start with its next name');
+  const length = Buffer.alloc(2); length.writeUInt16BE(rr.end - rr.data - target.length + 2);
+  const compressed = Buffer.concat([body.subarray(0, rr.data - 2), length, Buffer.from([0xc0 | (at >> 8), at & 0xff]),
+    body.subarray(rr.data + target.length)]);
+  parseMessage(compressed);
+  return compressed;
+}
 
 async function reservePort() {
   const server = net.createServer();
@@ -207,7 +226,8 @@ async function generation(mode) {
         queueMicrotask(() => {
           const incoming = new PassThrough(); incoming.statusCode = 200;
           incoming.headers = { 'content-type': 'application/dns-message' };
-          callback(incoming); incoming.end(response(message, [[], denial, []], 0x8180));
+          const body = response(message, [[], denial, []], 0x8180);
+          callback(incoming); incoming.end(mode === 'wildcard-compressed-proof' ? compressCoveringNext(body) : body);
         });
         return;
       }
@@ -251,7 +271,7 @@ async function generation(mode) {
     results[mode].tlsa_flags = tls.flags;
     results[mode].proof_queries = observed.filter((entry) => entry.mode === mode && entry.type === PROOF_PROBE).length;
     assert(results[mode].proof_queries > 0, 'The relay must fetch the wildcard proof');
-    if (mode === 'wildcard-valid') {
+    if (PROVEN_WILDCARD_MODES.includes(mode)) {
       for (const [reply, type] of [[answer, 1], [tls, 52]]) {
         assert.equal(reply.flags & 15, 0, `Proven wildcard ${type} must resolve`);
         assert(reply.flags & 0x20, `Proven wildcard ${type} must be locally validated`);
