@@ -1,8 +1,8 @@
 {
   "project_license": "AGPL-3.0-or-later",
-  "generated_at": "2026-10-03T12:25:00.854107+00:00",
+  "generated_at": "2026-10-15T00:00:00.000Z",
   "audit_baseline": "0.7.15",
-  "notes": "Integration inventory from upstream v0.8.7, carried into the AGPL-3.0-or-later Freedom fork. Upstream component records are retained pending candidate artifact review. HNS and dVPN resources are not yet completely classified; a server or source-project license alone does not establish a bundled binary license closure.",
+  "notes": "Re-derived on 2026-10-15 for the Pirate fork of Freedom Browser (AGPL-3.0-or-later) after it merged upstream v0.8.7 (tag commit 3a8c75e6). Upstream's component records were re-read against this tree and kept where they still hold; the fork's additions are recorded beside them: the committed Handshake helpers (hns-bin/), the committed V2Ray runtime (dvpn-bin/; its GeoIP/GeoSite data files were removed as unused), the Agora Web SDK vendor bundle, the dVPN SDK npm packages, and the fork's own assets/hns/ and scripts/jacktrip/ files. The inventory is derived from package.json build.extraResources, the committed per-target helper directories, src/renderer/vendor/ and the rest of src/; licenses-audit.test.js fails if this file drifts from any of them or from the committed helper bytes. Upstream's own audit (0.8.7, MPL-2.0 posture) is at 3a8c75e6:licenses-audit.json.",
   "distribution_model": {
     "packaging": "electron-builder",
     "bundles_node_modules": true,
@@ -14,14 +14,15 @@
       "libradicle.node",
       "myotis-node.node"
     ],
-    "external_binaries": ["antd", "arti", "myotis-supervisor"],
+    "external_binaries": ["antd", "arti", "myotis-supervisor", "hnsd", "fingertipd", "v2ray"],
     "vendored_renderer_bundles": [
       "src/renderer/vendor/openlv.esm.js",
       "src/renderer/vendor/highlight.min.js",
       "src/renderer/vendor/marked.min.js",
-      "src/renderer/vendor/purify.min.js"
+      "src/renderer/vendor/purify.min.js",
+      "src/renderer/vendor/AgoraRTC_N-4.24.0.js"
     ],
-    "notes": "Linux packaging targets deb only. Existing macOS and Windows packaging settings are retained for integration review. Declared resources are not proof of installed artifact contents. Native addons and upstream renderer bundles require their existing notices; retained HNS/dVPN helpers require additional artifact attribution."
+    "notes": "The fork's Linux target is a deb only (build.linux.target); no AppImage or pacman package is built from this tree. macOS and Windows configuration is retained from upstream. better-sqlite3, freedom_ipfs_native.node, libradicle.node and Ant ship in every package. myotis-node.node, myotis-supervisor and Arti ship in macOS and Windows packages only, because build.linux.extraResources does not name them. hnsd, fingertipd and V2Ray are committed for linux-x64 only, matching src/shared/platform-capabilities.json, so only Linux x64 packages carry them. Pre-built third-party renderer libraries are committed under src/renderer/vendor/ and ship inside app.asar via the src/**/* files pattern, which also ships every other committed file under src/."
   },
   "dependencies": [
     {
@@ -29,7 +30,10 @@
       "version": "44.7.0",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/electron/electron" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/electron/electron"
+      },
       "license": {
         "spdx": ["MIT"],
         "raw": "MIT",
@@ -53,7 +57,10 @@
       "version": "v0.5.61",
       "type": "binary",
       "scope": "runtime",
-      "source": { "ecosystem": "github", "url": "https://github.com/freedom-hq/ant" },
+      "source": {
+        "ecosystem": "github",
+        "url": "https://github.com/freedom-hq/ant"
+      },
       "license": {
         "spdx": ["MIT", "Apache-2.0"],
         "raw": "MIT OR Apache-2.0",
@@ -71,7 +78,10 @@
       "version": "v0.4.5",
       "type": "native-addon",
       "scope": "runtime",
-      "source": { "ecosystem": "github", "url": "https://github.com/solardev-xyz/freedom-ipfs" },
+      "source": {
+        "ecosystem": "github",
+        "url": "https://github.com/solardev-xyz/freedom-ipfs"
+      },
       "license": {
         "spdx": ["MIT", "Apache-2.0"],
         "raw": "MIT OR Apache-2.0",
@@ -89,7 +99,10 @@
       "version": "0.8.0",
       "type": "native-addon",
       "scope": "runtime",
-      "source": { "ecosystem": "github", "url": "https://github.com/solardev-xyz/libradicle" },
+      "source": {
+        "ecosystem": "github",
+        "url": "https://github.com/solardev-xyz/libradicle"
+      },
       "license": {
         "spdx": ["MIT", "Apache-2.0"],
         "raw": "MIT OR Apache-2.0",
@@ -113,7 +126,10 @@
       "version": "v0.1.14",
       "type": "native-addon",
       "scope": "runtime",
-      "source": { "ecosystem": "github", "url": "https://github.com/biafra23/myotis" },
+      "source": {
+        "ecosystem": "github",
+        "url": "https://github.com/biafra23/myotis"
+      },
       "license": {
         "spdx": ["Apache-2.0"],
         "raw": "Apache-2.0",
@@ -128,7 +144,7 @@
       "issues": [
         {
           "kind": "notice",
-          "details": "Apache-2.0 section 4(d): upstream ships a NOTICE file, so its attribution text must be reproduced in any redistribution. Copyright 2026 Dirk Jäckel.",
+          "details": "Apache-2.0 section 4(d): upstream ships a NOTICE file, so its attribution text must be reproduced in any redistribution. That NOTICE's copyright line names the Myotis author. Shipped only in the macOS and Windows packages; the fork's Linux deb omits it.",
           "recommended_fix": "Reproduced verbatim in NOTICES; re-check the upstream NOTICE on every version bump."
         }
       ]
@@ -138,7 +154,10 @@
       "version": "2.7.0",
       "type": "binary",
       "scope": "runtime",
-      "source": { "ecosystem": "crates.io", "url": "https://gitlab.torproject.org/tpo/core/arti" },
+      "source": {
+        "ecosystem": "crates.io",
+        "url": "https://gitlab.torproject.org/tpo/core/arti"
+      },
       "license": {
         "spdx": ["MIT", "Apache-2.0"],
         "raw": "MIT OR Apache-2.0",
@@ -173,7 +192,7 @@
         "notice_required": true
       },
       "version_pin": "package.json build.toolsets.appimage (1.0.3), which electron-builder maps to appimage-tools-runtime-20251108",
-      "bundled_with_app": true,
+      "bundled_with_app": false,
       "linking_or_integration": "separate-process",
       "risk": "orange",
       "issues": [
@@ -182,7 +201,8 @@
           "details": "Linux AppImage only. Since #566 every .AppImage starts with the static type-2 runtime as its ELF header; it mounts the squashfs image and execs Freedom, so Freedom is not linked to it. The runtime statically links libfuse 3.15.0 (LGPL-2.1) with upstream's patches/libfuse/mount.c.diff applied. The previous runtime (appimage-12.0.1) dlopen()ed the system libfuse.so.2 instead, so 0.8.7 is the first release whose AppImage carries LGPL-2.1 code. The .deb and pacman packages do not contain the runtime. Attribution is in NOTICES; until this revision none of the audit files recorded the runtime, because licenses-audit.test.js derives its inventory from build.extraResources and src/, and the runtime arrives through electron-builder's toolset instead.",
           "recommended_fix": "Decided by the maintainer (2026-10-07): pointing to upstream's public source is sufficient. The runtime is a separate upstream program, unmodified by Freedom, and AppImage/type2-runtime publishes its complete source, build scripts and the libfuse patch at the pinned release 20251108 (libfuse 3.15.0 itself at libfuse/libfuse), which is what LGPL-2.1 section 6 needs for a user to rebuild and relink the runtime against a modified libfuse. NOTICES names that release and the libfuse version. Re-read the component list, and confirm the source stays published, on every build.toolsets.appimage or electron-builder bump."
         }
-      ]
+      ],
+      "fork_status": "Not shipped by this fork: build.linux.target is deb only, so no artifact starts with the AppImage runtime. Upstream's attribution was removed from NOTICES with it. If an AppImage target is ever restored, restore upstream's NOTICES entry (3a8c75e6:NOTICES) and this record's obligations with it."
     },
     {
       "name": "openlv (@openlv/core, @openlv/session, @openlv/signaling, @openlv/transport)",
@@ -216,7 +236,10 @@
       "version": "11.11.1",
       "type": "vendored-bundle",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/highlightjs/highlight.js" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/highlightjs/highlight.js"
+      },
       "license": {
         "spdx": ["BSD-3-Clause"],
         "raw": "BSD-3-Clause",
@@ -240,7 +263,10 @@
       "version": "15.0.7",
       "type": "vendored-bundle",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/markedjs/marked" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/markedjs/marked"
+      },
       "license": {
         "spdx": ["MIT"],
         "raw": "MIT",
@@ -258,7 +284,10 @@
       "version": "3.2.5",
       "type": "vendored-bundle",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/cure53/DOMPurify" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/cure53/DOMPurify"
+      },
       "license": {
         "spdx": ["MPL-2.0", "Apache-2.0"],
         "raw": "(MPL-2.0 OR Apache-2.0)",
@@ -282,7 +311,10 @@
       "version": "13.0.3",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/WiseLibs/better-sqlite3" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/WiseLibs/better-sqlite3"
+      },
       "license": {
         "spdx": ["MIT"],
         "raw": "MIT",
@@ -305,7 +337,10 @@
       "version": "2.18.2",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/ghostery/adblocker" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/ghostery/adblocker"
+      },
       "license": {
         "spdx": ["MPL-2.0"],
         "raw": "MPL-2.0",
@@ -318,7 +353,7 @@
       "issues": [
         {
           "kind": "copyleft",
-          "details": "MPL-2.0 is file-level weak copyleft and is the project's own license, so combination is unproblematic. Freedom consumes it unmodified from npm. Its @remusao/* helpers and @ghostery/url-parser carry the same license.",
+          "details": "MPL-2.0 is file-level weak copyleft. It was upstream's own license; in this AGPL-3.0-or-later fork it combines under MPL-2.0 section 3.3, as no Exhibit B notice applies. Freedom consumes it unmodified from npm. Its @remusao/* helpers and @ghostery/url-parser carry the same license.",
           "recommended_fix": "Attributed in NOTICES; disclose sources only if a bundled MPL file is ever modified."
         }
       ]
@@ -328,7 +363,10 @@
       "version": "0.2.0",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/open-lavatory/open-lavatory" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/open-lavatory/open-lavatory"
+      },
       "license": {
         "spdx": ["LGPL-3.0-only"],
         "raw": "LGPL-3.0-only",
@@ -351,7 +389,10 @@
       "version": "0.2.0",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/open-lavatory/open-lavatory" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/open-lavatory/open-lavatory"
+      },
       "license": {
         "spdx": ["LGPL-3.0-only"],
         "raw": "LGPL-3.0-only",
@@ -374,7 +415,10 @@
       "version": "6.17.0",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/ethers-io/ethers.js" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/ethers-io/ethers.js"
+      },
       "license": {
         "spdx": ["MIT"],
         "raw": "MIT",
@@ -391,7 +435,10 @@
       "version": "5.4.4",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/megahertz/electron-log" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/megahertz/electron-log"
+      },
       "license": {
         "spdx": ["MIT"],
         "raw": "MIT",
@@ -428,7 +475,10 @@
       "version": "3.0.2",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/corpus-core/c4" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/corpus-core/c4"
+      },
       "license": {
         "spdx": ["MIT"],
         "raw": "MIT",
@@ -445,7 +495,10 @@
       "version": "3.1.1",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/ensdomains/content-hash" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/ensdomains/content-hash"
+      },
       "license": {
         "spdx": ["MIT"],
         "raw": "MIT",
@@ -462,7 +515,10 @@
       "version": "1.11.1",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/adraffy/ens-normalize.js" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/adraffy/ens-normalize.js"
+      },
       "license": {
         "spdx": ["MIT"],
         "raw": "MIT",
@@ -479,7 +535,10 @@
       "version": "13.1.0",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/ethersphere/bee-js" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/ethersphere/bee-js"
+      },
       "license": {
         "spdx": ["BSD-3-Clause"],
         "raw": "BSD-3-Clause",
@@ -496,7 +555,10 @@
       "version": "7.10.0",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/LedgerHQ/ledger-live" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/LedgerHQ/ledger-live"
+      },
       "license": {
         "spdx": ["Apache-2.0"],
         "raw": "Apache-2.0",
@@ -513,7 +575,10 @@
       "version": "6.33.5",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/LedgerHQ/ledger-live" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/LedgerHQ/ledger-live"
+      },
       "license": {
         "spdx": ["Apache-2.0"],
         "raw": "Apache-2.0",
@@ -530,7 +595,10 @@
       "version": "6.0.0",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/MetaMask/browser-passworder" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/MetaMask/browser-passworder"
+      },
       "license": {
         "spdx": ["ISC"],
         "raw": "ISC",
@@ -547,7 +615,10 @@
       "version": "8.0.7",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/safe-global/safe-core-sdk" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/safe-global/safe-core-sdk"
+      },
       "license": {
         "spdx": ["MIT"],
         "raw": "MIT",
@@ -564,7 +635,10 @@
       "version": "2.4.0",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/paulmillr/scure-bip39" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/paulmillr/scure-bip39"
+      },
       "license": {
         "spdx": ["MIT"],
         "raw": "MIT",
@@ -581,7 +655,10 @@
       "version": "2.28.0",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/x402-foundation/x402" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/x402-foundation/x402"
+      },
       "license": {
         "spdx": ["Apache-2.0"],
         "raw": "Apache-2.0",
@@ -598,7 +675,10 @@
       "version": "2.28.0",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/x402-foundation/x402" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/x402-foundation/x402"
+      },
       "license": {
         "spdx": ["Apache-2.0"],
         "raw": "Apache-2.0",
@@ -615,7 +695,10 @@
       "version": "0.10.2",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/paulmillr/micro-key-producer" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/paulmillr/micro-key-producer"
+      },
       "license": {
         "spdx": ["MIT"],
         "raw": "MIT",
@@ -632,7 +715,10 @@
       "version": "4.1.2",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/moxystudio/node-proper-lockfile" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/moxystudio/node-proper-lockfile"
+      },
       "license": {
         "spdx": ["MIT"],
         "raw": "MIT",
@@ -649,7 +735,10 @@
       "version": "1.5.4",
       "type": "direct",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/soldair/node-qrcode" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/soldair/node-qrcode"
+      },
       "license": {
         "spdx": ["MIT"],
         "raw": "MIT",
@@ -666,7 +755,10 @@
       "version": "0.0.7",
       "type": "transitive",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/v3xlabs/websocket-mqtt" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/v3xlabs/websocket-mqtt"
+      },
       "license": {
         "spdx": ["LGPL-3.0"],
         "raw": "LGPL-3.0",
@@ -689,7 +781,10 @@
       "version": "4.0.1, 4.2.0, 8.1.0",
       "type": "transitive",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/ethereumjs/ethereumjs-monorepo" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/ethereumjs/ethereumjs-monorepo"
+      },
       "license": {
         "spdx": ["MPL-2.0"],
         "raw": "MPL-2.0",
@@ -702,7 +797,7 @@
       "issues": [
         {
           "kind": "copyleft",
-          "details": "MPL-2.0, same as the project's own license; consumed unmodified.",
+          "details": "MPL-2.0, upstream's own license; combines with this AGPL-3.0-or-later fork under MPL-2.0 section 3.3. Consumed unmodified.",
           "recommended_fix": "Covered by the NOTICES npm-dependencies section."
         }
       ]
@@ -712,7 +807,10 @@
       "version": "2.0.1",
       "type": "transitive",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/nodeca/argparse" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/nodeca/argparse"
+      },
       "license": {
         "spdx": ["Python-2.0"],
         "raw": "Python-2.0",
@@ -729,7 +827,10 @@
       "version": "1.6.1",
       "type": "transitive",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/isaacs/sax-js" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/isaacs/sax-js"
+      },
       "license": {
         "spdx": ["BlueOak-1.0.0"],
         "raw": "BlueOak-1.0.0",
@@ -746,7 +847,10 @@
       "version": "2.7.0, 2.8.1",
       "type": "transitive",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/Microsoft/tslib" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/Microsoft/tslib"
+      },
       "license": {
         "spdx": ["0BSD"],
         "raw": "0BSD",
@@ -763,7 +867,10 @@
       "version": "13.4.2, 14.0.5",
       "type": "transitive",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/multiformats/js-multiformats" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/multiformats/js-multiformats"
+      },
       "license": {
         "spdx": ["Apache-2.0", "MIT"],
         "raw": "Apache-2.0 OR MIT",
@@ -780,7 +887,10 @@
       "version": "2.1.2",
       "type": "transitive",
       "scope": "runtime",
-      "source": { "ecosystem": "npm", "url": "https://github.com/node-hid/node-hid" },
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/node-hid/node-hid"
+      },
       "license": {
         "spdx": ["MIT", "X11"],
         "raw": "(MIT OR X11)",
@@ -791,28 +901,370 @@
       "linking_or_integration": "native-addon",
       "risk": "green",
       "issues": []
+    },
+    {
+      "name": "freedom-browser (upstream)",
+      "version": "0.8.7",
+      "type": "upstream-source",
+      "scope": "runtime",
+      "source": {
+        "ecosystem": "github",
+        "url": "https://github.com/solardev-xyz/freedom-browser/tree/3a8c75e6"
+      },
+      "license": {
+        "spdx": ["MPL-2.0"],
+        "raw": "MPL-2.0 (upstream LICENSE); this fork distributes the combination under AGPL-3.0-or-later",
+        "license_files": ["LICENSE (upstream)"],
+        "notice_required": true
+      },
+      "bundled_with_app": true,
+      "linking_or_integration": "source",
+      "risk": "green",
+      "issues": [
+        {
+          "kind": "copyleft",
+          "details": "Most of this tree is upstream Freedom Browser code, which upstream licenses under MPL-2.0 and which carries no Exhibit B notice. MPL-2.0 section 3.3 lets the fork distribute it inside a Larger Work under a Secondary License (the GNU GPL family, AGPL-3.0 included), but the upstream files stay MPL-2.0: recipients must be told so and how to obtain the MPL-2.0 text (section 3.1), and the Source Code Form must be available (section 3.2(a)). The fork's LICENSE holds only the AGPL text.",
+          "recommended_fix": "NOTICES now names the upstream code, its MPL-2.0 licence and where the text and the source are published. README.md still says the project is available under MPL-2.0, which contradicts LICENSE; that file is outside this audit's edit scope."
+        }
+      ]
+    },
+    {
+      "name": "hnsd",
+      "version": "v2.0.0 (a5c7c287e848f46d3e97f16b698e2027c8dc96c3) with ops/hns-encrypted-transport/hnsd-encrypted.patch",
+      "type": "binary",
+      "scope": "runtime",
+      "source": {
+        "ecosystem": "github",
+        "url": "https://github.com/handshake-org/hnsd/tree/a5c7c287e848f46d3e97f16b698e2027c8dc96c3"
+      },
+      "license": {
+        "spdx": ["MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Apache-2.0"],
+        "raw": "hnsd MIT; statically links its vendored libuv (MIT, with BSD-2-Clause, ISC and BSD-3-Clause externally maintained parts) and libsecp256k1 (MIT), and code adapted from easy-ecc (BSD-2-Clause), Picnic (MIT), khash (MIT), poly1305-donna (MIT), chacha20-simple (ISC), RHash (permissive, no notice condition), BLAKE2 (offered as CC0-1.0, OpenSSL or Apache-2.0; used under Apache-2.0), tiny-bignum-c (public domain) and the LND brontide implementation (MIT)",
+        "license_files": [
+          "hns-bin/linux-x64/licenses/hnsd/ (LICENSE, uv-LICENSE, src-secp256k1-COPYING, BLAKE2 headers, LICENSE-APACHE-2.0, source.tar, hnsd-encrypted.patch)"
+        ],
+        "notice_required": true
+      },
+      "targets": ["linux-x64"],
+      "artifacts": {
+        "hns-bin/linux-x64/hnsd": "d539d508d10773a89f4a4e900b3c2c87b38a130908049d0566a1d03473984a0f"
+      },
+      "bundled_with_app": true,
+      "linking_or_integration": "separate-process",
+      "risk": "green",
+      "issues": [
+        {
+          "kind": "notice",
+          "details": "Built by hosted run 38709852038 from the pinned source plus Freedom's patch (sha256 810edac7e7b991cc9d6ab569ca648a58455b9a43cf09be43f3c6cfea5072de67, committed in this repository). libhsk and libuv are linked statically; the only dynamic dependencies are the system libunbound.so.8 (BSD-3-Clause; it loads OpenSSL 3, Apache-2.0, and libevent, BSD-3-Clause) and libc.so.6 (glibc, LGPL-2.1-or-later). None of these system libraries is bundled: the deb declares libunbound8 and libc6 (>= 2.36), so the user's distribution supplies them and can replace them, and no LGPL relinking obligation attaches to the shipped file. No copyleft code is linked statically.",
+          "recommended_fix": "The reviewed notice bundle from the 0.7.15 checkpoint is ported to hns-bin/linux-x64/licenses/ and ships beside the binary: every upstream notice file copied unedited, and source.tar, the complete upstream source (sha256 d5411e7bac5d0d78bffb392c3af2888abba966ae6e12b8d42ce984949be509b1, identical to the retained source of run 38709852038), plus the patch. source-record.json binds every file, the binary and the patched files by sha256; licenses-audit.test.js checks the binding. NOTICES summarises the attribution."
+        }
+      ],
+      "notice_bundle": {
+        "path": "hns-bin/linux-x64/licenses/",
+        "record": "hns-bin/linux-x64/licenses/source-record.json",
+        "ported_from": "cb8539104811baba7cdfcdf38c741d820e8ff5fb (release/security-checkpoint-0.7.15)"
+      }
+    },
+    {
+      "name": "fingertipd",
+      "version": "21f044ebc830eed87e6851ed7216f9590f6f3df3",
+      "type": "binary",
+      "scope": "runtime",
+      "source": {
+        "ecosystem": "github",
+        "url": "https://github.com/pirate-social-club/fingertipd/tree/21f044ebc830eed87e6851ed7216f9590f6f3df3"
+      },
+      "license": {
+        "spdx": ["MIT", "Apache-2.0", "BSD-3-Clause"],
+        "raw": "fingertipd MIT (Copyright (c) 2026 Pirate Social Club); statically links github.com/buffrr/letsdane v0.6.1 (Apache-2.0, no NOTICE file), github.com/miekg/dns v1.1.63 (BSD-3-Clause), golang.org/x/net v0.31.0 and golang.org/x/sys v0.27.0 (BSD-3-Clause, The Go Authors) and the Go 1.26.2 standard library (BSD-3-Clause, The Go Authors)",
+        "license_files": [
+          "hns-bin/linux-x64/licenses/fingertipd/ (LICENSE-MIT, module LICENSE/COPYRIGHT/PATENTS files, Go 1.26.2 notices)"
+        ],
+        "notice_required": true
+      },
+      "targets": ["linux-x64"],
+      "artifacts": {
+        "hns-bin/linux-x64/fingertipd": "065e4f0d5c118213f09319998c94633033cae7f96dc6d714083208468225f766"
+      },
+      "bundled_with_app": true,
+      "linking_or_integration": "separate-process",
+      "risk": "green",
+      "issues": [
+        {
+          "kind": "notice",
+          "details": "Static Go 1.26.2 binary, CGO disabled; `go version -m` lists exactly the four modules above, with the h1 sums recorded in hns-bin/linux-x64/PROVENANCE.md's retained evidence. letsdane v0.6.1 ships no NOTICE file, so Apache-2.0 section 4(d) adds nothing; section 4(a) needs the licence text, which NOTICES carries.",
+          "recommended_fix": "Attributed in NOTICES; every module's licence, copyright and patent file, fingertipd's MIT text and the Go 1.26.2 notices ship unedited in hns-bin/linux-x64/licenses/fingertipd/, unchanged from the 0.7.15 checkpoint because the binary is unchanged. The fingertipd source names no other upstream; whether any of it derives from imperviousinc/fingertip (Apache-2.0) was not compared line by line."
+        }
+      ],
+      "notice_bundle": {
+        "path": "hns-bin/linux-x64/licenses/",
+        "record": "hns-bin/linux-x64/licenses/source-record.json",
+        "ported_from": "cb8539104811baba7cdfcdf38c741d820e8ff5fb (release/security-checkpoint-0.7.15)"
+      }
+    },
+    {
+      "name": "v2ray",
+      "version": "v5.2.1 (42b166760b2ba8d984e514b830fcd44e23728e43)",
+      "type": "binary",
+      "scope": "runtime",
+      "source": {
+        "ecosystem": "github-release",
+        "url": "https://github.com/v2fly/v2ray-core/releases/download/v5.2.1/v2ray-linux-64.zip"
+      },
+      "license": {
+        "spdx": ["MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0"],
+        "raw": "V2Ray MIT (Copyright (c) 2015-2022 V2Fly Community); statically links the Go 1.19.4 standard library (BSD-3-Clause) and 52 Go modules under MIT, BSD-2-Clause, BSD-3-Clause and Apache-2.0, two of which (google.golang.org/grpc and gopkg.in/yaml.v3) ship NOTICE files; the full list is in NOTICES",
+        "license_files": [
+          "dvpn-bin/linux-x64/licenses/v2ray/ (every embedded module's LICENSE, COPYRIGHT, NOTICE and PATENTS files, v2ray-core's LICENSE, Go 1.19.4 notices)"
+        ],
+        "notice_required": true
+      },
+      "targets": ["linux-x64"],
+      "artifacts": {
+        "dvpn-bin/linux-x64/v2ray": "bf9699e6b3665f749b63bdead2e1a95a00b10d9901a9a952858b9e17d4bc43dd"
+      },
+      "bundled_with_app": true,
+      "linking_or_integration": "separate-process",
+      "risk": "yellow",
+      "issues": [
+        {
+          "kind": "notice",
+          "details": "The shipped bytes equal v2ray in the official v2ray-linux-64.zip for v5.2.1 (archive sha256 56eb8d4727b058d10f8ff830bb0121381386b0695171767f38ba410f2613fc9a); the binary's embedded vcs.revision is the v5.2.1 tag commit. Every embedded module's licence was read from its module-proxy archive at the exact version: none is copyleft and none is unidentified. Apache-2.0 NOTICE files of grpc v1.51.0 and yaml.v3 v3.0.1 are reproduced in NOTICES. Each of the 52 module archives matches the h1 sum the binary embeds.",
+          "recommended_fix": "NOTICES lists every module with its licence and its copyright lines copied verbatim from the module's LICENSE, carries the licence texts and both NOTICE files, and dvpn-bin/linux-x64/licenses/ ships every module's licence files unedited, bound by sha256 in source-record.json; licenses-audit.test.js checks the binding."
+        }
+      ],
+      "notice_bundle": {
+        "path": "dvpn-bin/linux-x64/licenses/",
+        "record": "dvpn-bin/linux-x64/licenses/source-record.json"
+      }
+    },
+    {
+      "name": "agora-rtc-sdk-ng",
+      "version": "4.24.0",
+      "type": "vendored-bundle",
+      "scope": "runtime",
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://www.npmjs.com/package/agora-rtc-sdk-ng/v/4.24.0"
+      },
+      "license": {
+        "spdx": ["MIT"],
+        "raw": "MIT",
+        "source": "npm registry metadata only: the package.json `license` field of agora-rtc-sdk-ng@4.24.0 (registry integrity sha512-2apG/07EtsuX21ncSF77q+dr6/kDgu9B/RpKtstCtaq46l4/Eraoecewi4zXRUCY3Im+8dzTIXx6jUwyPdxdHQ==). The package ships no licence file, the AgoraIO/agora-rtc-web repository commits none, and the bundle's banner reads only `Copyright AgoraInc.`",
+        "license_files": [],
+        "notice_required": true
+      },
+      "vendored_path": "src/renderer/vendor/AgoraRTC_N-4.24.0.js",
+      "sha256": "f440fa2dbf56983fcc80a0443f2e4d2413aaee264c3a64a35d9e01f2b7e3c98b",
+      "bundled_with_app": true,
+      "linking_or_integration": "script-tag",
+      "risk": "yellow",
+      "issues": [
+        {
+          "kind": "notice",
+          "details": "Byte-identical to AgoraRTC_N-production.js in the npm package and to https://download.agora.io/sdk/release/AgoraRTC_N-4.24.0.js; loaded only by src/renderer/pages/live-room.html. The minified bundle embeds the libraries listed in embedded_libraries, identified from code and strings in it. Agora publishes no source map or dependency list, so code that left no recognisable trace could be missing; a fingerprint sweep for about forty other common libraries found none.",
+          "recommended_fix": "NOTICES carries the MIT terms with Agora's own copyright line, and each embedded library's licence file copied verbatim from its npm package. Ask Agora for a licence file and a third-party notice list."
+        }
+      ],
+      "embedded_libraries": [
+        {
+          "name": "core-js-pure",
+          "version": "3.42.0",
+          "version_basis": "established: the bundle registers {version: \"3.42.0\", mode: \"pure\"}",
+          "license": "MIT",
+          "license_file_sha256": "83ed88fba5135357a011243ac1d518ddd3f0a2815ff0faabdd2fd7a85ba4aa98"
+        },
+        {
+          "name": "axios",
+          "version": "1.9.0",
+          "version_basis": "established: VERSION constant",
+          "license": "MIT",
+          "license_file_sha256": "82761059eaedacb3356803aea8a170d8298609f91b14fc32ee1bfb40d690183c"
+        },
+        {
+          "name": "ua-parser-js",
+          "version": "0.7.40",
+          "version_basis": "established: VERSION constant",
+          "license": "MIT",
+          "license_file_sha256": "75e54ad49d0017f57a936f42d561d4d667ecd2d0ecaf23ddfa643996f057aff3"
+        },
+        {
+          "name": "webrtc-adapter",
+          "version": "7.6.2-9.0.6",
+          "version_basis": "inferred: shimGetParameters and related shims; licence file identical across all 41 releases from 7.0.0",
+          "license": "BSD-3-Clause",
+          "license_file_sha256": "00a46c6cfc219593b97586398b477e188391556e70487225d3ff9d60ccda6dce"
+        },
+        {
+          "name": "sdp",
+          "version": "2.0.0-3.2.2",
+          "version_basis": "inferred: session boilerplate and RTP parsers; licence file identical across all 27 releases",
+          "license": "MIT",
+          "license_file_sha256": "798e82590af6a84bfbde3d6bb0fb9162c519edf16122404fea00acefdc55cbd9"
+        },
+        {
+          "name": "pako",
+          "version": "2.1.0-2.2.0",
+          "version_basis": "inferred: deflate/inflate identifiers and zlib 1.2.12 mode numbering; licence file identical across all 2.x releases",
+          "license": "MIT AND Zlib",
+          "license_file_sha256": "a04665b3b2de56c66730c1f720f528175739e4104f79073614aa611da1e85539"
+        },
+        {
+          "name": "formdata-polyfill",
+          "version": "4.0.5-4.0.10",
+          "version_basis": "inferred: banner and multipart encoder; licence file identical across all 3.x and 4.x releases",
+          "license": "MIT",
+          "license_file_sha256": "435a6437e47e5e479942255680e7fbe5f333d55234ada1c35f6115ca641d5bb4"
+        }
+      ]
+    },
+    {
+      "name": "sentinel-ai-connect (blue-agent-connect)",
+      "version": "2.0.0 (924d472cb8be47b11f2432515f23bd5ea20d297c)",
+      "type": "direct",
+      "scope": "runtime",
+      "source": {
+        "ecosystem": "github-tarball",
+        "url": "https://codeload.github.com/Sentinel-Autonomybuilder/blue-ai-connect/tar.gz/924d472cb8be47b11f2432515f23bd5ea20d297c"
+      },
+      "license": {
+        "spdx": ["MIT"],
+        "raw": "MIT (Copyright (c) 2026 Norse Labs; the LICENSE adds a line stating it derives from blue-js-sdk)",
+        "license_files": ["LICENSE"],
+        "notice_required": false
+      },
+      "bundled_with_app": true,
+      "linking_or_integration": "js-import",
+      "risk": "green",
+      "issues": [
+        {
+          "kind": "note",
+          "details": "Installed under node_modules/sentinel-ai-connect with package name blue-agent-connect. GitHub's licence detector reports NOASSERTION because of the extra derivation line; the file itself is the MIT text.",
+          "recommended_fix": null
+        }
+      ]
+    },
+    {
+      "name": "blue-js-sdk",
+      "version": "2.8.0",
+      "type": "transitive",
+      "scope": "runtime",
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/Sentinel-Autonomybuilder/sentinel-dvpn-sdk"
+      },
+      "license": {
+        "spdx": ["MIT"],
+        "raw": "MIT (Copyright (c) 2026 Sentinel dVPN Contributors)",
+        "license_files": ["LICENSE"],
+        "notice_required": false
+      },
+      "bundled_with_app": true,
+      "linking_or_integration": "js-import",
+      "risk": "green",
+      "issues": []
+    },
+    {
+      "name": "@cosmjs/* (amino, crypto, encoding, json-rpc, math, proto-signing, socket, stargate, stream, tendermint-rpc, utils)",
+      "version": "0.39.0",
+      "type": "transitive",
+      "scope": "runtime",
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/cosmos/cosmjs"
+      },
+      "license": {
+        "spdx": ["Apache-2.0"],
+        "raw": "Apache-2.0",
+        "license_files": [],
+        "notice_required": true
+      },
+      "bundled_with_app": true,
+      "linking_or_integration": "js-import",
+      "risk": "green",
+      "issues": [
+        {
+          "kind": "notice",
+          "details": "Reached through blue-js-sdk. None of the eleven packages ships a licence file, so the Apache-2.0 text section 4(a) requires does not reach app.asar through them.",
+          "recommended_fix": "NOTICES carries the full Apache-2.0 text."
+        }
+      ]
+    },
+    {
+      "name": "readonly-date-esm",
+      "version": "2.0.0",
+      "type": "transitive",
+      "scope": "runtime",
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://www.npmjs.com/package/readonly-date-esm"
+      },
+      "license": {
+        "spdx": ["Apache-2.0"],
+        "raw": "Apache-2.0",
+        "license_files": ["LICENSE", "NOTICE"],
+        "notice_required": true
+      },
+      "bundled_with_app": true,
+      "linking_or_integration": "js-import",
+      "risk": "yellow",
+      "issues": [
+        {
+          "kind": "notice",
+          "details": "Reached through @cosmjs. The only package in the production tree that ships an Apache-2.0 NOTICE file, so section 4(d) applies.",
+          "recommended_fix": "NOTICE reproduced verbatim in NOTICES."
+        }
+      ]
+    },
+    {
+      "name": "dotenv",
+      "version": "16.6.1",
+      "type": "transitive",
+      "scope": "runtime",
+      "source": {
+        "ecosystem": "npm",
+        "url": "https://github.com/motdotla/dotenv"
+      },
+      "license": {
+        "spdx": ["BSD-2-Clause"],
+        "raw": "BSD-2-Clause",
+        "license_files": ["LICENSE"],
+        "notice_required": true
+      },
+      "bundled_with_app": true,
+      "linking_or_integration": "js-import",
+      "risk": "green",
+      "issues": [
+        {
+          "kind": "note",
+          "details": "Nested under blue-js-sdk; the only BSD-2-Clause package in the production tree. Its LICENSE ships inside app.asar.",
+          "recommended_fix": null
+        }
+      ]
     }
   ],
   "production_license_distribution": {
-    "unique_packages": 273,
+    "unique_packages": 299,
     "counts": {
-      "MIT": 198,
-      "Apache-2.0": 21,
+      "MIT": 211,
+      "Apache-2.0": 33,
       "ISC": 20,
       "MPL-2.0": 13,
-      "LGPL-3.0-only": 4,
-      "LGPL-3.0": 1,
-      "Apache-2.0 OR MIT": 3,
       "BSD-3-Clause": 4,
+      "LGPL-3.0-only": 4,
+      "Apache-2.0 OR MIT": 3,
       "0BSD": 3,
       "(MIT OR X11)": 1,
       "(MIT OR WTFPL)": 1,
       "(BSD-2-Clause OR MIT OR Apache-2.0)": 1,
       "(Zlib OR MIT OR Apache-2.0)": 1,
+      "LGPL-3.0": 1,
       "Python-2.0": 1,
-      "BlueOak-1.0.0": 1
+      "BlueOak-1.0.0": 1,
+      "BSD-2-Clause": 1
     },
-    "method": "walk of package.json `dependencies` and `optionalDependencies` plus their transitive `dependencies`, `optionalDependencies` and `peerDependencies` in the installed tree, deduplicated by name@version. npm installs optional and auto-installed peer dependencies on a production install, so they ship in app.asar too: eight packages (@peculiar/*, asn1js, pvtsutils, pvutils, webcrypto-core, reached through gun's optional @peculiar/webcrypto) appear in no `dependencies` chain at all"
+    "method": "walk of package.json `dependencies` and `optionalDependencies` plus their transitive `dependencies`, `optionalDependencies` and `peerDependencies` in the installed tree, deduplicated by name@version. npm installs optional and auto-installed peer dependencies on a production install, so they ship in app.asar too: eight packages (@peculiar/*, asn1js, pvtsutils, pvutils, webcrypto-core, reached through gun's optional @peculiar/webcrypto) appear in no `dependencies` chain at all",
+    "re_derived": "2026-10-15 from the fork's installed tree (re-run on the lock with the app-builder-lib @electron/get and argparse overrides, Docker volume freedom-m2-nm2; the override removed only build-tool packages and moved argparse 2.0.1 to the root without changing its version or licence), by the same walk licenses-audit.test.js uses: 321 installed package directories, 299 unique name@version. The 26 packages beyond upstream's 273 all arrive through sentinel-ai-connect (blue-agent-connect, blue-js-sdk, @cosmjs/*, cosmjs-types, readonly-date-esm, xstream, socks-proxy-agent and helpers): 13 MIT, 12 Apache-2.0, 1 BSD-2-Clause."
   },
   "dev_dependencies_summary": {
     "risk_assessment": "Dev dependencies are not shipped with the application and do not affect the license of the distributed product. Notable: caniuse-lite is CC-BY-4.0 but is never distributed.",
@@ -829,7 +1281,13 @@
         "notice_required": false
       },
       "risk": "green",
-      "issues": []
+      "issues": [
+        {
+          "kind": "trademark",
+          "details": "Upstream's icon and wordmark files are recorded upstream as original Freedom Team work, while upstream's NOTICES places everything committed under src/ under MPL-2.0. The fork redistributes them under upstream's product name. MPL-2.0 section 2.3 grants no trademark rights.",
+          "recommended_fix": "A naming and branding decision for the fork, outside this licence audit."
+        }
+      ]
     },
     {
       "name": "ad-blocking filter lists",
@@ -904,39 +1362,105 @@
       "type": "source",
       "license": {
         "spdx": ["MPL-2.0"],
-        "raw": "Freedom's own sources, same license as the rest of the tree",
+        "raw": "Upstream Freedom sources under MPL-2.0, distributed in this fork's AGPL-3.0-or-later Larger Work (MPL-2.0 section 3.3)",
+        "notice_required": false
+      },
+      "risk": "green",
+      "issues": []
+    },
+    {
+      "name": "HNS checkpoint and launcher",
+      "path": "assets/hns/",
+      "type": "data",
+      "license": {
+        "spdx": ["AGPL-3.0-or-later"],
+        "raw": "The fork's own README.md and hnsd-encrypted launcher script; checkpoint_main.dat holds 150 public Handshake mainnet block headers (348000-348149), chain data with no licence asserted",
+        "notice_required": false
+      },
+      "risk": "green",
+      "issues": [],
+      "notes": "Ships through the assets/ extraResources entry in every package; only Linux x64 uses it."
+    },
+    {
+      "name": "JackTrip audio-routing script",
+      "path": "scripts/jacktrip/",
+      "type": "source",
+      "license": {
+        "spdx": ["AGPL-3.0-or-later"],
+        "raw": "The fork's own shell script; JackTrip itself is not bundled",
         "notice_required": false
       },
       "risk": "green",
       "issues": []
     }
   ],
-  "summary": { "green": 266, "yellow": 2, "orange": 5, "red": 0, "unknown": 0 },
+  "summary": {
+    "green": 292,
+    "yellow": 2,
+    "orange": 5,
+    "red": 0,
+    "unknown": 0,
+    "basis": "production npm packages by name@version, as upstream counted them; bundled binaries, vendor bundles and data are recorded individually above"
+  },
   "blockers": [
     {
-      "component": "HNS helpers",
-      "details": "Classify the retained artifacts, reproduce required upstream notices, and establish the static system-library closure and corresponding-source/relinking obligations."
-    },
-    {
-      "component": "dVPN runtime and datasets",
-      "details": "Reproduce V2Ray dependency notices and GeoIP/GeoSite data attribution, tied to the exact retained bytes."
-    },
-    {
-      "component": "Integrated artifact inventory",
-      "details": "Reconcile LICENSE_AUDIT.md, extraResources classification and installed package contents against this AGPL fork before release."
+      "component": "Installed package contents",
+      "details": "LICENSE_AUDIT.md, the extraResources classification and the committed helper bytes are reconciled, but no package has been built from this integration tree, so its installed contents have not been listed and compared with the classification. Build the Linux deb, list resources/ and app.asar, and compare; the 2026-10-04 evaluation deb predates the upstream merge and does not count."
     }
   ],
   "resolved_since_last_audit": [
     {
       "kind": "copyleft",
       "component": "qrious 4.0.2 (src/renderer/vendor/qrious.min.js)",
-      "details": "A GPL-3.0 QR-code library was committed under src/renderer/vendor/ and shipped inside app.asar via the src/**/* files pattern, unreferenced by any source file. GPL-3.0 is strong copyleft and is not compatible with distributing Freedom under MPL-2.0. The 2026-08-19 audit's `Copyleft: 0` line missed it.",
+      "details": "A GPL-3.0 QR-code library was committed under src/renderer/vendor/ and shipped inside app.asar via the src/**/* files pattern, unreferenced by any source file. GPL-3.0 is strong copyleft and is not compatible with distributing Freedom under MPL-2.0. The 2026-08-19 audit's `Copyleft: 0` line missed it. (Upstream finding from 0.8.5, kept for history; under this AGPL-3.0-or-later fork GPL-3.0 code would be licence-compatible, but the file was unreferenced dead weight either way.)",
       "resolution": "Deleted, together with two other unreferenced vendor files (qrcode.esm.js, and qrcode.min.js which was a 64-byte jsDelivr 404 body). The app's QR rendering uses the npm `qrcode` package (MIT) from the main process."
+    },
+    {
+      "kind": "inventory",
+      "component": "hns-bin/, dvpn-bin/, scripts/jacktrip/ (build.extraResources)",
+      "details": "Three fork extraResources paths shipped unclassified; licenses-audit.test.js failed on them.",
+      "resolution": "Classified, with every committed helper file listed and its sha256 bound to both audit files."
+    },
+    {
+      "kind": "inventory",
+      "component": "src/renderer/vendor/AgoraRTC_N-4.24.0.js",
+      "details": "A vendored third-party bundle with no licence header and no licence file.",
+      "resolution": "Classified; bytes pinned, licence provenance (npm metadata) recorded, attribution added to NOTICES."
+    },
+    {
+      "kind": "notice",
+      "component": "NOTICES and LICENSE_AUDIT.md",
+      "details": "The merge kept a 2026-05 posture note as LICENSE_AUDIT.md and an NOTICES that called Freedom's own work MPL-2.0, attributed an AppImage runtime the fork does not build, and said nothing about upstream's MPL-2.0 code inside the AGPL fork.",
+      "resolution": "Both rewritten against this tree; the upstream MPL-2.0 notice and the fork components are attributed."
+    },
+    {
+      "kind": "notice",
+      "component": "HNS helpers and dVPN runtime (earlier blockers)",
+      "details": "Artifacts classified, system-library closure and relinking position established, V2Ray dependency licences and NOTICE files.",
+      "resolution": "Recorded in NOTICES and LICENSE_AUDIT.md; what remains is narrowed into the current blockers."
+    },
+    {
+      "kind": "notice",
+      "component": "HNS helpers' individually held notices",
+      "details": "hnsd, its vendored libuv and libsecp256k1, its adapted code, and miekg/dns in fingertipd carry copyright lines naming individual authors that NOTICES does not reproduce.",
+      "resolution": "Ported the reviewed licence bundle from the 0.7.15 checkpoint (cb853910) to hns-bin/linux-x64/licenses/, updated for the new hnsd build (run 38709852038, patch added), with every digest recomputed and checked by licenses-audit.test.js."
+    },
+    {
+      "kind": "license-terms",
+      "component": "V2Ray geoip.dat and geosite.dat (dvpn-bin/linux-x64/)",
+      "details": "geoip.dat (sha256 1af779bf9ba759be7590be3b3baf83d7e5c686b003f6f39dd3ab0e847eaedb72, v2fly/geoip release 202301120046, CC-BY-SA-4.0) was converted from MaxMind GeoLite2 data, whose current End User License Agreement (read 2026-10-15, updated 2026-02-12) adds a 30-day update-and-destroy duty and a disclosure-consent duty beyond CC BY-SA 4.0; whether those bound redistribution was not established. geosite.dat (sha256 59926af84ac04e645459452e18a69901c839bcf2170943695a4ace5ad647e6a4, v2fly/domain-list-community, MIT) shipped beside it. Both came from the V2Ray v5.2.1 release archive.",
+      "resolution": "Removed: neither file ships any more. Nothing used them: a runtime check on 2026-10-15 showed the shipped V2Ray 5.2.1 validating and starting with the SDK-shaped configuration (routing by inboundTag only, no geoip: or geosite: rules) and no geo files present, and blue-js-sdk's preflight checks only for the v2ray binary. Both were removed from dvpn-bin/linux-x64/ and from src/shared/platform-capabilities.json, the Linux deb workflow fails if either appears in the package, and licenses-audit.test.js fails if either returns unclassified."
+    },
+    {
+      "kind": "notice",
+      "component": "Individually held copyright notices (V2Ray modules, Agora bundle)",
+      "details": "MIT, BSD and ISC terms require the copyright notice itself to accompany binary redistribution. The Handshake helpers now meet this through the ported hns-bin/linux-x64/licenses/ bundle. For V2Ray's Go modules (twenty of whose copyright lines name individual authors) and the libraries embedded in the Agora bundle (core-js, formdata-polyfill, ua-parser-js 0.7.40, axios; only the first two keep their notices in the file), NOTICES gives the licence, the module or library and where the exact line is published, but not the line, because the workspace rule forbids writing personal names. Resolve by shipping the module archives' own licence files unedited in a dvpn-bin/linux-x64/licenses/ bundle bound by digest, as the HNS bundle does, and the equivalent for Agora's embedded libraries, or by an owner decision.",
+      "resolution": "Owner ruling: licence and NOTICE text the licences require is copied verbatim even where it names individual authors; nothing written for the fork names anyone. dvpn-bin/linux-x64/licenses/ now ships every embedded Go module's licence files unedited (72 files, each archive matching the binary's h1 sum), bound by sha256 in source-record.json and checked by licenses-audit.test.js; NOTICES copies each module's copyright lines verbatim and reproduces the licence files of the seven libraries identified in the Agora bundle from their npm packages."
     }
   ],
   "verdict": {
     "status": "REVIEW_REQUIRED",
-    "message": "Integration candidate is not cleared for distribution. Freedom retains AGPL-3.0-or-later; upstream source and third-party components retain their own notices. Resolve recorded artifact obligations and rerun the complete licensing gate before release."
+    "message": "Not cleared. The fork's own licence (AGPL-3.0-or-later) is compatible with every shipped component: nothing in the tree is licensed incompatibly, and the LGPL-3.0 OpenLV bundle, the GPL-3.0 uBlock data and the MPL-2.0 upstream code are each handled. Every required third-party notice found is shipped. One item stays open: no package of this tree has been inspected against this inventory."
   },
   "required_actions": [
     {
@@ -960,14 +1484,29 @@
       "details": "Linux and Windows packages inherit it from the Electron dist. macOS does not: electron-builder unlinks it, and the .dmg/-mac.zip carry only Freedom.app, so build.mac.extraResources copies it into Contents/Resources. Dropping that entry silently removes Chromium's third-party attribution from every macOS artifact; licenses-audit.test.js fails if it goes."
     },
     {
-      "priority": "required",
+      "priority": "conditional",
       "action": "Keep the AppImage runtime's attribution and source pointer current",
-      "details": "The static AppImage runtime (AppImage/type2-runtime 20251108, via build.toolsets.appimage) links a patched libfuse 3.15.0 into every Linux .AppImage. The maintainer decided that NOTICES' pointer to upstream's published source meets LGPL-2.1 section 6. On every build.toolsets.appimage or electron-builder bump, re-read the runtime's component list and point NOTICES at the release that actually ships."
+      "details": "Only if an AppImage target is restored: the fork builds a deb only, so no artifact carries the static AppImage runtime today and NOTICES no longer attributes it. Restoring the target means restoring upstream's attribution (3a8c75e6:NOTICES) and its LGPL-2.1 source pointer."
     },
     {
       "priority": "recommended",
       "action": "Ask libradicle upstream for LICENSE files",
       "details": "solardev-xyz/libradicle declares MIT OR Apache-2.0 in Cargo.toml but commits no license text."
+    },
+    {
+      "priority": "required",
+      "action": "Re-audit committed helpers whenever their bytes change",
+      "details": "hns-bin/ and dvpn-bin/ hold committed binaries with no version pin. licenses-audit.test.js compares each file's sha256 with this file and LICENSE_AUDIT.md; a new binary needs its linked components and notices re-derived before the digests are updated. For hnsd and fingertipd, update hns-bin/linux-x64/licenses/ and its source-record.json with the new source, notices and digests in the same change. For V2Ray, regenerate dvpn-bin/linux-x64/licenses/ from the new binary's module list in the same change."
+    },
+    {
+      "priority": "required",
+      "action": "Keep the upstream MPL-2.0 notice",
+      "details": "Upstream Freedom code stays MPL-2.0 inside the AGPL fork. NOTICES must keep telling recipients so, with the MPL-2.0 text location and the source location. README.md's MPL-2.0 sentence should be corrected to match LICENSE."
+    },
+    {
+      "priority": "recommended",
+      "action": "Ask Agora for licence and third-party notices",
+      "details": "agora-rtc-sdk-ng declares MIT only in package.json metadata and ships neither a licence file nor a notice list for the code its bundle embeds."
     }
   ]
 }

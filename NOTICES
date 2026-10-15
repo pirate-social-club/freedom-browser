@@ -4,14 +4,38 @@ This software includes the following third-party components.
 
 Every component listed here ships inside the packaged application. The
 inventory is derived from `package.json`'s `build.extraResources` (the
-external binaries and native addons under `resources/`) and from what
-`build.files`' `src/**/*` pattern commits into `app.asar` — the pre-built
-bundles in `src/renderer/vendor/` and the assets beside them.
+external binaries, native addons and data under `resources/`), from the
+helper files committed per target under `hns-bin/` and `dvpn-bin/`, and
+from what `build.files`' `src/**/*` pattern commits into `app.asar` — the
+pre-built bundles in `src/renderer/vendor/` and the assets beside them.
 `licenses-audit.test.js` fails, in the unit suite `npm test` runs, if any
-of those grows a component that is not named below. That is a test, not a
-packaging step: run `npm test` before you build, because packaging itself
-refuses only one thing, a missing `LICENSES.chromium.html`
-(`scripts/build.js`).
+of those grows a component that is not named below, or if a committed
+helper's bytes change. That is a test, not a packaging step: run
+`npm test` before you build, because packaging itself refuses only one
+thing, a missing `LICENSES.chromium.html` (`scripts/build.js`).
+
+Where a licence below requires its text to accompany the software, the
+text is either shipped inside the package that brings the component or
+reproduced under "Licence texts" at the end of this file. Copyright
+lines and licence texts quoted from upstream are copied verbatim. The
+Handshake helpers and V2Ray also ship their upstream licence files
+unedited, in `resources/hns-bin/licenses/` and
+`resources/dvpn-bin/licenses/`.
+
+== Freedom Browser and this fork ==
+
+Freedom Browser (Pirate fork)
+  This application is the Pirate fork of Freedom Browser. The fork is
+  distributed under the GNU Affero General Public License, version 3 or
+  (at your option) any later version; the text ships as `LICENSE`.
+  Corresponding source: https://github.com/pirate-social-club/freedom-browser
+  Most of its code comes from upstream Freedom Browser by the Freedom
+  Team, https://github.com/solardev-xyz/freedom-browser, merged at
+  release v0.8.7 (commit 3a8c75e696f7eb7fafae0a0d9fbcd46a4ade23f0), which
+  upstream licenses under the Mozilla Public License 2.0. Those files
+  remain covered by MPL-2.0; its section 3.3 permits distributing them
+  as part of this larger work under the AGPL. The MPL-2.0 text is at
+  https://mozilla.org/MPL/2.0/ and upstream's source is at the URL above.
 
 == External binaries and native addons (resources/) ==
 
@@ -65,30 +89,274 @@ Microsoft Visual C++ runtime (Windows builds only)
   as Distributable Code under the Microsoft Visual Studio license terms.
   https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files
 
-AppImage runtime (Linux AppImage only)
-  The executable header of the Freedom .AppImage file: the static type-2
-  runtime from AppImage/type2-runtime release 20251108, added by
-  electron-builder (build.toolsets.appimage 1.0.3). It is a separate
-  program that mounts the image and then starts Freedom; Freedom's code
-  is not linked into it. The .deb and pacman packages do not contain it.
-  Corresponding source, including the build scripts and the libfuse
-  patch: https://github.com/AppImage/type2-runtime/tree/20251108
-  It contains code from:
-  - type2-runtime: MIT, Copyright (c) 2004-23 probonopd
-  - libfuse 3.15.0: LGPL-2.1, https://github.com/libfuse/libfuse,
-    modified by upstream's patches/libfuse/mount.c.diff
-  - squashfuse 0.5.2: BSD-2-Clause, Copyright (c) 2012 Dave Vasilevsky,
-    Phillip Lougher, https://github.com/vasi/squashfuse
-  - musl libc: MIT, Copyright (c) 2005-2020 Rich Felker, et al.,
-    https://musl.libc.org
-  - zstd: BSD-3-Clause (offered as BSD-3-Clause OR GPL-2.0; used under
-    BSD-3-Clause), Copyright (c) Meta Platforms, Inc. and affiliates,
-    https://github.com/facebook/zstd
-  - zlib: Zlib, https://zlib.net
-  - mimalloc: MIT, Copyright (c) Microsoft Corporation, Daan Leijen,
-    https://github.com/microsoft/mimalloc
-  Running the AppImage with --appimage-help prints upstream's own list of
-  these licenses (it does not name mimalloc).
+== Handshake helpers (resources/hns-bin/) ==
+
+hnsd (Handshake SPV resolver)
+  Shipped in Linux x64 packages only.
+  `resources/hns-bin/hnsd`, sha256
+  d539d508d10773a89f4a4e900b3c2c87b38a130908049d0566a1d03473984a0f
+  License: MIT
+  https://github.com/handshake-org/hnsd, release v2.0.0 at commit
+  a5c7c287e848f46d3e97f16b698e2027c8dc96c3, built with this fork's patch
+  `ops/hns-encrypted-transport/hnsd-encrypted.patch` (sha256
+  810edac7e7b991cc9d6ab569ca648a58455b9a43cf09be43f3c6cfea5072de67),
+  which is part of this fork's corresponding source.
+  The upstream notices ship unedited beside the binary, in
+  `resources/hns-bin/licenses/hnsd/`: hnsd's `LICENSE`, libuv's
+  `uv-LICENSE`, libsecp256k1's `src-secp256k1-COPYING`, the BLAKE2 file
+  headers with the full Apache-2.0 text, the patch, and `source.tar`, the
+  complete upstream source at that commit, which carries every embedded
+  notice listed below. `resources/hns-bin/licenses/source-record.json`
+  binds each of those files, the source archive and this binary by sha256.
+  Linked statically from that source tree:
+  - libuv, vendored in `uv/`: MIT. The libuv notice is reproduced under
+    "Licence texts" below. Parts libuv lists as externally maintained
+    carry their own notices in `uv/LICENSE` at the commit above: tree.h
+    (BSD-2-Clause), inet_pton and inet_ntop in src/inet.c (ISC, Internet
+    Systems Consortium, Inc.), and BSD-3-Clause files used only on
+    Windows and Android builds.
+  - libsecp256k1, vendored in `src/secp256k1/`: MIT; notice in
+    `licenses/hnsd/src-secp256k1-COPYING`.
+  - Code adapted from other projects, each named in the header of the
+    file at the commit above:
+      LND brontide (src/brontide.c): MIT,
+        Copyright (C) 2015-2017 The Lightning Network Developers
+      Picnic (src/random.c): MIT,
+        Copyright (c) 2016-2017 Graz University of Technology,
+        and a second holder named in that header
+      easy-ecc (src/ecc.c): BSD-2-Clause
+      khash (src/map.c): MIT
+      chacha20-simple (src/chacha20/): ISC
+      poly1305-donna (src/poly1305/): MIT
+      RHash (src/sha256.c, src/sha3.c): permissive, with no condition
+        to retain a notice
+      BLAKE2 (src/blake2b*): CC0-1.0, OpenSSL or Apache-2.0 at the
+        user's option; used under Apache-2.0
+      tiny-bignum-c (src/bn.c): public domain
+  Linked dynamically and not shipped: the system's libunbound
+  (BSD-3-Clause), which loads OpenSSL (Apache-2.0) and libevent
+  (BSD-3-Clause), and the GNU C Library (LGPL-2.1-or-later). The .deb
+  declares `libunbound8` and `libc6 (>= 2.36)`; your distribution supplies
+  those libraries and you can replace them. Like any program built with
+  GCC against glibc, the binary also contains small start-up objects from
+  glibc and libgcc; those carry licence exceptions written for exactly
+  this use (glibc's start-file exception and the GCC Runtime Library
+  Exception) and add no obligation.
+
+fingertipd (Handshake DNSSEC/DANE proxy)
+  Shipped in Linux x64 packages only.
+  `resources/hns-bin/fingertipd`, sha256
+  065e4f0d5c118213f09319998c94633033cae7f96dc6d714083208468225f766
+  License: MIT
+  Copyright (c) 2026 Pirate Social Club
+  https://github.com/pirate-social-club/fingertipd, commit
+  21f044ebc830eed87e6851ed7216f9590f6f3df3, built with Go 1.26.2 and
+  CGO disabled, so it contains these Go modules:
+    github.com/buffrr/letsdane v0.6.1   Apache-2.0 (no NOTICE file)
+    github.com/miekg/dns v1.1.63        BSD-3-Clause, "Copyright (c) 2009,
+                                        The Go Authors", with extensions
+                                        (see its LICENSE and COPYRIGHT
+                                        files, shipped as described below)
+    golang.org/x/net v0.31.0            BSD-3-Clause, The Go Authors
+    golang.org/x/sys v0.27.0            BSD-3-Clause, The Go Authors
+    Go 1.26.2 standard library          BSD-3-Clause, The Go Authors
+  The Go licence text (identical for the last three) and the Apache-2.0
+  text are under "Licence texts" below. Every one of these modules'
+  licence, copyright and patent files, fingertipd's own MIT text and the Go
+  1.26.2 notices ship unedited in `resources/hns-bin/licenses/fingertipd/`,
+  indexed by sha256 in `resources/hns-bin/licenses/source-record.json`.
+
+  The `PROVENANCE.md` and `encrypted-validator.json` files beside these
+  helpers, and `licenses/README.md`, are this fork's own build records.
+
+== dVPN runtime (resources/dvpn-bin/) ==
+
+V2Ray (dVPN transport)
+  Shipped in Linux x64 packages only.
+  `resources/dvpn-bin/v2ray`, sha256
+  bf9699e6b3665f749b63bdead2e1a95a00b10d9901a9a952858b9e17d4bc43dd,
+  unmodified from the official V2Ray v5.2.1 release archive
+  https://github.com/v2fly/v2ray-core/releases/download/v5.2.1/v2ray-linux-64.zip
+  (sha256 56eb8d4727b058d10f8ff830bb0121381386b0695171767f38ba410f2613fc9a),
+  built from commit 42b166760b2ba8d984e514b830fcd44e23728e43.
+  License: MIT
+  Copyright (c) 2015-2022 V2Fly Community
+  https://github.com/v2fly/v2ray-core
+  It is a static Go 1.19.4 program, so it contains the Go standard
+  library (BSD-3-Clause, The Go Authors) and the following Go modules.
+  Each module's licence was read from its archive on proxy.golang.org at
+  the version given, and its copyright lines below are copied verbatim
+  from that archive's LICENSE file. Every module's complete licence,
+  copyright, notice and patent files ship unedited in
+  `resources/dvpn-bin/licenses/v2ray/`, indexed by sha256 in
+  `resources/dvpn-bin/licenses/source-record.json`.
+    github.com/adrg/xdg v0.4.0
+      MIT
+      Copyright (c) 2014 Adrian-George Bostan <adrg@epistack.com>
+    github.com/aead/cmac v0.0.0-20160719120800-7af84192f0b1
+      MIT
+      Copyright (c) 2016 Andreas Auernhammer
+    github.com/ajg/form v1.5.1
+      BSD-3-Clause
+      Copyright (c) 2014 Alvaro J. Genial. All rights reserved.
+    github.com/andybalholm/brotli v1.0.4
+      MIT
+      Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors.
+    github.com/boljen/go-bitmap v0.0.0-20151001105940-23cd2fb0ce7d
+      MIT
+      Copyright (c) 2015 Bol Christophe
+    github.com/dgryski/go-metro v0.0.0-20200812162917-85c65e2d0165
+      MIT
+      Copyright (c) 2016 Damian Gryski
+    github.com/ebfe/bcrypt_pbkdf v0.0.0-20140212075826-3c8d2dcb253a
+      BSD-2-Clause
+      Copyright (c) 2014, ebfe
+    github.com/go-chi/chi/v5 v5.0.8
+      MIT
+      Copyright (c) 2015-present Peter Kieltyka (https://github.com/pkieltyka), Google Inc.
+    github.com/go-chi/render v1.0.2
+      MIT
+      Copyright (c) 2016-Present https://github.com/go-chi authors
+    github.com/go-playground/locales v0.14.0
+      MIT
+      Copyright (c) 2016 Go Playground
+    github.com/go-playground/universal-translator v0.18.0
+      MIT
+      Copyright (c) 2016 Go Playground
+    github.com/go-playground/validator/v10 v10.11.1
+      MIT
+      Copyright (c) 2015 Dean Karn
+    github.com/golang/protobuf v1.5.2
+      BSD-3-Clause
+      Copyright 2010 The Go Authors.  All rights reserved.
+    github.com/gorilla/websocket v1.5.0
+      BSD-2-Clause
+      (text below)
+    github.com/jhump/protoreflect v1.14.0
+      Apache-2.0
+      (no NOTICE file)
+    github.com/klauspost/compress v1.15.12
+      BSD-3-Clause AND Apache-2.0 AND MIT
+      Copyright (c) 2012 The Go Authors. All rights reserved.
+      Copyright (c) 2019 Klaus Post. All rights reserved.
+      Copyright 2016-2017 The New York Times Company
+      Copyright (c) 2015 Klaus Post
+      Copyright (c) 2011 The Snappy-Go Authors. All rights reserved.
+      Copyright 2016 The filepathx Authors
+    github.com/klauspost/cpuid v1.2.3
+      MIT
+      Copyright (c) 2015 Klaus Post
+    github.com/klauspost/reedsolomon v1.9.3
+      MIT
+      Copyright (c) 2015 Klaus Post
+      Copyright (c) 2015 Backblaze
+    github.com/leodido/go-urn v1.2.1
+      MIT
+      Copyright (c) 2018 Leonardo Di Donato
+    github.com/lucas-clemente/quic-go v0.31.1
+      MIT
+      Copyright (c) 2016 the quic-go authors & Google, Inc.
+    github.com/lunixbochs/struc v0.0.0-20200707160740-784aaebc1d40
+      MIT
+      Copyright (c) 2015 Ryan Hileman
+    github.com/marten-seemann/qtls-go1-19 v0.1.1
+      BSD-3-Clause
+      (Go licence text below)
+    github.com/mustafaturan/bus v1.0.2
+      Apache-2.0
+      (no NOTICE file)
+    github.com/mustafaturan/monoton v1.0.0
+      Apache-2.0
+      (no NOTICE file)
+    github.com/patrickmn/go-cache v2.1.0+incompatible
+      MIT
+      Copyright (c) 2012-2017 Patrick Mylund Nielsen and the go-cache contributors
+    github.com/pelletier/go-toml v1.9.5
+      MIT AND Apache-2.0
+      Copyright (c) 2013 - 2021 Thomas Pelletier, Eric Anderton
+    github.com/pion/dtls/v2 v2.0.0-rc.7
+      MIT
+      Copyright (c) 2018
+    github.com/pion/logging v0.2.2
+      MIT
+      Copyright (c) 2018
+    github.com/pion/sctp v1.7.6
+      MIT
+      Copyright (c) 2018
+    github.com/pires/go-proxyproto v0.6.2
+      Apache-2.0
+      (no NOTICE file)
+    github.com/pkg/errors v0.9.1
+      BSD-2-Clause
+      Copyright (c) 2015, Dave Cheney <dave@cheney.net>
+    github.com/refraction-networking/utls v1.2.0
+      BSD-3-Clause
+      (Go licence text below)
+    github.com/riobard/go-bloom v0.0.0-20200614022211-cdc8013cb5b3
+      Apache-2.0
+      (no NOTICE file)
+    github.com/secure-io/siv-go v0.0.0-20180922214919-5ff40651e2c4
+      MIT
+      Copyright (c) 2018 SecureIO
+    github.com/seiflotfy/cuckoofilter v0.0.0-20220411075957-e3b120b3f5fb
+      MIT
+      Copyright (c) 2015 Seif Lotfy <seif.lotfy@gmail.com>
+    github.com/v2fly/BrowserBridge v0.0.0-20210430233438-0570fc1d7d08
+      MIT
+      Copyright (c) 2019-2021 V2Fly Community
+    github.com/v2fly/VSign v0.0.0-20201108000810-e2adc24bf848
+      MIT
+      Copyright (c) 2015-2020 V2Fly Community
+    github.com/v2fly/ss-bloomring v0.0.0-20210312155135-28617310f63e
+      Apache-2.0
+      (no NOTICE file)
+    github.com/xiaokangwang/VLite v0.0.0-20220418190619-cff95160a432
+      MIT
+      Copyright (c) 2020-2022 Shelikhoo(Xiaokang Wang)
+    github.com/xtaci/smux v1.5.15
+      MIT
+      Copyright (c) 2016-2017 Daniel Fu
+    go.starlark.net v0.0.0-20220817180228-f738f5508c12
+      BSD-3-Clause
+      (text below)
+    go4.org/netipx v0.0.0-20220812043211-3cc044ffd68d
+      BSD-3-Clause
+      (text below)
+    golang.org/x/crypto v0.4.0
+      BSD-3-Clause
+      (Go licence text below)
+    golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e
+      BSD-3-Clause
+      (Go licence text below)
+    golang.org/x/net v0.4.0
+      BSD-3-Clause
+      (Go licence text below)
+    golang.org/x/sys v0.3.0
+      BSD-3-Clause
+      (Go licence text below)
+    golang.org/x/text v0.5.0
+      BSD-3-Clause
+      (Go licence text below)
+    golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1
+      BSD-3-Clause
+      Copyright (c) 2019 The Go Authors. All rights reserved.
+    google.golang.org/genproto v0.0.0-20200526211855-cb27e3aa2013
+      Apache-2.0
+      (no NOTICE file)
+    google.golang.org/grpc v1.51.0
+      Apache-2.0
+      (NOTICE below)
+    google.golang.org/protobuf v1.28.1
+      BSD-3-Clause
+      Copyright (c) 2018 The Go Authors. All rights reserved.
+    gopkg.in/yaml.v3 v3.0.1
+      MIT AND Apache-2.0
+      Copyright (c) 2006-2010 Kirill Simonov
+      Copyright (c) 2006-2011 Kirill Simonov
+      Copyright (c) 2011-2019 Canonical Ltd
+  The MIT permission notice, the BSD-2-Clause and BSD-3-Clause texts, the
+  Apache-2.0 text, and the NOTICE files of google.golang.org/grpc and
+  gopkg.in/yaml.v3 are reproduced under "Licence texts" below.
 
 == Bundled renderer libraries (src/renderer/vendor/) ==
 
@@ -121,6 +389,30 @@ DOMPurify (HTML sanitizer)
   Copyright (c) Cure53 and other contributors
   https://github.com/cure53/DOMPurify
 
+Agora Web SDK (agora-rtc-sdk-ng)
+  Version 4.24.0, shipped as `src/renderer/vendor/AgoraRTC_N-4.24.0.js`
+  (sha256 f440fa2dbf56983fcc80a0443f2e4d2413aaee264c3a64a35d9e01f2b7e3c98b),
+  unmodified: byte-identical to `AgoraRTC_N-production.js` in the npm
+  package agora-rtc-sdk-ng@4.24.0 and to
+  https://download.agora.io/sdk/release/AgoraRTC_N-4.24.0.js
+  Used only by the live-room page.
+  License: MIT, as declared by the npm package's `license` field. The
+  package ships no licence file; the MIT permission notice is reproduced
+  under "Licence texts" below.
+  Copyright AgoraInc.
+  The bundle also contains the following libraries, identified from code
+  and strings inside it. Their licence files, copied verbatim from the npm
+  package of the version shown, are reproduced under "Licence texts"
+  below. Where the version is a range, the bundle does not state it, and
+  the licence file is byte-identical across every version in the range.
+    core-js-pure 3.42.0          MIT
+    axios 1.9.0                  MIT
+    ua-parser-js 0.7.40          MIT
+    webrtc-adapter 7.6.2-9.0.6   BSD-3-Clause
+    sdp 2.0.0-3.2.2              MIT
+    pako 2.1.0-2.2.0             MIT (with zlib-derived code, Zlib)
+    formdata-polyfill 4.0.5-4.0.10  MIT
+
 == Framework ==
 
 Electron
@@ -131,8 +423,7 @@ Electron
   carry their own notices. Electron generates them all into a single
   `LICENSES.chromium.html`, and Freedom ships that file with every package:
     macOS    inside the bundle, `Freedom.app/Contents/Resources/`
-    Linux    beside the `freedom` executable (`/opt/Freedom/` for the .deb,
-             the mount root inside the AppImage)
+    Linux    beside the `freedom` executable (`/opt/Freedom/` in the .deb)
     Windows  beside `Freedom.exe` in the installation directory
   The macOS copy is placed there deliberately, by
   `package.json` `build.mac.extraResources`: on that platform
@@ -198,7 +489,7 @@ Ad-blocking filter lists (bundled data, not code)
   `assets/adblock/COPYING.GPL-3.0.txt`. These files are separate data and
   scripts that Freedom's filter engine reads at run time (the scriptlets
   run inside web pages, not in Freedom's own code); they are not
-  combined into Freedom's MPL-2.0 sources. See LICENSE_AUDIT.md.
+  combined into Freedom's own sources. See LICENSE_AUDIT.md.
 
 == Committed assets ==
 
@@ -212,13 +503,18 @@ Chain and token marks (sidebar and wallet icons)
 
 Everything else committed under `src/` — the internal-page artwork and
 wordmark in `src/renderer/pages/images/`, and the Myotis supervisor
-sources in `src/main/myotis/native/` — is Freedom's own work under the
-MPL-2.0 in `LICENSE`.
+sources in `src/main/myotis/native/` — is upstream Freedom work under
+MPL-2.0, or this fork's own work under the AGPL in `LICENSE`. So are
+`assets/hns/` (the fork's Handshake launcher script and its provenance
+note; `checkpoint_main.dat` there holds public Handshake block headers)
+and the JackTrip routing script in `resources/jacktrip-scripts/`. JackTrip
+itself is not bundled.
 
 == npm dependencies ==
 
 npm dependencies
-  See package.json for the full list.
+  See package.json for the full list. Each package's own licence file
+  ships with it inside `app.asar`.
   Most use permissive licenses (MIT, ISC, BSD, Apache-2.0, 0BSD,
   BlueOak-1.0.0, Python-2.0). The weak-copyleft ones are:
     MPL-2.0        @ghostery/adblocker and its @remusao/* helpers,
@@ -228,3 +524,857 @@ npm dependencies
   MPL packages are consumed unmodified from npm, and the LGPL ones ship as
   the separate, replaceable `openlv.esm.js` bundle described above.
   better-sqlite3 (MIT) embeds SQLite, which is in the public domain.
+  The dVPN SDK this fork adds, sentinel-ai-connect (installed as
+  blue-agent-connect 2.0.0, MIT, Copyright (c) 2026 Norse Labs) and
+  blue-js-sdk 2.8.0 (MIT, Copyright (c) 2026 Sentinel dVPN Contributors),
+  brings @cosmjs/* 0.39.0 (Apache-2.0; these packages ship no licence
+  file, so the Apache-2.0 text below applies) and readonly-date-esm 2.0.0
+  (Apache-2.0), whose upstream NOTICE is reproduced per Apache License 2.0
+  section 4(d):
+
+    This repository was forked from https://github.com/iov-one/readonly-date
+    at commit 737f03f5d8d7c0736e5feb5634c75c05b9584b92.
+
+    Copyright 2018 IOV SAS
+    Copyright 2025 Confio GmbH
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+           http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+
+== Licence texts ==
+
+These texts are reproduced verbatim from the files named. Where a
+component above says it uses one of them, the text applies with that
+component's own copyright line.
+
+libuv (vendored in hnsd), from `uv/LICENSE` at hnsd commit a5c7c287
+    libuv is licensed for use as follows:
+
+    ====
+    Copyright (c) 2015-present libuv project contributors.
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to
+    deal in the Software without restriction, including without limitation the
+    rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+    sell copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+    IN THE SOFTWARE.
+    ====
+
+    This license applies to parts of libuv originating from the
+    https://github.com/joyent/libuv repository:
+
+    ====
+
+    Copyright Joyent, Inc. and other Node contributors. All rights reserved.
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to
+    deal in the Software without restriction, including without limitation the
+    rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+    sell copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+    IN THE SOFTWARE.
+
+    ====
+
+    This license applies to all parts of libuv that are not externally
+    maintained libraries.
+
+MIT License, from V2Ray v5.2.1's LICENSE (used by every MIT component
+above, each under its own copyright line)
+    The MIT License (MIT)
+
+    Copyright (c) 2015-2022 V2Fly Community
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+BSD-3-Clause, the Go licence: Go 1.26.2's LICENSE, identical in
+golang.org/x/net v0.31.0 and golang.org/x/sys v0.27.0
+    Copyright 2009 The Go Authors.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are
+    met:
+
+       * Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+       * Redistributions in binary form must reproduce the above
+    copyright notice, this list of conditions and the following disclaimer
+    in the documentation and/or other materials provided with the
+    distribution.
+       * Neither the name of Google LLC nor the names of its
+    contributors may be used to endorse or promote products derived from
+    this software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+    A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+    OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+BSD-3-Clause, the Go licence: Go 1.19.4's LICENSE, identical in
+golang.org/x/crypto, x/exp, x/net, x/sys, x/text,
+github.com/marten-seemann/qtls-go1-19 and
+github.com/refraction-networking/utls at the versions above, and the same
+text under the copyright lines quoted above for github.com/golang/protobuf,
+google.golang.org/protobuf and golang.org/x/xerrors
+    Copyright (c) 2009 The Go Authors. All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are
+    met:
+
+       * Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+       * Redistributions in binary form must reproduce the above
+    copyright notice, this list of conditions and the following disclaimer
+    in the documentation and/or other materials provided with the
+    distribution.
+       * Neither the name of Google Inc. nor the names of its
+    contributors may be used to endorse or promote products derived from
+    this software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+    A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+    OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+BSD-3-Clause, from go.starlark.net's LICENSE
+    Copyright (c) 2017 The Bazel Authors.  All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are
+    met:
+
+    1. Redistributions of source code must retain the above copyright
+       notice, this list of conditions and the following disclaimer.
+
+    2. Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in the
+       documentation and/or other materials provided with the
+       distribution.
+
+    3. Neither the name of the copyright holder nor the names of its
+       contributors may be used to endorse or promote products derived
+       from this software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+    A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+    HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+BSD-3-Clause, from go4.org/netipx's LICENSE
+    Copyright (c) 2020 The Inet.af AUTHORS. All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are
+    met:
+
+       * Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+       * Redistributions in binary form must reproduce the above
+    copyright notice, this list of conditions and the following disclaimer
+    in the documentation and/or other materials provided with the
+    distribution.
+       * Neither the name of Tailscale Inc. nor the names of its
+    contributors may be used to endorse or promote products derived from
+    this software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+    A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+    OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+BSD-2-Clause, from github.com/gorilla/websocket v1.5.0's LICENSE
+    Copyright (c) 2013 The Gorilla WebSocket Authors. All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are met:
+
+      Redistributions of source code must retain the above copyright notice, this
+      list of conditions and the following disclaimer.
+
+      Redistributions in binary form must reproduce the above copyright notice,
+      this list of conditions and the following disclaimer in the documentation
+      and/or other materials provided with the distribution.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+    ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+    DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+    FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+    DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+    SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+    CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+    OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+ISC License (chacha20-simple, libuv's inet_pton and inet_ntop), without
+the copyright line, from hnsd's src/chacha20/chacha20.c
+    Permission to use, copy, modify, and distribute this software for any
+    purpose with or without fee is hereby granted, provided that the above
+    copyright notice and this permission notice appear in all copies.
+
+    THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+    WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+    MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+    SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+    WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+    ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
+    IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+    This implementation is intended to be simple, many optimizations can be
+    performed.
+     */
+
+    #include "config.h"
+
+    #include <string.h>
+
+    #include "chacha20.h"
+
+    #define ROTL32(v, n) ((v) << (n)) | ((v) >> (32 - (n)))
+
+    #define READLE(p)                   \
+      (((uint32_t)((p)[0]))         \
+      | ((uint32_t)((p)[1]) << 8)   \
+      | ((uint32_t)((p)[2]) << 16)  \
+      | ((uint32_t)((p)[3]) << 24))
+
+    #define WRITELE(b, i)         \
+      (b)[0] = i & 0xFF;         \
+      (b)[1] = (i >> 8) & 0xFF;  \
+      (b)[2] = (i >> 16) & 0xFF; \
+      (b)[3] = (i >> 24) & 0xFF;
+
+    #ifndef MIN
+    #define MIN(a, b) (((a) < (b)) ? (a) : (b))
+    #endif
+
+    #define QUARTERROUND(x, a, b, c, d)             \
+      x[a] += x[b]; x[d] = ROTL32(x[d] ^ x[a], 16); \
+      x[c] += x[d]; x[b] = ROTL32(x[b] ^ x[c], 12); \
+      x[a] += x[b]; x[d] = ROTL32(x[d] ^ x[a], 8);  \
+      x[c] += x[d]; x[b] = ROTL32(x[b] ^ x[c], 7);
+
+    void
+    hsk_chacha20_setup(
+      hsk_chacha20_ctx *ctx,
+      const uint8_t *key,
+      size_t length,
+      const uint8_t *nonce,
+      uint8_t nonce_size
+    ) {
+      hsk_chacha20_keysetup(ctx, key, length);
+      hsk_chacha20_ivsetup(ctx, nonce, nonce_size);
+    }
+
+    void
+    hsk_chacha20_keysetup(
+      hsk_chacha20_ctx *ctx,
+      const uint8_t *key,
+      size_t length
+    ) {
+      const char *constants = (length == 32)
+        ? "expand 32-byte k"
+        : "expand 16-byte k";
+
+      ctx->schedule[0] = READLE(constants + 0);
+      ctx->schedule[1] = READLE(constants + 4);
+      ctx->schedule[2] = READLE(constants + 8);
+      ctx->schedule[3] = READLE(constants + 12);
+      ctx->schedule[4] = READLE(key + 0);
+      ctx->schedule[5] = READLE(key + 4);
+      ctx->schedule[6] = READLE(key + 8);
+      ctx->schedule[7] = READLE(key + 12);
+      ctx->schedule[8] = READLE(key + 16 % length);
+      ctx->schedule[9] = READLE(key + 20 % length);
+      ctx->schedule[10] = READLE(key + 24 % length);
+      ctx->schedule[11] = READLE(key + 28 % length);
+      ctx->schedule[12] = 0;
+
+      ctx->available = 0;
+      ctx->nonce_size = 8;
+    }
+
+    void
+    hsk_chacha20_ivsetup(
+      hsk_chacha20_ctx *ctx,
+      const uint8_t *nonce,
+      uint8_t nonce_size
+    ) {
+      ctx->schedule[12] = 0;
+
+      if (nonce_size == 8) {
+        ctx->schedule[13] = 0;
+        ctx->schedule[14] = READLE(nonce + 0);
+        ctx->schedule[15] = READLE(nonce + 4);
+      } else {
+        ctx->schedule[13] = READLE(nonce + 0);
+        ctx->schedule[14] = READLE(nonce + 4);
+        ctx->schedule[15] = READLE(nonce + 8);
+      }
+
+      ctx->nonce_size = nonce_size;
+    }
+
+    void
+    hsk_chacha20_counter_set(hsk_chacha20_ctx *ctx, uint64_t counter) {
+      if (ctx->nonce_size == 8) {
+        ctx->schedule[12] = counter & UINT32_C(0xFFFFFFFF);
+        ctx->schedule[13] = counter >> 32;
+      } else {
+        ctx->schedule[12] = (uint32_t)counter;
+      }
+      ctx->available = 0;
+    }
+
+    uint64_t
+    hsk_chacha20_counter_get(hsk_chacha20_ctx *ctx) {
+      if (ctx->nonce_size == 8)
+        return ((uint64_t)ctx->schedule[13] << 32) | ctx->schedule[12];
+
+      return (uint64_t)ctx->schedule[12];
+    }
+
+    void
+    hsk_chacha20_block(hsk_chacha20_ctx *ctx, uint32_t output[16]) {
+      uint32_t *nonce = ctx->schedule + 12;
+      int i = 10;
+
+      memcpy(output, ctx->schedule, sizeof(ctx->schedule));
+
+      while (i--) {
+        QUARTERROUND(output, 0, 4, 8, 12)
+        QUARTERROUND(output, 1, 5, 9, 13)
+        QUARTERROUND(output, 2, 6, 10, 14)
+        QUARTERROUND(output, 3, 7, 11, 15)
+        QUARTERROUND(output, 0, 5, 10, 15)
+        QUARTERROUND(output, 1, 6, 11, 12)
+        QUARTERROUND(output, 2, 7, 8, 13)
+        QUARTERROUND(output, 3, 4, 9, 14)
+      }
+
+      for (i = 0; i < 16; i++) {
+        uint32_t result = output[i] + ctx->schedule[i];
+        WRITELE((uint8_t *)(output + i), result);
+      }
+
+      if (!++nonce[0]) {
+        if (ctx->nonce_size == 8)
+          nonce[1]++;
+      }
+    }
+
+    static inline
+    void hsk_chacha20_xor(
+      uint8_t *keystream,
+      const uint8_t **in,
+      uint8_t **out,
+      size_t length
+    ) {
+      uint8_t *end_keystream = keystream + length;
+      do {
+        *(*out)++ = *(*in)++ ^ *keystream++;
+      } while (keystream < end_keystream);
+    }
+
+    void
+    hsk_chacha20_encrypt(
+      hsk_chacha20_ctx *ctx,
+      const uint8_t *in,
+      uint8_t *out,
+      size_t length
+    ) {
+      if (length) {
+        uint8_t *k = (uint8_t *)ctx->keystream;
+
+        if (ctx->available) {
+          size_t amount = MIN(length, ctx->available);
+          size_t size = sizeof(ctx->keystream) - ctx->available;
+          hsk_chacha20_xor(k + size, &in, &out, amount);
+          ctx->available -= amount;
+          length -= amount;
+        }
+
+        while (length) {
+          size_t amount = MIN(length, sizeof(ctx->keystream));
+          hsk_chacha20_block(ctx, ctx->keystream);
+          hsk_chacha20_xor(k, &in, &out, amount);
+          length -= amount;
+          ctx->available = sizeof(ctx->keystream) - amount;
+        }
+      }
+    }
+
+    void
+    hsk_chacha20_decrypt(
+      hsk_chacha20_ctx *ctx,
+      const uint8_t *in,
+      uint8_t *out,
+      size_t length
+    ) {
+      hsk_chacha20_encrypt(ctx, in, out, length);
+    }
+
+Libraries embedded in the Agora Web SDK bundle, each from the npm
+package named
+  core-js-pure 3.42.0, package/LICENSE
+    Copyright (c) 2014-2025 Denis Pushkarev
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
+
+  axios 1.9.0, package/LICENSE
+    # Copyright (c) 2014-present Matt Zabriskie & Collaborators
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  ua-parser-js 0.7.40, package/license.md
+    MIT License
+
+    Copyright (c) 2012-2024 Faisal Salman <<f@faisalman.com>>
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+  webrtc-adapter 9.0.6, package/LICENSE.md (identical from 7.6.2)
+    Copyright (c) 2014, The WebRTC project authors. All rights reserved.
+    Copyright (c) 2018, The adapter.js project authors. All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are
+    met:
+
+      * Redistributions of source code must retain the above copyright
+        notice, this list of conditions and the following disclaimer.
+
+      * Redistributions in binary form must reproduce the above copyright
+        notice, this list of conditions and the following disclaimer in
+        the documentation and/or other materials provided with the
+        distribution.
+
+      * Neither the name of Google nor the names of its contributors may
+        be used to endorse or promote products derived from this software
+        without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+    A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+    HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+  sdp 3.2.2, package/LICENSE (identical from 2.0.0)
+    Copyright (c) 2017 Philipp Hancke
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+  pako 2.1.0, package/LICENSE (identical in 2.2.0)
+    (The MIT License)
+
+    Copyright (C) 2014-2017 by Vitaly Puzrin and Andrei Tuputcyn
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
+
+  formdata-polyfill 4.0.10, package/LICENSE (identical from 4.0.5)
+    MIT License
+
+    Copyright (c) 2016 Jimmy Karl Roland Wärting
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+google.golang.org/grpc v1.51.0 NOTICE.txt, reproduced per Apache License
+2.0 section 4(d)
+    Copyright 2014 gRPC authors.
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+
+gopkg.in/yaml.v3 v3.0.1 NOTICE, reproduced per Apache License 2.0
+section 4(d)
+    Copyright 2011-2016 Canonical Ltd.
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+
+Apache License 2.0, from github.com/buffrr/letsdane v0.6.1's LICENSE
+                                     Apache License
+                               Version 2.0, January 2004
+                            http://www.apache.org/licenses/
+
+       TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+       1. Definitions.
+
+          "License" shall mean the terms and conditions for use, reproduction,
+          and distribution as defined by Sections 1 through 9 of this document.
+
+          "Licensor" shall mean the copyright owner or entity authorized by
+          the copyright owner that is granting the License.
+
+          "Legal Entity" shall mean the union of the acting entity and all
+          other entities that control, are controlled by, or are under common
+          control with that entity. For the purposes of this definition,
+          "control" means (i) the power, direct or indirect, to cause the
+          direction or management of such entity, whether by contract or
+          otherwise, or (ii) ownership of fifty percent (50%) or more of the
+          outstanding shares, or (iii) beneficial ownership of such entity.
+
+          "You" (or "Your") shall mean an individual or Legal Entity
+          exercising permissions granted by this License.
+
+          "Source" form shall mean the preferred form for making modifications,
+          including but not limited to software source code, documentation
+          source, and configuration files.
+
+          "Object" form shall mean any form resulting from mechanical
+          transformation or translation of a Source form, including but
+          not limited to compiled object code, generated documentation,
+          and conversions to other media types.
+
+          "Work" shall mean the work of authorship, whether in Source or
+          Object form, made available under the License, as indicated by a
+          copyright notice that is included in or attached to the work
+          (an example is provided in the Appendix below).
+
+          "Derivative Works" shall mean any work, whether in Source or Object
+          form, that is based on (or derived from) the Work and for which the
+          editorial revisions, annotations, elaborations, or other modifications
+          represent, as a whole, an original work of authorship. For the purposes
+          of this License, Derivative Works shall not include works that remain
+          separable from, or merely link (or bind by name) to the interfaces of,
+          the Work and Derivative Works thereof.
+
+          "Contribution" shall mean any work of authorship, including
+          the original version of the Work and any modifications or additions
+          to that Work or Derivative Works thereof, that is intentionally
+          submitted to Licensor for inclusion in the Work by the copyright owner
+          or by an individual or Legal Entity authorized to submit on behalf of
+          the copyright owner. For the purposes of this definition, "submitted"
+          means any form of electronic, verbal, or written communication sent
+          to the Licensor or its representatives, including but not limited to
+          communication on electronic mailing lists, source code control systems,
+          and issue tracking systems that are managed by, or on behalf of, the
+          Licensor for the purpose of discussing and improving the Work, but
+          excluding communication that is conspicuously marked or otherwise
+          designated in writing by the copyright owner as "Not a Contribution."
+
+          "Contributor" shall mean Licensor and any individual or Legal Entity
+          on behalf of whom a Contribution has been received by Licensor and
+          subsequently incorporated within the Work.
+
+       2. Grant of Copyright License. Subject to the terms and conditions of
+          this License, each Contributor hereby grants to You a perpetual,
+          worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+          copyright license to reproduce, prepare Derivative Works of,
+          publicly display, publicly perform, sublicense, and distribute the
+          Work and such Derivative Works in Source or Object form.
+
+       3. Grant of Patent License. Subject to the terms and conditions of
+          this License, each Contributor hereby grants to You a perpetual,
+          worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+          (except as stated in this section) patent license to make, have made,
+          use, offer to sell, sell, import, and otherwise transfer the Work,
+          where such license applies only to those patent claims licensable
+          by such Contributor that are necessarily infringed by their
+          Contribution(s) alone or by combination of their Contribution(s)
+          with the Work to which such Contribution(s) was submitted. If You
+          institute patent litigation against any entity (including a
+          cross-claim or counterclaim in a lawsuit) alleging that the Work
+          or a Contribution incorporated within the Work constitutes direct
+          or contributory patent infringement, then any patent licenses
+          granted to You under this License for that Work shall terminate
+          as of the date such litigation is filed.
+
+       4. Redistribution. You may reproduce and distribute copies of the
+          Work or Derivative Works thereof in any medium, with or without
+          modifications, and in Source or Object form, provided that You
+          meet the following conditions:
+
+          (a) You must give any other recipients of the Work or
+              Derivative Works a copy of this License; and
+
+          (b) You must cause any modified files to carry prominent notices
+              stating that You changed the files; and
+
+          (c) You must retain, in the Source form of any Derivative Works
+              that You distribute, all copyright, patent, trademark, and
+              attribution notices from the Source form of the Work,
+              excluding those notices that do not pertain to any part of
+              the Derivative Works; and
+
+          (d) If the Work includes a "NOTICE" text file as part of its
+              distribution, then any Derivative Works that You distribute must
+              include a readable copy of the attribution notices contained
+              within such NOTICE file, excluding those notices that do not
+              pertain to any part of the Derivative Works, in at least one
+              of the following places: within a NOTICE text file distributed
+              as part of the Derivative Works; within the Source form or
+              documentation, if provided along with the Derivative Works; or,
+              within a display generated by the Derivative Works, if and
+              wherever such third-party notices normally appear. The contents
+              of the NOTICE file are for informational purposes only and
+              do not modify the License. You may add Your own attribution
+              notices within Derivative Works that You distribute, alongside
+              or as an addendum to the NOTICE text from the Work, provided
+              that such additional attribution notices cannot be construed
+              as modifying the License.
+
+          You may add Your own copyright statement to Your modifications and
+          may provide additional or different license terms and conditions
+          for use, reproduction, or distribution of Your modifications, or
+          for any such Derivative Works as a whole, provided Your use,
+          reproduction, and distribution of the Work otherwise complies with
+          the conditions stated in this License.
+
+       5. Submission of Contributions. Unless You explicitly state otherwise,
+          any Contribution intentionally submitted for inclusion in the Work
+          by You to the Licensor shall be under the terms and conditions of
+          this License, without any additional terms or conditions.
+          Notwithstanding the above, nothing herein shall supersede or modify
+          the terms of any separate license agreement you may have executed
+          with Licensor regarding such Contributions.
+
+       6. Trademarks. This License does not grant permission to use the trade
+          names, trademarks, service marks, or product names of the Licensor,
+          except as required for reasonable and customary use in describing the
+          origin of the Work and reproducing the content of the NOTICE file.
+
+       7. Disclaimer of Warranty. Unless required by applicable law or
+          agreed to in writing, Licensor provides the Work (and each
+          Contributor provides its Contributions) on an "AS IS" BASIS,
+          WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+          implied, including, without limitation, any warranties or conditions
+          of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+          PARTICULAR PURPOSE. You are solely responsible for determining the
+          appropriateness of using or redistributing the Work and assume any
+          risks associated with Your exercise of permissions under this License.
+
+       8. Limitation of Liability. In no event and under no legal theory,
+          whether in tort (including negligence), contract, or otherwise,
+          unless required by applicable law (such as deliberate and grossly
+          negligent acts) or agreed to in writing, shall any Contributor be
+          liable to You for damages, including any direct, indirect, special,
+          incidental, or consequential damages of any character arising as a
+          result of this License or out of the use or inability to use the
+          Work (including but not limited to damages for loss of goodwill,
+          work stoppage, computer failure or malfunction, or any and all
+          other commercial damages or losses), even if such Contributor
+          has been advised of the possibility of such damages.
+
+       9. Accepting Warranty or Additional Liability. While redistributing
+          the Work or Derivative Works thereof, You may choose to offer,
+          and charge a fee for, acceptance of support, warranty, indemnity,
+          or other liability obligations and/or rights consistent with this
+          License. However, in accepting such obligations, You may act only
+          on Your own behalf and on Your sole responsibility, not on behalf
+          of any other Contributor, and only if You agree to indemnify,
+          defend, and hold each Contributor harmless for any liability
+          incurred by, or claims asserted against, such Contributor by reason
+          of your accepting any such warranty or additional liability.
+
+       END OF TERMS AND CONDITIONS
+
+       APPENDIX: How to apply the Apache License to your work.
+
+          To apply the Apache License to your work, attach the following
+          boilerplate notice, with the fields enclosed by brackets "[]"
+          replaced with your own identifying information. (Don't include
+          the brackets!)  The text should be enclosed in the appropriate
+          comment syntax for the file format. We also recommend that a
+          file or class name and description of purpose be included on the
+          same "printed page" as the copyright notice for easier
+          identification within third-party archives.
+
+       Copyright [yyyy] [name of copyright owner]
+
+       Licensed under the Apache License, Version 2.0 (the "License");
+       you may not use this file except in compliance with the License.
+       You may obtain a copy of the License at
+
+           http://www.apache.org/licenses/LICENSE-2.0
+
+       Unless required by applicable law or agreed to in writing, software
+       distributed under the License is distributed on an "AS IS" BASIS,
+       WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+       See the License for the specific language governing permissions and
+       limitations under the License.

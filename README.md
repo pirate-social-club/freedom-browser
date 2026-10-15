@@ -89,4 +89,4 @@ Do not post credentials, seed phrases, private keys, or sensitive logs in public
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request. It explains issue scope, local verification, commit conventions, licensing, and the policy for AI-assisted contributions.
 
-Freedom Browser is available under the [Mozilla Public License 2.0](LICENSE). Third-party notices are recorded in [NOTICES](NOTICES).
+This fork of Freedom Browser is available under the [GNU Affero General Public License, version 3 or later](LICENSE). Code taken from upstream Freedom Browser remains under the Mozilla Public License 2.0 within this larger work. Third-party notices are recorded in [NOTICES](NOTICES), and the component audit in [LICENSE_AUDIT.md](LICENSE_AUDIT.md).

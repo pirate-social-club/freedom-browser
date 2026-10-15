@@ -30,8 +30,16 @@
  * scripts' pins, the lockfile) and compared with what the audit records, so a
  * bump cannot leave the audit stale either, and the audit's own baseline is
  * pinned to `package.json`'s version so a release cannot carry a stale one.
+ *
+ * This fork (AGPL-3.0-or-later) adds helpers that are committed rather than
+ * fetched: `hns-bin/` and `dvpn-bin/` hold exact binaries and data for the
+ * targets `src/shared/platform-capabilities.json` enables. They have no pin
+ * to compare a version with, so their bytes are the pin: every committed file
+ * is listed below and its digest must match the one licenses-audit.json and
+ * LICENSE_AUDIT.md record, so a swapped binary cannot inherit an old audit.
  */
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -93,8 +101,16 @@ const EXTRA_RESOURCES = {
     auditName: 'myotis',
     noticeMatch: /^Myotis \(trustless Ethereum wallet engine\)$/m,
     pin: { file: 'scripts/myotis-release.json', re: /"releaseTag": "([^"]+)"/ },
+    // The fork's Linux deb omits Myotis (`build.linux.extraResources` does not
+    // name it), so its platform set is written down like Arti's and checked
+    // the same way.
     platformClaims: [
       { file: 'NOTICES', line: /^ {2}Bundled on .+ only\.$/m },
+      {
+        file: 'LICENSE_AUDIT.md',
+        block: /^### Myotis \(Native Wallet-Engine Addon\)/m,
+        line: /^Myotis ships in the .+ builds only\.$/m,
+      },
     ],
   },
   'arti-bin/${os}-${arch}/': {
@@ -113,9 +129,11 @@ const EXTRA_RESOURCES = {
       { file: 'NOTICES', line: /^Arti \(Tor client, .+ builds\)$/m },
       { file: 'LICENSE_AUDIT.md', line: /^ *- Arti \(Tor client\) — .*$/m },
       {
+        // The fork writes LICENSE_AUDIT.md as prose, so the claim is a
+        // sentence of its own rather than upstream's `- **Platforms:**` row.
         file: 'LICENSE_AUDIT.md',
         block: /^### Arti \(Tor Client\)/m,
-        line: /^- \*\*Platforms:\*\* .*$/m,
+        line: /^Arti ships in the .+ builds only\.$/m,
       },
     ],
   },
@@ -137,8 +155,91 @@ const EXTRA_RESOURCES = {
   },
   'config/ant.yaml': { thirdParty: false, label: "Freedom's own Ant config" },
   'config/default-bookmarks.json': { thirdParty: false, label: "Freedom's own bookmark seed" },
-  LICENSE: { thirdParty: false, label: "Freedom's own MPL-2.0 licence text" },
+  LICENSE: { thirdParty: false, label: "the fork's AGPL-3.0-or-later licence text" },
   NOTICES: { thirdParty: false, label: 'this attribution set' },
+  // Fork additions. These two ship committed bytes, one directory per target,
+  // and only for the targets the capability manifest enables; `committed`
+  // lists every file each target directory may hold and which audit entry
+  // records its digest (null for the fork's own provenance records).
+  'hns-bin/${os}-${arch}/': {
+    thirdParty: true,
+    label: 'Handshake helpers (hnsd and fingertipd)',
+    auditName: 'hnsd',
+    noticeMatch: /^hnsd \(Handshake SPV resolver\)$/m,
+    also: [
+      {
+        label: 'fingertipd',
+        auditName: 'fingertipd',
+        noticeMatch: /^fingertipd \(Handshake DNSSEC\/DANE proxy\)$/m,
+      },
+    ],
+    committed: {
+      capability: 'hns',
+      files: {
+        hnsd: 'hnsd',
+        fingertipd: 'fingertipd',
+        'PROVENANCE.md': null,
+        'encrypted-validator.json': null,
+        licenses: null,
+      },
+      // The helpers' upstream licence files and hnsd's complete source, copied
+      // unedited and indexed with digests by `licenses/source-record.json`.
+      noticeBundle: {
+        dir: 'licenses',
+        record: 'licenses/source-record.json',
+        unindexed: ['README.md', 'source-record.json'],
+        binaries: { hnsd: 'hnsd', fingertipd: 'fingertipd' },
+      },
+    },
+    targetClaims: [
+      { file: 'NOTICES', block: /^hnsd \(/m, line: /^ {2}Shipped in .+ packages only\.$/m },
+      { file: 'NOTICES', block: /^fingertipd \(/m, line: /^ {2}Shipped in .+ packages only\.$/m },
+      {
+        file: 'LICENSE_AUDIT.md',
+        block: /^### Handshake helpers/m,
+        line: /^The Handshake helpers ship in .+ packages only\.$/m,
+      },
+    ],
+  },
+  'dvpn-bin/${os}-${arch}/': {
+    thirdParty: true,
+    label: 'V2Ray runtime',
+    auditName: 'v2ray',
+    noticeMatch: /^V2Ray \(dVPN transport\)$/m,
+    // Only the binary: V2Ray's geoip.dat and geosite.dat were removed once
+    // V2Ray was shown to start without them under the SDK's configuration.
+    // A data file coming back fails "holds only classified files" until it
+    // is classified and attributed again.
+    committed: {
+      capability: 'dvpn',
+      files: {
+        v2ray: 'v2ray',
+        licenses: null,
+      },
+      // Every embedded Go module's licence files, copied unedited from its
+      // proxy.golang.org archive and indexed by `licenses/source-record.json`.
+      noticeBundle: {
+        dir: 'licenses',
+        record: 'licenses/source-record.json',
+        unindexed: ['README.md', 'source-record.json'],
+        binaries: { v2ray: 'v2ray' },
+      },
+    },
+    targetClaims: [
+      { file: 'NOTICES', block: /^V2Ray \(/m, line: /^ {2}Shipped in .+ packages only\.$/m },
+      {
+        file: 'LICENSE_AUDIT.md',
+        block: /^### V2Ray \(dVPN transport\)/m,
+        line: /^V2Ray ships in .+ packages only\.$/m,
+      },
+    ],
+  },
+  // A shell script the fork wrote to route JackTrip audio through PipeWire.
+  // JackTrip itself is not bundled; see LICENSE_AUDIT.md.
+  'scripts/jacktrip/': {
+    thirdParty: false,
+    label: "the fork's own JackTrip audio-routing script",
+  },
 };
 
 /** Where Chromium's notices come from, and the macOS quirk that needs them copied. */
@@ -172,6 +273,22 @@ const VENDOR_FILES = {
     label: 'DOMPurify',
     auditName: 'dompurify',
     noticeMatch: /^DOMPurify \(HTML sanitizer\)$/m,
+  },
+  // Fork addition, loaded only by the live-room page. Agora's build carries a
+  // copyright banner but names no licence, and the npm package ships no
+  // licence file: its MIT grant exists only as registry metadata. A header
+  // regex therefore cannot vouch for it, so the exact bytes are pinned
+  // instead, and licenses-audit.json must record where the licence came from.
+  // Replacing or upgrading the file fails here until it is re-audited.
+  'AgoraRTC_N-4.24.0.js': {
+    thirdParty: true,
+    label: 'Agora Web SDK',
+    auditName: 'agora-rtc-sdk-ng',
+    noticeMatch: /^Agora Web SDK \(agora-rtc-sdk-ng\)$/m,
+    headerless: {
+      sha256: 'f440fa2dbf56983fcc80a0443f2e4d2413aaee264c3a64a35d9e01f2b7e3c98b',
+      licenceSource: /^npm registry metadata only\b/,
+    },
   },
 };
 
@@ -323,6 +440,47 @@ const auditByName = new Map(
   [...audit.dependencies, ...(audit.assets ?? [])].map((entry) => [entry.name, entry])
 );
 
+/**
+ * One row per attribution a classified path owes. A path that ships two
+ * third-party components (`hns-bin/` carries hnsd and fingertipd) lists the
+ * second under `also`, and each is checked as if it were its own entry.
+ */
+const attributionsOf = ([id, meta]) => [
+  [id, meta],
+  ...(meta.also ?? []).map((extra) => [`${id} ${extra.label}`, { thirdParty: true, ...extra }]),
+];
+
+const sha256 = (rel) =>
+  crypto
+    .createHash('sha256')
+    .update(fs.readFileSync(path.join(repoRoot, rel)))
+    .digest('hex');
+
+/** The file a claim lives in, and where a block inside it ends. */
+const CLAIM_FILES = {
+  NOTICES: { text: notices, blockEnd: /\n(?=\S)/ },
+  'LICENSE_AUDIT.md': { text: auditDoc, blockEnd: /\n(?=### |---)/ },
+};
+
+/**
+ * The line stating a platform set, scoped to its block when the claim names
+ * one — `- **Platforms:**` is a shape any component's section can carry, so
+ * a whole-file sweep would read the wrong one as soon as a second component
+ * states a platform set.
+ */
+const claimLine = (claim) => {
+  const { text, blockEnd } = CLAIM_FILES[claim.file];
+  let scope = text;
+  if (claim.block) {
+    const start = scope.search(claim.block);
+    if (start < 0) return null;
+    scope = scope.slice(start);
+    const end = scope.slice(1).search(blockEnd);
+    if (end >= 0) scope = scope.slice(0, end + 1);
+  }
+  return scope.match(claim.line)?.[0] ?? null;
+};
+
 describe('bundled-component inventory', () => {
   it('classifies every path build.extraResources ships', () => {
     for (const from of declaredExtraResources()) {
@@ -379,7 +537,9 @@ describe('NOTICES attributes every third-party component that ships', () => {
     ...Object.entries(EXTRA_RESOURCES),
     ...Object.entries(VENDOR_FILES),
     ...Object.entries(SRC_ASSETS),
-  ].filter(([, meta]) => meta.thirdParty && !meta.coveredBy);
+  ]
+    .flatMap(attributionsOf)
+    .filter(([, meta]) => meta.thirdParty && !meta.coveredBy);
 
   it.each(attributable)('%s', (id, meta) => {
     expect({ id, attributed: meta.noticeMatch.test(notices) }).toEqual({ id, attributed: true });
@@ -403,31 +563,6 @@ describe('platform claims match the artifacts that carry the component', () => {
   // longer exists. The set is now derived from the `extraResources` scopes
   // that put the binary in an artifact, and every statement of it is compared
   // with that.
-
-  /** The file a claim lives in, and where a block inside it ends. */
-  const CLAIM_FILES = {
-    NOTICES: { text: notices, blockEnd: /\n(?=\S)/ },
-    'LICENSE_AUDIT.md': { text: auditDoc, blockEnd: /\n(?=### |---)/ },
-  };
-
-  /**
-   * The line stating a platform set, scoped to its block when the claim names
-   * one — `- **Platforms:**` is a shape any component's section can carry, so
-   * a whole-file sweep would read the wrong one as soon as a second component
-   * states a platform set.
-   */
-  const claimLine = (claim) => {
-    const { text, blockEnd } = CLAIM_FILES[claim.file];
-    let scope = text;
-    if (claim.block) {
-      const start = scope.search(claim.block);
-      if (start < 0) return null;
-      scope = scope.slice(start);
-      const end = scope.slice(1).search(blockEnd);
-      if (end >= 0) scope = scope.slice(0, end + 1);
-    }
-    return scope.match(claim.line)?.[0] ?? null;
-  };
 
   const claimed = Object.entries(EXTRA_RESOURCES).filter(([, meta]) => meta.platformClaims);
 
@@ -477,6 +612,150 @@ describe('platform claims match the artifacts that carry the component', () => {
       const contradicts = Object.values(PLATFORM_WORDING).filter(
         (other) => other !== wording && !wording.includes(other) && line.includes(other)
       );
+      expect({ id, line, contradicts }).toEqual({ id, line, contradicts: [] });
+    }
+  });
+});
+
+describe('committed helpers match their audited targets and bytes', () => {
+  // `hns-bin/` and `dvpn-bin/` are not fetched at build time. Their exact
+  // files are committed, one directory per target, and electron-builder copies
+  // whichever directory matches the build, so the set of directories is the
+  // set of targets that ship them. The capability manifest says which targets
+  // may use them; the audit files have to agree with both, and with the bytes.
+  const capabilities = JSON.parse(read('src/shared/platform-capabilities.json')).capabilities;
+
+  /** How a committed target directory is written in prose. */
+  const TARGET_WORDING = {
+    'linux-x64': 'Linux x64',
+    'linux-arm64': 'Linux arm64',
+    'mac-x64': 'macOS x64',
+    'mac-arm64': 'macOS arm64',
+    'win-x64': 'Windows x64',
+    'win-arm64': 'Windows arm64',
+  };
+
+  const committed = Object.entries(EXTRA_RESOURCES).filter(([, meta]) => meta.committed);
+  const baseDir = (from) => from.slice(0, from.indexOf('/${os}-${arch}/'));
+  const committedTargets = (from) =>
+    fs
+      .readdirSync(path.join(repoRoot, baseDir(from)), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+
+  it('guards every audit entry that records committed artifacts', () => {
+    const guarded = new Set(
+      committed.flatMap(([, meta]) => Object.values(meta.committed.files)).filter(Boolean)
+    );
+    for (const entry of [...audit.dependencies, ...(audit.assets ?? [])]) {
+      if (!entry.artifacts && !entry.targets) continue;
+      expect({ name: entry.name, guarded: guarded.has(entry.name) }).toEqual({
+        name: entry.name,
+        guarded: true,
+      });
+    }
+  });
+
+  it.each(committed)('%s holds only the targets its capability enables', (id, meta) => {
+    const supported = [...capabilities[meta.committed.capability].supportedTargets].sort();
+    expect({ id, targets: committedTargets(id) }).toEqual({ id, targets: supported });
+  });
+
+  it.each(committed)('%s holds only classified files', (id, meta) => {
+    for (const target of committedTargets(id)) {
+      const files = fs.readdirSync(path.join(repoRoot, baseDir(id), target)).sort();
+      expect({ id, target, files }).toEqual({
+        id,
+        target,
+        files: Object.keys(meta.committed.files).sort(),
+      });
+    }
+  });
+
+  const bundled = committed.filter(([, meta]) => meta.committed.noticeBundle);
+
+  it.each(bundled)('%s ships a notice bundle that matches its record', (id, meta) => {
+    // The bundle is what carries the verbatim upstream notices (individual
+    // authors' copyright lines included) and hnsd's corresponding source. It
+    // is only evidence while every file in it is the file its record names,
+    // and the record names the binaries actually shipped beside it.
+    const { dir, record, unindexed, binaries } = meta.committed.noticeBundle;
+    for (const target of committedTargets(id)) {
+      const root = `${baseDir(id)}/${target}`;
+      const index = JSON.parse(read(`${root}/${record}`));
+      for (const [key, file] of Object.entries(binaries)) {
+        expect({ root, file, recorded: index[key]?.binary_sha256 }).toEqual({
+          root,
+          file,
+          recorded: sha256(`${root}/${file}`),
+        });
+      }
+      const onDisk = [];
+      const walk = (rel) => {
+        for (const entry of fs.readdirSync(path.join(repoRoot, root, rel), {
+          withFileTypes: true,
+        })) {
+          const child = `${rel}/${entry.name}`;
+          if (entry.isDirectory()) walk(child);
+          else onDisk.push(child);
+        }
+      };
+      walk(dir);
+      const indexed = index.notices.map((notice) => notice.path);
+      const expected = [...indexed, ...unindexed.map((name) => `${dir}/${name}`)].sort();
+      expect({ root, files: onDisk.sort() }).toEqual({ root, files: expected });
+      for (const notice of index.notices) {
+        expect({ root, path: notice.path, sha256: sha256(`${root}/${notice.path}`) }).toEqual({
+          root,
+          path: notice.path,
+          sha256: notice.sha256,
+        });
+      }
+    }
+  });
+
+  it.each(committed)('%s bytes match the digests both audit files record', (id, meta) => {
+    for (const target of committedTargets(id)) {
+      for (const [file, auditName] of Object.entries(meta.committed.files)) {
+        if (!auditName) continue;
+        const rel = `${baseDir(id)}/${target}/${file}`;
+        const digest = sha256(rel);
+        const entry = auditByName.get(auditName);
+        expect({ rel, recorded: entry?.artifacts?.[rel] }).toEqual({ rel, recorded: digest });
+        expect({ rel, documented: auditDoc.includes(digest) }).toEqual({ rel, documented: true });
+        expect({ rel, targets: [...(entry?.targets ?? [])].sort() }).toEqual({
+          rel,
+          targets: committedTargets(id),
+        });
+      }
+    }
+  });
+
+  it.each(committed)('%s states its targets everywhere it is written down', (id, meta) => {
+    const targets = committedTargets(id);
+    const wording = targets.map((target) => TARGET_WORDING[target]);
+    expect({ id, wording }).toEqual({ id, wording: targets.map(() => expect.any(String)) });
+    const claimedOs = new Set(targets.map((target) => target.split('-')[0]));
+    const others = [
+      ...Object.entries(TARGET_WORDING)
+        .filter(([target]) => !targets.includes(target))
+        .map(([, words]) => words),
+      ...ALL_PLATFORMS.filter((os) => !claimedOs.has(os)).map((os) => PLATFORM_WORDING[os]),
+    ];
+    for (const claim of meta.targetClaims) {
+      const line = claimLine(claim);
+      expect({ id, claim: String(claim.line), found: line !== null }).toEqual({
+        id,
+        claim: String(claim.line),
+        found: true,
+      });
+      expect({ id, line, states: wording.every((words) => line.includes(words)) }).toEqual({
+        id,
+        line,
+        states: true,
+      });
+      const contradicts = others.filter((words) => line.includes(words));
       expect({ id, line, contradicts }).toEqual({ id, line, contradicts: [] });
     }
   });
@@ -584,20 +863,55 @@ describe('copyleft', () => {
 
   it.each(Object.entries(VENDOR_FILES).filter(([, meta]) => meta.thirdParty && !meta.coveredBy))(
     '%s carries a licence header of its own',
-    (file) => {
+    (file, meta) => {
+      if (meta.headerless) {
+        // No header to read (see VENDOR_FILES): the reviewed bytes and the
+        // recorded provenance of the licence stand in for it.
+        const digest = sha256(`${VENDOR_DIR}/${file}`);
+        expect({ file, sha256: digest }).toEqual({ file, sha256: meta.headerless.sha256 });
+        const entry = auditByName.get(meta.auditName);
+        expect({ file, recorded: entry?.sha256 }).toEqual({ file, recorded: digest });
+        expect({ file, source: entry?.license?.source }).toEqual({
+          file,
+          source: expect.stringMatching(meta.headerless.licenceSource),
+        });
+        return;
+      }
       const head = fs.readFileSync(path.join(repoRoot, VENDOR_DIR, file), 'utf8').slice(0, 4096);
       expect({ file, declares: LICENCE_HEADER.test(head) }).toEqual({ file, declares: true });
     }
   );
 
+  // This fork is AGPL-3.0-or-later (`package.json`, `LICENSE`), and Freedom's
+  // own code says so where it states its licence, which a bare GPL/AGPL match
+  // cannot tell apart from a pasted third-party library. Only the exact
+  // statements listed here are exempt; each is built from `package.json`'s
+  // licence and must still be present, so a stale or reworded exemption fails
+  // instead of quietly widening.
+  const OWN_LICENCE_STATEMENTS = {
+    'src/main/index.js': [`Copyleft — ${pkg.license}`], // the About panel
+  };
+
   it('finds no GPL/AGPL licence anywhere else under src/', () => {
     // `src/renderer/vendor/` is where a third-party bundle is *supposed* to
     // go, not where it has to go: the `src/**\/*` files pattern ships all of
     // `src/`, so the same file in `src/renderer/lib/` is the same bug.
-    for (const file of shippedSrcFiles()) {
+    const shipped = shippedSrcFiles();
+    for (const file of Object.keys(OWN_LICENCE_STATEMENTS)) {
+      expect({ file, shipped: shipped.includes(file) }).toEqual({ file, shipped: true });
+    }
+    for (const file of shipped) {
       if (file.startsWith(`${VENDOR_DIR}/`)) continue; // swept per-file above
       if (!TEXT_EXTENSIONS.has(path.extname(file))) continue;
-      const text = fs.readFileSync(path.join(repoRoot, file), 'utf8');
+      let text = fs.readFileSync(path.join(repoRoot, file), 'utf8');
+      for (const statement of OWN_LICENCE_STATEMENTS[file] ?? []) {
+        expect({ file, statement, present: text.includes(statement) }).toEqual({
+          file,
+          statement,
+          present: true,
+        });
+        text = text.split(statement).join('');
+      }
       expect({ file, gpl: GPL.test(stripLgpl(text)) }).toEqual({ file, gpl: false });
     }
   });
@@ -752,7 +1066,8 @@ describe('audit files agree with each other', () => {
       field: 'audit_baseline',
       version: expectedBaseline,
     });
-    const documented = auditDoc.match(/^\*\*Baseline:\*\* `([^`]+)`$/m);
+    // Upstream bolds the label; the fork's prose audit writes it plain.
+    const documented = auditDoc.match(/^(?:\*\*)?Baseline:(?:\*\*)? `([^`]+)`$/m);
     expect({ field: 'LICENSE_AUDIT.md Baseline', found: Boolean(documented) }).toEqual({
       field: 'LICENSE_AUDIT.md Baseline',
       found: true,
