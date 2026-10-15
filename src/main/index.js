@@ -189,7 +189,8 @@ const unregisterShutdownSignalHandlers = registerShutdownSignalHandlers({
 const { BrowserWindow, protocol, session, webContents } = require('electron');
 const { createSessionRoutingTermination } = require('./session-routing-termination');
 const { registerApiRequestDiagnostics, initializeSessionRouting, getProxySessionPolicy,
-  setProxySessionPolicyObserver, setProxySessionDispatcherOptions } = require('./network-manager');
+  setProxySessionPolicyObserver, setProxySessionDispatcherOptions,
+  setHnsProtectionRequired, rebuild: rebuildSessionRouting } = require('./network-manager');
 const { createSessionRoutingNoticeStore, showPreviousRoutingNotice } = require('./session-routing-notice');
 const { registerSessionRoutingFeedback } = require('./session-routing-feedback');
 const routingNoticeStore = createSessionRoutingNoticeStore(app.getPath('userData'));
@@ -514,7 +515,10 @@ async function bootstrap() {
   installOnchainProvenanceCapture();
   installX402Interception();
   registerApiRequestDiagnostics(defaultSession);
+  const settings = loadSettings();
   initializeSessionRouting(terminateRouting);
+  setHnsProtectionRequired(!TEST_MODE && require('../shared/platform-capabilities').getCapabilityStatus('hns').supported && settings.enableHnsIntegration === true);
+  await rebuildSessionRouting();
   registerSessionRoutingFeedback({ app, ipcMain, webContents, dialog, getMainWindows, getPartitionForWebContents,
     getPolicy: getProxySessionPolicy, getDefaultSession: () => session.defaultSession,
     setPolicyObserver: setProxySessionPolicyObserver });
@@ -614,7 +618,6 @@ async function bootstrap() {
     log.error('[App] Failed to check vault status:', err.message);
   }
 
-  const settings = loadSettings();
   // A profile cold-started from another window's "edit" button (Profiles
   // manager) carries --open-settings; land its first tab on Profile settings.
   const coldStartUrl = process.argv.includes('--open-settings') ? PROFILE_SETTINGS_DEEPLINK : null;

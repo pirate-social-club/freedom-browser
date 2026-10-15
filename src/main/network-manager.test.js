@@ -143,6 +143,25 @@ function loadNetworkManagerModule(options = {}) {
 
 const REPRESENTATIVE_PIRATE_HOST = 'sable-harbor-4143.pirate';
 
+test('HNS waiting and helper retirement retain a refusing guard while ordinary HTTPS stays direct', async () => {
+  const ctx = loadNetworkManagerModule();
+  ctx.mod.setHnsProtectionRequired(true);
+  await ctx.mod.rebuild();
+  const initial = ctx.mod.buildPacScript();
+  expect(evaluatePac(initial, 'app.pirate')).toBe('PROXY 127.0.0.1:9999');
+  expect(evaluatePac(initial, 'pirate')).toBe('PROXY 127.0.0.1:9999');
+  expect(evaluatePac(initial, 'example.com')).toBe('DIRECT');
+  const privateSession = makeProxySession();
+  await ctx.mod.registerProxySession(privateSession);
+  expect(privateSession.setProxy).toHaveBeenCalledWith(expect.objectContaining({ mode: 'pac_script' }));
+  ctx.mod.clearHnsProxy(); await ctx.mod.rebuild();
+  expect(evaluatePac(ctx.mod.buildPacScript(), 'app.pirate')).toBe('PROXY 127.0.0.1:9999');
+  const res = { writeHead: jest.fn(), end: jest.fn() };
+  ctx.createServerCalls[0].handler({ url: 'http://app.pirate/', headers: {} }, res);
+  expect(res.writeHead).toHaveBeenCalledWith(503);
+  expect(ctx.netConnect).not.toHaveBeenCalled(); expect(ctx.httpRequest).not.toHaveBeenCalled();
+});
+
 function evaluatePac(pac, host, url = `https://${host}/`) {
   const dnsDomainLevels = (value) => String(value || '').split('.').length - 1;
   const isResolvable = (value) => !String(value || '').startsWith('missing.');

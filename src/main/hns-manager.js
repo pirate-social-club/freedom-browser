@@ -1,5 +1,5 @@
 const log = require('./logger');
-const { ipcMain, app, session } = require('electron');
+const { ipcMain, app, session, net: electronNet, powerMonitor } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -10,12 +10,10 @@ const { createHash, X509Certificate } = require('crypto');
 const IPC = require('../shared/ipc-channels');
 const { getHnsPublicSuffixes } = require('../shared/hns-hosts');
 const { getCapabilityStatus } = require('../shared/platform-capabilities');
-const {
-  buildHnsHealthProbeHosts,
-  formatHnsHealthSummary,
-  probeHnsResolver,
-  probeHnsChainState,
-} = require('./hns-health');
+const { probeHnsChainState, probeHnsValidator } = require('./hns-health');
+const { createHnsAuthority } = require('./hns-authority');
+const { createHnsNetworkMonitor } = require('./hns-network-monitor');
+const { createHnsValidatorTransport } = require('./hns-validator-transport');
 const { pruneUnknownSingleLabelHistory } = require('./browser-state-sanitizer');
 const { installHnsCheckpoint } = require('./hns-checkpoint');
 const {
@@ -43,7 +41,17 @@ let helperProcess = null;
 let helperGeneration = 0;
 let helperTeardown = Promise.resolve();
 let pendingStart = false;
-let forceKillTimeout = null;
+let encryptedRelay = null;
+let startingTransport = null;
+let nativeCustody = null;
+let authority = null;
+let readyPublished = false;
+let networkMonitor = null;
+let runtimeWanted = false;
+let cleanupFailed = false;
+let recovery = null;
+let activation = null;
+let encryptedProbeTimer = null;
 let restartCount = 0;
 const MAX_RESTARTS = 5;
 const RESTART_RESET_MS = 10 * 60 * 1000;
@@ -61,6 +69,7 @@ let proxyAddr = null;
 let caPemPath = null;
 let caCertFingerprint = null;
 const certificateSessions = new Map();
+const childClosures = new WeakMap();
 let readyTicket = null;
 let synced = false;
 let canaryReady = false;
@@ -70,7 +79,6 @@ let height = 0;
 let lastHeightChangeAt = 0;
 let rootAddr = null;
 let recursiveAddr = null;
-let lastProcessError = null;
 const hnsStderrLogState = new Map();
 let hnsChainTimer = null;
 let hnsChainGeneration = 0;
@@ -80,7 +88,6 @@ let hnsHealthTimer = null;
 let hnsHealthInFlight = false;
 let hnsHealthAttempt = 0;
 let lastHnsHealthOk = null;
-let lastHnsHealthSummary = null;
 let localReadySuccessCount = 0;
 let localReadyFailureCount = 0;
 let lastBroadcastReadiness = {
@@ -155,10 +162,11 @@ function clearHnsHealthState() {
     clearTimeout(hnsHealthTimer);
     hnsHealthTimer = null;
   }
+  if (encryptedProbeTimer) clearTimeout(encryptedProbeTimer);
+  encryptedProbeTimer = null;
   hnsHealthInFlight = false;
   hnsHealthAttempt = 0;
   lastHnsHealthOk = null;
-  lastHnsHealthSummary = null;
   localReadySuccessCount = 0;
   localReadyFailureCount = 0;
 }
@@ -222,24 +230,20 @@ function scheduleHnsChainCheck(delayMs = HNS_CHAIN_POLL_MS) {
     try {
       const state = await probeHnsChainState({ rootAddr });
       if (!active()) return;
-      if (state.height !== height || lastHeightChangeAt === 0) lastHeightChangeAt = Date.now();
-      height = state.height;
-      peerCount = state.peers;
-      syncProgress = state.progress;
-      synced = state.synced;
-      if (synced) {
-        scheduleHnsHealthCheck('chain sync');
-      } else {
-        resetHnsReadiness();
-        const idle = Math.max(0, Math.floor((Date.now() - lastHeightChangeAt) / 1000));
-        setStatusMessage('hns', `Syncing block ${height}; ${peerCount} peers; ${idle}s without new headers`);
-      }
-    } catch (error) {
+      if (state.height !== height || !lastHeightChangeAt) lastHeightChangeAt = Date.now();
+      height = state.height; peerCount = state.peers; syncProgress = state.progress;
+      synced = authority.metadata(state) && networkMonitor.allowed();
       if (!active()) return;
-      synced = false;
-      resetHnsReadiness();
-      setStatusMessage('hns', 'Waiting for HNS chain status');
-      log.warn(`[HNS] Chain status unavailable: ${error.message}`);
+      if (synced) { scheduleHnsHealthCheck('chain fresh'); await activateGeneration(); }
+      else {
+        resetHnsReadiness();
+        setStatusMessage('hns', `Syncing block ${height}; ${peerCount} peers`);
+      }
+    } catch {
+      if (!active()) return;
+      synced = false; resetHnsReadiness();
+      if (readyPublished) invalidateHnsGeneration('hns_metadata_unavailable');
+      else setStatusMessage('hns', 'Waiting for fresh local HNS chain status');
     } finally {
       if (active()) {
         updateService('hns', { synced, canaryReady, localResolverReady, dohFallbackReady, height, peerCount, syncProgress });
@@ -247,7 +251,6 @@ function scheduleHnsChainCheck(delayMs = HNS_CHAIN_POLL_MS) {
       }
     }
   }, delayMs);
-  hnsChainTimer.unref?.();
 }
 
 function canProbeHnsHealth() {
@@ -277,91 +280,96 @@ function scheduleHnsHealthRetry() {
 
 async function runHnsHealthCheck(reason = 'manual') {
   if (!canProbeHnsHealth() || hnsHealthInFlight) return null;
-
+  const generation = helperGeneration;
+  const candidate = authority;
   hnsHealthInFlight = true;
   try {
-    const hosts = buildHnsHealthProbeHosts(getHnsPublicSuffixes());
-    const result = await probeHnsResolver({
-      hosts,
-      recursiveAddr,
-    });
-    if (!canProbeHnsHealth()) return result;
-
-    const summary = formatHnsHealthSummary(result);
-    const appPirateEntry = result.results.find((entry) => entry.host === 'app.pirate');
-    let appPirateResolution = null;
-    if (!appPirateEntry?.ok) {
-      if (typeof networkManager.getHnsResolutionForHost === 'function') {
-        appPirateResolution = await networkManager.getHnsResolutionForHost('app.pirate');
-      } else if (await networkManager.canResolveHnsFallbackForHost?.('app.pirate') === true) {
-        appPirateResolution = { resolverType: 'doh' };
-      }
-    }
-    const appPirateFallbackReady = Boolean(appPirateResolution);
-    const appPirateRecursiveReady = Boolean(appPirateEntry?.ok && appPirateEntry.addresses?.length > 0);
-    const appPirateLocalReady = Boolean(
-      appPirateRecursiveReady ||
-      appPirateResolution?.resolverType === 'local'
-    );
-    updateLocalResolverReadiness(appPirateLocalReady);
-    dohFallbackReady = Boolean(
-      appPirateResolution?.resolverType === 'doh' ||
-      (appPirateFallbackReady && appPirateResolution?.resolverType !== 'local')
-    );
-    const readyForStatus = localResolverReady || dohFallbackReady;
-    if (shouldBroadcastReadiness()) {
-      updateService('hns', {
-        localResolverReady,
-        dohFallbackReady,
-      });
-    }
-
-    const changed = summary !== lastHnsHealthSummary || result.ok !== lastHnsHealthOk;
-    lastHnsHealthSummary = summary;
-    lastHnsHealthOk = result.ok;
-
-    if (result.ok || readyForStatus || appPirateLocalReady) {
-      hnsHealthAttempt = 0;
-      clearErrorState('hns');
-      let resolverLabel = 'HTTPS last-resort resolver';
-      if (appPirateRecursiveReady) {
-        resolverLabel = 'app.pirate local recursive resolver';
-      } else if (appPirateResolution?.resolverType === 'local') {
-        resolverLabel = 'local delegation resolver';
-      }
-      const statusMessage = appPirateRecursiveReady
-        ? `HNS resolver partially degraded; ${resolverLabel} ready`
-        : `HNS recursive resolver recovering; using ${resolverLabel}`;
-      setStatusMessage('hns', result.ok ? null : statusMessage);
-      if (appPirateLocalReady && !localResolverReady) {
-        scheduleHnsHealthRetry();
-      }
-      if (result.ok && changed) {
-        log.info(`[HNS] Resolver health ok (${reason}): ${summary}`);
-      } else if (!result.ok) {
-        const retryDelayMs = scheduleHnsHealthRetry();
-        if (changed) {
-          const logPrefix = appPirateRecursiveReady
-            ? 'Resolver partially degraded'
-            : 'Local recursive resolver unavailable';
-          log.info(
-            `[HNS] ${logPrefix} (${reason}): ${summary}; ${resolverLabel} ready; retrying in ${retryDelayMs}ms`
-          );
-        }
-      }
-      return result;
-    }
-
-    hnsHealthAttempt += 1;
-    setStatusMessage('hns', 'HNS resolver degraded');
-    const retryDelayMs = scheduleHnsHealthRetry();
-    if (changed) {
-      log.warn(`[HNS] Resolver degraded (${reason}): ${summary}; retrying in ${retryDelayMs}ms`);
-    }
+    const result = await probeHnsValidator({ recursiveAddr });
+    if (generation !== helperGeneration || candidate !== authority || !canProbeHnsHealth()) return result;
+    if (!result.ok) throw new Error('Local DNSSEC validation unavailable');
+    if (!candidate.validation()) return result;
+    updateLocalResolverReadiness(true);
+    dohFallbackReady = false;
+    hnsHealthAttempt = 0;
+    if (lastHnsHealthOk !== true) log.info(`[HNS] Local DNSSEC/DANE records validated (${reason})`);
+    lastHnsHealthOk = true;
+    if (shouldBroadcastReadiness()) updateService('hns', { localResolverReady, dohFallbackReady });
+    await activateGeneration();
+    scheduleHnsHealthCheck('validation lease', HNS_HEALTH_RETRY_BASE_MS);
     return result;
+  } catch {
+    if (generation !== helperGeneration || candidate !== authority) return null;
+    lastHnsHealthOk = false;
+    updateLocalResolverReadiness(false);
+    if (readyPublished) invalidateHnsGeneration('hns_validation_failed');
+    else { hnsHealthAttempt += 1; scheduleHnsHealthRetry(); }
+    return { ok: false };
   } finally {
-    hnsHealthInFlight = false;
+    if (generation === helperGeneration) hnsHealthInFlight = false;
   }
+}
+
+function scheduleEncryptedProbe(delay = 0) {
+  if (encryptedProbeTimer || currentState !== STATUS.RUNNING) return;
+  const generation = helperGeneration;
+  encryptedProbeTimer = setTimeout(async () => {
+    encryptedProbeTimer = null;
+    const candidate = authority;
+    try {
+      await encryptedRelay.probe();
+      if (generation !== helperGeneration || candidate !== authority) return;
+      if (candidate.transport()) await activateGeneration();
+    } catch {
+      if (generation === helperGeneration) invalidateHnsGeneration('encrypted_dns_probe_failed');
+    } finally {
+      if (generation === helperGeneration) scheduleEncryptedProbe(5000);
+    }
+  }, delay);
+}
+
+function invalidateHnsGeneration(reason) {
+  authority?.retire();
+  readyPublished = false;
+  networkManager.clearHnsProxy();
+  caCertFingerprint = null;
+  resetHnsReadiness();
+  if (recovery || !runtimeWanted) return;
+  log.warn(`[HNS] Resolver generation retired: ${reason}`);
+  recovery = stopHns({ recovering: true }).then(() => {
+    recovery = null;
+    if (cleanupFailed) { updateState(STATUS.ERROR, 'Unresolved HNS resolver custody');
+      setErrorState('hns', 'HNS is blocked until unresolved resolver cleanup is verified'); return; }
+    if (runtimeWanted && networkMonitor?.allowed()) maybeRestart();
+  }).catch(() => {
+    recovery = null;
+    updateState(STATUS.ERROR, 'HNS resolver cleanup failed');
+    setErrorState('hns', 'HNS resolver cleanup failed');
+  });
+}
+
+async function activateGeneration() {
+  if (readyPublished || activation || !authority?.isValid() || !localResolverReady || !nativeCustody?.isCaptured() || !networkMonitor?.allowed()) return;
+  const candidate = authority;
+  const generation = helperGeneration;
+  activation = (async () => {
+    await networkManager.beginHnsCertificateUpdate();
+    if (generation !== helperGeneration || candidate !== authority) return;
+    if (!candidate.publish()) { invalidateHnsGeneration('hns_activation_lease_expired'); return; }
+    readyPublished = true;
+    updateSessionCertificates(true);
+    networkManager.setHnsProxy(proxyAddr, { generation, caFingerprint: caCertFingerprint,
+      isValid: () => candidate === authority && readyPublished && candidate.isValid() && networkMonitor.allowed() });
+    networkManager.setHnsResolverAddrs({ rootAddr, recursiveAddr });
+    await networkManager.rebuild();
+    if (generation !== helperGeneration || candidate !== authority || !candidate.isValid()) return;
+    const publishedProxyAddr = networkManager.getHnsProxyAddr();
+    updateService('hns', { api: publishedProxyAddr ? `http://${publishedProxyAddr}` : null,
+      proxy: publishedProxyAddr, mode: MODE.BUNDLED, publicSuffixes: getHnsPublicSuffixes() });
+    clearErrorState('hns'); setStatusMessage('hns', null);
+  })();
+  try { await activation; }
+  catch { if (generation === helperGeneration) invalidateHnsGeneration('hns_activation_failed'); }
+  finally { if (generation === helperGeneration) activation = null; }
 }
 
 function getHelperBinaryPath() {
@@ -580,12 +588,14 @@ function configureCertVerification(targetSession) {
   }
 
   const trustedFingerprint = caCertFingerprint;
+  const generationAuthority = authority;
   const token = certificateSessions.get(targetSession);
   const verify = createCertificateVerifier(trustedFingerprint);
   targetSession.setCertificateVerifyProc((request, callback) => {
     // Retired callbacks cannot retain authority after release or CA rotation,
     // even if clearing a session's native procedure fails during disposal.
-    if (caCertFingerprint !== trustedFingerprint ||
+    if (authority !== generationAuthority || !readyPublished || !authority?.isValid() || !networkMonitor?.allowed() ||
+        caCertFingerprint !== trustedFingerprint ||
         (targetSession !== session.defaultSession && certificateSessions.get(targetSession) !== token)) {
       callback(-3);
       return;
@@ -658,71 +668,26 @@ function loadCaFingerprint(pemPath) {
 }
 
 async function handleReady(event) {
-  if (currentState !== STATUS.STARTING && currentState !== STATUS.RUNNING) return;
-  const generation = helperGeneration;
-  const ticket = {};
-  readyTicket = ticket;
-  const isCurrent = () => generation === helperGeneration && readyTicket === ticket;
-  try {
-    await networkManager.beginHnsCertificateUpdate();
-  } catch (error) {
-    if (isCurrent()) {
-      updateState(STATUS.ERROR, 'HNS certificate transition failed');
-      setErrorState('hns', 'HNS certificate transition failed');
-      log.error('[HNS] Certificate transition failed:', error.message);
-    }
-    return;
-  }
-  if (!isCurrent()) return;
+  if (currentState !== STATUS.STARTING || !authority || readyTicket) return;
+  readyTicket = {};
   proxyAddr = event.proxyAddr || null;
   caPemPath = event.caPath || null;
-  lastProcessError = null;
-
-  if (!caPemPath || !loadCaFingerprint(caPemPath)) {
-    updateState(STATUS.ERROR, 'Failed to load HNS CA certificate');
-    setErrorState('hns', 'CA certificate missing or invalid');
+  if (!/^127\.0\.0\.1:[1-9]\d*$/.test(proxyAddr || '') ||
+      Number(proxyAddr.split(':')[1]) > 65535 || !caPemPath || !loadCaFingerprint(caPemPath)) {
+    invalidateHnsGeneration('invalid_hns_helper_ready');
     return;
   }
-
-  let publishedProxyAddr;
-
-  try {
-    updateSessionCertificates(true);
-    networkManager.setHnsProxy(proxyAddr, { generation, caFingerprint: caCertFingerprint });
-    networkManager.setHnsResolverAddrs?.({ rootAddr, recursiveAddr });
-    await networkManager.rebuild();
-    if (!isCurrent()) return;
-    publishedProxyAddr = networkManager.getHnsProxyAddr() || null;
-    networkManager.refreshImportedHnsSuffixes()
-      .then((suffixes) => {
-        if (!isCurrent()) return;
-        updateService('hns', { publicSuffixes: suffixes });
-        if (suffixes.length > 1) {
-          pruneUnknownSingleLabelHistory();
-        }
-        scheduleHnsHealthCheck('suffix refresh');
-      })
-      .catch((err) => {
-        log.warn(`[HNS] Imported namespace suffix refresh failed: ${err.message}`);
-      });
-  } catch (err) {
-    if (!isCurrent()) return;
-    updateState(STATUS.ERROR, `Proxy configuration failed: ${err.message}`);
-    setErrorState('hns', 'Proxy configuration failed');
-    return;
-  }
-
-  updateService('hns', {
-    api: publishedProxyAddr ? `http://${publishedProxyAddr}` : null,
-    proxy: publishedProxyAddr,
-    mode: MODE.BUNDLED,
-    publicSuffixes: getHnsPublicSuffixes(),
-  });
-  setStatusMessage('hns', null);
-
   updateState(STATUS.RUNNING);
+  updateService('hns', { mode: MODE.BUNDLED, api: null, proxy: null });
+  setStatusMessage('hns', 'Waiting for fresh local validation');
   scheduleHnsChainCheck(0);
-  log.info(`[HNS] Helper ready: proxy=${publishedProxyAddr || 'unavailable'}, upstream=${proxyAddr}, ca=${caPemPath}`);
+  scheduleEncryptedProbe();
+  const generation = helperGeneration;
+  networkManager.refreshImportedHnsSuffixes().then((suffixes) => {
+    if (generation !== helperGeneration) return;
+    updateService('hns', { publicSuffixes: suffixes });
+    if (suffixes.length > 1) pruneUnknownSingleLabelHistory();
+  }).catch(() => log.warn('[HNS] Namespace discovery unavailable'));
 }
 
 function parseStdoutLine(line) {
@@ -744,9 +709,7 @@ function parseStdoutLine(line) {
         break;
 
       case 'error':
-        log.error(`[HNS] Helper error: ${event.error}`);
-        lastProcessError = event.error || 'Unknown error';
-        setErrorState('hns', event.error || 'Unknown error');
+        invalidateHnsGeneration('hns_helper_reported_error');
         break;
 
       case 'stopping':
@@ -761,160 +724,86 @@ function parseStdoutLine(line) {
   }
 }
 
-async function startHns() {
+async function startHns(recovering = false) {
+  if (cleanupFailed) { setErrorState('hns', 'HNS is blocked until unresolved resolver cleanup is verified'); return; }
   if (!hnsCapability.supported) {
-    log.info(`[HNS] Start blocked on unsupported target ${hnsCapability.target}`);
     setStatusMessage('hns', hnsCapability.unsupportedReason);
     return;
   }
-
-  if (currentState === STATUS.RUNNING || currentState === STATUS.STARTING) {
-    log.info(`[HNS] Ignoring start request, current state: ${currentState}`);
+  runtimeWanted = true;
+  if (!recovering) restartCount = 0;
+  networkManager.setHnsProtectionRequired(true);
+  if ([STATUS.RUNNING, STATUS.STARTING].includes(currentState)) return;
+  if (currentState === STATUS.STOPPING) { pendingStart = true; return; }
+  if (!networkMonitor) networkMonitor = createHnsNetworkMonitor({
+    net: electronNet, powerMonitor,
+    onChange: invalidateHnsGeneration,
+    onStable: () => {
+      if (runtimeWanted && !recovery && [STATUS.STOPPED, STATUS.ERROR].includes(currentState)) startHns(true);
+    },
+  });
+  if (!networkMonitor.allowed()) {
+    await networkManager.rebuild();
+    setStatusMessage('hns', 'Waiting for an available network');
     return;
   }
-
-  if (currentState === STATUS.STOPPING) {
-    log.info('[HNS] Currently stopping, queuing start');
-    pendingStart = true;
-    return;
-  }
-
   pendingStart = false;
-  helperGeneration += 1;
+  const generation = ++helperGeneration;
+  const active = () => generation === helperGeneration && currentState === STATUS.STARTING && runtimeWanted;
   updateState(STATUS.STARTING);
-
+  authority = createHnsAuthority({ onInvalid: invalidateHnsGeneration });
+  readyTicket = null; readyPublished = false; activation = null;
   const binPath = getHelperBinaryPath();
-  if (!fs.existsSync(binPath)) {
-    updateState(STATUS.ERROR, `Helper binary not found at ${binPath}`);
-    setStatusMessage('hns', 'HNS not available');
-    return;
-  }
-
-  const binaryValidationError = getHelperBinaryValidationError(binPath);
-  if (binaryValidationError) {
-    log.error(`[HNS] ${binaryValidationError}`);
-    updateState(STATUS.ERROR, binaryValidationError);
-    setErrorState('hns', 'HNS helper binary is obsolete');
-    setStatusMessage('hns', 'HNS helper binary is obsolete');
-    return;
-  }
-
-  const dataDir = getHnsDataPath();
-
-  try {
-    const assetsDir = app.isPackaged
-      ? path.join(process.resourcesPath, 'assets')
-      : path.join(__dirname, '..', '..', 'assets');
-    if (installHnsCheckpoint(path.join(assetsDir, 'hns', 'checkpoint_main.dat'), dataDir)) {
-      log.info('[HNS] Installed the bundled mainnet checkpoint for a fresh profile');
-    }
-  } catch (error) {
-    updateState(STATUS.ERROR, `HNS checkpoint initialization failed: ${error.message}`);
-    setErrorState('hns', 'HNS checkpoint integrity check failed');
-    setStatusMessage('hns', 'HNS checkpoint unavailable or invalid');
-    return;
-  }
-
   const hnsdPath = getHnsdBinaryPath();
-  if (!fs.existsSync(hnsdPath)) {
-    updateState(STATUS.ERROR, `hnsd binary not found at ${hnsdPath}`);
-    setStatusMessage('hns', 'HNS not available');
-    return;
-  }
-
-  let resolverAddrs;
   try {
-    resolverAddrs = await allocateResolverAddrs();
-  } catch (err) {
-    updateState(STATUS.ERROR, `Resolver port allocation failed: ${err.message}`);
-    setErrorState('hns', 'HNS resolver ports unavailable');
-    return;
-  }
-
-  rootAddr = resolverAddrs.rootAddr;
-  recursiveAddr = resolverAddrs.recursiveAddr;
-  lastProcessError = null;
-  hnsStderrLogState.clear();
-
-  const args = [
-    '-data-dir', dataDir,
-    '-hnsd-path', hnsdPath,
-    '-root-addr', rootAddr,
-    '-recursive-addr', recursiveAddr,
-  ];
-
-  log.info(`[HNS] Starting: ${binPath} ${args.join(' ')}`);
-
-  try {
-    helperProcess = spawn(binPath, args);
-
-    const generation = helperGeneration;
-    const rl = readline.createInterface({ input: helperProcess.stdout });
-    rl.on('line', (line) => {
-      if (generation === helperGeneration) parseStdoutLine(line);
+    if (!fs.existsSync(binPath) || !fs.existsSync(hnsdPath)) throw new Error('HNS binaries unavailable');
+    const binaryValidationError = getHelperBinaryValidationError(binPath);
+    if (binaryValidationError) throw new Error(binaryValidationError);
+    const dataDir = getHnsDataPath();
+    const assetsDir = app.isPackaged ? path.join(process.resourcesPath, 'assets') : path.join(__dirname, '..', '..', 'assets');
+    installHnsCheckpoint(path.join(assetsDir, 'hns', 'checkpoint_main.dat'), dataDir);
+    await networkManager.rebuild();
+    if (!active()) return;
+    const addresses = await allocateResolverAddrs();
+    if (!active()) return;
+    rootAddr = addresses.rootAddr; recursiveAddr = addresses.recursiveAddr;
+    const preparation = createHnsValidatorTransport({ rootAddr, dataDir, binaryPath: hnsdPath, assetsDir,
+      onFailure: (reason) => { if (generation === helperGeneration) invalidateHnsGeneration(reason); } });
+    startingTransport = preparation;
+    const transport = await preparation;
+    if (startingTransport === preparation) startingTransport = null;
+    if (!active()) { await transport.relay.close(); return; }
+    encryptedRelay = transport.relay;
+    hnsStderrLogState.clear();
+    const args = ['-data-dir', dataDir, '-hnsd-path', transport.launcher,
+      '-root-addr', rootAddr, '-recursive-addr', recursiveAddr];
+    nativeCustody = transport.custody;
+    nativeCustody.prepare();
+    let child;
+    try { child = spawn(binPath, args, { env: transport.env, shell: false }); }
+    catch (error) { nativeCustody.neverSpawned(); nativeCustody = null; throw error; }
+    helperProcess = child;
+    childClosures.set(child, new Promise((resolve) => child.once('close', resolve)));
+    const rl = readline.createInterface({ input: child.stdout });
+    rl.on('line', (line) => { if (generation === helperGeneration && child === helperProcess) parseStdoutLine(line); });
+    child.stderr.on('data', (data) => { if (generation === helperGeneration) logHnsStderr(data); });
+    child.on('close', () => rl.close());
+    child.on('exit', () => {
+      if (generation === helperGeneration && child === helperProcess) invalidateHnsGeneration('hns_helper_exited');
     });
-
-    helperProcess.stderr.on('data', logHnsStderr);
-
-    helperProcess.on('close', (code) => {
-      const teardownGeneration = ++helperGeneration;
-      log.info(`[HNS] Process exited with code ${code}`);
-      helperProcess = null;
-
-      if (forceKillTimeout) {
-        clearTimeout(forceKillTimeout);
-        forceKillTimeout = null;
-      }
-
-      const exitError =
-        code !== 0 ? lastProcessError || `Exited with code ${code}` : null;
-
-      if (currentState !== STATUS.STOPPING) {
-        updateState(STATUS.STOPPED, exitError);
-      } else {
-        updateState(STATUS.STOPPED);
-      }
-
-      networkManager.clearHnsProxy();
-      clearHnsHealthState();
-      caCertFingerprint = null;
-      helperTeardown = networkManager.rebuild().then(() => {
-        if (teardownGeneration === helperGeneration) updateSessionCertificates(false);
-      });
-      helperTeardown.catch((error) => {
-        log.error('[HNS] Session network cleanup failed:', error.message);
-      });
-      clearService('hns');
-      proxyAddr = null;
-      caPemPath = null;
-      caCertFingerprint = null;
-      synced = false;
-      canaryReady = false;
-      resetHnsReadiness();
-      height = 0;
-      rootAddr = null;
-      recursiveAddr = null;
-      lastHeightChangeAt = 0;
-      lastProcessError = null;
-      hnsStderrLogState.clear();
-
-      if (pendingStart) {
-        log.info('[HNS] Processing queued start request');
-        pendingStart = false;
-        setTimeout(() => startHns(), 100);
-      } else if (currentState === STATUS.STOPPED && code !== 0) {
-        maybeRestart();
-      }
+    child.on('error', () => {
+      if (generation === helperGeneration && child === helperProcess) invalidateHnsGeneration('hns_helper_failed');
     });
-
-    helperProcess.on('error', (err) => {
-      log.error('[HNS] Failed to start process:', err);
-      updateState(STATUS.ERROR, err.message);
-      setStatusMessage('hns', 'HNS failed to start');
-    });
-  } catch (err) {
-    updateState(STATUS.ERROR, err.message);
-    setStatusMessage('hns', 'HNS failed to start');
+    if (!Number.isSafeInteger(child.pid)) {
+      nativeCustody.neverSpawned(); nativeCustody = null;
+      invalidateHnsGeneration('hns_helper_not_spawned'); return;
+    }
+    nativeCustody.bindParent(child.pid);
+    try { await transport.custody.capture(); }
+    catch { if (generation === helperGeneration) invalidateHnsGeneration('native_hns_custody_failed'); }
+  } catch (error) {
+    if (error.code === 'HNS_CUSTODY_UNRESOLVED') cleanupFailed = true;
+    if (generation === helperGeneration && runtimeWanted) invalidateHnsGeneration('hns_start_failed');
   }
 }
 
@@ -932,8 +821,8 @@ function maybeRestart() {
   log.info(`[HNS] Restarting in ${delay}ms (attempt ${restartCount})`);
 
   setTimeout(() => {
-    if (currentState === STATUS.STOPPED) {
-      startHns();
+    if (runtimeWanted && networkMonitor?.allowed() && currentState === STATUS.STOPPED) {
+      startHns(true);
     }
   }, delay);
 
@@ -944,60 +833,65 @@ function maybeRestart() {
   }, RESTART_RESET_MS);
 }
 
-function stopHns() {
+function stopChild(child) {
+  if (!child || child.exitCode !== null || child.signalCode != null) return Promise.resolve();
+  if (!Number.isSafeInteger(child.pid)) return Promise.resolve();
   return new Promise((resolve, reject) => {
-    pendingStart = false;
-    helperGeneration += 1;
-    restartCount = 0;
-
-    if (!helperProcess) {
-      updateState(STATUS.STOPPED);
-      clearService('hns');
-      networkManager.clearHnsProxy();
-      clearHnsHealthState();
-      rootAddr = null;
-      recursiveAddr = null;
-      lastHeightChangeAt = 0;
-      lastProcessError = null;
-      caCertFingerprint = null;
-      caPemPath = null;
-      proxyAddr = null;
-      let certificateError = null;
-      try {
-        updateSessionCertificates(false);
-      } catch (error) {
-        certificateError = error;
-      }
-      networkManager.rebuild().then(() => {
-        if (certificateError) reject(certificateError);
-        else resolve();
-      }, reject);
-      return;
-    }
-
-    const onExit = () => {
-      if (forceKillTimeout) {
-        clearTimeout(forceKillTimeout);
-        forceKillTimeout = null;
-      }
-      helperTeardown.then(resolve, reject);
-    };
-
-    helperProcess.once('close', onExit);
-
-    updateState(STATUS.STOPPING);
-
-    if (forceKillTimeout) clearTimeout(forceKillTimeout);
-    forceKillTimeout = setTimeout(() => {
-      if (helperProcess) {
-        log.warn('[HNS] Force killing process...');
-        helperProcess.kill('SIGKILL');
-      }
-      forceKillTimeout = null;
-    }, 5000);
-
-    helperProcess.kill('SIGTERM');
+    let killTimer;
+    const deadline = setTimeout(() => reject(new Error('HNS helper did not exit')), 5000);
+    child.once('exit', () => { clearTimeout(deadline); clearTimeout(killTimer); resolve(); });
+    killTimer = setTimeout(() => child.kill('SIGKILL'), 2500);
+    child.kill('SIGTERM');
   });
+}
+
+async function awaitChildClosure(child) {
+  if (!child) return;
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('HNS helper stdio did not close')), 2000);
+  });
+  try { await Promise.race([childClosures.get(child), deadline]); }
+  finally { clearTimeout(timer); }
+}
+
+async function stopHns({ recovering = false } = {}) {
+  let observerCleanup;
+  if (!recovering) {
+    runtimeWanted = false; restartCount = 0;
+    observerCleanup = networkMonitor?.close(); networkMonitor = null;
+  }
+  if (currentState === STATUS.STOPPING) {
+    helperTeardown = Promise.all([helperTeardown, observerCleanup]).catch((error) => { cleanupFailed = true; throw error; });
+    return helperTeardown;
+  }
+  pendingStart = false;
+  helperGeneration += 1;
+  readyPublished = false; readyTicket = null; activation = null;
+  authority?.retire(); authority = null;
+  networkManager.clearHnsProxy();
+  clearHnsHealthState();
+  caCertFingerprint = null;
+  const child = helperProcess; helperProcess = null;
+  const custody = nativeCustody; nativeCustody = null;
+  const relay = encryptedRelay; encryptedRelay = null;
+  const preparation = startingTransport; startingTransport = null;
+  updateState(STATUS.STOPPING);
+  helperTeardown = Promise.all([
+    stopChild(child).then(() => custody?.terminate()).then(() => awaitChildClosure(child)), relay?.close(), observerCleanup,
+    preparation?.then((transport) => transport.relay.close(), () => {}),
+    networkManager.rebuild().then(() => updateSessionCertificates(false)),
+  ]);
+  try {
+    let observedBarrier;
+    do { observedBarrier = helperTeardown; await observedBarrier; } while (observedBarrier !== helperTeardown);
+  }
+  catch (error) { cleanupFailed = true; throw error; }
+  proxyAddr = null; caPemPath = null; rootAddr = null; recursiveAddr = null;
+  synced = false; canaryReady = false; height = 0; lastHeightChangeAt = 0;
+  resetHnsReadiness(); hnsStderrLogState.clear();
+  clearService('hns'); updateState(STATUS.STOPPED);
+  if (pendingStart && runtimeWanted && (!networkMonitor || networkMonitor.allowed())) { pendingStart = false; startHns(true); }
 }
 
 function checkBinary() {

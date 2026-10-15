@@ -191,4 +191,26 @@ describe('HNS guard resource containment', () => {
     expect(f.net.connect).not.toHaveBeenCalled();
     expect(f.http.request).not.toHaveBeenCalled();
   });
+
+  test('expired authority refuses an in-flight CONNECT success before forwarding headers', () => {
+    const f = fixture(); const client = stream();
+    f.forwarding.connect({ url: 'example.hns:443', httpVersion: '1.1', headers: {} }, client);
+    f.net.connect.mock.calls[0][2]();
+    f.withdraw();
+    f.upstream.emit('data', Buffer.from('HTTP/1.1 200 OK\r\n\r\n'));
+    expect(client.write).not.toHaveBeenCalled();
+    expect(client.destroyed).toBe(true);
+    expect(f.upstream.destroyed).toBe(true);
+    expect(f.fallbackConnect).not.toHaveBeenCalled();
+  });
+
+  test('expired authority refuses in-flight HTTP headers', () => {
+    const f = fixture(); const req = stream(); const res = stream();
+    Object.assign(req, { url: 'http://example.hns/', headers: {}, method: 'GET' });
+    f.forwarding.request(req, res); f.withdraw();
+    const response = stream(); response.statusCode = 200;
+    f.http.request.mock.calls[0][1](response);
+    expect(res.writeHead).not.toHaveBeenCalled();
+    expect(response.destroyed).toBe(true); expect(res.destroyed).toBe(true);
+  });
 });

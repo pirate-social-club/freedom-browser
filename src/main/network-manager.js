@@ -23,6 +23,8 @@ let hnsProxyAddr = null;
 let hnsUpstreamProxyAddr = null;
 let hnsTrustIdentity = null;
 let hnsCertificateUpdating = false;
+let hnsRequired = false;
+let hnsAuthorityCheck = () => false;
 let hnsTrustRevision = 0;
 let hnsRootResolverAddr = null;
 let hnsGuardServer = null;
@@ -361,7 +363,10 @@ async function forwardHttpToDohFallback(req, res, host, defaultPort, requestPath
 
 const guardForwarding = createHnsGuardForwarding({
   net, http, resources: guardResources,
-  getRoute: () => guardAllowed ? guardRoute : null,
+  getRoute: () => {
+    if (!guardAllowed || !guardRoute) return null;
+    try { return hnsAuthorityCheck() ? guardRoute : null; } catch { return null; }
+  },
   isAllowed: isAllowedHnsProxyTarget, markHost: markHnsProxyHost,
   parseAuthority, writeError: writeProxyError,
   fallbackConnect: forwardConnectToDohFallback, fallbackHttp: forwardHttpToDohFallback,
@@ -378,7 +383,7 @@ function extractNamespaceSuffixes(payload) {
 function buildPacScript(intent = getRoutingIntent()) {
   const hnsHostPredicate = buildHnsHostPredicate();
   const hnsRootMap = buildPacHnsRootMap(intent.suffixes);
-  const effectiveHnsProxyAddr = intent.hnsUpstream ? (hnsProxyAddr || intent.hnsUpstream) : null;
+  const effectiveHnsProxyAddr = (intent.hnsRequired || intent.hnsUpstream) ? (hnsProxyAddr || '127.0.0.1:9') : null;
   const hnsLine = effectiveHnsProxyAddr
     ? `  if (${hnsHostPredicate}) {\n    return "PROXY ${effectiveHnsProxyAddr}";\n  }`
     : `  if (${hnsHostPredicate}) {\n    return "DIRECT";\n  }`;
@@ -512,8 +517,6 @@ async function startHnsGuardProxy() {
     return hnsProxyAddr;
   }
 
-  if (!hnsUpstreamProxyAddr) return null;
-
   return new Promise((resolve, reject) => {
     const srv = http.createServer(guardForwarding.request);
     srv.on('connect', guardForwarding.connect);
@@ -581,7 +584,7 @@ async function stopPacServer() {
 
 function getRoutingIntent() {
   return { hnsUpstream: hnsUpstreamProxyAddr, rootResolver: hnsRootResolverAddr,
-    hnsCertificateUpdating,
+    hnsCertificateUpdating, hnsRequired,
     trustIdentity: hnsUpstreamProxyAddr ? hnsTrustIdentity : null,
     dvpnHost: dvpnProxyHost, dvpnPort: dvpnProxyPort,
     torSocksEndpoint, torRoutingConfigured,
@@ -594,16 +597,17 @@ async function prepareProxyPolicy(intent) {
   // Electron requests were withdrawn before this shared preparation began.
   await drainGuardResources();
   guardRoute = intent.hnsUpstream ? parseProxyAddress(intent.hnsUpstream) : null;
-  if (!intent.hnsUpstream && !intent.dvpnHost && !intent.torRoutingConfigured) {
+  const guardNeeded = Boolean(intent.hnsRequired || intent.hnsUpstream);
+  if (!guardNeeded && !intent.dvpnHost && !intent.torRoutingConfigured) {
     return { configuration: { mode: 'direct' }, key: 'direct', guardNeeded: false };
   }
-  if (intent.hnsUpstream) await startHnsGuardProxy();
+  if (guardNeeded) await startHnsGuardProxy();
   const pac = buildPacScript(intent);
   const port = await startPacServer(pac);
   const configuration = { mode: 'pac_script', pacScript: `http://127.0.0.1:${port}/proxy.pac` };
   return { configuration, key: JSON.stringify([configuration, pac, intent]),
-    content: pac, pacServer, guardServer: intent.hnsUpstream ? hnsGuardServer : null,
-    guardNeeded: Boolean(intent.hnsUpstream) };
+    content: pac, pacServer, guardServer: guardNeeded ? hnsGuardServer : null,
+    guardNeeded };
 }
 
 let torSocksEndpoint = null;
@@ -623,7 +627,7 @@ const routing = createSessionRoutingCoordinator(proxySessions, {
   isValid: (policy) => policy.configuration.mode === 'direct' ||
     (pacServer === policy.pacServer && Boolean(pacServer && pacPort) && currentPacContent === policy.content &&
       (!policy.guardNeeded || (hnsGuardServer === policy.guardServer && Boolean(hnsGuardServer && hnsGuardPort)))),
-  isInitialDirect: (intent) => !intent.hnsCertificateUpdating && !intent.hnsUpstream && !intent.dvpnHost && !intent.torRoutingConfigured && !pacServer && !hnsGuardServer,
+  isInitialDirect: (intent) => !intent.hnsCertificateUpdating && !intent.hnsRequired && !intent.hnsUpstream && !intent.dvpnHost && !intent.torRoutingConfigured && !pacServer && !hnsGuardServer,
   retire: async (policy) => {
     if (!policy.guardNeeded) await stopHnsGuardProxy();
     if (policy.configuration.mode === 'direct') await stopPacServer();
@@ -651,7 +655,14 @@ function clearProxy() {
   return routing.rebuild();
 }
 
+function setHnsProtectionRequired(required) {
+  hnsRequired = required === true;
+  routing.intentChanged();
+}
+
 function setHnsProxy(proxyAddr, trustIdentity = null) {
+  hnsAuthorityCheck = typeof trustIdentity?.isValid === 'function'
+    ? trustIdentity.isValid : () => !hnsRequired;
   hnsCertificateUpdating = false;
   hnsUpstreamProxyAddr = proxyAddr;
   // A new CA or helper can invalidate live TLS even when addresses are reused.
@@ -671,11 +682,12 @@ function setHnsResolverAddrs({ rootAddr } = {}) {
 }
 
 function clearHnsProxy() {
+  hnsAuthorityCheck = () => false;
   hnsCertificateUpdating = false;
   hnsUpstreamProxyAddr = null;
   hnsTrustIdentity = null;
   hnsRootResolverAddr = null;
-  hnsProxyAddr = null;
+  hnsProxyAddr = hnsGuardServer && hnsGuardPort ? `127.0.0.1:${hnsGuardPort}` : null;
   hnsProxyHosts.clear();
   routing.intentChanged();
   log.info('[Network] HNS proxy cleared');
@@ -784,6 +796,7 @@ module.exports = {
   initializeSessionRouting,
   getProxySessionPolicy: proxySessions.policyFor,
   setProxySessionPolicyObserver: proxySessions.setPolicyObserver,
+  setHnsProtectionRequired,
   setHnsProxy,
   beginHnsCertificateUpdate,
   setHnsResolverAddrs,

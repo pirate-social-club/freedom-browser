@@ -38,6 +38,7 @@ function createHnsGuardForwarding({ net, http, resources, getRoute, isAllowed,
       upstream.destroy();
     };
     upstream = net.connect(route.port, route.host, () => {
+      if (getRoute() !== route) { cancel(); return; }
       if (client.destroyed) { cancel(); return; }
       if (cancelled || settled) return;
       const lines = [`CONNECT ${req.url} HTTP/${req.httpVersion}`];
@@ -57,6 +58,7 @@ function createHnsGuardForwarding({ net, http, resources, getRoute, isAllowed,
     if (cancelled || client.destroyed) { upstream.destroy(); cancel(); return; }
     upstream.setTimeout(timeoutMs, () => refuse('local upstream timeout'));
     upstream.on('data', (chunk) => {
+      if (getRoute() !== route) { cancel(); return; }
       if (client.destroyed) { cancel(); return; }
       if (cancelled || settled) return;
       buffered = Buffer.concat([buffered, chunk]);
@@ -138,6 +140,7 @@ function createHnsGuardForwarding({ net, http, resources, getRoute, isAllowed,
     proxyReq = http.request({ host: route.host, port: route.port, method: req.method, agent: false,
       path: req.url, headers: req.headers }, (incoming) => {
       proxyRes = incoming;
+      if (getRoute() !== route) { incoming.destroy(); cancel(); res.destroy(); return; }
       incoming.on('error', () => { cancel(); res.destroy(); });
       resources.track(incoming);
       if (cancelled || res.destroyed) { incoming.destroy(); return; }

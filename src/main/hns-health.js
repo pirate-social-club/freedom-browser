@@ -115,17 +115,38 @@ async function probeHnsChainState({ rootAddr, query = queryDns }) {
   const synced = text(chain, 'synced.chain.hnsd');
   const heightText = text(chain, 'height.tip.chain.hnsd');
   const progressText = text(chain, 'progress.chain.hnsd');
+  const tipHash = text(chain, 'hash.tip.chain.hnsd').toLowerCase();
+  const tipTimeText = text(chain, 'time.tip.chain.hnsd');
+  const tipTime = Number(tipTimeText);
   const peersText = text(pool, 'size.pool.hnsd');
   const height = Number(heightText);
   const progress = Number(progressText);
   const peers = Number(peersText);
-  if (!['true', 'false'].includes(synced) || !/^\d+$/.test(heightText) ||
+  if (!/^[0-9a-f]{64}$/.test(tipHash) || !/^\d+$/.test(tipTimeText) || !Number.isSafeInteger(tipTime) ||
+      !['true', 'false'].includes(synced) || !/^\d+$/.test(heightText) ||
       !/^\d+$/.test(peersText) || !Number.isSafeInteger(height) ||
       !Number.isSafeInteger(peers) || !/^\d+(?:\.\d+)?$/.test(progressText) ||
       !Number.isFinite(progress) || progress < 0 || progress > 1) {
     throw new Error('Invalid HNS chain metadata');
   }
-  return { synced: synced === 'true', height, progress, peers };
+  return { synced: synced === 'true', height, progress, peers, tipHash, tipTime };
 }
 
 module.exports.probeHnsChainState = probeHnsChainState;
+
+// An AD bit is accepted only from the owned loopback validator, never DoH.
+async function probeHnsValidator({ recursiveAddr, query = queryDns }) {
+  const match = /^127\.0\.0\.1:(\d+)$/.exec(recursiveAddr || '');
+  if (!match || Number(match[1]) < 1 || Number(match[1]) > 65535) throw new Error('Owned validator required');
+  const results = await Promise.all([
+    ['app.pirate', 1], ['app.pirate', 28], ['_443._tcp.app.pirate', 52],
+  ].map(async ([hostname, type]) => ({ type, response: await query({
+    host: '127.0.0.1', port: Number(match[1]), hostname, type, recursive: true,
+    dnssec: true, timeoutMs: 6000, tcpFallback: false,
+  }) })));
+  const ok = results.every(({ response }) => response.authenticated && !response.truncated && response.rcode === 0) &&
+    results.some(({ type, response }) => [1, 28].includes(type) && response.answers.some((rr) => rr.address)) &&
+    results.find(({ type }) => type === 52).response.answers.some((rr) => rr.type === 52);
+  return { ok };
+}
+module.exports.probeHnsValidator = probeHnsValidator;

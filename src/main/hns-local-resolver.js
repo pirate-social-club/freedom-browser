@@ -3,6 +3,7 @@ const dgram = require('dgram');
 const dns = require('dns').promises;
 const net = require('net');
 const log = require('./logger');
+const { parseQuery, validateResponse } = require('./hns-dns-wire');
 const { resolveHnsDohAddresses: resolveHnsDohAddressesDefault } = require('./hns-doh-resolver');
 
 const DNS_TYPE_A = 1;
@@ -48,12 +49,13 @@ function encodeDnsName(hostname) {
   return Buffer.concat(parts);
 }
 
-function buildDnsQuery(hostname, type = DNS_TYPE_A, recursive = false, klass = DNS_CLASS_IN) {
+function buildDnsQuery(hostname, type = DNS_TYPE_A, recursive = false, klass = DNS_CLASS_IN, dnssec = false) {
   const id = crypto.randomInt(0, 0x10000);
   const header = Buffer.alloc(12);
   header.writeUInt16BE(id, 0);
   header.writeUInt16BE(recursive ? 0x0100 : 0, 2);
   header.writeUInt16BE(1, 4);
+  if (dnssec) header.writeUInt16BE(1, 10);
 
   const question = Buffer.alloc(4);
   question.writeUInt16BE(type, 0);
@@ -61,7 +63,8 @@ function buildDnsQuery(hostname, type = DNS_TYPE_A, recursive = false, klass = D
 
   return {
     id,
-    message: Buffer.concat([header, encodeDnsName(hostname), question]),
+    message: Buffer.concat([header, encodeDnsName(hostname), question,
+      ...(dnssec ? [Buffer.from('0000291000000080000000', 'hex')] : [])]),
   };
 }
 
@@ -200,14 +203,15 @@ function parseDnsMessage(buffer, expectedId) {
     additionals,
     answers,
     authorities,
+    authenticated: Boolean(flags & 0x0020),
     truncated: Boolean(flags & 0x0200),
     rcode: flags & 0x000f,
   };
 }
 
-function queryDnsUdp({ host, hostname, port = 53, recursive = false, timeoutMs = DEFAULT_TIMEOUT_MS, type, klass }) {
+function queryDnsUdp({ host, hostname, port = 53, recursive = false, timeoutMs = DEFAULT_TIMEOUT_MS, type, klass, dnssec }) {
   return new Promise((resolve, reject) => {
-    const query = buildDnsQuery(hostname, type, recursive, klass);
+    const query = buildDnsQuery(hostname, type, recursive, klass, dnssec);
     const socket = dgram.createSocket(net.isIP(host) === 6 ? 'udp6' : 'udp4');
     socket.unref?.();
     const timeout = setTimeout(() => {
@@ -223,10 +227,12 @@ function queryDnsUdp({ host, hostname, port = 53, recursive = false, timeoutMs =
       socket.close();
       reject(error);
     });
-    socket.once('message', (message) => {
+    socket.on('message', (message, peer) => {
+      if (!peer || peer.port !== port || (net.isIP(host) && peer.address !== host)) return;
       clearTimeout(timeout);
       socket.close();
       try {
+        validateResponse(message, parseQuery(query.message));
         resolve(parseDnsMessage(message, query.id));
       } catch (error) {
         reject(error);
@@ -236,9 +242,9 @@ function queryDnsUdp({ host, hostname, port = 53, recursive = false, timeoutMs =
   });
 }
 
-function queryDnsTcp({ host, hostname, port = 53, recursive = false, timeoutMs = DEFAULT_TIMEOUT_MS, type, klass }) {
+function queryDnsTcp({ host, hostname, port = 53, recursive = false, timeoutMs = DEFAULT_TIMEOUT_MS, type, klass, dnssec }) {
   return new Promise((resolve, reject) => {
-    const query = buildDnsQuery(hostname, type, recursive, klass);
+    const query = buildDnsQuery(hostname, type, recursive, klass, dnssec);
     const length = Buffer.alloc(2);
     length.writeUInt16BE(query.message.length, 0);
     const framedQuery = Buffer.concat([length, query.message]);
@@ -281,7 +287,9 @@ function queryDnsTcp({ host, hostname, port = 53, recursive = false, timeoutMs =
       if (expectedLength === null || payload.length < expectedLength + 2) return;
 
       try {
-        finish(null, parseDnsMessage(payload.subarray(2, expectedLength + 2), query.id));
+        const message = payload.subarray(2, expectedLength + 2);
+        validateResponse(message, parseQuery(query.message));
+        finish(null, parseDnsMessage(message, query.id));
       } catch (error) {
         finish(error);
       }
