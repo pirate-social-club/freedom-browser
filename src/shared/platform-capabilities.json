@@ -20,6 +20,10 @@
           {
             "name": "PROVENANCE.md",
             "executable": false
+          },
+          {
+            "name": "encrypted-validator.json",
+            "executable": false
           }
         ],
         "win": [

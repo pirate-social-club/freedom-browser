@@ -1,4 +1,6 @@
 const path = require('path');
+const fs = require('fs');
+const nativeDir = path.join(__dirname, '..', 'hns-bin', 'linux-x64');
 const { checkCapabilityBinaries } = require('./check-binaries');
 
 function createFsMock(files = {}) {
@@ -12,7 +14,9 @@ function createFsMock(files = {}) {
 function capabilityFiles(rootDir, directory, target, names) {
   return Object.fromEntries(names.map((name) => [
     path.join(rootDir, directory, target, name),
-    { mode: name.endsWith('.dat') || name.endsWith('.md') ? 0o644 : 0o755 },
+    { mode: /\.(?:dat|md|json)$/.test(name) ? 0o644 : 0o755,
+      contents: directory === 'hns-bin' && ['hnsd', 'encrypted-validator.json'].includes(name)
+        ? fs.readFileSync(path.join(nativeDir, name)) : undefined },
   ]));
 }
 
@@ -42,6 +46,7 @@ describe('capability binary checks', () => {
     const files = capabilityFiles(rootDir, 'hns-bin', 'linux-x64', [
       'fingertipd',
       'hnsd',
+      'encrypted-validator.json',
     ]);
     const missing = checkCapabilityBinaries('hns', { os: 'linux', arch: 'x64' }, {
       rootDir,
@@ -76,10 +81,11 @@ describe('capability binary checks', () => {
     expect(missing).toEqual([expect.stringContaining('not executable')]);
   });
 
-  test('rejects an HNS daemon with an unbundled libunbound dependency', () => {
+  test('rejects changed native bytes even when they claim the expected library', () => {
     const files = capabilityFiles(rootDir, 'hns-bin', 'linux-x64', [
       'fingertipd',
       'hnsd',
+      'encrypted-validator.json',
       'PROVENANCE.md',
     ]);
     files[path.join(rootDir, 'hns-bin', 'linux-x64', 'hnsd')].contents =
@@ -88,13 +94,14 @@ describe('capability binary checks', () => {
       rootDir,
       fsImpl: createFsMock(files),
     });
-    expect(missing).toEqual([expect.stringContaining('not self-contained')]);
+    expect(missing).toEqual([expect.stringContaining('encrypted validator provenance mismatch')]);
   });
 
   test('accepts complete supported capability bundles', () => {
     const hnsFiles = capabilityFiles(rootDir, 'hns-bin', 'linux-x64', [
       'fingertipd',
       'hnsd',
+      'encrypted-validator.json',
       'PROVENANCE.md',
     ]);
     const dvpnFiles = capabilityFiles(rootDir, 'dvpn-bin', 'linux-x64', [

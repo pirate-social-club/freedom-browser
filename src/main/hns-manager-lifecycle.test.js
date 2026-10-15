@@ -18,7 +18,8 @@ function fixture(options = {}) {
   const transport = { relay, custody, launcher: '/launcher', env: {} };
   const createTransport = jest.fn(() => options.transport || Promise.resolve(transport));
   const monitor = { allowed: () => true, close: jest.fn(async () => {}) };
-  const createMonitor = jest.fn(() => monitor);
+  const monitorEvents = {};
+  const createMonitor = jest.fn((callbacks) => { Object.assign(monitorEvents, callbacks); return monitor; });
   const network = Object.fromEntries(['setHnsProtectionRequired', 'setHnsProxy', 'clearHnsProxy',
     'setHnsResolverAddrs', 'registerProxySession', 'unregisterProxySession', 'beginHnsCertificateUpdate',
     'rebuild'].map((name) => [name, jest.fn(async () => {})]));
@@ -44,7 +45,7 @@ function fixture(options = {}) {
   const { mod } = loadMainModule(require.resolve('./hns-manager'), {
     electronOverrides: { session: { defaultSession: cert } },
     extraMocks: {
-      fs: () => ({ existsSync: () => true, readFileSync: () => Buffer.from('test'), mkdirSync: jest.fn() }),
+      fs: () => ({ existsSync: options.existsSync || (() => true), readFileSync: () => Buffer.from('test'), mkdirSync: jest.fn() }),
       crypto: () => ({ ...jest.requireActual('crypto'), X509Certificate: class { raw = Buffer.from('test'); } }),
       net: () => ({ createServer: makeServer }),
       dgram: () => ({ createSocket: () => { const socket = new EventEmitter(); socket.unref = () => {};
@@ -56,13 +57,13 @@ function fixture(options = {}) {
       [require.resolve('./hns-network-monitor')]: () => ({ createHnsNetworkMonitor: createMonitor }),
       [require.resolve('./hns-validator-transport')]: () => ({ createHnsValidatorTransport: createTransport }),
       [require.resolve('./hns-health')]: () => ({ probeHnsChainState: chain, probeHnsValidator: validator }),
-      [require.resolve('./hns-checkpoint')]: () => ({ installHnsCheckpoint: jest.fn() }),
+      [require.resolve('./hns-checkpoint')]: () => ({ installHnsCheckpoint: options.installCheckpoint || jest.fn() }),
       [require.resolve('./browser-state-sanitizer')]: () => ({ pruneUnknownSingleLabelHistory: jest.fn() }),
       [require.resolve('./service-registry')]: () => ({ MODE: { BUNDLED: 'bundled' },
         ...Object.fromEntries(['updateService', 'setStatusMessage', 'setErrorState', 'clearErrorState', 'clearService'].map((name) => [name, jest.fn()])) }),
     },
   });
-  return { mod, network, spawn, children, lines, relay, custody, transport, createTransport, createMonitor, monitor, chain, validator };
+  return { mod, network, spawn, children, lines, relay, custody, transport, createTransport, createMonitor, monitor, monitorEvents, chain, validator };
 }
 
 describe('HNS encrypted generation lifecycle', () => {
@@ -124,5 +125,67 @@ describe('HNS encrypted generation lifecycle', () => {
     await ctx.mod.stopHns();
     expect(ctx.custody.terminate).toHaveBeenCalledTimes(1);
     expect(ctx.mod.getHnsStatus().status).toBe('stopped');
+  });
+
+  test.each(['helper', 'native', 'checkpoint'])('permanent %s failure stays refused until an explicit repaired retry', async (kind) => {
+    let broken = true;
+    const ctx = fixture({
+      existsSync: (target) => !broken || !target.endsWith(kind === 'helper' ? '/fingertipd' : kind === 'native' ? '/hnsd' : '/absent'),
+      installCheckpoint: () => { if (broken && kind === 'checkpoint') throw new Error('Invalid checkpoint'); },
+    });
+    await ctx.mod.startHns();
+    expect(ctx.mod.getHnsStatus()).toMatchObject({ status: 'error', localResolverReady: false });
+    expect(ctx.createTransport).not.toHaveBeenCalled();
+    expect(ctx.spawn).not.toHaveBeenCalled();
+    expect(ctx.network.setHnsProtectionRequired).toHaveBeenCalledWith(true);
+    ctx.monitorEvents.onChange('network_changed'); ctx.monitorEvents.onStable();
+    await jest.advanceTimersByTimeAsync(30000);
+    expect(ctx.mod.getHnsStatus().status).toBe('error');
+    expect(ctx.spawn).not.toHaveBeenCalled();
+    broken = false;
+    await ctx.mod.startHns();
+    expect(ctx.spawn).toHaveBeenCalledTimes(1);
+    expect(ctx.mod.getHnsStatus()).toMatchObject({ status: 'starting', error: null });
+    await ctx.mod.stopHns();
+  });
+
+  test('an explicit stop during preflight cleanup cannot be overwritten by its old error', async () => {
+    const ctx = fixture({ existsSync: () => false });
+    const cleanup = deferred(); ctx.network.rebuild.mockReturnValueOnce(cleanup.promise);
+    const starting = ctx.mod.startHns(); await flush();
+    const stopping = ctx.mod.stopHns(); cleanup.resolve();
+    await Promise.all([starting, stopping]);
+    expect(ctx.mod.getHnsStatus()).toMatchObject({ status: 'stopped', error: null });
+    expect(ctx.spawn).not.toHaveBeenCalled();
+  });
+
+  test('a queued manual retry starts after its older preflight recovery settles', async () => {
+    let broken = true;
+    const ctx = fixture({ existsSync: () => !broken });
+    const cleanup = deferred(); ctx.network.rebuild.mockReturnValueOnce(cleanup.promise);
+    const starting = ctx.mod.startHns(); await flush();
+    broken = false; await ctx.mod.startHns(); cleanup.resolve();
+    await starting; await flush();
+    expect(ctx.spawn).toHaveBeenCalledTimes(1);
+    expect(ctx.mod.getHnsStatus()).toMatchObject({ status: 'starting', error: null });
+    await ctx.mod.stopHns();
+  });
+
+  test('cleanup failure takes precedence over a friendly permanent startup error', async () => {
+    const ctx = fixture({ existsSync: () => false });
+    ctx.network.rebuild.mockRejectedValueOnce(new Error('Routing cleanup failed'));
+    await ctx.mod.startHns();
+    expect(ctx.mod.getHnsStatus()).toMatchObject({ status: 'error', error: 'HNS resolver cleanup failed' });
+    await ctx.mod.startHns();
+    expect(ctx.spawn).not.toHaveBeenCalled();
+  });
+
+  test('a transient transport setup failure retains bounded automatic recovery', async () => {
+    const ctx = fixture(); ctx.createTransport.mockRejectedValueOnce(new Error('Temporary transport failure'));
+    await ctx.mod.startHns(); await flush();
+    await jest.advanceTimersByTimeAsync(1000); await flush();
+    expect(ctx.createTransport).toHaveBeenCalledTimes(2);
+    expect(ctx.spawn).toHaveBeenCalledTimes(1);
+    await ctx.mod.stopHns();
   });
 });

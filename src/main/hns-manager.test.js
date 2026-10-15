@@ -6,60 +6,28 @@ const {
 } = require('../../test/helpers/main-process-test-utils');
 
 function createProcessMock() {
-  const listeners = new Map();
-  const onceListeners = new Map();
-  const stdoutListeners = new Map();
-  const stderrListeners = new Map();
-
-  const emitAll = (store, event, args) => {
-    for (const handler of store.get(event) || []) {
-      handler(...args);
+  const proc = new (require('events').EventEmitter)();
+  proc.stdout = new (require('events').EventEmitter)();
+  proc.stderr = new (require('events').EventEmitter)();
+  proc.exitCode = null;
+  proc.signalCode = null;
+  const emit = proc.emit.bind(proc);
+  proc.emit = (event, ...args) => {
+    if (event === 'close' && proc.exitCode === null && proc.signalCode === null) {
+      proc.exitCode = args[0] ?? 0;
+      emit('exit', proc.exitCode, null);
     }
+    return emit(event, ...args);
   };
-
-  return {
-    stdout: {
-      on: jest.fn((event, handler) => {
-        if (!stdoutListeners.has(event)) {
-          stdoutListeners.set(event, []);
-        }
-        stdoutListeners.get(event).push(handler);
-      }),
-    },
-    stderr: {
-      on: jest.fn((event, handler) => {
-        if (!stderrListeners.has(event)) {
-          stderrListeners.set(event, []);
-        }
-        stderrListeners.get(event).push(handler);
-      }),
-    },
-    on: jest.fn((event, handler) => {
-      if (!listeners.has(event)) {
-        listeners.set(event, []);
-      }
-      listeners.get(event).push(handler);
-    }),
-    once: jest.fn((event, handler) => {
-      if (!onceListeners.has(event)) {
-        onceListeners.set(event, []);
-      }
-      onceListeners.get(event).push(handler);
-    }),
-    emit(event, ...args) {
-      emitAll(listeners, event, args);
-      const oneTimeHandlers = onceListeners.get(event) || [];
-      onceListeners.delete(event);
-      oneTimeHandlers.forEach((handler) => handler(...args));
-    },
-    emitStdout(event, ...args) {
-      emitAll(stdoutListeners, event, args);
-    },
-    emitStderr(event, ...args) {
-      emitAll(stderrListeners, event, args);
-    },
-    kill: jest.fn(() => true),
-  };
+  proc.emitStdout = (...args) => proc.stdout.emit(...args);
+  proc.emitStderr = (...args) => proc.stderr.emit(...args);
+  proc.kill = jest.fn((signal) => {
+    proc.signalCode = signal;
+    emit('exit', null, signal);
+    emit('close', null, signal);
+    return true;
+  });
+  return proc;
 }
 
 function loadHnsManagerModule(options = {}) {
@@ -100,6 +68,7 @@ function loadHnsManagerModule(options = {}) {
   const clearErrorState = jest.fn();
   const clearService = jest.fn();
 
+  const setHnsProtectionRequired = jest.fn();
   const setHnsProxy = jest.fn();
   const beginHnsCertificateUpdate = jest.fn(async () => {});
   const setHnsResolverAddrs = jest.fn();
@@ -127,6 +96,7 @@ function loadHnsManagerModule(options = {}) {
   const unavailableUdpPorts = new Set(options.unavailableUdpPorts || []);
   const spawn = jest.fn((binary, args = []) => {
     const proc = (options.createProcess || createProcessMock)();
+    proc.pid = 100 + spawnedProcesses.length;
     proc.binary = binary;
     proc.args = args;
     spawnedProcesses.push(proc);
@@ -134,6 +104,7 @@ function loadHnsManagerModule(options = {}) {
   });
   const readlineHandlers = new Map();
   const readlineInterface = {
+    close: jest.fn(),
     on: jest.fn((event, handler) => {
       readlineHandlers.set(event, handler);
     }),
@@ -209,6 +180,7 @@ function loadHnsManagerModule(options = {}) {
         MODE: { BUNDLED: 'bundled', REUSED: 'reused', EXTERNAL: 'external', NONE: 'none' },
       }),
       [require.resolve('./network-manager')]: () => ({
+        setHnsProtectionRequired,
         setHnsProxy,
         beginHnsCertificateUpdate,
         setHnsResolverAddrs,
@@ -226,10 +198,22 @@ function loadHnsManagerModule(options = {}) {
         pruneUnknownSingleLabelHistory,
       }),
       [require.resolve('./hns-checkpoint')]: () => ({ installHnsCheckpoint }),
+      [require.resolve('./hns-network-monitor')]: () => ({
+        createHnsNetworkMonitor: () => ({ allowed: () => true, close: jest.fn(async () => {}) }),
+      }),
+      [require.resolve('./hns-validator-transport')]: () => ({
+        createHnsValidatorTransport: jest.fn(async () => ({
+          launcher: '/test-owned-encrypted-launcher', env: {},
+          relay: { probe: jest.fn(async () => {}), close: jest.fn(async () => {}) },
+          custody: { prepare: jest.fn(), bindParent: jest.fn(), capture: jest.fn(async () => {}),
+            isCaptured: () => true, terminate: jest.fn(async () => {}), neverSpawned: jest.fn() },
+        })),
+      }),
       [require.resolve('./hns-health')]: () => ({
-        ...(options.hnsHealth || jest.requireActual('./hns-health')),
+        probeHnsValidator: options.probeHnsValidator || jest.fn(async () => ({ ok: true })),
         probeHnsChainState: options.probeHnsChainState || jest.fn(async () => ({
-          synced: Boolean(options.hnsHealth), height: 326149, progress: 0.99, peers: 2,
+          synced: true, height: 326149, progress: 0.99, peers: 2,
+          tipHash: 'a'.repeat(64), tipTime: Math.floor(Date.now() / 1000),
         })),
       }),
       [require.resolve('../shared/platform-capabilities')]: () => ({
@@ -293,11 +277,14 @@ async function emitHelperReady(ctx) {
   ctx.readlineHandlers.get('line')?.(JSON.stringify({
     type: 'ready', proxyAddr: '127.0.0.1:44041', caPath: '/tmp/hns-ca.pem',
   }));
-  for (let i = 0; i < 5; i += 1) await Promise.resolve();
+  await jest.advanceTimersByTimeAsync(6000);
+  for (let i = 0; i < 10; i += 1) await Promise.resolve();
 }
 
 describe('hns-manager', () => {
+  beforeEach(() => jest.useFakeTimers());
   afterEach(() => {
+    jest.clearAllTimers();
     jest.clearAllMocks();
     jest.useRealTimers();
   });
@@ -342,194 +329,52 @@ describe('hns-manager', () => {
     });
   });
 
-  test('localResolverReady follows app.pirate health instead of aggregate suffix health', async () => {
-    jest.useFakeTimers();
-    const probeResults = [
-      {
-        ok: false,
-        results: [
-          { host: 'pirate', ok: true, addresses: ['173.199.93.117'] },
-          { host: 'app.pirate', ok: true, addresses: ['173.199.93.117'] },
-          { host: 'baddie', ok: false, code: 'ETIMEOUT' },
-        ],
-      },
-      {
-        ok: false,
-        results: [
-          { host: 'pirate', ok: true, addresses: ['173.199.93.117'] },
-          { host: 'app.pirate', ok: true, addresses: ['173.199.93.117'] },
-          { host: 'baddie', ok: false, code: 'ETIMEOUT' },
-        ],
-      },
-      {
-        ok: false,
-        results: [
-          { host: 'pirate', ok: false, code: 'ESERVFAIL' },
-          { host: 'app.pirate', ok: false, code: 'ESERVFAIL' },
-        ],
-      },
-      {
-        ok: false,
-        results: [
-          { host: 'pirate', ok: false, code: 'ESERVFAIL' },
-          { host: 'app.pirate', ok: false, code: 'ESERVFAIL' },
-        ],
-      },
-    ];
+  test('two native validations publish readiness and a later failure retires it', async () => {
+    const validator = jest.fn().mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: true })
+      .mockResolvedValue({ ok: false });
     const ctx = loadHnsManagerModule({
-      cryptoMock: {
-        X509Certificate: class {
-          raw = Buffer.from('test certificate');
-        },
-      },
-      hnsHealth: {
-        buildHnsHealthProbeHosts: jest.fn(() => ['pirate', 'app.pirate', 'baddie']),
-        formatHnsHealthSummary: jest.fn((result) => result.results.map((entry) => entry.host).join(', ')),
-        probeHnsResolver: jest.fn(() => Promise.resolve(probeResults.shift())),
-      },
-      readFileSync: () => 'test certificate',
+      cryptoMock: { X509Certificate: class { raw = Buffer.from('test certificate'); } },
+      readFileSync: () => 'test certificate', probeHnsValidator: validator,
     });
-
     await ctx.mod.startHns();
-    ctx.readlineHandlers.get('line')?.(JSON.stringify({
-      type: 'ready',
-      proxyAddr: '127.0.0.1:44041',
-      caPath: '/tmp/hns-ca.pem',
-    }));
-    await Promise.resolve();
-    ctx.readlineHandlers.get('line')?.(JSON.stringify({
-      type: 'sync',
-      synced: true,
-      height: 326149,
-    }));
-
+    ctx.readlineHandlers.get('line')(JSON.stringify({ type: 'ready', proxyAddr: '127.0.0.1:44041', caPath: '/tmp/hns-ca.pem' }));
     await jest.advanceTimersByTimeAsync(1000);
-    expect(ctx.updateService).toHaveBeenCalledWith('hns', expect.objectContaining({
-      localResolverReady: false,
-    }));
     expect(ctx.mod.getHnsStatus().localResolverReady).toBe(false);
-
-    await jest.advanceTimersByTimeAsync(5000);
-    expect(ctx.updateService).toHaveBeenCalledWith('hns', expect.objectContaining({
-      localResolverReady: true,
-    }));
-    expect(ctx.mod.getHnsStatus().localResolverReady).toBe(true);
-
+    expect(ctx.setHnsProxy).not.toHaveBeenCalled();
     await jest.advanceTimersByTimeAsync(5000);
     expect(ctx.mod.getHnsStatus().localResolverReady).toBe(true);
-
+    const published = ctx.setHnsProxy.mock.calls[0][1];
+    expect(published.isValid()).toBe(true);
     await jest.advanceTimersByTimeAsync(5000);
-    expect(ctx.updateService).toHaveBeenLastCalledWith('hns', expect.objectContaining({
-      localResolverReady: false,
-    }));
     expect(ctx.mod.getHnsStatus().localResolverReady).toBe(false);
-    expect(ctx.updateService.mock.calls.filter(([_service, updates]) => (
-      Object.prototype.hasOwnProperty.call(updates, 'dohFallbackReady') &&
-      !Object.prototype.hasOwnProperty.call(updates, 'synced')
-    ))).toHaveLength(3);
-    expect(ctx.log.info).toHaveBeenCalledWith(
-      '[HNS] localResolverReady=false->true after 2 consecutive successful probes'
-    );
-    expect(ctx.log.info).toHaveBeenCalledWith(
-      '[HNS] localResolverReady=true->false after 2 consecutive failed probes'
-    );
+    expect(published.isValid()).toBe(false);
+    expect(ctx.clearHnsProxy).toHaveBeenCalled();
   });
 
-  test('dohFallbackReady stays true when app.pirate DoH last-resort resolution is available', async () => {
-    jest.useFakeTimers();
+  test('a remote DoH result cannot replace failed local DNSSEC validation', async () => {
     const ctx = loadHnsManagerModule({
       hnsResolutionForHost: { resolverType: 'doh' },
-      cryptoMock: {
-        X509Certificate: class {
-          raw = Buffer.from('test certificate');
-        },
-      },
-      hnsHealth: {
-        buildHnsHealthProbeHosts: jest.fn(() => ['pirate', 'app.pirate']),
-        formatHnsHealthSummary: jest.fn(() => 'pirate=FAIL(ESERVFAIL), app.pirate=FAIL(ESERVFAIL)'),
-        probeHnsResolver: jest.fn(() => Promise.resolve({
-          ok: false,
-          results: [
-            { host: 'pirate', ok: false, code: 'ESERVFAIL' },
-            { host: 'app.pirate', ok: false, code: 'ESERVFAIL' },
-          ],
-        })),
-      },
-      readFileSync: () => 'test certificate',
+      cryptoMock: { X509Certificate: class { raw = Buffer.from('test certificate'); } },
+      readFileSync: () => 'test certificate', probeHnsValidator: jest.fn(async () => ({ ok: false })),
     });
-
-    await ctx.mod.startHns();
-    ctx.readlineHandlers.get('line')?.(JSON.stringify({
-      type: 'ready',
-      proxyAddr: '127.0.0.1:44041',
-      caPath: '/tmp/hns-ca.pem',
-    }));
-    await Promise.resolve();
-    ctx.readlineHandlers.get('line')?.(JSON.stringify({
-      type: 'sync',
-      synced: true,
-      height: 326149,
-    }));
-
-    await jest.advanceTimersByTimeAsync(1000);
-
-    expect(ctx.getHnsResolutionForHost).toHaveBeenCalledWith('app.pirate');
+    await emitHelperReady(ctx);
+    expect(ctx.mod.getHnsStatus()).toMatchObject({ dohFallbackReady: false, localResolverReady: false });
+    expect(ctx.setHnsProxy).not.toHaveBeenCalled();
+    expect(ctx.getHnsResolutionForHost).not.toHaveBeenCalled();
     expect(ctx.canResolveHnsFallbackForHost).not.toHaveBeenCalled();
-    expect(ctx.updateService).toHaveBeenCalledWith('hns', expect.objectContaining({
-      dohFallbackReady: true,
-      localResolverReady: false,
-    }));
-    expect(ctx.mod.getHnsStatus().localResolverReady).toBe(false);
-    expect(ctx.mod.getHnsStatus().dohFallbackReady).toBe(true);
-    expect(ctx.setStatusMessage).toHaveBeenCalledWith(
-      'hns',
-      'HNS recursive resolver recovering; using HTTPS last-resort resolver'
-    );
   });
 
-  test('skips readiness broadcasts when readiness state is unchanged', async () => {
-    jest.useFakeTimers();
-    const ctx = loadHnsManagerModule({
-      hnsResolutionForHost: { resolverType: 'doh' },
-      cryptoMock: {
-        X509Certificate: class {
-          raw = Buffer.from('test certificate');
-        },
-      },
-      hnsHealth: {
-        buildHnsHealthProbeHosts: jest.fn(() => ['pirate', 'app.pirate']),
-        formatHnsHealthSummary: jest.fn(() => 'pirate=FAIL(ESERVFAIL), app.pirate=FAIL(ESERVFAIL)'),
-        probeHnsResolver: jest.fn(() => Promise.resolve({
-          ok: false,
-          results: [
-            { host: 'pirate', ok: false, code: 'ESERVFAIL' },
-            { host: 'app.pirate', ok: false, code: 'ESERVFAIL' },
-          ],
-        })),
-      },
-      readFileSync: () => 'test certificate',
-    });
-
-    await ctx.mod.startHns();
-    ctx.readlineHandlers.get('line')?.(JSON.stringify({
-      type: 'ready',
-      proxyAddr: '127.0.0.1:44041',
-      caPath: '/tmp/hns-ca.pem',
-    }));
-    await Promise.resolve();
-    ctx.readlineHandlers.get('line')?.(JSON.stringify({
-      type: 'sync',
-      synced: true,
-      height: 326149,
-    }));
-
-    await jest.advanceTimersByTimeAsync(1000);
-    await jest.advanceTimersByTimeAsync(5000);
-
-    expect(ctx.updateService.mock.calls.filter(([_service, updates]) => (
+  test('skips readiness broadcasts when validation remains ready', async () => {
+    const ctx = loadCertificateSessionFixture();
+    await emitHelperReady(ctx);
+    const broadcasts = () => ctx.updateService.mock.calls.filter(([_service, updates]) => (
       Object.prototype.hasOwnProperty.call(updates, 'dohFallbackReady') &&
       !Object.prototype.hasOwnProperty.call(updates, 'synced')
-    ))).toHaveLength(1);
+    ));
+    expect(broadcasts()).toHaveLength(2);
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(broadcasts()).toHaveLength(2);
+    expect(ctx.mod.getHnsStatus().localResolverReady).toBe(true);
   });
 
   test('helper canary changes do not override independently observed chain readiness', async () => {
@@ -596,90 +441,48 @@ describe('hns-manager', () => {
     ctx.readlineHandlers.get('line')?.(JSON.stringify({ type: 'sync', synced: true, height: 136149 }));
     await jest.advanceTimersByTimeAsync(30000);
     expect(ctx.mod.getHnsStatus()).toMatchObject({ synced: false, canaryReady: true, localResolverReady: false, height: 136149, peerCount: 0 });
-    expect(ctx.setStatusMessage).toHaveBeenLastCalledWith('hns', expect.stringContaining('without new headers'));
+    expect(ctx.setStatusMessage).toHaveBeenLastCalledWith('hns', 'Syncing block 136149; 0 peers');
   });
 
-  test('losing chain sync or metadata clears previously established readiness', async () => {
-    jest.useFakeTimers();
-    let chain = { synced: true, height: 349265, progress: 1, peers: 2 };
+  test('lost chain sync or metadata retires authority until a fresh generation', async () => {
+    let chain = { synced: true, height: 349265, progress: 1, peers: 2, tipHash: 'a'.repeat(64) };
     const ctx = loadHnsManagerModule({
       cryptoMock: { X509Certificate: class { raw = Buffer.from('test certificate'); } },
       readFileSync: () => 'test certificate',
-      probeHnsChainState: jest.fn(async () => { if (chain instanceof Error) throw chain; return chain; }),
-      hnsHealth: {
-        buildHnsHealthProbeHosts: () => ['app.pirate'],
-        formatHnsHealthSummary: () => 'app.pirate=OK',
-        probeHnsResolver: async () => ({ ok: true, results: [{ host: 'app.pirate', ok: true, addresses: ['203.0.113.10'] }] }),
-      },
+      probeHnsChainState: jest.fn(async () => {
+        if (chain instanceof Error) throw chain;
+        return { ...chain, tipTime: Math.floor(Date.now() / 1000) };
+      }),
     });
-    await ctx.mod.startHns();
-    ctx.readlineHandlers.get('line')?.(JSON.stringify({ type: 'ready', proxyAddr: '127.0.0.1:44041', caPath: '/tmp/hns-ca.pem' }));
-    await Promise.resolve();
-    await jest.advanceTimersByTimeAsync(6000);
+    await emitHelperReady(ctx);
     expect(ctx.mod.getHnsStatus().localResolverReady).toBe(true);
+    const first = ctx.setHnsProxy.mock.calls[0][1];
     chain = { ...chain, synced: false };
     await jest.advanceTimersByTimeAsync(2000);
     expect(ctx.mod.getHnsStatus()).toMatchObject({ synced: false, localResolverReady: false });
+    expect(first.isValid()).toBe(false);
+    await ctx.mod.stopHns();
     chain = { ...chain, synced: true };
-    await jest.advanceTimersByTimeAsync(6000);
-    expect(ctx.mod.getHnsStatus().synced).toBe(true);
+    await emitHelperReady(ctx);
+    expect(ctx.mod.getHnsStatus().localResolverReady).toBe(true);
+    const second = ctx.setHnsProxy.mock.calls[1][1];
+    expect(second.generation).toBeGreaterThan(first.generation);
     chain = new Error('resolver stopped responding');
     await jest.advanceTimersByTimeAsync(2000);
     expect(ctx.mod.getHnsStatus()).toMatchObject({ synced: false, localResolverReady: false });
+    expect(second.isValid()).toBe(false);
   });
 
-  test('localResolverReady reports local delegation when recursive DNS is unavailable', async () => {
-    jest.useFakeTimers();
+  test('an address-only local delegation cannot replace native validation', async () => {
     const ctx = loadHnsManagerModule({
       hnsResolutionForHost: { resolverType: 'local' },
-      cryptoMock: {
-        X509Certificate: class {
-          raw = Buffer.from('test certificate');
-        },
-      },
-      hnsHealth: {
-        buildHnsHealthProbeHosts: jest.fn(() => ['pirate', 'app.pirate']),
-        formatHnsHealthSummary: jest.fn(() => 'pirate=FAIL(ETIMEOUT), app.pirate=FAIL(ETIMEOUT)'),
-        probeHnsResolver: jest.fn(() => Promise.resolve({
-          ok: false,
-          results: [
-            { host: 'pirate', ok: false, code: 'ETIMEOUT' },
-            { host: 'app.pirate', ok: false, code: 'ETIMEOUT' },
-          ],
-        })),
-      },
-      readFileSync: () => 'test certificate',
+      cryptoMock: { X509Certificate: class { raw = Buffer.from('test certificate'); } },
+      readFileSync: () => 'test certificate', probeHnsValidator: jest.fn(async () => ({ ok: false })),
     });
-
-    await ctx.mod.startHns();
-    ctx.readlineHandlers.get('line')?.(JSON.stringify({
-      type: 'ready',
-      proxyAddr: '127.0.0.1:44041',
-      caPath: '/tmp/hns-ca.pem',
-    }));
-    await Promise.resolve();
-    ctx.readlineHandlers.get('line')?.(JSON.stringify({
-      type: 'sync',
-      synced: true,
-      height: 326149,
-    }));
-
-    await jest.advanceTimersByTimeAsync(1000);
-    expect(ctx.mod.getHnsStatus().localResolverReady).toBe(false);
-
-    await jest.advanceTimersByTimeAsync(5000);
-
-    expect(ctx.updateService).toHaveBeenCalledWith('hns', expect.objectContaining({
-      dohFallbackReady: false,
-      localResolverReady: true,
-    }));
-    expect(ctx.setStatusMessage).toHaveBeenCalledWith(
-      'hns',
-      'HNS recursive resolver recovering; using local delegation resolver'
-    );
-    expect(ctx.log.info).toHaveBeenCalledWith(
-      '[HNS] Local recursive resolver unavailable (chain sync): pirate=FAIL(ETIMEOUT), app.pirate=FAIL(ETIMEOUT); local delegation resolver ready; retrying in 5000ms'
-    );
+    await emitHelperReady(ctx);
+    expect(ctx.mod.getHnsStatus()).toMatchObject({ dohFallbackReady: false, localResolverReady: false });
+    expect(ctx.setHnsProxy).not.toHaveBeenCalled();
+    expect(ctx.getHnsResolutionForHost).not.toHaveBeenCalled();
   });
 
   test('publishes guarded HNS proxy instead of helper upstream', async () => {
@@ -695,9 +498,9 @@ describe('hns-manager', () => {
 
     await emitHelperReady(ctx);
 
-    expect(ctx.setHnsProxy).toHaveBeenCalledWith('127.0.0.1:44041', {
-      generation: expect.any(Number), caFingerprint: expect.any(String),
-    });
+    expect(ctx.setHnsProxy).toHaveBeenCalledWith('127.0.0.1:44041', expect.objectContaining({
+      generation: expect.any(Number), caFingerprint: expect.any(String), isValid: expect.any(Function),
+    }));
     expect(ctx.rebuild).toHaveBeenCalled();
     expect(ctx.getHnsProxyAddr).toHaveBeenCalled();
     expect(ctx.updateService).toHaveBeenCalledWith('hns', expect.objectContaining({
@@ -801,7 +604,7 @@ describe('hns-manager', () => {
     expect(ctx.spawn).not.toHaveBeenCalled();
     expect(ctx.mod.getHnsStatus().status).toBe('error');
     expect(ctx.mod.getHnsStatus().error).toContain(`obsolete hardcoded canary "${OBSOLETE_HNS_CANARY}"`);
-    expect(ctx.setErrorState).toHaveBeenCalledWith('hns', 'HNS helper binary is obsolete');
+    expect(ctx.setErrorState).toHaveBeenCalledWith('hns', expect.stringContaining('obsolete hardcoded canary'));
   });
 
   test('startHns ignores request when already running', async () => {
@@ -927,14 +730,13 @@ describe('hns-manager', () => {
     expect(callback).toHaveBeenLastCalledWith(0);
   });
 
-  test('ready waits for connection drainage before reading or applying a CA', async () => {
+  test('validated readiness waits for connection drainage before applying CA authority', async () => {
     jest.useFakeTimers();
     const ctx = loadCertificateSessionFixture();
     let release;
     ctx.beginHnsCertificateUpdate.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
     await emitHelperReady(ctx);
     expect(ctx.beginHnsCertificateUpdate).toHaveBeenCalledTimes(1);
-    expect(ctx.fsMock.readFileSync).not.toHaveBeenCalledWith('/tmp/hns-ca.pem', 'utf-8');
     expect(ctx.session.defaultSession.setCertificateVerifyProc).not.toHaveBeenCalled();
     expect(ctx.setHnsProxy).not.toHaveBeenCalled();
     release();
@@ -943,32 +745,28 @@ describe('hns-manager', () => {
     expect(ctx.setHnsProxy).toHaveBeenCalledTimes(1);
   });
 
-  test('failed drainage never reads or publishes a new CA', async () => {
+  test('failed drainage never applies or publishes CA authority', async () => {
     jest.useFakeTimers();
     const ctx = loadCertificateSessionFixture();
     ctx.beginHnsCertificateUpdate.mockRejectedValueOnce(new Error('drain failed'));
     await emitHelperReady(ctx);
-    expect(ctx.mod.getHnsStatus().status).toBe('error');
-    expect(ctx.fsMock.readFileSync).not.toHaveBeenCalledWith('/tmp/hns-ca.pem', 'utf-8');
-    expect(ctx.session.defaultSession.setCertificateVerifyProc).not.toHaveBeenCalled();
+    expect(ctx.mod.getHnsStatus().localResolverReady).toBe(false);
+    expect(ctx.session.defaultSession.setCertificateVerifyProc).not.toHaveBeenCalledWith(expect.any(Function));
     expect(ctx.setHnsProxy).not.toHaveBeenCalled();
   });
 
-  test('a superseded ready event cannot publish after its drainage completes', async () => {
-    jest.useFakeTimers();
+  test('a duplicate helper ready event cannot replace an activating identity', async () => {
     const ctx = loadCertificateSessionFixture();
     let release;
     ctx.beginHnsCertificateUpdate.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
     await emitHelperReady(ctx);
-    ctx.readlineHandlers.get('line')(JSON.stringify({
-      type: 'ready', proxyAddr: '127.0.0.1:44042', caPath: '/tmp/hns-ca.pem',
-    }));
-    for (let i = 0; i < 8; i += 1) await Promise.resolve();
-    expect(ctx.setHnsProxy).toHaveBeenCalledTimes(1);
-    expect(ctx.setHnsProxy.mock.calls[0][0]).toBe('127.0.0.1:44042');
+    ctx.readlineHandlers.get('line')(JSON.stringify({ type: 'ready', proxyAddr: '127.0.0.1:44042', caPath: '/tmp/other-ca.pem' }));
+    expect(ctx.setHnsProxy).not.toHaveBeenCalled();
     release();
-    for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    for (let i = 0; i < 40; i += 1) await Promise.resolve();
     expect(ctx.setHnsProxy).toHaveBeenCalledTimes(1);
+    expect(ctx.setHnsProxy.mock.calls[0][0]).toBe('127.0.0.1:44041');
+    expect(ctx.fsMock.readFileSync).not.toHaveBeenCalledWith('/tmp/other-ca.pem', 'utf-8');
   });
 
   test('late enrollment installs certificates before adopting routing', async () => {
@@ -1015,32 +813,36 @@ describe('hns-manager', () => {
     expect(ctx.unregisterProxySession).toHaveBeenCalledWith(privateSession);
   });
 
-  test('helper exit completes teardown even when one certificate session fails', async () => {
-    jest.useFakeTimers();
+  test('helper exit revokes authority even when one certificate session fails cleanup', async () => {
     const ctx = loadCertificateSessionFixture();
     const privateSession = { setCertificateVerifyProc: jest.fn() };
     await ctx.mod.registerHnsSession(privateSession);
     await emitHelperReady(ctx);
+    const retained = privateSession.setCertificateVerifyProc.mock.calls[0][0];
     ctx.session.defaultSession.setCertificateVerifyProc.mockImplementationOnce(() => { throw new Error('session closed'); });
     ctx.spawnedProcesses[0].emit('close', 0);
-    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    for (let i = 0; i < 40; i += 1) await Promise.resolve();
     expect(privateSession.setCertificateVerifyProc).toHaveBeenLastCalledWith(null);
-    expect(ctx.clearService).toHaveBeenCalledWith('hns');
-    expect(ctx.mod.getHnsStatus()).toEqual(expect.objectContaining({ status: 'stopped', proxyAddr: null, caPemPath: null }));
-    expect(ctx.log.error).toHaveBeenCalledWith('[HNS] Session network cleanup failed:', 'HNS session certificate update failed');
+    const callback = jest.fn();
+    retained({ certificate: { fingerprint: ctx.mod.chromiumCertificateFingerprint(Buffer.from('test certificate')) } }, callback);
+    expect(callback).toHaveBeenCalledWith(-3);
+    expect(ctx.clearHnsProxy).toHaveBeenCalled();
+    expect(ctx.mod.getHnsStatus()).toMatchObject({ status: 'error', localResolverReady: false });
+    await ctx.mod.startHns();
+    expect(ctx.spawn).toHaveBeenCalledTimes(1);
   });
 
-  test('late ready completion cannot publish running after helper exit', async () => {
-    jest.useFakeTimers();
+  test('late activation completion cannot publish authority after helper exit', async () => {
     const ctx = loadCertificateSessionFixture();
-    let finishRouting;
-    ctx.rebuild.mockImplementationOnce(() => new Promise((resolve) => { finishRouting = resolve; }));
+    let finishDrain;
+    ctx.beginHnsCertificateUpdate.mockImplementationOnce(() => new Promise((resolve) => { finishDrain = resolve; }));
     await emitHelperReady(ctx);
     ctx.spawnedProcesses[0].emit('close', 0);
-    finishRouting();
-    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    finishDrain();
+    for (let i = 0; i < 40; i += 1) await Promise.resolve();
     expect(ctx.mod.getHnsStatus().status).toBe('stopped');
-    expect(ctx.refreshImportedHnsSuffixes).not.toHaveBeenCalled();
+    expect(ctx.setHnsProxy).not.toHaveBeenCalled();
+    expect(ctx.session.defaultSession.setCertificateVerifyProc).not.toHaveBeenCalledWith(expect.any(Function));
   });
 
   test('stop reports routing failure when no helper remains', async () => {
@@ -1083,7 +885,7 @@ describe('hns-manager', () => {
     expect(callback).toHaveBeenCalledWith(-3);
     privateSession.setCertificateVerifyProc.mockClear();
     ctx.spawnedProcesses[0].emit('close', 0);
-    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    for (let i = 0; i < 40; i += 1) await Promise.resolve();
     expect(privateSession.setCertificateVerifyProc).not.toHaveBeenCalled();
   });
 
@@ -1124,7 +926,7 @@ describe('hns-manager', () => {
     let finished = false;
     const stopping = ctx.mod.stopHns().then(() => { finished = true; });
     ctx.spawnedProcesses[0].emit('close', 0);
-    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    for (let i = 0; i < 40; i += 1) await Promise.resolve();
     expect(finished).toBe(false);
     expect(ctx.session.defaultSession.setCertificateVerifyProc).not.toHaveBeenCalledWith(null);
     finishRouting();
@@ -1148,34 +950,33 @@ describe('hns-manager', () => {
     await emitHelperReady(ctx);
     const oldLineHandler = ctx.readlineHandlers.get('line');
     ctx.spawnedProcesses[0].emit('close', 0);
-    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    for (let i = 0; i < 40; i += 1) await Promise.resolve();
     await ctx.mod.startHns();
     oldLineHandler(JSON.stringify({ type: 'ready', proxyAddr: '127.0.0.1:45001', caPath: '/tmp/old-ca.pem' }));
     expect(ctx.setHnsProxy).toHaveBeenCalledTimes(1);
     expect(ctx.mod.getHnsStatus().status).toBe('starting');
   });
 
-  test('ready binds routing to the current helper generation and certificate fingerprint', async () => {
+  test('routing identity freezes its certificate until a fresh helper generation', async () => {
     let certificate = 'first certificate';
     const ctx = loadHnsManagerModule({
-      cryptoMock: { X509Certificate: class {
-        constructor(pem) { this.raw = Buffer.from(pem); }
-      } },
+      cryptoMock: { X509Certificate: class { constructor(pem) { this.raw = Buffer.from(pem); } } },
       readFileSync: () => certificate,
     });
     await emitHelperReady(ctx);
     const firstIdentity = ctx.setHnsProxy.mock.calls[0][1];
     expect(firstIdentity.caFingerprint).toBe(ctx.mod.chromiumCertificateFingerprint(Buffer.from(certificate)));
     certificate = 'second certificate';
-    ctx.readlineHandlers.get('line')(JSON.stringify({
-      type: 'ready', proxyAddr: '127.0.0.1:44041', caPath: '/tmp/hns-ca.pem',
-    }));
-    for (let i = 0; i < 5; i += 1) await Promise.resolve();
-    expect(ctx.setHnsProxy).toHaveBeenLastCalledWith('127.0.0.1:44041', {
-      generation: firstIdentity.generation,
-      caFingerprint: ctx.mod.chromiumCertificateFingerprint(Buffer.from(certificate)),
-    });
-    expect(ctx.setHnsProxy.mock.calls[1][1].caFingerprint).not.toBe(firstIdentity.caFingerprint);
+    ctx.readlineHandlers.get('line')(JSON.stringify({ type: 'ready', proxyAddr: '127.0.0.1:44041', caPath: '/tmp/hns-ca.pem' }));
+    expect(ctx.setHnsProxy).toHaveBeenCalledTimes(1);
+    expect(firstIdentity.isValid()).toBe(true);
+    await ctx.mod.stopHns();
+    expect(firstIdentity.isValid()).toBe(false);
+    await emitHelperReady(ctx);
+    const secondIdentity = ctx.setHnsProxy.mock.calls[1][1];
+    expect(secondIdentity.caFingerprint).toBe(ctx.mod.chromiumCertificateFingerprint(Buffer.from(certificate)));
+    expect(secondIdentity.caFingerprint).not.toBe(firstIdentity.caFingerprint);
+    expect(secondIdentity.generation).toBeGreaterThan(firstIdentity.generation);
   });
 
   test('a restarted helper has a new routing identity even with the same CA and address', async () => {
@@ -1184,7 +985,7 @@ describe('hns-manager', () => {
     await emitHelperReady(ctx);
     const firstIdentity = ctx.setHnsProxy.mock.calls[0][1];
     ctx.spawnedProcesses[0].emit('close', 0);
-    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    for (let i = 0; i < 40; i += 1) await Promise.resolve();
     await emitHelperReady(ctx);
     const secondIdentity = ctx.setHnsProxy.mock.calls[1][1];
     expect(secondIdentity.caFingerprint).toBe(firstIdentity.caFingerprint);

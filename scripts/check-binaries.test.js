@@ -2,7 +2,13 @@ jest.mock('fs', () => ({
   existsSync: jest.fn(),
   mkdirSync: jest.fn(),
   statSync: jest.fn(() => ({ mode: 0o755 })),
-  readFileSync: jest.fn(() => Buffer.from('verified fixture artifact')),
+  readFileSync: jest.fn((target, ...args) => {
+    const filename = require('path').basename(String(target));
+    if (['hnsd', 'encrypted-validator.json'].includes(filename)) {
+      return jest.requireActual('fs').readFileSync(require('path').join(__dirname, '..', 'hns-bin', 'linux-x64', filename), ...args);
+    }
+    return Buffer.from('verified fixture artifact');
+  }),
 }));
 
 jest.mock('./fetch-myotis', () => ({ validateInstalledAddon: jest.fn(() => null) }));

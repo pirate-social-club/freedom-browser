@@ -49,6 +49,7 @@ let readyPublished = false;
 let networkMonitor = null;
 let runtimeWanted = false;
 let cleanupFailed = false;
+let permanentStartupError = null;
 let recovery = null;
 let activation = null;
 let encryptedProbeTimer = null;
@@ -327,7 +328,9 @@ function scheduleEncryptedProbe(delay = 0) {
   }, delay);
 }
 
-function invalidateHnsGeneration(reason) {
+function invalidateHnsGeneration(reason, startupError = null) {
+  if (permanentStartupError && !startupError) return;
+  if (startupError) permanentStartupError = startupError;
   authority?.retire();
   readyPublished = false;
   networkManager.clearHnsProxy();
@@ -335,10 +338,21 @@ function invalidateHnsGeneration(reason) {
   resetHnsReadiness();
   if (recovery || !runtimeWanted) return;
   log.warn(`[HNS] Resolver generation retired: ${reason}`);
-  recovery = stopHns({ recovering: true }).then(() => {
+  const teardown = stopHns({ recovering: true });
+  const stoppedGeneration = helperGeneration;
+  recovery = teardown.then(() => {
     recovery = null;
     if (cleanupFailed) { updateState(STATUS.ERROR, 'Unresolved HNS resolver custody');
       setErrorState('hns', 'HNS is blocked until unresolved resolver cleanup is verified'); return; }
+    if (startupError) {
+      if (runtimeWanted && helperGeneration === stoppedGeneration && currentState === STATUS.STOPPED &&
+          permanentStartupError === startupError) {
+        updateState(STATUS.ERROR, startupError);
+        setErrorState('hns', startupError);
+        setStatusMessage('hns', startupError);
+      }
+      return;
+    }
     if (runtimeWanted && networkMonitor?.allowed()) maybeRestart();
   }).catch(() => {
     recovery = null;
@@ -726,6 +740,8 @@ function parseStdoutLine(line) {
 
 async function startHns(recovering = false) {
   if (cleanupFailed) { setErrorState('hns', 'HNS is blocked until unresolved resolver cleanup is verified'); return; }
+  if (recovering && permanentStartupError) return;
+  if (!recovering) permanentStartupError = null;
   if (!hnsCapability.supported) {
     setStatusMessage('hns', hnsCapability.unsupportedReason);
     return;
@@ -755,13 +771,17 @@ async function startHns(recovering = false) {
   readyTicket = null; readyPublished = false; activation = null;
   const binPath = getHelperBinaryPath();
   const hnsdPath = getHnsdBinaryPath();
+  let permanentPreflight = true;
   try {
-    if (!fs.existsSync(binPath) || !fs.existsSync(hnsdPath)) throw new Error('HNS binaries unavailable');
+    if (!fs.existsSync(binPath)) throw new Error(`Helper binary not found: ${binPath}`);
+    if (!fs.existsSync(hnsdPath)) throw new Error(`hnsd binary not found: ${hnsdPath}`);
     const binaryValidationError = getHelperBinaryValidationError(binPath);
     if (binaryValidationError) throw new Error(binaryValidationError);
     const dataDir = getHnsDataPath();
     const assetsDir = app.isPackaged ? path.join(process.resourcesPath, 'assets') : path.join(__dirname, '..', '..', 'assets');
-    installHnsCheckpoint(path.join(assetsDir, 'hns', 'checkpoint_main.dat'), dataDir);
+    try { installHnsCheckpoint(path.join(assetsDir, 'hns', 'checkpoint_main.dat'), dataDir); }
+    catch { throw new Error('HNS checkpoint unavailable or invalid'); }
+    permanentPreflight = false;
     await networkManager.rebuild();
     if (!active()) return;
     const addresses = await allocateResolverAddrs();
@@ -803,7 +823,10 @@ async function startHns(recovering = false) {
     catch { if (generation === helperGeneration) invalidateHnsGeneration('native_hns_custody_failed'); }
   } catch (error) {
     if (error.code === 'HNS_CUSTODY_UNRESOLVED') cleanupFailed = true;
-    if (generation === helperGeneration && runtimeWanted) invalidateHnsGeneration('hns_start_failed');
+    if (generation === helperGeneration && runtimeWanted) {
+      invalidateHnsGeneration('hns_start_failed', permanentPreflight ? error.message : null);
+      if (permanentPreflight) await recovery;
+    }
   }
 }
 
@@ -858,7 +881,7 @@ async function awaitChildClosure(child) {
 async function stopHns({ recovering = false } = {}) {
   let observerCleanup;
   if (!recovering) {
-    runtimeWanted = false; restartCount = 0;
+    runtimeWanted = false; restartCount = 0; permanentStartupError = null;
     observerCleanup = networkMonitor?.close(); networkMonitor = null;
   }
   if (currentState === STATUS.STOPPING) {
@@ -891,7 +914,15 @@ async function stopHns({ recovering = false } = {}) {
   synced = false; canaryReady = false; height = 0; lastHeightChangeAt = 0;
   resetHnsReadiness(); hnsStderrLogState.clear();
   clearService('hns'); updateState(STATUS.STOPPED);
-  if (pendingStart && runtimeWanted && (!networkMonitor || networkMonitor.allowed())) { pendingStart = false; startHns(true); }
+  if (pendingStart && runtimeWanted && (!networkMonitor || networkMonitor.allowed())) {
+    pendingStart = false;
+    const startPending = () => {
+      if (runtimeWanted && currentState === STATUS.STOPPED && (!networkMonitor || networkMonitor.allowed())) startHns(true);
+    };
+    // A queued explicit retry must begin after the retiring recovery settles.
+    if (recovery) recovery.then(startPending);
+    else startPending();
+  }
 }
 
 function checkBinary() {

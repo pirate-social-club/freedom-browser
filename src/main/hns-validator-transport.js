@@ -6,12 +6,13 @@ const { createHnsNativeCustody, assertNoUnresolvedNativeGeneration } = require('
 
 const HNSD_SOURCE = 'a5c7c287e848f46d3e97f16b698e2027c8dc96c3';
 const HNSD_PATCH_SHA256 = '810edac7e7b991cc9d6ab569ca648a58455b9a43cf09be43f3c6cfea5072de67';
+const HNSD_BINARY_SHA256 = 'd539d508d10773a89f4a4e900b3c2c87b38a130908049d0566a1d03473984a0f';
 
-function validateEncryptedHnsd(binaryPath) {
-  const manifest = JSON.parse(fs.readFileSync(path.join(path.dirname(binaryPath), 'encrypted-validator.json'), 'utf8'));
-  const digest = createHash('sha256').update(fs.readFileSync(binaryPath)).digest('hex');
+function validateEncryptedHnsd(binaryPath, fsImpl = fs) {
+  const manifest = JSON.parse(fsImpl.readFileSync(path.join(path.dirname(binaryPath), 'encrypted-validator.json'), 'utf8'));
+  const digest = createHash('sha256').update(fsImpl.readFileSync(binaryPath)).digest('hex');
   if (manifest.schema !== 1 || manifest.source_commit !== HNSD_SOURCE ||
-      manifest.patch_sha256 !== HNSD_PATCH_SHA256 || manifest.sha256 !== digest) {
+      manifest.patch_sha256 !== HNSD_PATCH_SHA256 || manifest.sha256 !== digest || digest !== HNSD_BINARY_SHA256) {
     throw new Error('Encrypted HNS validator provenance mismatch');
   }
 }

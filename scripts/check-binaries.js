@@ -3,8 +3,8 @@ const path = require('path');
 const { getCapabilityBinaries, getCapabilityDefinition, getCapabilityStatus } =
   require('../src/shared/platform-capabilities');
 const ROOT_DIR = path.join(__dirname, '..');
+const { validateEncryptedHnsd } = require('../src/main/hns-validator-transport');
 const FORBIDDEN_HNS_BINARY_STRINGS = [['shake', 'station'].join('')];
-const FORBIDDEN_HNSD_DYNAMIC_STRINGS = ['libunbound.so'];
 function findForbiddenBinaryString(binaryPath, forbiddenStrings, fsImpl = fs) {
   if (!fsImpl.existsSync(binaryPath)) return null;
 
@@ -57,17 +57,8 @@ function checkCapabilityBinaries(capability, platform, options = {}) {
     }
 
     if (capability === 'hns' && platform.os === 'linux' && binary.name === 'hnsd') {
-      const dynamicDependency = findForbiddenBinaryString(
-        binaryPath,
-        FORBIDDEN_HNSD_DYNAMIC_STRINGS,
-        fsImpl
-      );
-      if (dynamicDependency) {
-        missing.push(
-          `${definition.displayName} artifact for ${status.target} is not self-contained (` +
-          `${dynamicDependency}): ${binaryPath}`
-        );
-      }
+      try { validateEncryptedHnsd(binaryPath, fsImpl); }
+      catch { missing.push(`${definition.displayName} encrypted validator provenance mismatch: ${binaryPath}`); }
     }
   }
 
