@@ -129,11 +129,19 @@ class PackagedElectronApp extends EventEmitter {
     this._output = output;
     this._readOutput = readOutput;
     this._closing = null;
+    this._forcedQuit = false;
     child.once('exit', () => this.emit('close'));
   }
 
   process() {
     return this._child;
+  }
+
+  // How the process ended: its exit code and signal, and whether close() had
+  // to kill it after the quit deadline. A forced quit still resolves close(),
+  // so a spec that needs a clean shutdown must check this.
+  exitResult() {
+    return { code: this._child.exitCode, signal: this._child.signalCode, forced: this._forcedQuit };
   }
 
   // The last 64 KiB the app wrote to stdout/stderr since launch.
@@ -209,6 +217,7 @@ class PackagedElectronApp extends EventEmitter {
             // Connection already gone; the exit wait below decides.
           }
           if (!(await waitForExit(this._child, QUIT_TIMEOUT_MS))) {
+            this._forcedQuit = true;
             this._child.kill('SIGKILL');
             await waitForExit(this._child, 10_000);
           }
