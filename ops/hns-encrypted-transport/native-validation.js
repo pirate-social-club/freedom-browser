@@ -191,6 +191,9 @@ async function generation(mode) {
     catch { if (child.exitCode !== null) throw new Error('Native validator exited'); await pause(100); }
   }
   assert(answer, 'Native validator never answered');
+  results[mode] = { passed: false, flags: answer.flags, remote_queries: observed.filter((entry) => entry.mode === mode).length,
+    relay_tcp_connections: tcpConnections[mode] || 0,
+    intermediate_dnskey_bytes: response(query(TLD, 48), [tldKeys, [], []]).length, production_udp_client_refused: false };
   if (mode === 'valid') {
     assert(response(query(TLD, 48), [tldKeys, [], []]).length > 4096);
     assert(tcpConnections[mode] > 0, 'Large intermediate DNSKEY must use relay TCP');
@@ -210,8 +213,8 @@ async function generation(mode) {
     await assert.rejects(queryDns({ host: '127.0.0.1', port: recursivePort, hostname: HOST, type: 28,
       recursive: true, dnssec: true, tcpFallback: false }), (error) => error.code === 'ETRUNCATED');
   }
-  results[mode] = { passed: true, flags: answer.flags, remote_queries: observed.filter((entry) => entry.mode === mode).length, relay_tcp_connections: tcpConnections[mode] || 0,
-    intermediate_dnskey_bytes: response(query(TLD, 48), [tldKeys, [], []]).length, production_udp_client_refused: mode === 'large-final' };
+  results[mode].passed = true;
+  results[mode].production_udp_client_refused = mode === 'large-final';
   await stopped(child); children.delete(child); await relay.close(); relays.delete(relay);
   await new Promise((resolve) => root.close(resolve)); sockets.delete(root);
 }
@@ -246,11 +249,14 @@ async function main() {
   try {
     for (const mode of ['valid', 'bad-dnskey', 'bad-address', 'large-final']) await generation(mode);
     await custody();
-    fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ results, observed }, null, 2) + '\n');
   } finally {
-    for (const child of children) await stopped(child);
-    for (const relay of relays) await relay.close();
-    for (const socket of sockets) { try { socket.close(); } catch { /* Closed already. */ } }
+    try {
+      fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ results, observed }, null, 2) + '\n');
+    } finally {
+      for (const child of children) await stopped(child);
+      for (const relay of relays) await relay.close();
+      for (const socket of sockets) { try { socket.close(); } catch { /* Closed already. */ } }
+    }
   }
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

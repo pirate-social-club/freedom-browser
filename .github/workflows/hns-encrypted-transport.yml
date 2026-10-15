@@ -38,7 +38,7 @@ jobs:
           git -c core.hooksPath=/dev/null clone --branch v2.0.0 --depth 1 https://github.com/handshake-org/hnsd.git "$RUNNER_TEMP/hns-encrypted-source"
           test "$(git -C "$RUNNER_TEMP/hns-encrypted-source" rev-parse HEAD)" = a5c7c287e848f46d3e97f16b698e2027c8dc96c3
           git -C "$RUNNER_TEMP/hns-encrypted-source" archive HEAD > "$RUNNER_TEMP/hns-encrypted-input/hnsd-source.tar"
-          test "$(sha256sum ops/hns-encrypted-transport/hnsd-encrypted.patch | cut -d ' ' -f 1)" = 1b9749f6275c0814ecea487072b979cd263ed84823fe8a3a2a48cc88e8752c96
+          test "$(sha256sum ops/hns-encrypted-transport/hnsd-encrypted.patch | cut -d ' ' -f 1)" = 810edac7e7b991cc9d6ab569ca648a58455b9a43cf09be43f3c6cfea5072de67
           cp ops/hns-encrypted-transport/hnsd-encrypted.patch "$RUNNER_TEMP/hns-encrypted-input/"
           docker build --tag "hns-encrypted:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" ops/hns-encrypted-transport
           docker image inspect "hns-encrypted:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" > "$RUNNER_TEMP/hns-encrypted-output/image.json"

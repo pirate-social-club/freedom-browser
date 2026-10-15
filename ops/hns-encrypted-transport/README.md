@@ -1,6 +1,6 @@
 # Encrypted HNS transport validation
 
-The PR39-only hosted workflow builds pinned hnsd a5c7c287 with two reviewed changes: outbound libunbound TCP support for the loopback relay, and truthful TC flags for oversized native replies. The original and patched source archives, patch, compiler, system packages, license texts, ELF observations and native digest are retained. This dynamic build requires the target runtime's libunbound8; no system library is bundled.
+The PR39-only hosted workflow builds pinned hnsd a5c7c287 with outbound libunbound TCP support for the loopback relay, truthful TC flags for oversized native replies, and SERVFAIL refusal of results libunbound marks bogus. The original and patched source archives, patch, compiler, system packages, license texts, ELF observations and native digest are retained. This dynamic build requires the target runtime's libunbound8; no system library is bundled.
 
 The Node relay supplies authenticated Pirate HTTPS transport beneath the owned native validator. Root questions, top-level DS and local metadata stay on the owned authoritative root. Remote AD is cleared. Remote root authority is refused in every section. No plaintext external fallback is enabled. The native authoritative and recursive listeners remain UDP-only; oversized final answers fail closed.
 

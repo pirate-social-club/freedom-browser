@@ -5,7 +5,7 @@ const { createHnsEncryptedRelay } = require('./hns-encrypted-relay');
 const { createHnsNativeCustody, assertNoUnresolvedNativeGeneration } = require('./hns-native-custody');
 
 const HNSD_SOURCE = 'a5c7c287e848f46d3e97f16b698e2027c8dc96c3';
-const HNSD_PATCH_SHA256 = '1b9749f6275c0814ecea487072b979cd263ed84823fe8a3a2a48cc88e8752c96';
+const HNSD_PATCH_SHA256 = '810edac7e7b991cc9d6ab569ca648a58455b9a43cf09be43f3c6cfea5072de67';
 
 function validateEncryptedHnsd(binaryPath) {
   const manifest = JSON.parse(fs.readFileSync(path.join(path.dirname(binaryPath), 'encrypted-validator.json'), 'utf8'));

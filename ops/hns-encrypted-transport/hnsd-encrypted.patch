@@ -9,6 +9,17 @@
      return false;
  
    char stub[HSK_MAX_HOST];
+@@ -442,6 +442,10 @@
+   if (result->why_bogus)
+     hsk_rs_log(ns, "  why_bogus: %s\n", result->why_bogus);
+ 
++  // libunbound can retain answer data and rcode=NOERROR for a bogus result.
++  if (result->bogus)
++    goto fail;
++
+   uint8_t *data = result->answer_packet;
+   size_t data_len = result->answer_len;
+ 
 --- a/src/dns.c
 +++ b/src/dns.c
 @@ -302,10 +302,9 @@
