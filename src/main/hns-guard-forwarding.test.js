@@ -19,7 +19,7 @@ function stream() {
   return value;
 }
 
-function fixture() {
+function fixture(timeoutMs = 5000) {
   const resources = createHnsGuardResources();
   resources.publish();
   const upstream = stream();
@@ -31,9 +31,9 @@ function fixture() {
   const fallbackHttp = jest.fn(async (_req, res) => { res.writeHead(502); res.end('refused'); });
   const forwarding = createHnsGuardForwarding({ net, http, resources, getRoute: () => route,
     isAllowed: () => true, markHost: jest.fn(), parseAuthority: () => ({ host: 'example.hns' }),
-    writeError: jest.fn(), fallbackConnect, fallbackHttp, log: { warn: jest.fn() }, timeoutMs: 5000 });
+    writeError: jest.fn(), fallbackConnect, fallbackHttp, log: { warn: jest.fn() }, timeoutMs });
   return { resources, upstream, outbound, net, http, fallbackConnect, fallbackHttp, forwarding,
-    withdraw() { route = null; resources.withdraw(); } };
+    withdraw() { route = null; resources.withdraw(); }, reroute() { route = { host: '127.0.0.1', port: 5381 }; } };
 }
 
 describe('HNS guard resource containment', () => {
@@ -214,3 +214,65 @@ describe('HNS guard resource containment', () => {
     expect(response.destroyed).toBe(true); expect(res.destroyed).toBe(true);
   });
 });
+
+// fingertipd answers a CONNECT only after hnsd has validated the host, which
+// for an uncached host measured 7.4 to 7.9 s on 2026-10-16. The upstream's
+// idle timer is real here (under fake timers), so silence actually elapses.
+describe('HNS guard CONNECT budget for a slow but valid upstream', () => {
+  const BUDGET_MS = 20000;
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  function slowFixture() {
+    const f = fixture(BUDGET_MS);
+    let idle;
+    f.upstream.setTimeout = jest.fn((ms, onIdle) => {
+      clearTimeout(idle);
+      if (ms > 0) idle = setTimeout(onIdle, ms);
+    });
+    const client = stream();
+    f.forwarding.connect({ url: 'example.hns:443', httpVersion: '1.1', headers: {} }, client);
+    f.net.connect.mock.calls[0][2]();
+    return { f, client };
+  }
+
+  test('a valid answer after six seconds of silence opens the tunnel', () => {
+    const { f, client } = slowFixture();
+    jest.advanceTimersByTime(6000);
+    f.upstream.emit('data', Buffer.from('HTTP/1.1 200 Connection established\r\n\r\n'));
+    expect(f.upstream.pipe).toHaveBeenCalledWith(client);
+    expect(client.pipe).toHaveBeenCalledWith(f.upstream);
+    expect(f.fallbackConnect).not.toHaveBeenCalled();
+    expect(f.upstream.setTimeout).toHaveBeenLastCalledWith(0);
+  });
+
+  test('silence past the budget is refused, and an answer after that is ignored', () => {
+    const { f, client } = slowFixture();
+    jest.advanceTimersByTime(BUDGET_MS);
+    expect(f.fallbackConnect).toHaveBeenCalledWith(expect.anything(), client, expect.anything(), 'local upstream timeout');
+    f.upstream.emit('data', Buffer.from('HTTP/1.1 200 Connection established\r\n\r\n'));
+    expect(f.upstream.pipe).not.toHaveBeenCalled();
+  });
+
+  test('authority withdrawal during the wait closes both sides', async () => {
+    // Production clears the route and the routing change drains the guard.
+    const { f, client } = slowFixture();
+    jest.advanceTimersByTime(6000);
+    f.withdraw();
+    await f.resources.drain();
+    expect(client.destroyed).toBe(true);
+    expect(f.upstream.destroyed).toBe(true);
+    f.upstream.emit('data', Buffer.from('HTTP/1.1 200 Connection established\r\n\r\n'));
+    expect(f.upstream.pipe).not.toHaveBeenCalled();
+  });
+
+  test('an answer arriving after the route changed closes instead of tunnelling', () => {
+    const { f, client } = slowFixture();
+    jest.advanceTimersByTime(6000);
+    f.reroute();
+    f.upstream.emit('data', Buffer.from('HTTP/1.1 200 Connection established\r\n\r\n'));
+    expect(f.upstream.pipe).not.toHaveBeenCalled();
+    expect(client.destroyed).toBe(true);
+  });
+});
+

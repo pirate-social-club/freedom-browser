@@ -201,6 +201,14 @@ describe('network-manager', () => {
     expect(route).not.toContain('PROXY');
   });
 
+  test('the HNS guard waits long enough for a cold validated lookup, and no longer than bounded', () => {
+    // Cold A + TLSA validation measured 7.4 to 7.9 s through the encrypted
+    // relay on 2026-10-16; a 5 s budget refused those CONNECTs.
+    const ctx = loadNetworkManagerModule();
+    expect(ctx.mod.HNS_PROXY_CONNECT_TIMEOUT_MS).toBeGreaterThanOrEqual(15000);
+    expect(ctx.mod.HNS_PROXY_CONNECT_TIMEOUT_MS).toBeLessThanOrEqual(30000);
+  });
+
   test('a malformed Tor endpoint cannot enter the PAC script', () => {
     const ctx = loadNetworkManagerModule();
     expect(() => ctx.mod.setTorProxy('127.0.0.1:9150; DIRECT')).toThrow('Invalid Tor SOCKS endpoint');
