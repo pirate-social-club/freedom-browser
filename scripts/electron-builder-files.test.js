@@ -53,6 +53,8 @@ const NOT_SHIPPED = [
   'scripts',
   'AGENTS.md',
   'src/main/spaces/anchors.test.js',
+  'src/main/__tests__/integration/ccip-proxy-electron-probe.js',
+  'src/main/wallet/safe/__tests__/helpers/stub-chain.js',
 ];
 
 describe.each(['linux', 'mac', 'win'])('%s app.asar contents', (platform) => {

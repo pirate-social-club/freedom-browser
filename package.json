@@ -128,6 +128,7 @@
         "package.json",
         "!**/*.test.js",
         "!**/coverage/**",
+        "!**/__tests__/**",
         "!**/node_modules/better-sqlite3/prebuilds/!(darwin-${arch}).node"
       ],
       "extraResources": [
@@ -179,6 +180,7 @@
         "package.json",
         "!**/*.test.js",
         "!**/coverage/**",
+        "!**/__tests__/**",
         "!**/node_modules/better-sqlite3/prebuilds/!(linux-${arch}).node"
       ],
       "extraResources": [
@@ -237,6 +239,7 @@
         "package.json",
         "!**/*.test.js",
         "!**/coverage/**",
+        "!**/__tests__/**",
         "!**/node_modules/better-sqlite3/prebuilds/!(win32-${arch}).node"
       ],
       "extraResources": [
@@ -269,7 +272,8 @@
       "src/**/*",
       "package.json",
       "!**/*.test.js",
-      "!**/coverage/**"
+      "!**/coverage/**",
+      "!**/__tests__/**"
     ],
     "asarUnpack": [
       "**/node_modules/better-sqlite3/**",
