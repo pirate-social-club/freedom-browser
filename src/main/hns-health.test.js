@@ -2,6 +2,7 @@ const {
   buildHnsHealthProbeHosts,
   formatHnsHealthSummary,
   probeHnsResolver,
+  probeHnsValidator,
   probeHnsChainState,
 } = require('./hns-health');
 
@@ -67,3 +68,41 @@ describe('local HNS chain metadata', () => {
     await expect(probeHnsChainState({ rootAddr: '127.0.0.1:25349', query: async ({ hostname }) => data[hostname] })).rejects.toThrow('Missing HNS');
   });
 });
+
+describe('probeHnsValidator refuses anything but complete authenticated answers', () => {
+  const good = () => ({
+    1: { rcode: 0, authenticated: true, truncated: false, answers: [{ type: 1, address: '81.15.150.167' }] },
+    28: { rcode: 0, authenticated: true, truncated: false, answers: [] },
+    52: { rcode: 0, authenticated: true, truncated: false, answers: [{ type: 52 }] },
+  });
+  const probe = (data) => probeHnsValidator({ recursiveAddr: '127.0.0.1:25350', query: async ({ type }) => data[type] });
+
+  test('accepts authenticated A and TLSA answers', async () => {
+    await expect(probe(good())).resolves.toEqual({ ok: true });
+  });
+
+  test.each([
+    ['unauthenticated', (d) => { d[52].authenticated = false; }],
+    ['truncated', (d) => { d[1].truncated = true; }],
+    ['SERVFAIL', (d) => { d[28].rcode = 2; }],
+    ['missing TLSA', (d) => { d[52].answers = []; }],
+    ['no address', (d) => { d[1].answers = []; }],
+  ])('refuses a %s answer', async (_label, damage) => {
+    const data = good();
+    damage(data);
+    await expect(probe(data)).resolves.toEqual({ ok: false });
+  });
+
+  test('a query that does not complete makes the probe throw, distinct from a refused answer', async () => {
+    const timeout = Object.assign(new Error('DNS query timed out for app.pirate'), { code: 'ETIMEOUT' });
+    await expect(probeHnsValidator({ recursiveAddr: '127.0.0.1:25350', query: async ({ type }) => {
+      if (type === 52) throw timeout;
+      return good()[type];
+    } })).rejects.toBe(timeout);
+  });
+
+  test('only an owned loopback validator is probed', async () => {
+    await expect(probeHnsValidator({ recursiveAddr: '10.0.0.1:53', query: jest.fn() })).rejects.toThrow('Owned validator required');
+  });
+});
+

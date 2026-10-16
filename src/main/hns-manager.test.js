@@ -351,6 +351,69 @@ describe('hns-manager', () => {
     expect(ctx.clearHnsProxy).toHaveBeenCalled();
   });
 
+  // A validation probe that cannot complete (a query timed out) is retried
+  // inside the existing lease; it never renews it, and expiry still retires.
+  const timedOut = () => Object.assign(new Error('DNS query timed out for app.pirate'), { code: 'ETIMEOUT' });
+  async function publishedWith(validator) {
+    const ctx = loadHnsManagerModule({
+      cryptoMock: { X509Certificate: class { raw = Buffer.from('test certificate'); } },
+      readFileSync: () => 'test certificate', probeHnsValidator: validator,
+    });
+    await ctx.mod.startHns();
+    ctx.readlineHandlers.get('line')(JSON.stringify({ type: 'ready', proxyAddr: '127.0.0.1:44041', caPath: '/tmp/hns-ca.pem' }));
+    await jest.advanceTimersByTimeAsync(1000);
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(ctx.mod.getHnsStatus().localResolverReady).toBe(true);
+    return { ctx, published: ctx.setHnsProxy.mock.calls[0][1] };
+  }
+
+  test('a validation probe that does not complete is retried within the lease and a verified success keeps the generation', async () => {
+    const validator = jest.fn().mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: true })
+      .mockRejectedValueOnce(timedOut()).mockResolvedValue({ ok: true });
+    const { ctx, published } = await publishedWith(validator);
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(ctx.log.warn).toHaveBeenCalledWith(expect.stringContaining('Validator probe did not complete; retrying within the current lease (1/2)'));
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(validator).toHaveBeenCalledTimes(4);
+    expect(published.isValid()).toBe(true);
+    expect(ctx.clearHnsProxy).not.toHaveBeenCalled();
+    expect(ctx.mod.getHnsStatus().localResolverReady).toBe(true);
+  });
+
+  test('probes that keep failing to complete retire the generation as incomplete', async () => {
+    const validator = jest.fn().mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: true })
+      .mockRejectedValue(timedOut());
+    const { ctx, published } = await publishedWith(validator);
+    await jest.advanceTimersByTimeAsync(5000);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(published.isValid()).toBe(true);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(validator).toHaveBeenCalledTimes(5);
+    expect(published.isValid()).toBe(false);
+    expect(ctx.clearHnsProxy).toHaveBeenCalled();
+    expect(ctx.log.warn).toHaveBeenCalledWith('[HNS] Resolver generation retired: hns_validation_incomplete');
+  });
+
+  test('a retry renews nothing: the lease still expires on schedule and a late success cannot revive it', async () => {
+    const slowFailure = () => new Promise((_resolve, reject) => setTimeout(() => reject(timedOut()), 6000));
+    const lateSuccess = () => new Promise((resolve) => setTimeout(() => resolve({ ok: true }), 6000));
+    const validator = jest.fn().mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: true })
+      .mockImplementationOnce(slowFailure).mockImplementationOnce(lateSuccess).mockResolvedValue({ ok: true });
+    // Leases run on the monotonic clock; let it follow the faked one here.
+    const start = Date.now();
+    jest.spyOn(require('perf_hooks').performance, 'now').mockImplementation(() => Date.now() - start);
+    // The second success at t=6 s renewed the validation lease to t=21 s.
+    const { ctx, published } = await publishedWith(validator);
+    await jest.advanceTimersByTimeAsync(14800); // t=20.8 s: the retry is still in flight
+    expect(validator).toHaveBeenCalledTimes(4);
+    expect(published.isValid()).toBe(true);
+    await jest.advanceTimersByTimeAsync(400); // t=21.2 s: past the lease, nothing renewed it
+    expect(published.isValid()).toBe(false);
+    await jest.advanceTimersByTimeAsync(3000); // the retry's success arrives at t=24 s
+    expect(published.isValid()).toBe(false);
+    expect(ctx.setHnsProxy.mock.calls.filter(([, authority]) => authority === published)).toHaveLength(1);
+  });
+
   test('a remote DoH result cannot replace failed local DNSSEC validation', async () => {
     const ctx = loadHnsManagerModule({
       hnsResolutionForHost: { resolverType: 'doh' },

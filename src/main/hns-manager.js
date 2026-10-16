@@ -61,6 +61,12 @@ const HNS_STDERR_REPEAT_WINDOW_MS = 30 * 1000;
 const HNS_HEALTH_INITIAL_DELAY_MS = 1000;
 const HNS_HEALTH_RETRY_BASE_MS = 5000;
 const HNS_HEALTH_RETRY_MAX_MS = 60 * 1000;
+// A published generation's validation probe that could not complete (a query
+// timed out or failed to send) is retried this many times, this soon, while
+// the existing validation lease still holds. A retry renews nothing: only a
+// verified success does, so the lease still expires on schedule.
+const HNS_HEALTH_TRANSIENT_RETRIES = 2;
+const HNS_HEALTH_TRANSIENT_RETRY_MS = 1000;
 const HNS_LOCAL_READY_SUCCESS_THRESHOLD = 2;
 const HNS_LOCAL_READY_FAILURE_THRESHOLD = 2;
 const FORBIDDEN_HELPER_CANARIES = [['shake', 'station'].join('')];
@@ -88,6 +94,7 @@ let syncProgress = 0;
 let hnsHealthTimer = null;
 let hnsHealthInFlight = false;
 let hnsHealthAttempt = 0;
+let hnsHealthTransientFailures = 0;
 let lastHnsHealthOk = null;
 let localReadySuccessCount = 0;
 let localReadyFailureCount = 0;
@@ -167,6 +174,7 @@ function clearHnsHealthState() {
   encryptedProbeTimer = null;
   hnsHealthInFlight = false;
   hnsHealthAttempt = 0;
+  hnsHealthTransientFailures = 0;
   lastHnsHealthOk = null;
   localReadySuccessCount = 0;
   localReadyFailureCount = 0;
@@ -285,24 +293,42 @@ async function runHnsHealthCheck(reason = 'manual') {
   const candidate = authority;
   hnsHealthInFlight = true;
   try {
-    const result = await probeHnsValidator({ recursiveAddr });
+    let result;
+    try {
+      result = await probeHnsValidator({ recursiveAddr });
+    } catch {
+      // The probe did not complete; no answer was judged. Within a still-valid
+      // lease, look again shortly instead of retiring the generation at once.
+      if (generation !== helperGeneration || candidate !== authority || !canProbeHnsHealth()) return null;
+      if (readyPublished && hnsHealthTransientFailures < HNS_HEALTH_TRANSIENT_RETRIES && candidate.isValid()) {
+        hnsHealthTransientFailures += 1;
+        log.warn(`[HNS] Validator probe did not complete; retrying within the current lease (${hnsHealthTransientFailures}/${HNS_HEALTH_TRANSIENT_RETRIES})`);
+        hnsHealthInFlight = false;
+        scheduleHnsHealthCheck('transient retry', HNS_HEALTH_TRANSIENT_RETRY_MS);
+        return { ok: false, transient: true };
+      }
+      throw Object.assign(new Error('Local DNSSEC validation did not complete'), { incomplete: true });
+    }
     if (generation !== helperGeneration || candidate !== authority || !canProbeHnsHealth()) return result;
+    // An answer that fails validation (SERVFAIL, no AD, truncated, missing
+    // records) is never retried.
     if (!result.ok) throw new Error('Local DNSSEC validation unavailable');
     if (!candidate.validation()) return result;
     updateLocalResolverReadiness(true);
     dohFallbackReady = false;
     hnsHealthAttempt = 0;
+    hnsHealthTransientFailures = 0;
     if (lastHnsHealthOk !== true) log.info(`[HNS] Local DNSSEC/DANE records validated (${reason})`);
     lastHnsHealthOk = true;
     if (shouldBroadcastReadiness()) updateService('hns', { localResolverReady, dohFallbackReady });
     await activateGeneration();
     scheduleHnsHealthCheck('validation lease', HNS_HEALTH_RETRY_BASE_MS);
     return result;
-  } catch {
+  } catch (error) {
     if (generation !== helperGeneration || candidate !== authority) return null;
     lastHnsHealthOk = false;
     updateLocalResolverReadiness(false);
-    if (readyPublished) invalidateHnsGeneration('hns_validation_failed');
+    if (readyPublished) invalidateHnsGeneration(error?.incomplete ? 'hns_validation_incomplete' : 'hns_validation_failed');
     else { hnsHealthAttempt += 1; scheduleHnsHealthRetry(); }
     return { ok: false };
   } finally {
