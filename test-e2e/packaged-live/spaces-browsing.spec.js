@@ -186,6 +186,22 @@ test.describe('installed Spaces browsing', () => {
           })
           .toBe(WEBSITE.url);
         await expect(address).toHaveValue(WEBSITE.handle);
+        const landed = await activePage(window);
+        test.info().annotations.push({
+          type: `${WEBSITE.handle} website`,
+          description: JSON.stringify({
+            expected: WEBSITE.url,
+            href: landed?.href,
+            addressBar: await address.inputValue(),
+          }),
+        });
+      } else {
+        test
+          .info()
+          .annotations.push({
+            type: 'website check',
+            description: 'not run: FREEDOM_E2E_SPACES_WEBSITE unset',
+          });
       }
 
       await closeApp(session.app, { timeout: 100_000 });
