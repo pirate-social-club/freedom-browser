@@ -7,7 +7,7 @@ const { createSessionProxyController } = require('./session-proxy-controller');
 const { registerWebRequestHandler, attachWebRequestDispatcher } = require('./webrequest-dispatcher');
 const { createSessionRoutingCoordinator } = require('./session-routing-coordinator');
 const { createHnsGuardResources } = require('./hns-guard-resources');
-const { createHnsGuardForwarding } = require('./hns-guard-forwarding');
+const { createHnsGuardForwarding, HNS_PROXY_CONNECT_TIMEOUT_MS } = require('./hns-guard-forwarding');
 const { runRoutingOperation } = require('./session-routing-operation');
 const { resolveHnsDohAddresses } = require('./hns-doh-resolver');
 const { resolveHnsLocalAddresses } = require('./hns-local-resolver');
@@ -45,14 +45,6 @@ const hnsProxyHosts = new Set();
 
 const API_DIAGNOSTICS_REPEAT_WINDOW_MS = 30 * 1000;
 const API_DIAGNOSTICS_HOSTS = new Set(['api.pirate.sc', 'api-staging.pirate.sc']);
-// How long the guard waits, with no bytes from fingertipd, for its answer to a
-// CONNECT. fingertipd answers only after hnsd has validated the host's A and
-// TLSA records, and a host that is not yet cached can need several encrypted
-// round trips plus a wildcard proof: cold lookups measured 7.4 to 7.9 s on
-// 2026-10-16, which a 5 s budget refused while HNS stayed ready. A late
-// answer is still checked against the current route, and withdrawal still
-// closes the pending pair through the guard's resources.
-const HNS_PROXY_CONNECT_TIMEOUT_MS = 20000;
 
 function isApiDiagnosticsEnabled() {
   return !app?.isPackaged || process.env.FREEDOM_API_DIAGNOSTICS === '1';

@@ -67,6 +67,10 @@ const HNS_HEALTH_RETRY_MAX_MS = 60 * 1000;
 // verified success does, so the lease still expires on schedule.
 const HNS_HEALTH_TRANSIENT_RETRIES = 2;
 const HNS_HEALTH_TRANSIENT_RETRY_MS = 1000;
+// Only these mean the probe did not complete. A truncated reply (ETRUNCATED,
+// TCP fallback is off), an ID or question mismatch and a malformed reply are
+// answers that failed, and retire the generation at once like any other.
+const HNS_HEALTH_INCOMPLETE_CODES = new Set(['ETIMEOUT', 'ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH']);
 const HNS_LOCAL_READY_SUCCESS_THRESHOLD = 2;
 const HNS_LOCAL_READY_FAILURE_THRESHOLD = 2;
 const FORBIDDEN_HELPER_CANARIES = [['shake', 'station'].join('')];
@@ -296,11 +300,13 @@ async function runHnsHealthCheck(reason = 'manual') {
     let result;
     try {
       result = await probeHnsValidator({ recursiveAddr });
-    } catch {
+    } catch (error) {
+      if (!HNS_HEALTH_INCOMPLETE_CODES.has(error?.code)) throw error;
       // The probe did not complete; no answer was judged. Within a still-valid
       // lease, look again shortly instead of retiring the generation at once.
-      if (generation !== helperGeneration || candidate !== authority || !canProbeHnsHealth()) return null;
-      if (readyPublished && hnsHealthTransientFailures < HNS_HEALTH_TRANSIENT_RETRIES && candidate.isValid()) {
+      if (generation !== helperGeneration || candidate !== authority) return null;
+      if (readyPublished && canProbeHnsHealth() && hnsHealthTransientFailures < HNS_HEALTH_TRANSIENT_RETRIES &&
+          candidate.isValid()) {
         hnsHealthTransientFailures += 1;
         log.warn(`[HNS] Validator probe did not complete; retrying within the current lease (${hnsHealthTransientFailures}/${HNS_HEALTH_TRANSIENT_RETRIES})`);
         hnsHealthInFlight = false;
@@ -310,8 +316,8 @@ async function runHnsHealthCheck(reason = 'manual') {
       throw Object.assign(new Error('Local DNSSEC validation did not complete'), { incomplete: true });
     }
     if (generation !== helperGeneration || candidate !== authority || !canProbeHnsHealth()) return result;
-    // An answer that fails validation (SERVFAIL, no AD, truncated, missing
-    // records) is never retried.
+    // An answer that fails validation (SERVFAIL, no AD, missing records) is
+    // never retried; neither is a truncated, mismatched or malformed reply.
     if (!result.ok) throw new Error('Local DNSSEC validation unavailable');
     if (!candidate.validation()) return result;
     updateLocalResolverReadiness(true);

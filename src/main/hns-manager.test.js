@@ -401,7 +401,8 @@ describe('hns-manager', () => {
       .mockImplementationOnce(slowFailure).mockImplementationOnce(lateSuccess).mockResolvedValue({ ok: true });
     // Leases run on the monotonic clock; let it follow the faked one here.
     const start = Date.now();
-    jest.spyOn(require('perf_hooks').performance, 'now').mockImplementation(() => Date.now() - start);
+    const monotonic = jest.spyOn(require('perf_hooks').performance, 'now').mockImplementation(() => Date.now() - start);
+    try {
     // The second success at t=6 s renewed the validation lease to t=21 s.
     const { ctx, published } = await publishedWith(validator);
     await jest.advanceTimersByTimeAsync(14800); // t=20.8 s: the retry is still in flight
@@ -412,6 +413,24 @@ describe('hns-manager', () => {
     await jest.advanceTimersByTimeAsync(3000); // the retry's success arrives at t=24 s
     expect(published.isValid()).toBe(false);
     expect(ctx.setHnsProxy.mock.calls.filter(([, authority]) => authority === published)).toHaveLength(1);
+    } finally {
+      monotonic.mockRestore();
+    }
+  });
+
+  test.each([
+    ['truncated (TCP fallback is off)', 'ETRUNCATED'],
+    ['mismatched or malformed', undefined],
+  ])('a %s reply is a failed answer, not an incomplete probe: it retires at once', async (_label, code) => {
+    const failure = Object.assign(new Error('DNS reply refused'), code ? { code } : {});
+    const validator = jest.fn().mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: true })
+      .mockRejectedValue(failure);
+    const { ctx, published } = await publishedWith(validator);
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(validator).toHaveBeenCalledTimes(3);
+    expect(published.isValid()).toBe(false);
+    expect(ctx.log.warn).toHaveBeenCalledWith('[HNS] Resolver generation retired: hns_validation_failed');
+    expect(ctx.log.warn).not.toHaveBeenCalledWith(expect.stringContaining('retrying within the current lease'));
   });
 
   test('a remote DoH result cannot replace failed local DNSSEC validation', async () => {

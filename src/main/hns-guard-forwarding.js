@@ -1,3 +1,12 @@
+// How long the guard waits, with no bytes from fingertipd, for its answer to a
+// CONNECT. fingertipd answers only after hnsd has validated the host's A and
+// TLSA records, and a host that is not yet cached can need several encrypted
+// round trips plus a wildcard proof: cold lookups measured 7.4 to 7.9 s on
+// 2026-10-16, which a 5 s budget refused while HNS stayed ready. A late
+// answer is still checked against the current route, and withdrawal still
+// closes the pending pair through the guard's resources.
+const HNS_PROXY_CONNECT_TIMEOUT_MS = 20000;
+
 // The guard uses the committed route, never mutable desired routing state.
 // Downstream cancellation destroys the paired Node operations as well.
 function createHnsGuardForwarding({ net, http, resources, getRoute, isAllowed,
@@ -169,4 +178,4 @@ function createHnsGuardForwarding({ net, http, resources, getRoute, isAllowed,
   return { connect, request };
 }
 
-module.exports = { createHnsGuardForwarding };
+module.exports = { HNS_PROXY_CONNECT_TIMEOUT_MS, createHnsGuardForwarding };

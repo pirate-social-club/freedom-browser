@@ -1,6 +1,6 @@
 const { EventEmitter } = require('events');
 const { createHnsGuardResources } = require('./hns-guard-resources');
-const { createHnsGuardForwarding } = require('./hns-guard-forwarding');
+const { createHnsGuardForwarding, HNS_PROXY_CONNECT_TIMEOUT_MS } = require('./hns-guard-forwarding');
 
 function stream() {
   const value = new EventEmitter();
@@ -219,7 +219,8 @@ describe('HNS guard resource containment', () => {
 // for an uncached host measured 7.4 to 7.9 s on 2026-10-16. The upstream's
 // idle timer is real here (under fake timers), so silence actually elapses.
 describe('HNS guard CONNECT budget for a slow but valid upstream', () => {
-  const BUDGET_MS = 20000;
+  // The production budget, so this cannot drift from what ships.
+  const BUDGET_MS = HNS_PROXY_CONNECT_TIMEOUT_MS;
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());
 
@@ -235,6 +236,10 @@ describe('HNS guard CONNECT budget for a slow but valid upstream', () => {
     f.net.connect.mock.calls[0][2]();
     return { f, client };
   }
+
+  test('the budget outlasts a measured cold validated lookup', () => {
+    expect(BUDGET_MS).toBeGreaterThan(8000);
+  });
 
   test('a valid answer after six seconds of silence opens the tunnel', () => {
     const { f, client } = slowFixture();
