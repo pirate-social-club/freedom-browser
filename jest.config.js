@@ -50,8 +50,9 @@ module.exports = {
   // `vm.SourceTextModule.prototype.hasAsyncGraph` — which needs *both*
   // node >= v24.9 and `--experimental-vm-modules`. The `jest` scripts in
   // package.json pass neither, so this transform is load-bearing on every
-  // toolchain we run, CI's node 24 included.
+  // toolchain we run, CI's node 24 included. `@spacesprotocol/libveritas`
+  // also needs its one `import.meta.url` rewritten (babel.config.json).
   transformIgnorePatterns: [
-    '/node_modules/(?!(@scure|@noble|micro-key-producer|micro-packed|@openlv|websocket-mqtt|ts-pattern|aedes)/)',
+    '/node_modules/(?!(@scure|@noble|micro-key-producer|micro-packed|@openlv|websocket-mqtt|ts-pattern|aedes|@spacesprotocol)/)',
   ],
 };

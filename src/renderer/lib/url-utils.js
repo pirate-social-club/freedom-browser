@@ -236,24 +236,29 @@ export const normalizeHnsHostInput = (str) => {
   return `https://${host}${rest || '/'}`;
 };
 
-export const parseSpacesRootInput = (str) => {
+// A Spaces label as the protocol defines it (spaces_protocol slabel.rs): 1 to
+// 62 of a-z, 0-9 and '-', no leading, trailing or doubled '-' except after an
+// `xn--` prefix. The main process (src/main/spaces/names.js) applies the same
+// rule before it resolves anything.
+const isSpaceLabel = (label) => {
+  if (label.length < 1 || label.length > 62) return false;
+  const checked = label.startsWith('xn--') && label.length > 4 ? label.slice(4) : label;
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(checked);
+};
+
+// `@space` or `name@space` typed into the address bar. ASCII letters are
+// lowercased; the route key is also what the address bar shows while the name
+// resolves and after, in front of the verified website.
+export const parseSpacesInput = (str) => {
   if (!str || typeof str !== 'string') return null;
 
-  const trimmed = str.trim();
-  if (!trimmed.startsWith('@')) return null;
-
-  // Raw address-bar Spaces support is root-only for now. Once Freedom can
-  // resolve published web targets, suffix handling can move back in here.
-  const match = trimmed.match(/^@([^\s/?#:@]+)$/u);
+  const match = /^([^@]*)@([^@]+)$/.exec(str.trim().replace(/[A-Z]/g, (c) => c.toLowerCase()));
   if (!match) return null;
+  const [, member, space] = match;
+  if (!isSpaceLabel(space) || (member && !isSpaceLabel(member))) return null;
 
-  const [, label] = match;
-  if (!label) return null;
-
-  return {
-    routeKey: `@${label}`,
-    displayValue: trimmed,
-  };
+  const handle = `${member}@${space}`;
+  return { routeKey: handle, displayValue: handle };
 };
 
 export const parseHashInput = (rawInput, bzzRoutePrefix) => {

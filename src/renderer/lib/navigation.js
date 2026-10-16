@@ -1,4 +1,4 @@
-import { normalizeHnsHostInput, parseSpacesRootInput } from './url-utils.js';
+import { normalizeHnsHostInput, parseSpacesInput } from './url-utils.js';
 import { isNavigationBlocked, isSessionRoutingBlocked, refreshSessionRoutingNotice } from './session-routing-ui.js';
 // Navigation, webview, and address bar handling
 import { state, isRadicleDisabledForProfile } from './state.js';
@@ -1552,42 +1552,39 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null, 
     }
     return;
   }
-  const spaceInput = parseSpacesRootInput(value);
+  // `@space` resolves in the main process (src/main/spaces-resolver.js) to the
+  // https website the space's owner signed, verified against relay-agreed
+  // anchors. That URL loads like any other, with the handle kept in the
+  // address bar; anything else lands on the result page, which says why.
+  const spaceInput = parseSpacesInput(value);
   if (spaceInput) {
     const sequence = navState.requestedNavigationSequence;
     const isCurrent = () => getTabById(targetTabId)?.navigationState === navState &&
       navState.requestedNavigationSequence === sequence;
     const display = displayOverride || spaceInput.displayValue;
+    const showResult = (result) => {
+      const page = new URL('pages/space-browser.html', window.location.href);
+      page.searchParams.set('handle', spaceInput.routeKey);
+      for (const key of ['type', 'reason', 'anchorHeight', 'message']) {
+        if (result?.[key] !== undefined && result[key] !== null) page.searchParams.set(key, String(result[key]));
+      }
+      rememberDisplayAlias(navState, page.toString(), display);
+      navState.pendingNavigationUrl = page.toString();
+      webview.loadURL(page.toString());
+    };
     setAddressDisplayForTab(display, targetTabId);
     setLoading(true, targetTabId);
     Promise.resolve().then(() => electronAPI.resolveSpace(spaceInput.routeKey)).then((result) => {
       if (!isCurrent()) return;
-      const selected = bundledHnsReady()
-        ? result?.freedomUrl || result?.webUrl || result?.selectedUrl
-        : result?.webUrl || result?.freedomUrl || result?.selectedUrl;
-      if (result?.type === 'ok' && selected) {
-        rememberDisplayAlias(navState, selected, display);
-        loadTarget(selected, display, webview, { continuesNavigation: true });
+      if (result?.type === 'ok' && typeof result.url === 'string' && result.url.startsWith('https://')) {
+        rememberDisplayAlias(navState, result.url, display);
+        loadTarget(result.url, display, webview, { continuesNavigation: true });
         return;
       }
-      const page = new URL('pages/space-browser.html', window.location.href);
-      page.searchParams.set('handle', spaceInput.routeKey);
-      for (const [key, value] of Object.entries(result || {})) {
-        if (['string', 'boolean', 'number'].includes(typeof value)) page.searchParams.set(key, String(value));
-      }
-      rememberDisplayAlias(navState, page.toString(), display);
-      navState.pendingNavigationUrl = page.toString();
-      webview.loadURL(page.toString());
+      showResult(result);
     }).catch((error) => {
       if (!isCurrent()) return;
-      const page = new URL('pages/space-browser.html', window.location.href);
-      page.searchParams.set('handle', spaceInput.routeKey);
-      page.searchParams.set('type', 'error');
-      page.searchParams.set('reason', 'SPACES_RESOLUTION_ERROR');
-      page.searchParams.set('message', error?.message || 'Spaces resolution failed');
-      rememberDisplayAlias(navState, page.toString(), display);
-      navState.pendingNavigationUrl = page.toString();
-      webview.loadURL(page.toString());
+      showResult({ type: 'error', reason: 'SPACES_RESOLUTION_ERROR', message: error?.message || 'Spaces resolution failed' });
     }).finally(() => {
       if (isCurrent()) setLoading(false, targetTabId);
     });

@@ -10,7 +10,7 @@ Method: re-derived from the installed dependency tree, the committed artifacts a
 
 This is a practical engineering audit, not legal advice. Final licensing decisions should be reviewed by counsel.
 
-This revision replaces the short AGPL posture note (2026-05-08) that the upstream v0.8.7 merge left in place of upstream's component audit. It starts from upstream's 0.8.7 audit (`git show 3a8c75e6:LICENSE_AUDIT.md`), re-reads each of its records against this tree, and adds the fork's own components: the committed Handshake helpers in `hns-bin/`, the committed V2Ray runtime in `dvpn-bin/`, the Agora Web SDK bundle, the dVPN SDK npm packages, and the fork's own `assets/hns/` and `scripts/jacktrip/` files. The upstream pins are unchanged from 0.8.7 and still match the recorded versions. The production npm tree grew from 273 to 299 unique packages, all of the 26 additions through the dVPN SDK and all permissive.
+This revision replaces the short AGPL posture note (2026-05-08) that the upstream v0.8.7 merge left in place of upstream's component audit. It starts from upstream's 0.8.7 audit (`git show 3a8c75e6:LICENSE_AUDIT.md`), re-reads each of its records against this tree, and adds the fork's own components: the committed Handshake helpers in `hns-bin/`, the committed V2Ray runtime in `dvpn-bin/`, the Agora Web SDK bundle, the dVPN SDK npm packages, and the fork's own `assets/hns/` and `scripts/jacktrip/` files. The upstream pins are unchanged from 0.8.7 and still match the recorded versions. The production npm tree grew from 273 to 299 unique packages, all of the 26 additions through the dVPN SDK and all permissive, and then to 300 when verified Spaces browsing added `@spacesprotocol/libveritas`.
 
 `package.json` names version 0.7.15, the fork's next release number (no v0.7.15 tag exists yet), so the audit is baselined there rather than at upstream's 0.8.7.
 
@@ -26,7 +26,7 @@ Two earlier items are closed. Copyright notices that name individual authors are
 
 | Category                                                          | Count       | Status                                                 |
 | ----------------------------------------------------------------- | ----------- | ------------------------------------------------------ |
-| Production npm packages (unique name@version)                     | 299         | See the distribution below                             |
+| Production npm packages (unique name@version)                     | 300         | See the distribution below                             |
 | External binaries and native addons from upstream in `resources/` | 5           | Ant, freedom-ipfs, libradicle, Myotis, Arti            |
 | Helpers committed by this fork in `resources/`                    | 3 binaries  | hnsd, fingertipd, V2Ray                                |
 | Vendored renderer bundles in `src/renderer/vendor/`               | 5           | OpenLV, highlight.js, marked, DOMPurify, Agora Web SDK |
@@ -219,14 +219,16 @@ node-hid 2.1.2, reached through `@ledgerhq/hw-transport-node-hid`, is MIT OR X11
 
 ## Production Dependency License Distribution
 
-This is a walk of `package.json` `dependencies` and `optionalDependencies` plus their transitive `dependencies`, `optionalDependencies` and `peerDependencies` in the installed tree, deduplicated by name@version, done exactly as `licenses-audit.test.js` walks it. It found 321 installed package directories and 299 unique packages. The optional and peer arms matter: npm installs both on a production install, and eight packages (`@peculiar/*`, `asn1js`, `pvtsutils`, `pvutils`, `webcrypto-core`, reached through `gun`'s optional `@peculiar/webcrypto`) ship without appearing in any `dependencies` chain.
+This is a walk of `package.json` `dependencies` and `optionalDependencies` plus their transitive `dependencies`, `optionalDependencies` and `peerDependencies` in the installed tree, deduplicated by name@version, done exactly as `licenses-audit.test.js` walks it. It found 321 installed package directories and 299 unique packages before `@spacesprotocol/libveritas` was added (below). The optional and peer arms matter: npm installs both on a production install, and eight packages (`@peculiar/*`, `asn1js`, `pvtsutils`, `pvutils`, `webcrypto-core`, reached through `gun`'s optional `@peculiar/webcrypto`) ship without appearing in any `dependencies` chain.
 
 The 26 packages the fork adds all arrive through `sentinel-ai-connect`, installed as blue-agent-connect 2.0.0 (MIT, "Copyright (c) 2026 Norse Labs"; GitHub's detector reports NOASSERTION only because the file adds a line saying it derives from blue-js-sdk). It brings blue-js-sdk 2.8.0 (MIT), eleven `@cosmjs/*` 0.39.0 packages and cosmjs-types (Apache-2.0), readonly-date-esm 2.0.0 (Apache-2.0), dotenv 16.6.1 (BSD-2-Clause), and socks-proxy-agent, xstream and their helpers (MIT). The `@cosmjs/*` packages ship no licence file, so `NOTICES` carries the Apache-2.0 text for them. readonly-date-esm is the only package in the tree with an Apache-2.0 `NOTICE` file, and `NOTICES` reproduces it.
+
+Verified Spaces browsing adds `@spacesprotocol/libveritas` 0.4.5, the Spaces proof verifier, as a direct dependency with no dependencies of its own, which makes 300 unique packages. Its package.json declares no licence and its tarball ships no licence file, so the walk alone would read it as UNKNOWN; the licence is read from upstream instead, where the workspace `Cargo.toml` declares Apache-2.0 and the repository's `LICENSE` is the Apache License 2.0 at tag v0.4.5. `licenses-audit.test.js` accepts that reading for exactly this version and requires the matching record in `licenses-audit.json`, and `NOTICES` names the package and points to the Apache-2.0 text it reproduces. `libveritas_bg.wasm` is a wasm-bindgen build that statically links 109 crates from upstream's `Cargo.lock` (62 MIT OR Apache-2.0, 17 MIT, 14 Apache-2.0, 8 CC0-1.0, the rest MITNFA, BSD-3-Clause, Unicode-3.0 alongside MIT OR Apache-2.0, or a choice that includes Apache-2.0 or the Unlicense); `licenses-audit.json` lists them, and the 37 proc-macro crates and their dependencies that run only at build time. None is copyleft. Crates offering Apache-2.0, CC0-1.0 or the Unlicense are used under it, and none of them ships a NOTICE file. For the others `NOTICES` reproduces each licence file verbatim in its own section: the 17 MIT crates, hex_lit (MITNFA), subtle (BSD-3-Clause), unicode-ident's Unicode-3.0 licence and the MIT `COPYING` of the C libsecp256k1 that secp256k1-sys vendors. Six of the MIT crates and hex_lit ship no licence file; for those `NOTICES` states the `Cargo.toml` declaration.
 
 | License                           | Count |
 | --------------------------------- | ----- |
 | MIT                               | 211   |
-| Apache-2.0                        | 33    |
+| Apache-2.0                        | 34    |
 | ISC                               | 20    |
 | MPL-2.0                           | 13    |
 | BSD-3-Clause                      | 4     |
@@ -241,7 +243,7 @@ The 26 packages the fork adds all arrive through `sentinel-ai-connect`, installe
 | Python-2.0                        | 1     |
 | BlueOak-1.0.0                     | 1     |
 | BSD-2-Clause                      | 1     |
-| Total                             | 299   |
+| Total                             | 300   |
 
 ---
 
@@ -308,7 +310,7 @@ Dev dependencies are not shipped with the application and do not affect the lice
 15. @ghostery/adblocker, MPL-2.0;
 16. the ad-blocking filter lists, CC BY-SA, and the uBlock files, GPL-3.0;
 17. the chain and token marks under `src/renderer/assets/`;
-18. all npm production dependencies, including the readonly-date-esm `NOTICE`;
+18. all npm production dependencies, including the readonly-date-esm `NOTICE`, and `@spacesprotocol/libveritas`, which ships no licence text of its own;
 19. the full texts of the licences whose terms require them and that no shipped package carries.
 
 `licenses-audit.test.js` checks items 2 to 17 against what `package.json`'s `build` configuration, the committed helper directories and the `src/**/*` files pattern ship, and fails on anything new that has not been classified.

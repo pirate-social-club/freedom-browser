@@ -362,9 +362,11 @@ test('live room and the Spaces result page run their scripts without a violation
   await liveRoom.waitForLoadState('load');
   expect(await liveRoom.evaluate(() => typeof window.AgoraRTC)).not.toBe('undefined');
 
-  // Any @space input lands on the result page, resolved or not; its script
-  // fills the status line in every branch.
-  await navigate(window, '@csp-probe');
+  // A Spaces member name is refused before any network request, so this lands
+  // on the result page without depending on the live relays; its script fills
+  // the status line in every branch. Loading the verifier itself is proved by
+  // the installed acceptance (test-e2e/packaged-live/spaces-browsing.spec.js).
+  await navigate(window, 'csp@probe');
   const space = await pageFor(electronApp, '/pages/space-browser.html');
   await space.waitForLoadState('load');
   await expect(space.locator('#status')).not.toBeEmpty();

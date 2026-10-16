@@ -1,76 +1,64 @@
+// Why a Spaces name did not open. A name whose owner signed an https website
+// never lands here: the browser loads that website instead. Every field is
+// written as text.
 const params = new URLSearchParams(window.location.search);
 const type = params.get('type') || 'error';
-const handle = params.get('handle') || '@unknown';
+const handle = params.get('handle') || '';
 const reason = params.get('reason') || '';
 const message = params.get('message') || '';
-const txid = params.get('txid') || '';
-const n = params.get('n') || '';
-const rootPubkey = params.get('rootPubkey') || '';
-const proofRootHash = params.get('proofRootHash') || '';
-const acceptedAnchorHeight = params.get('acceptedAnchorHeight') || '';
-const acceptedAnchorBlockHash = params.get('acceptedAnchorBlockHash') || '';
-const acceptedAnchorRootHash = params.get('acceptedAnchorRootHash') || '';
-const controlClass = params.get('controlClass') || '';
-const operationClass = params.get('operationClass') || '';
-const canonicalHandle = params.get('canonicalHandle') || '';
-const observationProvider = params.get('observationProvider') || '';
-const source = params.get('source') || '';
-const webUrl = params.get('webUrl') || '';
-const proofVerified = params.get('proofVerified') || '';
+const anchorHeight = params.get('anchorHeight') || '';
 
-const descriptionEl = document.getElementById('description');
-const statusEl = document.getElementById('status');
+const REASONS = {
+  NO_WEBSITE_RECORD: [
+    'Website not published',
+    'The owner of this Space has not signed a website for it.',
+  ],
+  INVALID_WEBSITE_RECORD: [
+    'Website not usable',
+    "The owner's signed website record does not name exactly one https address.",
+  ],
+  SPACE_NOT_FOUND: ['Not found', 'The relays have no Space by this name.'],
+  MEMBER_NAMES_UNSUPPORTED: ['Not supported yet', 'Names inside a Space cannot be verified yet.'],
+  INVALID_HANDLE: ['Not a Space name', 'This is not a valid Space name.'],
+  ANCHORS_UNAVAILABLE: [
+    'Cannot verify',
+    'Freedom could not get a recent, agreed view of the Spaces chain to check this name against.',
+  ],
+  PROOF_UNVERIFIED: [
+    'Cannot verify',
+    'None of the relays returned a proof for this name that checks out.',
+  ],
+  PROOF_UNCONFIRMED: [
+    'Cannot verify',
+    'Too few relays returned a proof of who owns this Space to trust it.',
+  ],
+  SESSION_UNAVAILABLE: ['Cannot verify', 'This window is closing.'],
+};
+
+const [status, description] =
+  REASONS[reason] ||
+  (type === 'refused'
+    ? ['Not opened', 'This Space did not open.']
+    : ['Cannot verify', 'Freedom could not check this Space.']);
+
+document.getElementById('status').textContent = status;
+document.getElementById('description').textContent = description;
+
 const detailsEl = document.getElementById('details');
-const hintEl = document.getElementById('hint');
-
-const addRow = (label, value, variant = 'mono') => {
+const addRow = (label, value) => {
   if (!value) return;
   const wrapper = document.createElement('div');
   const dt = document.createElement('dt');
   const dd = document.createElement('dd');
-
   dt.textContent = label;
   dd.textContent = value;
-  if (variant !== 'mono') {
-    dd.dataset.variant = variant;
-  }
-
   wrapper.appendChild(dt);
   wrapper.appendChild(dd);
   detailsEl.appendChild(wrapper);
 };
 
-addRow('Handle', handle);
+addRow('Space', handle);
+addRow('Verified at Bitcoin block', /^\d+$/.test(anchorHeight) ? anchorHeight : '');
+addRow('Detail', type === 'error' ? message : '');
 
-if (type === 'ok') {
-  statusEl.textContent = 'Resolved';
-  descriptionEl.textContent =
-    'Freedom resolved this Space. Browser-native web targets are not wired in yet, so this page shows the current root data instead.';
-  addRow('Canonical Handle', canonicalHandle && canonicalHandle !== handle ? canonicalHandle : '');
-  addRow('Current Outpoint', txid && n ? `${txid}:${n}` : '');
-  addRow('Root Pubkey', rootPubkey);
-  addRow('Proof Root Hash', proofRootHash);
-  addRow('Accepted Anchor Height', acceptedAnchorHeight, 'text');
-  addRow('Accepted Anchor Block', acceptedAnchorBlockHash);
-  addRow('Accepted Anchor Root', acceptedAnchorRootHash);
-  addRow('Proof Status', proofVerified === 'true' ? 'Verified' : proofVerified === 'false' ? 'Unverified' : '', 'text');
-  addRow('Control Class', controlClass, 'text');
-  addRow('Operation Class', operationClass, 'text');
-  addRow('Resolver Source', source, 'text');
-  addRow('Observation Provider', observationProvider, 'text');
-  addRow('Published Web Target', webUrl);
-  hintEl.textContent = 'This is a neutral resolver result page, not Pirate-owned content.';
-} else if (type === 'not_found') {
-  statusEl.textContent = 'Not Found';
-  descriptionEl.textContent =
-    'Freedom could not find a Space with this handle.';
-  addRow('Reason', reason, 'text');
-  hintEl.textContent = 'Check the spelling and try again.';
-} else {
-  statusEl.textContent = 'Resolver Error';
-  descriptionEl.textContent =
-    'Freedom could not reach a Spaces resolver for this handle.';
-  addRow('Reason', reason, 'text');
-  addRow('Message', message, 'text');
-  hintEl.textContent = 'The resolver is unavailable right now. Try again in a moment.';
-}
+document.getElementById('hint').textContent = type === 'error' ? 'Try again in a moment.' : '';

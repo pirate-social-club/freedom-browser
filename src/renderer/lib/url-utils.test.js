@@ -23,6 +23,7 @@ import {
   formatOnchainAppDisplayUrl,
   looksLikeOnchainAppInput,
   parseOnchainAppUrl,
+  parseSpacesInput,
 } from './url-utils.js';
 
 const BZZ_ROUTE_PREFIX = 'http://127.0.0.1:1633/bzz/';
@@ -1464,4 +1465,22 @@ describe('url-utils', () => {
       expect(deriveRadicleDisplayValue(undefined, RAD_PREFIX)).toBe(undefined);
     });
   });
+});
+
+describe('parseSpacesInput', () => {
+  test.each([
+    ['@yahoo', '@yahoo'],
+    ['  @Yahoo  ', '@yahoo'],
+    ['member@yahoo', 'member@yahoo'],
+    ['@xn--bcher-kva', '@xn--bcher-kva'],
+  ])('parses %s', (input, handle) => {
+    expect(parseSpacesInput(input)).toEqual({ routeKey: handle, displayValue: handle });
+  });
+
+  test.each(['yahoo', '@', '@-a', '@a-', '@a--b', '@a_b', '@a.b', 'me@example.com', '@a/b', '@yahoo path', 'a@b@c', `@${'a'.repeat(63)}`, null])(
+    'leaves %s alone',
+    (input) => {
+      expect(parseSpacesInput(input)).toBeNull();
+    }
+  );
 });

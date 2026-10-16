@@ -256,16 +256,20 @@ async function flush() {
 
 /**
  * Run `scripts/<page>.js` against a fake document holding `ids`
- * (`{ id: tagName }`) and the given `freedomAPI`. Returns the document, the
- * elements by id, the queued timers and the context.
+ * (`{ id: tagName }`) and the given `freedomAPI`, at `pages/<page>.html` plus
+ * `search`. Returns the document, the elements by id, the queued timers and
+ * the context.
  */
-async function runPageScript(page, { ids, freedomAPI, confirm = () => true, storage = {} }) {
+async function runPageScript(
+  page,
+  { ids, freedomAPI, confirm = () => true, storage = {}, search = '' }
+) {
   const document = new FakeDocument(ids);
   const timers = [];
   const context = {
     document,
     freedomAPI,
-    window: { freedomAPI, location: { href: `file:///pages/${page}.html`, search: '' } },
+    window: { freedomAPI, location: { href: `file:///pages/${page}.html${search}`, search } },
     localStorage: {
       getItem: (key) => (key in storage ? storage[key] : null),
       setItem: (key, value) => (storage[key] = String(value)),
@@ -278,6 +282,7 @@ async function runPageScript(page, { ids, freedomAPI, confirm = () => true, stor
     },
     clearTimeout: () => {},
     URL,
+    URLSearchParams,
   };
   const source = fs.readFileSync(path.join(SCRIPTS_DIR, `${page}.js`), 'utf8');
   vm.runInNewContext(source, context, { filename: `scripts/${page}.js` });

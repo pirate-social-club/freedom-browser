@@ -1,149 +1,282 @@
 const { runWithPrivateLogContext, redactForLog } = require('./private/private-log-context');
-const { isPrivateWebContents } = require('./private/private-windows');
+const { getPartitionForWebContents, isPrivateWebContents } = require('./private/private-windows');
 const log = require('./logger');
-const { ipcMain } = require('electron');
+const { BrowserWindow, ipcMain, session } = require('electron');
 const IPC = require('../shared/ipc-channels');
+const { establishTrust } = require('./spaces/anchors');
+const { fetchBytes } = require('./spaces/transport');
+const { loadVeritas } = require('./spaces/veritas');
+const { parseSpaceHandle } = require('./spaces/names');
+const { websiteFromZone } = require('./spaces/website');
 
-const SPACES_RESOLVER_BASE_URL =
-  process.env.SPACES_RESOLVER_BASE_URL?.trim()
-  || process.env.SPACES_VERIFIER_BASE_URL?.trim()
-  || 'https://verifier.pirate.sc/spaces';
-const SPACES_CACHE_TTL_MS = 30 * 1000;
-const spaceResultCache = new Map();
+/**
+ * Verified Spaces browsing.
+ *
+ * `@space` resolves to the https website its owner signed, and nothing else:
+ *  1. anchors come from src/main/spaces/anchors.js (relay quorum plus a fresh,
+ *     proof-of-work-checked Bitcoin header), refreshed every TRUST_TTL_MS;
+ *  2. every agreeing relay is asked for a proof of the name, and libveritas
+ *     verifies each answer locally against those anchors only (production
+ *     options, no dev mode);
+ *  3. the owner key is the one at the newest anchor among the proofs that
+ *     verify, and at least PROOF_AGREEMENT relays must have proved that same
+ *     key, so no single relay can substitute an older proof from before a
+ *     transfer. libveritas's ordering (commitment, then delegate records, then
+ *     the owner record set's sequence, then anchor height) picks among the
+ *     zones under that key;
+ *  4. src/main/spaces/website.js reads the owner-signed `website` record.
+ *
+ * What this cannot rule out: a proof verifies at any of the trusted anchors,
+ * which span about 15 days, and owner record sets carry a sequence number but
+ * no expiry, so relays that all serve an older set of the current owner's
+ * records, or all withhold a newer one, are believed. Relays learn the names
+ * looked up. When only two relays agree on the anchors, either of them can
+ * block every lookup, by failing or by answering "not found", though neither
+ * can make one come out wrong.
+ *
+ * "Not found" is only an absence from the relays' proofs, not a proof of
+ * absence, so it needs PROOF_AGREEMENT relays and is never cached.
+ * `name@space` is refused until member proofs can be verified. Requests go
+ * through the session the requesting window browses in (a private window's
+ * partition, not the default session its chrome runs on), so they follow that
+ * session's routing, and each session gets its own resolver and caches, so a
+ * private window neither reuses nor reveals another window's lookups.
+ * Verification runs on the main thread. libveritas verifies every bundle in a
+ * message, requested or not, but by default refuses the compact Groth16
+ * receipts, so each receipt it checks is a large succinct one: a 226 KB
+ * message with one receipt-bearing bundle verified in about 24 ms on one CPU
+ * (2026-10-16), and MAX_PROOF_BYTES keeps a whole message to a handful of
+ * them.
+ */
+const TRUST_TTL_MS = 10 * 60 * 1000;
+const RESULT_TTL_MS = 30 * 1000;
+const MAX_PROOF_BYTES = 1024 * 1024;
+const PROOF_AGREEMENT = 2;
 
-const normalizeSpaceHandle = (handle) => {
-  const trimmed = (handle || '').trim();
-  if (!trimmed) {
-    throw new Error('Spaces handle is empty');
-  }
-  const match = trimmed.match(/^@([^\s/?#:@]+)$/u);
-  if (!match) {
-    throw new Error('Spaces handle must be a root label like @space');
-  }
-
-  const normalizedLabel = match[1].normalize('NFKC').toLowerCase();
-  return `@${normalizedLabel}`;
-};
-
-const parseOutpoint = (value) => {
-  if (!value || typeof value !== 'string') {
-    return { txid: null, n: null };
-  }
-
-  const [txid, n] = value.split(':');
-  const parsedN = Number.parseInt(n, 10);
-  return {
-    txid: txid || null,
-    n: Number.isInteger(parsedN) ? parsedN : null,
-  };
-};
-
-async function resolveViaPublicResolver(handle) {
-  if (!SPACES_RESOLVER_BASE_URL) {
-    throw new Error('No Spaces resolver base URL configured');
-  }
-
-  const normalizedBaseUrl = SPACES_RESOLVER_BASE_URL.endsWith('/')
-    ? SPACES_RESOLVER_BASE_URL
-    : `${SPACES_RESOLVER_BASE_URL}/`;
-  const url = new URL('resolve', normalizedBaseUrl);
-  url.searchParams.set('handle', handle);
-
-  const response = await fetch(url.toString(), {
-    headers: {
-      Accept: 'application/json',
-    },
-  });
-
-  const text = await response.text();
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error(`Invalid spaces resolver response: ${text.slice(0, 200)}`);
-  }
-
-  if (!response.ok) {
-    const message = data?.error || `${response.status} ${response.statusText}`;
-    throw new Error(`spaces resolver HTTP ${response.status}: ${message}`);
-  }
-
-  if (data.resolved !== true) {
-    return {
-      type: 'not_found',
-      handle,
-      reason: typeof data.reason === 'string' ? data.reason : 'SPACE_NOT_FOUND',
-      source: 'resolver',
-    };
-  }
-
-  const outpoint = parseOutpoint(data.outpoint);
-
-  return {
-    type: 'ok',
-    handle: typeof data.handle === 'string' ? data.handle : handle,
-    canonicalHandle:
-      typeof data.canonical_handle === 'string' ? data.canonical_handle : handle,
-    txid: outpoint.txid,
-    n: outpoint.n,
-    scriptPubkey: null,
-    rootPubkey: typeof data.root_pubkey === 'string' ? data.root_pubkey : null,
-    proofRootHash: typeof data.proof_root_hash === 'string' ? data.proof_root_hash : null,
-    acceptedAnchorHeight:
-      typeof data.accepted_anchor_height === 'number' ? data.accepted_anchor_height : null,
-    acceptedAnchorBlockHash:
-      typeof data.accepted_anchor_block_hash === 'string' ? data.accepted_anchor_block_hash : null,
-    acceptedAnchorRootHash:
-      typeof data.accepted_anchor_root_hash === 'string' ? data.accepted_anchor_root_hash : null,
-    controlClass: typeof data.control_class === 'string' ? data.control_class : null,
-    operationClass: typeof data.operation_class === 'string' ? data.operation_class : null,
-    webUrl: typeof data.web_url === 'string' && data.web_url.trim() ? data.web_url.trim() : null,
-    freedomUrl:
-      typeof data.freedom_url === 'string' && data.freedom_url.trim() ? data.freedom_url.trim() : null,
-    selectedUrl:
-      (typeof data.freedom_url === 'string' && data.freedom_url.trim() ? data.freedom_url.trim() : null)
-      || (typeof data.web_url === 'string' && data.web_url.trim() ? data.web_url.trim() : null),
-    source: 'resolver',
-    observationProvider:
-      typeof data.observation_provider === 'string' ? data.observation_provider : null,
-    proofVerified: data.proof_verified === true,
-  };
+/**
+ * The zone to trust among verified answers for one name: the owner key is the
+ * one at the newest anchor, and `isBetterThan` (libveritas's ordering) picks
+ * among the zones under that key.
+ */
+function chooseZone(zones, isBetterThan) {
+  const newest = zones.reduce((a, b) => (b.anchor > a.anchor ? b : a));
+  const current = zones.filter((zone) => zone.script_pubkey === newest.script_pubkey);
+  return current.reduce((best, zone) => (isBetterThan(zone, best) ? zone : best));
 }
 
-async function resolveSpace(handle) {
-  const normalizedHandle = normalizeSpaceHandle(handle);
-  const cached = spaceResultCache.get(normalizedHandle);
-  if (cached && Date.now() - cached.timestamp < SPACES_CACHE_TTL_MS) {
-    return cached.result;
+function createSpacesResolver({
+  fetch,
+  lib = loadVeritas,
+  now = Date.now,
+  trust = establishTrust,
+}) {
+  let trusted = null;
+  let pendingTrust = null;
+  const results = new Map();
+
+  async function trustedAnchors(veritasLib, refresh) {
+    if (!refresh && trusted && now() - trusted.at < TRUST_TTL_MS) return trusted.value;
+    if (!pendingTrust) {
+      pendingTrust = trust({ fetch, lib: veritasLib, now })
+        .then((value) => {
+          trusted = { value, at: now() };
+          return value;
+        })
+        .finally(() => {
+          pendingTrust = null;
+        });
+    }
+    return pendingTrust;
   }
 
-  log.info(`[spaces] Resolving ${redactForLog(normalizedHandle)} via ${SPACES_RESOLVER_BASE_URL}`);
-
-  try {
-    const result = await resolveViaPublicResolver(normalizedHandle);
-    spaceResultCache.set(normalizedHandle, { result, timestamp: Date.now() });
-    return result;
-  } catch (err) {
-    const result = {
-      type: 'error',
-      handle: normalizedHandle,
-      reason: 'RESOLVER_UNAVAILABLE',
-      message: err.message,
+  async function queryRelay(veritasLib, relay, handle, veritas) {
+    let bytes;
+    try {
+      ({ bytes } = await fetchBytes(fetch, `${relay.url}/query?q=${encodeURIComponent(handle)}`, {
+        limit: MAX_PROOF_BYTES,
+      }));
+    } catch (err) {
+      return { relay, error: `${relay.name}: ${err.message}` };
+    }
+    const owned = [];
+    const own = (object) => {
+      owned.push(object);
+      return object;
     };
-    log.warn(`[spaces] Public resolver failed for ${redactForLog(normalizedHandle)}: ${redactForLog(err.message)}`, redactForLog(err.cause || ''));
-    spaceResultCache.set(normalizedHandle, { result, timestamp: Date.now() });
+    try {
+      const ctx = own(new veritasLib.QueryContext());
+      ctx.addRequest(handle);
+      const message = own(new veritasLib.Message(bytes));
+      const verified = own(veritas.verifyWithOptions(ctx, message, veritasLib.VERIFY_DEFAULT()));
+      // zones() hands back plain objects, which outlive the wasm ones.
+      const zone = verified
+        .zones()
+        .find((candidate) => candidate.handle === handle && candidate.canonical === handle);
+      return zone ? { relay, zone } : { relay, notFound: true };
+    } catch (err) {
+      const message = String(err?.message || err);
+      // libveritas: the requested space is not among the leaves this relay's
+      // proof holds. Any other space missing is just a bad message.
+      if (message === `space ${handle} not found in proof`) return { relay, notFound: true };
+      return { relay, error: `${relay.name}: ${message}` };
+    } finally {
+      for (const object of owned) object.free();
+    }
+  }
+
+  async function attempt(veritasLib, handle, refresh) {
+    let anchors;
+    try {
+      anchors = await trustedAnchors(veritasLib, refresh);
+    } catch (err) {
+      return { type: 'error', handle, reason: 'ANCHORS_UNAVAILABLE', message: err.message };
+    }
+    const anchorSet = new veritasLib.Anchors(JSON.stringify(anchors.entries));
+    let outcomes;
+    try {
+      const veritas = new veritasLib.Veritas(anchorSet);
+      try {
+        outcomes = await Promise.all(
+          anchors.relays.map((relay) => queryRelay(veritasLib, relay, handle, veritas))
+        );
+      } finally {
+        veritas.free();
+      }
+    } finally {
+      anchorSet.free();
+    }
+
+    const proved = outcomes.filter((outcome) => outcome.zone);
+    const detail = (others) =>
+      others
+        .map(
+          (outcome) =>
+            outcome.error ||
+            `${outcome.relay.name}: ${outcome.notFound ? 'name not in its proof' : 'proved another owner key'}`
+        )
+        .join('; ');
+    if (proved.length) {
+      const zone = chooseZone(
+        proved.map((outcome) => outcome.zone),
+        (a, b) => veritasLib.zoneIsBetterThan(a, b)
+      );
+      const agreeing = proved.filter(
+        (outcome) => outcome.zone.script_pubkey === zone.script_pubkey
+      );
+      if (agreeing.length < PROOF_AGREEMENT) {
+        return {
+          type: 'error',
+          handle,
+          reason: 'PROOF_UNCONFIRMED',
+          message:
+            `${agreeing.length} of ${outcomes.length} relays proved the current owner key, ` +
+            `${PROOF_AGREEMENT} needed (${detail(outcomes.filter((outcome) => !agreeing.includes(outcome)))})`,
+        };
+      }
+      const website = websiteFromZone(zone);
+      const verifiedAt = { anchorHeight: zone.anchor, trustRoot: anchors.root };
+      return website.url
+        ? { type: 'ok', handle, url: website.url, ...verifiedAt }
+        : { type: 'refused', handle, reason: website.reason, ...verifiedAt };
+    }
+    if (outcomes.filter((outcome) => outcome.notFound).length >= PROOF_AGREEMENT) {
+      return { type: 'refused', handle, reason: 'SPACE_NOT_FOUND' };
+    }
+    return { type: 'error', handle, reason: 'PROOF_UNVERIFIED', message: detail(outcomes) };
+  }
+
+  async function resolve(input) {
+    const name = parseSpaceHandle(input);
+    if (!name) {
+      return { type: 'refused', handle: String(input ?? '').trim(), reason: 'INVALID_HANDLE' };
+    }
+    if (name.member) {
+      return { type: 'refused', handle: name.handle, reason: 'MEMBER_NAMES_UNSUPPORTED' };
+    }
+    const cached = results.get(name.handle);
+    if (cached && now() - cached.at < RESULT_TTL_MS) return cached.result;
+
+    // Loading the verifier is not a relay failure: if it throws, so does this.
+    const veritasLib = lib();
+    let result = await attempt(veritasLib, name.handle, false);
+    // Proofs may sit at an anchor newer than a cached set; retry once fresh.
+    if (['PROOF_UNVERIFIED', 'PROOF_UNCONFIRMED'].includes(result.reason)) {
+      result = await attempt(veritasLib, name.handle, true);
+    }
+    if (result.type !== 'error' && result.reason !== 'SPACE_NOT_FOUND') {
+      results.set(name.handle, { result, at: now() });
+    }
     return result;
   }
+
+  return { resolve };
+}
+
+const resolvers = new WeakMap();
+
+function resolverFor(targetSession) {
+  let resolver = resolvers.get(targetSession);
+  if (!resolver) {
+    resolver = createSpacesResolver({ fetch: (url, init) => targetSession.fetch(url, init) });
+    resolvers.set(targetSession, resolver);
+  }
+  return resolver;
+}
+
+// Electron keeps an in-memory partition's session object alive after its
+// private window closes, so its lookups are dropped explicitly.
+function forgetSpacesSession(targetSession) {
+  resolvers.delete(targetSession);
+}
+
+// The session a window's tabs browse in. A sender that no longer has a window
+// (closing mid-lookup), or a private window whose partition is already gone,
+// gets none, never the default session.
+function hasLiveWindow(sender) {
+  try {
+    return Boolean(sender && !sender.isDestroyed() && BrowserWindow.fromWebContents(sender));
+  } catch {
+    return false;
+  }
+}
+
+function browsingSessionFor(sender) {
+  if (!hasLiveWindow(sender)) return null;
+  const partition = getPartitionForWebContents(sender);
+  if (partition) return session.fromPartition(partition);
+  return isPrivateWebContents(sender) ? null : session.defaultSession;
+}
+
+async function resolveSpace(targetSession, handle) {
+  if (!targetSession) {
+    return { type: 'error', handle: String(handle ?? '').trim(), reason: 'SESSION_UNAVAILABLE' };
+  }
+  const result = await resolverFor(targetSession).resolve(handle);
+  if (result.type === 'error') {
+    log.warn(
+      `[spaces] ${redactForLog(result.handle)}: ${result.reason} ${redactForLog(result.message || '')}`
+    );
+  } else {
+    log.info(
+      `[spaces] ${redactForLog(result.handle)}: ${result.type === 'ok' ? 'verified website' : result.reason}`
+    );
+  }
+  return result;
 }
 
 function registerSpacesIpc() {
-  ipcMain.handle(IPC.SPACES_RESOLVE, async (event, payload = {}) => {
-    return runWithPrivateLogContext(isPrivateWebContents(event.sender), () => resolveSpace(payload.handle));
-  });
+  ipcMain.handle(IPC.SPACES_RESOLVE, async (event, payload = {}) =>
+    runWithPrivateLogContext(isPrivateWebContents(event.sender), () =>
+      resolveSpace(browsingSessionFor(event.sender), payload.handle)
+    )
+  );
 }
 
 module.exports = {
-  normalizeSpaceHandle,
+  browsingSessionFor,
+  chooseZone,
+  createSpacesResolver,
+  forgetSpacesSession,
   registerSpacesIpc,
   resolveSpace,
 };

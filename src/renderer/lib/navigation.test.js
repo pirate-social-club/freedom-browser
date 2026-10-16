@@ -527,7 +527,7 @@ const loadNavigationModule = async (options = {}) => {
   jest.doMock('./navigation-utils.js', () => navigationUtilsMocks);
   const actualUrlUtils = jest.requireActual('./url-utils.js');
   urlUtilsMocks.normalizeHnsHostInput = actualUrlUtils.normalizeHnsHostInput;
-  urlUtilsMocks.parseSpacesRootInput = actualUrlUtils.parseSpacesRootInput;
+  urlUtilsMocks.parseSpacesInput = actualUrlUtils.parseSpacesInput;
   jest.doMock('./session-routing-ui.js', () => ({
     isSessionRoutingBlocked: () => options.routingBlocked === true,
     isNavigationBlocked: () => options.routingBlocked === true,
@@ -5732,6 +5732,82 @@ describe('navigation', () => {
       // trust object up from the map when it is switched back to.
       expect(ctx.navigationUtilsMocks.resolveTrustBadge.mock.calls.length).toBe(foregroundPaints);
       expect(ctx.elements.addressInput.value).toBe('https://a.example');
+    });
+  });
+});
+
+describe('Spaces navigation', () => {
+  const resultPageParams = (ctx) => {
+    const url = new URL(ctx.activeRef.tab.webview.loadURL.mock.calls.at(-1)[0]);
+    expect(url.pathname).toBe('/app/pages/space-browser.html');
+    return Object.fromEntries(url.searchParams);
+  };
+
+  async function navigateTo(input, result) {
+    const ctx = await loadNavigationModule();
+    ctx.electronAPI.resolveSpace = jest.fn().mockResolvedValue(result);
+    await ctx.mod.initNavigation();
+    ctx.activeRef.tab.webview.loadURL.mockClear();
+    ctx.mod.loadTarget(input);
+    await flushMicrotasks();
+    return ctx;
+  }
+
+  test('a verified website loads with the handle kept in the address bar', async () => {
+    const ctx = await navigateTo(' @Example ', {
+      type: 'ok',
+      handle: '@example',
+      url: 'https://example.com/c/@example',
+      anchorHeight: 144,
+    });
+    expect(ctx.electronAPI.resolveSpace).toHaveBeenCalledWith('@example');
+    expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenLastCalledWith('https://example.com/c/@example');
+    expect(ctx.elements.addressInput.value).toBe('@example');
+  });
+
+  test('a refusal shows the result page with only its own fields', async () => {
+    const ctx = await navigateTo('@example', {
+      type: 'refused',
+      handle: '@example',
+      reason: 'NO_WEBSITE_RECORD',
+      anchorHeight: 144,
+      url: 'https://not-verified.example/',
+      trustRoot: 'abc',
+    });
+    expect(resultPageParams(ctx)).toEqual({
+      handle: '@example',
+      type: 'refused',
+      reason: 'NO_WEBSITE_RECORD',
+      anchorHeight: '144',
+    });
+    expect(ctx.elements.addressInput.value).toBe('@example');
+  });
+
+  test('a member name goes to the resolver, which refuses it', async () => {
+    const ctx = await navigateTo('member@example', { type: 'refused', handle: 'member@example', reason: 'MEMBER_NAMES_UNSUPPORTED' });
+    expect(ctx.electronAPI.resolveSpace).toHaveBeenCalledWith('member@example');
+    expect(resultPageParams(ctx)).toMatchObject({ reason: 'MEMBER_NAMES_UNSUPPORTED' });
+  });
+
+  test('an "ok" without an https website is not followed', async () => {
+    const ctx = await navigateTo('@example', { type: 'ok', handle: '@example', url: 'http://example.com/' });
+    expect(resultPageParams(ctx)).toMatchObject({ type: 'ok' });
+    expect(ctx.activeRef.tab.webview.loadURL).not.toHaveBeenCalledWith('http://example.com/');
+  });
+
+  test('a failed lookup shows the error on the result page', async () => {
+    const ctx = await loadNavigationModule();
+    ctx.electronAPI.resolveSpace = jest.fn().mockRejectedValue(new Error('IPC gone'));
+    await ctx.mod.initNavigation();
+    ctx.mod.loadTarget('@example');
+    // The rejection passes the skipped success handler before the catch runs.
+    await flushMicrotasks();
+    await flushMicrotasks();
+    expect(resultPageParams(ctx)).toEqual({
+      handle: '@example',
+      type: 'error',
+      reason: 'SPACES_RESOLUTION_ERROR',
+      message: 'IPC gone',
     });
   });
 });

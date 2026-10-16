@@ -198,7 +198,7 @@ const terminateRouting = createSessionRoutingTermination({ app, log,
   markQuitting: () => { isQuitting = true; },
   recordNotice: (code) => routingNoticeStore.record(code),
 });
-const { registerSpacesIpc } = require('./spaces-resolver');
+const { forgetSpacesSession, registerSpacesIpc } = require('./spaces-resolver');
 const { registerHnsIpc, startHns, stopHns, registerHnsSession, unregisterHnsSession } = require('./hns-manager');
 const { registerDvpnIpc, initDvpn, stopDvpn } = require('./dvpn-manager');
 const { registerJacktripIpc, stopJacktrip } = require('./jacktrip-manager');
@@ -576,6 +576,7 @@ async function bootstrap() {
   // on disk, Chromium semantics) and its session-only permission decisions.
   // The session's storage is cleared by the private-windows module itself.
   registerPrivateCleanup((_partition, privateSession) => unregisterHnsSession(privateSession));
+  registerPrivateCleanup((_partition, privateSession) => forgetSpacesSession(privateSession));
   registerPrivateCleanup((partition) => cancelPrivateDownloads(partition));
   registerPrivateCleanup((partition) => dropPrivateDownloads(partition));
   registerPrivateCleanup((partition) => clearPrivatePermissionDecisions(partition));

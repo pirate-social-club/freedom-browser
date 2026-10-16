@@ -942,8 +942,29 @@ describe('copyleft', () => {
       .map((entry) => (typeof entry === 'string' ? entry : entry?.type))
       .filter(Boolean);
     if (legacy.length) return legacy.join(' OR ');
-    return 'UNKNOWN';
+    return READ_UPSTREAM[`${meta.name}@${meta.version}`] ?? 'UNKNOWN';
   };
+
+  // Packages whose npm metadata declares no licence at all, read instead from
+  // the upstream source at the shipped version. Each is pinned to that exact
+  // version, so a bump falls back to UNKNOWN until someone reads it again, and
+  // each must be recorded with the same version and licence in
+  // licenses-audit.json.
+  const READ_UPSTREAM = {
+    '@spacesprotocol/libveritas@0.4.5': 'Apache-2.0',
+  };
+
+  it('records every licence read from upstream in licenses-audit.json', () => {
+    for (const [id, spdx] of Object.entries(READ_UPSTREAM)) {
+      const at = id.lastIndexOf('@');
+      const entry = auditByName.get(id.slice(0, at));
+      expect({ id, version: entry?.version, spdx: entry?.license?.spdx }).toEqual({
+        id,
+        version: id.slice(at + 1),
+        spdx: [spdx],
+      });
+    }
+  });
 
   /**
    * Every package a production install puts in `app.asar`.
