@@ -101,6 +101,50 @@ describe('probeHnsValidator refuses anything but complete authenticated answers'
     } })).rejects.toBe(timeout);
   });
 
+  // Every query settles before the probe concludes, so an invalid answer is
+  // never reported as incomplete because another query timed out.
+  const mixed = (outcomes) => probeHnsValidator({ recursiveAddr: '127.0.0.1:25350', query: async ({ type }) => {
+    const outcome = outcomes[type];
+    if (outcome instanceof Error) throw outcome;
+    return outcome;
+  } });
+  const timedOut = () => Object.assign(new Error('DNS query timed out'), { code: 'ETIMEOUT' });
+
+  test.each([
+    ['A SERVFAIL, AAAA timed out', (d) => { d[1].rcode = 2; d[28] = timedOut(); }],
+    ['A without AD, AAAA timed out', (d) => { d[1].authenticated = false; d[28] = timedOut(); }],
+    ['TLSA missing its record, AAAA timed out', (d) => { d[52].answers = []; d[28] = timedOut(); }],
+    ['TLSA unauthenticated, A timed out', (d) => { d[52].authenticated = false; d[1] = timedOut(); }],
+    ['AAAA truncated, TLSA timed out', (d) => { d[28].truncated = true; d[52] = timedOut(); }],
+    ['A SERVFAIL, TLSA truncated by error', (d) => { d[1].rcode = 2; d[52] = Object.assign(new Error('t'), { code: 'ETRUNCATED' }); }],
+  ])('an invalid answer wins over another query that did not complete: %s', async (_label, damage) => {
+    const data = good();
+    damage(data);
+    await expect(mixed(data)).resolves.toEqual({ ok: false });
+  });
+
+  test('a failed query wins over one that did not complete', async () => {
+    const data = good();
+    const truncated = Object.assign(new Error('DNS response truncated'), { code: 'ETRUNCATED' });
+    data[1] = timedOut();
+    data[52] = truncated;
+    await expect(mixed(data)).rejects.toBe(truncated);
+  });
+
+  test('a missing address is not concluded while the other address query is incomplete', async () => {
+    const data = good();
+    data[1].answers = [];
+    const timeout = timedOut();
+    data[28] = timeout;
+    await expect(mixed(data)).rejects.toBe(timeout);
+  });
+
+  test('both address queries answered without an address is refused', async () => {
+    const data = good();
+    data[1].answers = [];
+    await expect(mixed(data)).resolves.toEqual({ ok: false });
+  });
+
   test('only an owned loopback validator is probed', async () => {
     await expect(probeHnsValidator({ recursiveAddr: '10.0.0.1:53', query: jest.fn() })).rejects.toThrow('Owned validator required');
   });

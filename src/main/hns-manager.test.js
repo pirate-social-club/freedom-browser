@@ -210,6 +210,7 @@ function loadHnsManagerModule(options = {}) {
         })),
       }),
       [require.resolve('./hns-health')]: () => ({
+        HNS_VALIDATOR_INCOMPLETE_CODES: jest.requireActual('./hns-health').HNS_VALIDATOR_INCOMPLETE_CODES,
         probeHnsValidator: options.probeHnsValidator || jest.fn(async () => ({ ok: true })),
         probeHnsChainState: options.probeHnsChainState || jest.fn(async () => ({
           synced: true, height: 326149, progress: 0.99, peers: 2,

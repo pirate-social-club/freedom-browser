@@ -10,7 +10,7 @@ const { createHash, X509Certificate } = require('crypto');
 const IPC = require('../shared/ipc-channels');
 const { getHnsPublicSuffixes } = require('../shared/hns-hosts');
 const { getCapabilityStatus } = require('../shared/platform-capabilities');
-const { probeHnsChainState, probeHnsValidator } = require('./hns-health');
+const { probeHnsChainState, probeHnsValidator, HNS_VALIDATOR_INCOMPLETE_CODES } = require('./hns-health');
 const { createHnsAuthority } = require('./hns-authority');
 const { createHnsNetworkMonitor } = require('./hns-network-monitor');
 const { createHnsValidatorTransport } = require('./hns-validator-transport');
@@ -67,10 +67,6 @@ const HNS_HEALTH_RETRY_MAX_MS = 60 * 1000;
 // verified success does, so the lease still expires on schedule.
 const HNS_HEALTH_TRANSIENT_RETRIES = 2;
 const HNS_HEALTH_TRANSIENT_RETRY_MS = 1000;
-// Only these mean the probe did not complete. A truncated reply (ETRUNCATED,
-// TCP fallback is off), an ID or question mismatch and a malformed reply are
-// answers that failed, and retire the generation at once like any other.
-const HNS_HEALTH_INCOMPLETE_CODES = new Set(['ETIMEOUT', 'ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH']);
 const HNS_LOCAL_READY_SUCCESS_THRESHOLD = 2;
 const HNS_LOCAL_READY_FAILURE_THRESHOLD = 2;
 const FORBIDDEN_HELPER_CANARIES = [['shake', 'station'].join('')];
@@ -301,7 +297,7 @@ async function runHnsHealthCheck(reason = 'manual') {
     try {
       result = await probeHnsValidator({ recursiveAddr });
     } catch (error) {
-      if (!HNS_HEALTH_INCOMPLETE_CODES.has(error?.code)) throw error;
+      if (!HNS_VALIDATOR_INCOMPLETE_CODES.has(error?.code)) throw error;
       // The probe did not complete; no answer was judged. Within a still-valid
       // lease, look again shortly instead of retiring the generation at once.
       if (generation !== helperGeneration || candidate !== authority) return null;

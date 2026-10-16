@@ -134,19 +134,39 @@ async function probeHnsChainState({ rootAddr, query = queryDns }) {
 
 module.exports.probeHnsChainState = probeHnsChainState;
 
+// Only these mean a validator query did not complete. A truncated reply
+// (ETRUNCATED, TCP fallback is off), an ID or question mismatch and a malformed
+// reply are answers that failed.
+const HNS_VALIDATOR_INCOMPLETE_CODES = new Set(['ETIMEOUT', 'ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH']);
+module.exports.HNS_VALIDATOR_INCOMPLETE_CODES = HNS_VALIDATOR_INCOMPLETE_CODES;
+
 // An AD bit is accepted only from the owned loopback validator, never DoH.
+// Every query is settled before anything is concluded, so an invalid answer
+// is never hidden behind another query that did not complete. In order of
+// precedence: any invalid answer returns { ok: false }; any query that failed
+// for another reason rethrows that error; a query that did not complete
+// rethrows its incomplete error; otherwise the complete set is judged.
 async function probeHnsValidator({ recursiveAddr, query = queryDns }) {
   const match = /^127\.0\.0\.1:(\d+)$/.exec(recursiveAddr || '');
   if (!match || Number(match[1]) < 1 || Number(match[1]) > 65535) throw new Error('Owned validator required');
-  const results = await Promise.all([
+  const settled = await Promise.allSettled([
     ['app.pirate', 1], ['app.pirate', 28], ['_443._tcp.app.pirate', 52],
-  ].map(async ([hostname, type]) => ({ type, response: await query({
+  ].map(([hostname, type]) => query({
     host: '127.0.0.1', port: Number(match[1]), hostname, type, recursive: true,
     dnssec: true, timeoutMs: 6000, tcpFallback: false,
-  }) })));
-  const ok = results.every(({ response }) => response.authenticated && !response.truncated && response.rcode === 0) &&
-    results.some(({ type, response }) => [1, 28].includes(type) && response.answers.some((rr) => rr.address)) &&
-    results.find(({ type }) => type === 52).response.answers.some((rr) => rr.type === 52);
-  return { ok };
+  })));
+  const [a, aaaa, tlsa] = settled;
+  const answered = settled.filter((s) => s.status === 'fulfilled').map((s) => s.value);
+  const hasAddress = (s) => s.status === 'fulfilled' && s.value.answers.some((rr) => rr.address);
+  const invalid =
+    answered.some((response) => !response.authenticated || response.truncated || response.rcode !== 0) ||
+    (tlsa.status === 'fulfilled' && !tlsa.value.answers.some((rr) => rr.type === 52)) ||
+    (a.status === 'fulfilled' && aaaa.status === 'fulfilled' && !hasAddress(a) && !hasAddress(aaaa));
+  if (invalid) return { ok: false };
+  const errors = settled.filter((s) => s.status === 'rejected').map((s) => s.reason);
+  const failed = errors.find((error) => !HNS_VALIDATOR_INCOMPLETE_CODES.has(error?.code));
+  if (failed) throw failed;
+  if (errors.length) throw errors[0];
+  return { ok: true };
 }
 module.exports.probeHnsValidator = probeHnsValidator;
