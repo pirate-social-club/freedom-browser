@@ -1823,7 +1823,7 @@
     "orange": 5,
     "red": 0,
     "unknown": 0,
-    "basis": "production npm packages by name@version, as upstream counted them; bundled binaries, vendor bundles and data are recorded individually above"
+    "basis": "resolved production npm dependency graph by name@version (300), including the installed React peer; the inspected f8ac9581 deb ships 299 unique packages in 315 directories. Bundled binaries, vendor bundles and data are recorded individually above"
   },
   "blockers": [],
   "resolved_since_last_audit": [
@@ -1884,9 +1884,11 @@
   "verdict": {
     "status": "OK_TO_SHIP",
     "scope": "Linux x64 evaluation deb",
-    "inspected_commit": "d8aad2be12599235190f64a7ba8fd84f9de27fa9",
+    "inspected_commit": "f8ac958145d0b98717718874aaa1c379481da014",
     "reinspect_when": "Any change to package.json build configuration or extraResources, the helper bundles under hns-bin or dvpn-bin, src/renderer/vendor, NOTICES or LICENSE, or package-lock.json production dependencies requires inspecting a newly built package before this verdict holds again.",
-    "message": "Cleared for the Linux x64 evaluation deb built from this tree. The fork's own licence (AGPL-3.0-or-later) is compatible with every shipped component, every required third-party notice ships, and the deb the Linux evaluation deb workflow built from commit d8aad2be (run 38852819019, sha256 c9085a4877cc077d9ff1b3002d540bead8f05a981cf8813de5eafec85531ecf6) was inspected against this inventory on 2026-10-16. The earlier inspection of the c51e4fe0 deb missed that its app.asar carried most of the repository (docs, ops, research, scripts, tests, agent files) because each platform's file list held only an exclusion; d8aad2be fixes that, and its app.asar holds only src, node_modules and package.json. This clears licensing for that evaluation build only; it is not a public-release decision, and the fork's use of upstream's product name, app id and icons remains an open fork decision."
+    "message": "Cleared for the Linux x64 evaluation deb built from f8ac958145d0b98717718874aaa1c379481da014 (run 38860180070, sha256 d86047ad39f8b17a4df085c898059a8ebbaf9f62cb17f42d27d6431436169bfd), independently inspected on 2026-10-16. app.asar contains only src, node_modules and package.json; repository files and src/**/__tests__ helpers are excluded. All 438 shipped source files, the locked libveritas 0.4.5 verifier, LICENSE, NOTICES, committed HNS/V2Ray helpers and complete licence bundles match the reviewed sources. Downloaded Ant/IPFS/Radicle bytes match the accepted installation; no fresh source-build comparison is claimed for those three. The artifact contains 299 unique npm packages in 315 directories; this audit's 300 counts the resolved dependency graph, including a React peer that neither this deb nor the accepted d8aad2be deb ships. Every shipped name/version is locked and classified; the reviewed Ledger entry imports the signer subpath without React hooks. Compared with the accepted installation, retained app.asar files are unchanged; only test files are removed, and refreshed adblock lists and their manifest differ outside app.asar. The earlier c51e4fe0 inspection missed repository files in app.asar; d8aad2be fixed that inclusion error and b28aee56 excluded the remaining source test helpers. This clearance is limited to this evaluation artifact, not a public-release decision; upstream product identity and maintainer metadata remain an open fork decision.",
+    "inspected_deb_sha256": "d86047ad39f8b17a4df085c898059a8ebbaf9f62cb17f42d27d6431436169bfd",
+    "inspected_workflow_run": 38860180070
   },
   "required_actions": [
     {

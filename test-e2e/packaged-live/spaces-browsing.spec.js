@@ -12,10 +12,10 @@
 //   FREEDOM_E2E_SPACES_LIVE=1 FREEDOM_E2E_EXECUTABLE=/opt/Freedom/freedom \
 //     npx playwright test --project=packaged-live test-e2e/packaged-live/spaces-browsing.spec.js
 //
-// @yahoo is a real space whose owner has published no records, so it must end
-// verified, on the "Website not published" result. When a space publishes a
-// signed website, FREEDOM_E2E_SPACES_WEBSITE=`@space=https://url/` adds the
-// positive check that the browser lands on exactly that URL.
+// @yahoo now publishes its owner-signed staging website. The default expected
+// URL is that approved destination; FREEDOM_E2E_SPACES_YAHOO_URL can name a later
+// approved destination. FREEDOM_E2E_SPACES_WEBSITE=`@space=https://url/` adds
+// another positive website check, such as @csca.
 
 const fs = require('fs');
 const os = require('os');
@@ -26,6 +26,8 @@ const { launchApp, packagedLaunchTarget, isPackagedRun } = require('../packaged-
 const { closeApp } = require('../close-app');
 
 const ENABLED = process.env.FREEDOM_E2E_SPACES_LIVE === '1';
+const YAHOO_URL =
+  process.env.FREEDOM_E2E_SPACES_YAHOO_URL || 'https://web-next-staging.pirate.sc/c/@yahoo';
 const WEBSITE = (() => {
   const raw = process.env.FREEDOM_E2E_SPACES_WEBSITE;
   if (!raw) return null;
@@ -153,18 +155,23 @@ test.describe('installed Spaces browsing', () => {
       const { window } = session;
       const address = window.locator('[data-test="address-input"]');
 
-      const yahoo = await resultFor(window, '@yahoo');
-      expect(yahoo.params, '@yahoo result').toMatchObject({
-        type: 'refused',
-        reason: 'NO_WEBSITE_RECORD',
-      });
-      expect(yahoo.status).toBe('Website not published');
-      expect(Number(yahoo.params.anchorHeight), '@yahoo verified anchor height').toBeGreaterThan(
-        970000
-      );
-      expect(yahoo.rows).toContainEqual(['Verified at Bitcoin block', yahoo.params.anchorHeight]);
+      await navigate(window, '@yahoo');
+      await expect
+        .poll(async () => (await activePage(window))?.href, {
+          message: '@yahoo must open its owner-signed website',
+          timeout: RESOLVE_TIMEOUT_MS,
+          intervals: [1_000],
+        })
+        .toBe(YAHOO_URL);
       await expect(address).toHaveValue('@yahoo');
-      test.info().annotations.push({ type: '@yahoo', description: JSON.stringify(yahoo.params) });
+      test.info().annotations.push({
+        type: '@yahoo website',
+        description: JSON.stringify({
+          expected: YAHOO_URL,
+          href: (await activePage(window))?.href,
+          addressBar: await address.inputValue(),
+        }),
+      });
 
       const absent = await resultFor(window, ABSENT);
       expect(absent.params, `${ABSENT} result`).toMatchObject({
@@ -172,9 +179,11 @@ test.describe('installed Spaces browsing', () => {
         reason: 'SPACE_NOT_FOUND',
       });
       expect(absent.status).toBe('Not found');
+      test.info().annotations.push({ type: 'absent name', description: JSON.stringify(absent.params) });
 
       const member = await resultFor(window, 'member@yahoo');
       expect(member.params).toMatchObject({ type: 'refused', reason: 'MEMBER_NAMES_UNSUPPORTED' });
+      test.info().annotations.push({ type: 'member name', description: JSON.stringify(member.params) });
 
       if (WEBSITE) {
         await navigate(window, WEBSITE.handle);
@@ -200,7 +209,7 @@ test.describe('installed Spaces browsing', () => {
           .info()
           .annotations.push({
             type: 'website check',
-            description: 'not run: FREEDOM_E2E_SPACES_WEBSITE unset',
+            description: 'additional website not run: FREEDOM_E2E_SPACES_WEBSITE unset',
           });
       }
 
@@ -212,6 +221,18 @@ test.describe('installed Spaces browsing', () => {
         signal: null,
         forced: false,
       });
+      test.info().annotations.push({ type: 'clean quit', description: JSON.stringify(exit) });
+    } catch (error) {
+      await test.info().attach('installed-browser-diagnostic', {
+        body: Buffer.from(
+          JSON.stringify({
+            exit: session?.app.exitResult?.(),
+            output: session?.app.outputText?.(),
+          })
+        ),
+        contentType: 'application/json',
+      });
+      throw error;
     } finally {
       if (session) await closeApp(session.app, { timeout: 100_000 }).catch(() => {});
       fs.rmSync(root, { recursive: true, force: true });
