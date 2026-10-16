@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; object-src 'none'; base-uri 'none'; form-action 'none';"
+    />
+    <title>Payments</title>
+    <link rel="stylesheet" href="styles/theme.css" />
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        font-family:
+          'IBM Plex Sans',
+          -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+        background: var(--page-gradient);
+        color: var(--pay-text);
+        padding: 48px;
+        box-sizing: border-box;
+        min-height: 100vh;
+      }
+      /* Same header accent as every other internal page (#256): #58a6ff dark,
+         #0969da light — matching history, downloads and links. */
+      h1 {
+        font-size: 28px;
+        margin-bottom: 8px;
+        color: var(--accent);
+        font-weight: 600;
+        letter-spacing: -0.5px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .subtitle {
+        color: var(--pay-muted);
+        margin-bottom: 24px;
+        font-size: 14px;
+      }
+      .toolbar {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 24px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .search-input {
+        flex: 1;
+        min-width: 220px;
+        max-width: 400px;
+        padding: 10px 16px;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--pay-text);
+        font-size: 14px;
+        font-family: inherit;
+        outline: none;
+        transition: border-color 0.15s;
+      }
+      .search-input:focus {
+        border-color: var(--accent);
+      }
+      .search-input::placeholder {
+        color: var(--pay-placeholder);
+      }
+      .filter-select {
+        padding: 10px 32px 10px 16px;
+        background: var(--bg-card) var(--select-chevron) no-repeat right 12px center;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--pay-text);
+        font-size: 14px;
+        font-family: inherit;
+        cursor: pointer;
+        appearance: none;
+        -webkit-appearance: none;
+        outline: none;
+        transition: border-color 0.15s;
+      }
+      .filter-select:focus {
+        border-color: var(--accent);
+      }
+      .filter-select:hover {
+        background-color: var(--bg-raised);
+        border-color: var(--border-strong);
+      }
+      .toolbar-right {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        margin-left: auto;
+      }
+      .btn {
+        padding: 10px 16px;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--pay-text);
+        font-size: 14px;
+        font-family: inherit;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .btn:hover {
+        background: var(--bg-raised);
+        border-color: var(--border-strong);
+      }
+      .btn.danger {
+        color: var(--danger);
+      }
+      .btn.danger:hover {
+        border-color: var(--danger);
+        background: var(--danger-bg);
+      }
+
+      /* Table */
+      .table-wrap {
+        background: var(--bg-elev);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      thead {
+        background: var(--pay-thead-bg);
+      }
+      th {
+        text-align: left;
+        padding: 12px 16px;
+        font-weight: 600;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-muted);
+        border-bottom: 1px solid var(--border);
+      }
+      td {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--pay-cell-border);
+        vertical-align: middle;
+      }
+      tbody tr:last-child td {
+        border-bottom: none;
+      }
+      tbody tr:hover {
+        background: var(--pay-row-hover);
+      }
+      .when {
+        color: var(--pay-muted);
+        white-space: nowrap;
+      }
+      .site {
+        font-weight: 500;
+        color: var(--pay-text);
+        max-width: 260px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .site .anon {
+        color: #6e7681;
+        font-style: italic;
+      }
+      .amount {
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      .amount-asset {
+        color: var(--pay-muted);
+        margin-left: 4px;
+      }
+      .addr {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        color: var(--pay-muted);
+      }
+      .tx-link {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        color: var(--accent);
+        text-decoration: none;
+      }
+      .tx-link:hover {
+        text-decoration: underline;
+      }
+      .tx-empty {
+        color: #6e7681;
+        font-size: 12px;
+        font-style: italic;
+      }
+
+      /* Badges + pills */
+      .badge {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .chain-badge {
+        background: var(--pay-chip-bg);
+        color: var(--pay-text);
+      }
+      .kind-x402 {
+        background: var(--pay-x402-bg);
+        color: var(--pay-x402-fg);
+      }
+      .kind-wallet-send {
+        background: var(--pay-wallet-bg);
+        color: var(--pay-wallet-fg);
+      }
+      .kind-dapp-send {
+        background: var(--pay-dapp-bg);
+        color: var(--pay-dapp-fg);
+      }
+      .kind-safe {
+        background: var(--pay-safe-bg);
+        color: var(--pay-safe-fg);
+      }
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 10px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: 500;
+        white-space: nowrap;
+      }
+      .status-pill::before {
+        content: '';
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+      }
+      .status-confirmed,
+      .status-settled {
+        background: rgba(76, 175, 80, 0.12);
+        color: var(--pay-status-ok);
+      }
+      .status-confirmed::before,
+      .status-settled::before {
+        background: #56d364;
+      }
+      .status-pending {
+        background: rgba(245, 158, 11, 0.12);
+        color: var(--pay-status-pending);
+      }
+      .status-pending::before {
+        background: #d29922;
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      .status-failed {
+        background: rgba(248, 81, 73, 0.12);
+        color: var(--pay-status-failed);
+      }
+      .status-failed::before {
+        background: #f85149;
+      }
+      .status-no-receipt {
+        background: rgba(110, 118, 129, 0.18);
+        color: var(--pay-status-none);
+      }
+      .status-no-receipt::before {
+        background: #8b949e;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.4;
+        }
+      }
+
+      /* States */
+      .empty-state,
+      .loading {
+        text-align: center;
+        padding: 64px 16px;
+        color: #6e7681;
+        background: var(--bg-elev);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+      }
+      .empty-state svg {
+        width: 64px;
+        height: 64px;
+        margin-bottom: 16px;
+        opacity: 0.5;
+      }
+      .empty-state p {
+        margin: 0;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>
+      <svg
+        width="28"
+        height="28"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <rect x="2" y="6" width="20" height="12" rx="2"></rect>
+        <circle cx="12" cy="12" r="2"></circle>
+        <path d="M6 12h.01M18 12h.01"></path>
+      </svg>
+      Payments
+    </h1>
+    <p class="subtitle" id="stats">Loading…</p>
+
+    <div class="toolbar">
+      <input
+        type="text"
+        class="search-input"
+        id="search-input"
+        placeholder="Search site, address, or tx hash…"
+        autofocus
+      />
+      <select class="filter-select" id="kind-select">
+        <option value="">All kinds</option>
+        <option value="x402">x402</option>
+        <option value="wallet-send">Wallet send</option>
+        <option value="dapp-send">Dapp send</option>
+        <option value="safe-send">Safe send</option>
+        <option value="safe-deploy">Safe setup</option>
+      </select>
+      <select class="filter-select" id="chain-select">
+        <option value="">All chains</option>
+      </select>
+      <div class="toolbar-right">
+        <button class="btn danger" id="clear-btn">
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path
+              d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+            ></path>
+          </svg>
+          Clear All
+        </button>
+      </div>
+    </div>
+
+    <div id="results">
+      <div class="loading">Loading payments…</div>
+    </div>
+
+    <script src="scripts/payments.js"></script>
+  </body>
+</html>

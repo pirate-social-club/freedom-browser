@@ -5,11 +5,26 @@
     "name": "Ethereum",
     "shortName": "ETH",
     "nativeSymbol": "ETH",
-    "rpcUrls": [],
     "blockExplorer": "https://etherscan.io",
     "logo": "ethereum.png",
     "builtin": true,
-    "hasPublicRpc": false
+    "verification": {
+      "primary": "colibri",
+      "order": ["myotis", "colibri", "quorum"],
+      "preferVerified": true
+    },
+    "access": {
+      "readOrder": ["myotis", "colibri", "quorum", "direct"],
+      "broadcastOrder": ["myotis", "direct"]
+    },
+    "quorum": {
+      "k": 3,
+      "m": 2,
+      "timeoutMs": 5000,
+      "anchor": "latest",
+      "anchorTtlMs": 30000
+    },
+    "zkProof": true
   },
   "100": {
     "chainId": 100,
@@ -17,15 +32,48 @@
     "name": "Gnosis Chain",
     "shortName": "GNO",
     "nativeSymbol": "xDAI",
-    "rpcUrls": [
-      "https://rpc.gnosischain.com",
-      "https://rpc.ankr.com/gnosis",
-      "https://gnosis-rpc.publicnode.com",
-      "https://gnosis.drpc.org"
-    ],
     "blockExplorer": "https://gnosisscan.io",
     "logo": "gnosis.png",
     "builtin": true,
-    "hasPublicRpc": true
+    "verification": {
+      "primary": "quorum",
+      "order": ["myotis", "colibri", "quorum"],
+      "preferVerified": true
+    },
+    "access": {
+      "readOrder": ["myotis", "colibri", "quorum", "direct"],
+      "broadcastOrder": ["myotis", "direct"]
+    },
+    "quorum": {
+      "k": 3,
+      "m": 2,
+      "timeoutMs": 5000,
+      "anchor": "latest",
+      "anchorTtlMs": 30000
+    }
+  },
+  "8453": {
+    "chainId": 8453,
+    "chainIdHex": "0x2105",
+    "name": "Base",
+    "shortName": "BASE",
+    "nativeSymbol": "ETH",
+    "blockExplorer": "https://basescan.org",
+    "logo": "base.png",
+    "builtin": true,
+    "verification": {
+      "primary": "quorum"
+    },
+    "access": {
+      "readOrder": ["quorum", "direct"],
+      "broadcastOrder": ["direct"]
+    },
+    "quorum": {
+      "k": 3,
+      "m": 2,
+      "timeoutMs": 5000,
+      "anchor": "latest",
+      "anchorTtlMs": 30000
+    }
   }
 }

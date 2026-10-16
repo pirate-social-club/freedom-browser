@@ -1,6 +1,16 @@
-const {
-  loadMainModule,
-} = require('../../test/helpers/main-process-test-utils');
+const path = require('path');
+const { pathToFileURL } = require('url');
+const { loadMainModule } = require('../../test/helpers/main-process-test-utils');
+
+// A real internal page of this checkout (ipc-sender-policy compares paths
+// exactly), for the popup blocker's internal-page exemption.
+const INTERNAL_HOME_URL = pathToFileURL(
+  path.resolve(__dirname, '..', 'renderer', 'pages', 'home.html')
+).href;
+
+// Trusted input on the guest: what the popup blocker's gesture check reads.
+const gesture = (contents, input = { type: 'mouseDown' }) =>
+  contents.emit('input-event', {}, input);
 
 function createContentsMock(options = {}) {
   const listeners = new Map();
@@ -11,7 +21,6 @@ function createContentsMock(options = {}) {
     id: options.id || 7,
     getType: jest.fn(() => options.type || 'webview'),
     getURL: jest.fn(() => currentUrl),
-    hostWebContents: options.hostWebContents || null,
     setURL(url) {
       currentUrl = url;
     },
@@ -41,6 +50,8 @@ function createContentsMock(options = {}) {
       contents.windowOpenHandler = handler;
     }),
     windowOpenHandler: null,
+    // The chrome renderer hosting this guest (popup-blocked reports go here).
+    hostWebContents: options.hostWebContents || null,
   };
 
   return contents;
@@ -54,24 +65,47 @@ function loadWebContentsSetupModule(options = {}) {
   };
   const BrowserWindow = options.BrowserWindow || {
     getAllWindows: jest.fn(() => options.windows || []),
+    // Default: the owner lookup misses, which is exactly the precondition
+    // for ownerWindowOf's teardown fallback.
+    fromWebContents: jest.fn(options.fromWebContents || (() => null)),
   };
+  const requestOpenExternal = jest.fn(() => true);
+  const getEffectiveDecision = jest.fn(options.getEffectiveDecision || (() => null));
+  const siteOriginForWebContents = jest.fn((contents) => {
+    try {
+      return new URL(contents.getURL()).origin;
+    } catch {
+      return null;
+    }
+  });
   const { app, mod } = loadMainModule(require.resolve('./webcontents-setup'), {
     BrowserWindow,
     extraMocks: {
       [require.resolve('./logger')]: () => log,
+      [require.resolve('./private/private-windows')]: () => ({
+        isPrivateWebContents: options.isPrivateWebContents || (() => false),
+        isPrivatePartition: options.isPrivatePartition || (() => false),
+        getPartitionForWebContents: options.getPartitionForWebContents || (() => null),
+      }),
+      [require.resolve('./permissions/permissions-manager')]: () => ({
+        requestOpenExternal,
+        getEffectiveDecision,
+        siteOriginForWebContents,
+        allowSitePermission: jest.fn(() => true),
+      }),
     },
   });
   const state = require('./state');
 
   state.activeBzzBases.clear();
-  state.activeIpfsBases.clear();
-  state.activeRadBases.clear();
 
   return {
     app,
     BrowserWindow,
     log,
     mod,
+    requestOpenExternal,
+    getEffectiveDecision,
     state,
   };
 }
@@ -79,6 +113,23 @@ function loadWebContentsSetupModule(options = {}) {
 describe('webcontents-setup', () => {
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  // #556: Next/Previous Tab are claimed in before-input-event on the chrome
+  // window and on every tab webview (tab-switch-keys.js), so they work
+  // wherever focus is; nothing else (DevTools, …) gets the listener.
+  test('attaches the tab-switch key handler to chrome windows and tab webviews only', () => {
+    const ctx = loadWebContentsSetupModule();
+    ctx.mod.registerWebContentsHandlers();
+    const listensForKeys = (type, id) => {
+      const contents = createContentsMock({ id, type, url: 'file:///app/index.html' });
+      ctx.app.emit('web-contents-created', {}, contents);
+      return contents.on.mock.calls.some(([event]) => event === 'before-input-event');
+    };
+    expect(listensForKeys('window', 41)).toBe(true);
+    expect(listensForKeys('webview', 42)).toBe(true);
+    expect(listensForKeys('remote', 43)).toBe(false);
+    expect(listensForKeys('backgroundPage', 44)).toBe(false);
   });
 
   test('injects light defaults for external webviews and clears active protocol bases on destroy', async () => {
@@ -90,8 +141,6 @@ describe('webcontents-setup', () => {
     });
 
     ctx.state.activeBzzBases.set(contents.id, new URL('http://127.0.0.1:1633/bzz/hash/'));
-    ctx.state.activeIpfsBases.set(contents.id, new URL('http://127.0.0.1:8080/ipfs/cid/'));
-    ctx.state.activeRadBases.set(contents.id, new URL('http://127.0.0.1:8780/api/v1/repos/rid/'));
 
     ctx.mod.registerWebContentsHandlers();
     ctx.app.emit('web-contents-created', {}, contents);
@@ -106,8 +155,175 @@ describe('webcontents-setup', () => {
 
     contents.emit('destroyed');
     expect(ctx.state.activeBzzBases.has(contents.id)).toBe(false);
-    expect(ctx.state.activeIpfsBases.has(contents.id)).toBe(false);
-    expect(ctx.state.activeRadBases.has(contents.id)).toBe(false);
+  });
+
+  // #410: iframes need the webview preload for their adblock scriptlets; the
+  // <webview> attribute can't turn this on, only the embedder's event can.
+  test('attaches tab webviews with the preload running in sub-frames', () => {
+    const ctx = loadWebContentsSetupModule();
+    const host = createContentsMock({ id: 3, type: 'window', url: 'file:///app/index.html' });
+    ctx.mod.registerWebContentsHandlers();
+    ctx.app.emit('web-contents-created', {}, host);
+
+    const webPreferences = { preload: '/app/webview-preload.js', sandbox: true };
+    host.emit('will-attach-webview', {}, webPreferences, {});
+    expect(webPreferences).toEqual({
+      preload: ctx.mod.WEBVIEW_PRELOAD_PATH,
+      nodeIntegration: false,
+      nodeIntegrationInWorker: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false,
+      nodeIntegrationInSubFrames: true,
+      additionalArguments: [expect.stringMatching(/^--freedom-webview-boot=/)],
+    });
+  });
+
+  // Security audit (docs/security-audit-electron.md, E-3): the guest's
+  // preferences come from a renderer-written attribute, so main overrides
+  // anything weaker and pins the preload to the one tab preload.
+  test('forces hardened guest preferences whatever the embedder asked for', () => {
+    const ctx = loadWebContentsSetupModule();
+    const host = createContentsMock({ id: 3, type: 'window', url: 'file:///app/index.html' });
+    ctx.mod.registerWebContentsHandlers();
+    ctx.app.emit('web-contents-created', {}, host);
+
+    const webPreferences = {
+      preload: '/tmp/evil-preload.js',
+      preloadURL: 'file:///tmp/evil-preload.js',
+      nodeIntegration: true,
+      nodeIntegrationInWorker: true,
+      contextIsolation: false,
+      sandbox: false,
+      webSecurity: false,
+      allowRunningInsecureContent: true,
+      experimentalFeatures: true,
+      enableBlinkFeatures: 'SomethingRisky',
+    };
+    host.emit('will-attach-webview', {}, webPreferences, { src: 'https://example.com' });
+    expect(webPreferences).toEqual({
+      preload: ctx.mod.WEBVIEW_PRELOAD_PATH,
+      nodeIntegration: false,
+      nodeIntegrationInWorker: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false,
+      nodeIntegrationInSubFrames: true,
+      additionalArguments: [expect.stringMatching(/^--freedom-webview-boot=/)],
+    });
+    expect(ctx.mod.WEBVIEW_PRELOAD_PATH).toMatch(/[\\/]src[\\/]main[\\/]webview-preload\.js$/);
+  });
+
+  // #512: the preload's per-load constants ride on the guest's command line.
+  const bootOf = (webPreferences) => {
+    const args = webPreferences.additionalArguments.filter((arg) =>
+      arg.startsWith('--freedom-webview-boot=')
+    );
+    expect(args).toHaveLength(1);
+    return JSON.parse(
+      Buffer.from(args[0].slice('--freedom-webview-boot='.length), 'base64').toString('utf-8')
+    );
+  };
+  const attach = (ctx, params = {}, webPreferences = { preload: '/app/webview-preload.js' }) => {
+    const host = createContentsMock({ id: 3, type: 'window', url: 'file:///app/index.html' });
+    ctx.mod.registerWebContentsHandlers();
+    ctx.app.emit('web-contents-created', {}, host);
+    host.emit('will-attach-webview', {}, webPreferences, params);
+    return { host, webPreferences };
+  };
+
+  test('hands a normal tab webview its preload constants, provider included', () => {
+    const { webPreferences } = attach(loadWebContentsSetupModule(), { partition: 'persist:p' });
+    const boot = bootOf(webPreferences);
+    expect(boot.isPrivate).toBe(false);
+    expect(boot.internalPages).toEqual(require('../shared/internal-pages.json'));
+    expect(boot.ethereum.info).toEqual(
+      expect.objectContaining({ name: expect.any(String), rdns: expect.any(String) })
+    );
+    expect(boot.ethereum.source).toBe(
+      require('fs').readFileSync(
+        path.join(__dirname, 'webview-preload-ethereum-inject.js'),
+        'utf-8'
+      )
+    );
+  });
+
+  test('a private partition is private, and gets no provider source', () => {
+    const isPrivatePartition = jest.fn((partition) => partition === 'private-abc');
+    const { webPreferences } = attach(loadWebContentsSetupModule({ isPrivatePartition }), {
+      partition: 'private-abc',
+    });
+    expect(isPrivatePartition).toHaveBeenCalledWith('private-abc');
+    const boot = bootOf(webPreferences);
+    expect(boot.isPrivate).toBe(true);
+    expect(boot).not.toHaveProperty('ethereum');
+  });
+
+  test("a private window's webview is private whatever its partition says", () => {
+    const isPrivateWebContents = jest.fn((contents) => contents.id === 3);
+    const { webPreferences } = attach(loadWebContentsSetupModule({ isPrivateWebContents }), {
+      partition: 'persist:p',
+    });
+    expect(bootOf(webPreferences).isPrivate).toBe(true);
+  });
+
+  test('the embedder cannot hand the guest its own boot switch', () => {
+    const forged =
+      '--freedom-webview-boot=' +
+      Buffer.from(JSON.stringify({ isPrivate: false, internalPages: {} })).toString('base64');
+    const { webPreferences } = attach(
+      loadWebContentsSetupModule({ isPrivatePartition: () => true }),
+      { partition: 'private-abc' },
+      { preload: '/app/webview-preload.js', additionalArguments: [forged, '--other'] }
+    );
+    expect(webPreferences.additionalArguments).not.toContain(forged);
+    expect(webPreferences.additionalArguments).toContain('--other');
+    expect(bootOf(webPreferences).isPrivate).toBe(true);
+  });
+
+  test('a webview that asked for no preload is not given one', () => {
+    const ctx = loadWebContentsSetupModule();
+    const host = createContentsMock({ id: 3, type: 'window', url: 'file:///app/index.html' });
+    ctx.mod.registerWebContentsHandlers();
+    ctx.app.emit('web-contents-created', {}, host);
+
+    const webPreferences = {};
+    host.emit('will-attach-webview', {}, webPreferences, {});
+    expect(webPreferences).not.toHaveProperty('preload');
+    expect(webPreferences).not.toHaveProperty('additionalArguments');
+    expect(webPreferences.sandbox).toBe(true);
+  });
+
+  // E-2: the chrome renderer carries the privileged preload; a dropped link
+  // or scripted navigation must never replace index.html in its top frame.
+  test('locks the chrome window to index.html: no navigation, redirect or popup', () => {
+    const ctx = loadWebContentsSetupModule();
+    const host = createContentsMock({ id: 3, type: 'window', url: 'file:///app/index.html' });
+    ctx.mod.registerWebContentsHandlers();
+    ctx.app.emit('web-contents-created', {}, host);
+
+    for (const event of ['will-navigate', 'will-redirect']) {
+      const nav = { preventDefault: jest.fn() };
+      host.emit(event, nav, 'https://evil.example/phish.html');
+      expect(nav.preventDefault).toHaveBeenCalled();
+    }
+    expect(host.windowOpenHandler({ url: 'https://evil.example/' })).toEqual({ action: 'deny' });
+  });
+
+  test('the chrome-window lock does not apply to tab webviews', () => {
+    const ctx = loadWebContentsSetupModule();
+    const guest = createContentsMock({ id: 9, type: 'webview', url: 'https://example.com' });
+    ctx.mod.registerWebContentsHandlers();
+    ctx.app.emit('web-contents-created', {}, guest);
+
+    const nav = { preventDefault: jest.fn() };
+    guest.emit('will-navigate', nav, 'https://example.org/next');
+    guest.emit('will-redirect', nav, 'https://example.org/next');
+    expect(nav.preventDefault).not.toHaveBeenCalled();
   });
 
   test('skips css injection for internal file pages and intercepts external window opens', () => {
@@ -123,7 +339,7 @@ describe('webcontents-setup', () => {
     const contents = createContentsMock({
       id: 22,
       type: 'webview',
-      url: 'file:///app/pages/home.html',
+      url: INTERNAL_HOME_URL,
       hostWebContents: parentWindow.webContents,
     });
 
@@ -141,7 +357,8 @@ describe('webcontents-setup', () => {
     expect(parentWindow.webContents.send).toHaveBeenCalledWith(
       'tab:new-with-url',
       'https://github.com/openai/project',
-      'named-tab'
+      'named-tab',
+      { background: false, newWindow: false, openerGuestId: contents.id }
     );
 
     const blankResult = contents.windowOpenHandler({
@@ -152,10 +369,125 @@ describe('webcontents-setup', () => {
     expect(parentWindow.webContents.send).toHaveBeenLastCalledWith(
       'tab:new-with-url',
       'https://example.com',
-      null
+      null,
+      { background: false, newWindow: false, openerGuestId: contents.id }
     );
     expect(ctx.log.info).toHaveBeenCalledWith(
       expect.stringContaining('intercepted new window request')
+    );
+  });
+
+  // #406: `target="_blank"` / `window.open` to an external scheme must not
+  // become a tab — the renderer's typed-URL path would launch it without the
+  // per-site prompt. It goes through the same gate as a same-tab link.
+  test('routes an external-protocol window open through the permission gate, not a tab', () => {
+    const parentWindow = { webContents: { id: 1, send: jest.fn() } };
+    const ctx = loadWebContentsSetupModule({
+      windows: [parentWindow],
+      getPartitionForWebContents: () => 'private-1',
+    });
+    const contents = createContentsMock({ id: 31, url: 'https://example.com/page' });
+    ctx.mod.registerWebContentsHandlers();
+    ctx.app.emit('web-contents-created', {}, contents);
+
+    const result = contents.windowOpenHandler({
+      url: 'magnet:?xt=urn:btih:abc',
+      frameName: '',
+      disposition: 'foreground-tab',
+      referrer: { url: 'https://ads.example.net/', policy: 'strict-origin-when-cross-origin' },
+    });
+    expect(result).toEqual({ action: 'deny' });
+    expect(parentWindow.webContents.send).not.toHaveBeenCalled();
+    expect(ctx.requestOpenExternal).toHaveBeenCalledWith({
+      webContents: contents,
+      url: 'magnet:?xt=urn:btih:abc',
+      isMainFrame: false,
+      requestingUrl: 'https://ads.example.net/',
+      privatePartition: 'private-1',
+    });
+
+    // No referrer (rel="noreferrer"): the top document is the requester.
+    contents.windowOpenHandler({ url: 'mailto:a@b.c', frameName: '_blank', referrer: { url: '' } });
+    expect(ctx.requestOpenExternal).toHaveBeenLastCalledWith(
+      expect.objectContaining({ url: 'mailto:a@b.c', requestingUrl: 'https://example.com/page' })
+    );
+    // A dangerous OS scheme is still handed to the gate (which refuses and
+    // logs it) rather than falling through to a tab.
+    contents.windowOpenHandler({ url: 'ms-msdt:/id x', frameName: '' });
+    expect(ctx.requestOpenExternal).toHaveBeenCalledTimes(3);
+    expect(parentWindow.webContents.send).not.toHaveBeenCalled();
+
+    // Ordinary links are unaffected (given the gesture any popup needs).
+    gesture(contents);
+    contents.windowOpenHandler({ url: 'https://example.org/', frameName: '' });
+    expect(ctx.requestOpenExternal).toHaveBeenCalledTimes(3);
+    expect(parentWindow.webContents.send).toHaveBeenCalledWith(
+      'tab:new-with-url',
+      'https://example.org/',
+      null,
+      { background: false, newWindow: false, openerGuestId: contents.id }
+    );
+  });
+
+  test('webview guests record user input for the external-protocol gesture check', () => {
+    const ctx = loadWebContentsSetupModule();
+    const contents = createContentsMock({ id: 32 });
+    ctx.mod.registerWebContentsHandlers();
+    ctx.app.emit('web-contents-created', {}, contents);
+    expect(contents.on).toHaveBeenCalledWith('input-event', expect.any(Function));
+  });
+
+  // #303: Chromium resolves the activation's modifiers into a disposition
+  // before it reaches this handler. Ctrl/Cmd+click and middle-click give
+  // `background-tab`, Shift+click (and sized `window.open` popups) give
+  // `new-window`. Both used to be collapsed into a foreground tab.
+  test('forwards the link disposition so modified clicks open in the background or a window', () => {
+    const parentWindow = { webContents: { id: 1, send: jest.fn() } };
+    const ctx = loadWebContentsSetupModule({ windows: [parentWindow] });
+    const contents = createContentsMock({ id: 23, type: 'webview', url: 'https://example.com/' });
+
+    ctx.mod.registerWebContentsHandlers();
+    ctx.app.emit('web-contents-created', {}, contents);
+
+    gesture(contents);
+    expect(
+      contents.windowOpenHandler({
+        url: 'https://example.com/bg',
+        frameName: '',
+        disposition: 'background-tab',
+      })
+    ).toEqual({ action: 'deny' });
+    expect(parentWindow.webContents.send).toHaveBeenLastCalledWith(
+      'tab:new-with-url',
+      'https://example.com/bg',
+      null,
+      { background: true, newWindow: false, openerGuestId: contents.id }
+    );
+
+    gesture(contents);
+    contents.windowOpenHandler({
+      url: 'https://example.com/win',
+      frameName: '',
+      disposition: 'new-window',
+    });
+    expect(parentWindow.webContents.send).toHaveBeenLastCalledWith(
+      'tab:new-with-url',
+      'https://example.com/win',
+      null,
+      { background: false, newWindow: true, openerGuestId: contents.id }
+    );
+
+    gesture(contents);
+    contents.windowOpenHandler({
+      url: 'https://example.com/fg',
+      frameName: '',
+      disposition: 'foreground-tab',
+    });
+    expect(parentWindow.webContents.send).toHaveBeenLastCalledWith(
+      'tab:new-with-url',
+      'https://example.com/fg',
+      null,
+      { background: false, newWindow: false, openerGuestId: contents.id }
     );
   });
 
@@ -192,6 +524,16 @@ describe('webcontents-setup', () => {
       expect.stringContaining('intercepted custom protocol navigation')
     );
 
+    const ethEvent = {
+      preventDefault: jest.fn(),
+    };
+    contents.emit('will-navigate', ethEvent, 'ethereum:vitalik.eth@1?value=1e16');
+    expect(ethEvent.preventDefault).toHaveBeenCalled();
+    expect(parentWindow.webContents.send).toHaveBeenCalledWith(
+      'navigate-to-url',
+      'ethereum:vitalik.eth@1?value=1e16'
+    );
+
     const httpEvent = {
       preventDefault: jest.fn(),
     };
@@ -205,8 +547,7 @@ describe('webcontents-setup', () => {
     expect(liveRoomEvent.preventDefault).toHaveBeenCalled();
     expect(parentWindow.webContents.send).toHaveBeenLastCalledWith(
       'tab:new-with-url',
-      'freedom://live-room?roomId=lr_test',
-      null
+      'freedom://live-room?roomId=lr_test'
     );
 
     contents.emit(
@@ -243,6 +584,456 @@ describe('webcontents-setup', () => {
     expect(ctx.log.error).toHaveBeenCalledWith('[webcontents:33:webview] crashed event (legacy)');
     expect(ctx.log.warn).toHaveBeenCalledWith('[webcontents:33:webview] became unresponsive');
     expect(ctx.log.warn).toHaveBeenCalledWith('[webcontents:33:webview] responsive again');
+  });
+
+  test('blocks scripted navigation and popups from an onchain app', () => {
+    const parentWindow = { webContents: { id: 2, send: jest.fn() } };
+    const ctx = loadWebContentsSetupModule({ windows: [parentWindow] });
+    const contents = createContentsMock({
+      id: 34,
+      type: 'webview',
+      url: 'web3://0x00000095643cffa7d9fae407a84dfcb6406456c6.eip155-1/',
+    });
+
+    ctx.mod.registerWebContentsHandlers();
+    ctx.app.emit('web-contents-created', {}, contents);
+
+    const navigationEvent = { preventDefault: jest.fn() };
+    contents.emit('will-navigate', navigationEvent, 'https://evil.example/phish');
+    expect(navigationEvent.preventDefault).toHaveBeenCalled();
+    expect(parentWindow.webContents.send).not.toHaveBeenCalled();
+
+    expect(
+      contents.windowOpenHandler({ url: 'https://evil.example/popup', frameName: '_blank' })
+    ).toEqual({ action: 'deny' });
+    expect(parentWindow.webContents.send).not.toHaveBeenCalled();
+  });
+
+  test('routes a web3 link from a normal page through renderer navigation', () => {
+    const parentWindow = { webContents: { id: 2, send: jest.fn() } };
+    const ctx = loadWebContentsSetupModule({ windows: [parentWindow] });
+    const contents = createContentsMock({ id: 35, type: 'webview', url: 'https://example.com' });
+    const target = 'web3://0x00000095643cffa7d9fae407a84dfcb6406456c6.eip155-1/';
+
+    ctx.mod.registerWebContentsHandlers();
+    ctx.app.emit('web-contents-created', {}, contents);
+
+    const event = { preventDefault: jest.fn() };
+    contents.emit('will-navigate', event, target);
+
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(parentWindow.webContents.send).toHaveBeenCalledWith('navigate-to-url', target);
+  });
+
+  // PRIVATE MODE GUARD (navigation logging): log.info is written to the
+  // persistent <userData>/logs/main.log, which outlives the private window.
+  // Neither an intercepted custom-protocol URL nor a new-window target may
+  // record where a private tab went — `rad:`/`ethereum:` URIs in particular
+  // have no origin for sanitizeUrlForLog to strip them back to.
+  test('private-window navigations log no URL at all', () => {
+    const parentWindow = { webContents: { id: 2, send: jest.fn() } };
+    const ctx = loadWebContentsSetupModule({
+      windows: [parentWindow],
+      // The private window's OWN chrome window resolves, so routing works
+      // normally — this test is about logging, not about the fallback.
+      fromWebContents: () => ({ ...parentWindow, isDestroyed: () => false }),
+      isPrivateWebContents: (contents) => contents?.id === 44,
+    });
+    const contents = createContentsMock({ id: 44, type: 'webview' });
+
+    ctx.mod.registerWebContentsHandlers();
+    ctx.app.emit('web-contents-created', {}, contents);
+
+    contents.emit('will-navigate', { preventDefault: jest.fn() }, 'rad:zSECRETRIDXYZZY');
+    contents.windowOpenHandler({ url: 'https://secret.example/path', frameName: '' });
+    contents.emit('did-fail-load', {}, -27, 'ERR_BLOCKED_BY_RESPONSE', 'https://secret.example/path', true, 1, 2);
+    expect(ctx.log.warn).not.toHaveBeenCalled();
+
+    // The events are still traced (diagnosability), just not their targets.
+    const lines = ctx.log.info.mock.calls.map((call) => call.join(' '));
+    expect(lines.some((line) => line.includes('intercepted custom protocol navigation'))).toBe(
+      true
+    );
+    expect(lines.some((line) => line.includes('intercepted new window request'))).toBe(true);
+    const joined = lines.join('\n');
+    expect(joined).not.toContain('zSECRETRIDXYZZY');
+    expect(joined).not.toContain('secret.example');
+    // The navigation itself still works.
+    expect(parentWindow.webContents.send).toHaveBeenCalledWith(
+      'navigate-to-url',
+      'rad:zSECRETRIDXYZZY'
+    );
+  });
+
+  // A window that is closing stays in BrowserWindow.getAllWindows() while it
+  // tears down, and its webContents is destroyed FIRST — so a bare
+  // `win.webContents.id` in the ownerWindowOf fallback throws "Object has
+  // been destroyed" synchronously inside the setWindowOpenHandler /
+  // will-navigate callback and escapes as an unhandled main-process
+  // exception. Both dereference shapes are exercised below.
+  // #442: the popup blocker. Driven through the real window-open handler, the
+  // real per-guest input tracking (external-protocol.js) and the real gate
+  // (popup-blocker.js); only the permissions store is stubbed.
+  describe('popup blocker', () => {
+    const setup = (options = {}) => {
+      const parentWindow = { webContents: { id: 1, send: jest.fn() } };
+      const host = { send: jest.fn(), isDestroyed: () => false };
+      const ctx = loadWebContentsSetupModule({ windows: [parentWindow], ...options });
+      const contents = createContentsMock({
+        id: 61,
+        type: 'webview',
+        url: options.url || 'https://site.example/page',
+        hostWebContents: host,
+      });
+      ctx.mod.registerWebContentsHandlers();
+      ctx.app.emit('web-contents-created', {}, contents);
+      const opened = () =>
+        parentWindow.webContents.send.mock.calls.filter(([ch]) => ch === 'tab:new-with-url');
+      const blocked = () => host.send.mock.calls.filter(([ch]) => ch === 'popups:blocked');
+      const open = (url, extra = {}) =>
+        contents.windowOpenHandler({ url, frameName: '', disposition: 'foreground-tab', ...extra });
+      return { ctx, contents, host, opened, blocked, open };
+    };
+
+    test('a gesture opens one popup; a second popup from the same gesture is blocked', () => {
+      const { contents, opened, blocked, open } = setup();
+      gesture(contents);
+      expect(open('https://site.example/first')).toEqual({ action: 'deny' });
+      expect(opened()).toHaveLength(1);
+      expect(opened()[0][1]).toBe('https://site.example/first');
+
+      expect(open('https://site.example/second')).toEqual({ action: 'deny' });
+      expect(opened()).toHaveLength(1);
+      expect(blocked()).toEqual([
+        [
+          'popups:blocked',
+          {
+            guestId: 61,
+            url: 'https://site.example/second',
+            targetName: null,
+            reuseOnly: false,
+            origin: 'https://site.example',
+          },
+        ],
+      ]);
+
+      // A new gesture buys exactly one more.
+      gesture(contents);
+      open('https://site.example/third');
+      expect(opened()).toHaveLength(2);
+    });
+
+    test('no gesture: nothing opens and the blocked popup is reported to the tab window', () => {
+      const { ctx, contents, opened, blocked, open } = setup();
+      open('https://ads.example/pop');
+      expect(opened()).toHaveLength(0);
+      expect(blocked()).toHaveLength(1);
+      expect(blocked()[0][1]).toMatchObject({
+        guestId: contents.id,
+        url: 'https://ads.example/pop',
+      });
+      expect(ctx.log.info).toHaveBeenCalledWith(
+        expect.stringContaining('blocked popup without a user gesture')
+      );
+    });
+
+    test('a gesture older than the 5 s activation window does not count', () => {
+      const { contents, opened, blocked, open } = setup();
+      const t0 = Date.now();
+      const now = jest.spyOn(Date, 'now').mockReturnValue(t0);
+      gesture(contents);
+      now.mockReturnValue(t0 + 5001);
+      open('https://site.example/late');
+      expect(opened()).toHaveLength(0);
+      expect(blocked()).toHaveLength(1);
+    });
+
+    test('only activating input counts, once per press', () => {
+      const { contents, opened, open } = setup();
+      // Mouse moves, a lone mouseUp, keyUp, char, Escape and bare modifiers are
+      // not user activation in Chromium.
+      for (const input of [
+        { type: 'mouseMove' },
+        { type: 'mouseUp' },
+        { type: 'keyUp', key: 'a' },
+        { type: 'char', key: 'a' },
+        { type: 'rawKeyDown', key: 'Escape' },
+        { type: 'keyDown', key: 'Escape' },
+        { type: 'rawKeyDown', key: 'Shift' },
+        { type: 'rawKeyDown', key: 'Control' },
+        { type: 'touchStart' },
+      ]) {
+        gesture(contents, input);
+        open('https://site.example/x');
+      }
+      expect(opened()).toHaveLength(0);
+
+      // One click is mouseDown + mouseUp: the mouseUp must not re-arm the
+      // gesture the first popup spent.
+      gesture(contents, { type: 'mouseDown' });
+      open('https://site.example/one');
+      gesture(contents, { type: 'mouseUp' });
+      open('https://site.example/two');
+      expect(opened()).toHaveLength(1);
+
+      for (const input of [
+        { type: 'rawKeyDown', key: 'a' },
+        { type: 'keyDown', key: 'Enter' },
+        { type: 'touchEnd' },
+      ]) {
+        gesture(contents, input);
+        open('https://site.example/y');
+      }
+      expect(opened()).toHaveLength(4);
+    });
+
+    test('a site holding the popups allow bypasses the gate, without spending the gesture', () => {
+      let decision = 'allow';
+      const { ctx, contents, opened, blocked, open } = setup({
+        getEffectiveDecision: () => decision,
+      });
+      open('https://site.example/a');
+      open('https://site.example/b');
+      expect(opened()).toHaveLength(2);
+      expect(blocked()).toHaveLength(0);
+      expect(ctx.getEffectiveDecision).toHaveBeenCalledWith('https://site.example', 'popups', null);
+
+      // A gesture taken while allowed was not spent by those popups.
+      gesture(contents);
+      open('https://site.example/c');
+      decision = null;
+      open('https://site.example/d');
+      expect(opened()).toHaveLength(4);
+      open('https://site.example/e');
+      expect(opened()).toHaveLength(4);
+    });
+
+    test("a private window's allow is read from the guest's own partition", () => {
+      const { ctx, open, opened } = setup({
+        getPartitionForWebContents: () => 'private-7',
+        getEffectiveDecision: (_origin, _key, partition) =>
+          partition === 'private-7' ? 'allow' : null,
+      });
+      open('https://site.example/p');
+      expect(opened()).toHaveLength(1);
+      expect(ctx.getEffectiveDecision).toHaveBeenCalledWith(
+        'https://site.example',
+        'popups',
+        'private-7'
+      );
+    });
+
+    test('internal pages open tabs without a gesture and report nothing', () => {
+      const { contents, opened, blocked, open } = setup({ url: INTERNAL_HOME_URL });
+      open('https://example.com/a');
+      open('https://example.com/b', { frameName: 'docs' });
+      expect(opened()).toHaveLength(2);
+      expect(blocked()).toHaveLength(0);
+      // Nor does an internal page spend a gesture it might have.
+      gesture(contents);
+      contents.setURL('https://site.example/');
+      open('https://site.example/after');
+      expect(opened()).toHaveLength(3);
+    });
+
+    test('a blocked plain named target is reported reuse-only; a modified or sized one is not', () => {
+      const { blocked, open } = setup();
+      open('https://site.example/v', { frameName: 'viewer' });
+      open('https://site.example/w', { frameName: 'viewer', disposition: 'background-tab' });
+      open('https://site.example/x', { frameName: 'viewer', disposition: 'new-window' });
+      open('https://site.example/y', { frameName: '_blank' });
+      expect(blocked().map(([, p]) => [p.targetName, p.reuseOnly])).toEqual([
+        ['viewer', true],
+        ['viewer', false],
+        ['viewer', false],
+        [null, false],
+      ]);
+    });
+
+    test('an onchain app is still denied outright, with no blocked-popup report', () => {
+      const { contents, opened, blocked, open } = setup({
+        url: 'web3://0x00000095643cffa7d9fae407a84dfcb6406456c6.eip155-1/',
+      });
+      gesture(contents);
+      open('https://evil.example/');
+      expect(opened()).toHaveLength(0);
+      expect(blocked()).toHaveLength(0);
+    });
+  });
+
+  describe('ownerWindowOf fallback: windows mid-teardown', () => {
+    const destroyedWindow = () => ({
+      isDestroyed: () => false,
+      get webContents() {
+        throw new Error('Object has been destroyed');
+      },
+    });
+
+    const contentsDestroyedWindow = () => ({
+      isDestroyed: () => false,
+      webContents: {
+        isDestroyed: () => true,
+        get id() {
+          throw new Error('Object has been destroyed');
+        },
+        send: jest.fn(),
+      },
+    });
+
+    test('skips a window whose webContents getter throws, and routes to a live one', () => {
+      const live = { isDestroyed: () => false, webContents: { id: 2, send: jest.fn() } };
+      const ctx = loadWebContentsSetupModule({ windows: [destroyedWindow(), live] });
+      const contents = createContentsMock({ id: 55, type: 'webview' });
+
+      ctx.mod.registerWebContentsHandlers();
+      ctx.app.emit('web-contents-created', {}, contents);
+
+      expect(() =>
+        contents.emit('will-navigate', { preventDefault: jest.fn() }, 'freedom://settings')
+      ).not.toThrow();
+      expect(live.webContents.send).toHaveBeenCalledWith('navigate-to-url', 'freedom://settings');
+    });
+
+    test('skips a window whose webContents is destroyed, and routes to a live one', () => {
+      const dying = contentsDestroyedWindow();
+      const live = { isDestroyed: () => false, webContents: { id: 2, send: jest.fn() } };
+      const ctx = loadWebContentsSetupModule({ windows: [dying, live] });
+      const contents = createContentsMock({ id: 55, type: 'webview' });
+
+      ctx.mod.registerWebContentsHandlers();
+      ctx.app.emit('web-contents-created', {}, contents);
+
+      gesture(contents);
+      expect(() =>
+        contents.windowOpenHandler({ url: 'https://example.com/popup', frameName: '' })
+      ).not.toThrow();
+      expect(live.webContents.send).toHaveBeenCalledWith(
+        'tab:new-with-url',
+        'https://example.com/popup',
+        null,
+        { background: false, newWindow: false, openerGuestId: contents.id }
+      );
+      expect(dying.webContents.send).not.toHaveBeenCalled();
+    });
+
+    test('drops the action when every remaining window is mid-teardown', () => {
+      const ctx = loadWebContentsSetupModule({
+        windows: [destroyedWindow(), contentsDestroyedWindow()],
+      });
+      const contents = createContentsMock({ id: 55, type: 'webview' });
+
+      ctx.mod.registerWebContentsHandlers();
+      ctx.app.emit('web-contents-created', {}, contents);
+
+      const navEvent = { preventDefault: jest.fn() };
+      expect(() => contents.emit('will-navigate', navEvent, 'bzz://example.eth/x')).not.toThrow();
+      // The navigation is still cancelled — the webview must not load a
+      // custom-protocol URL itself just because no window could take it.
+      expect(navEvent.preventDefault).toHaveBeenCalled();
+    });
+
+    test('survives getAllWindows() itself throwing during shutdown', () => {
+      const ctx = loadWebContentsSetupModule({
+        BrowserWindow: {
+          getAllWindows: jest.fn(() => {
+            throw new Error('Object has been destroyed');
+          }),
+          fromWebContents: jest.fn(() => null),
+        },
+      });
+      const contents = createContentsMock({ id: 55, type: 'webview' });
+
+      ctx.mod.registerWebContentsHandlers();
+      ctx.app.emit('web-contents-created', {}, contents);
+
+      expect(() =>
+        contents.windowOpenHandler({ url: 'https://example.com/popup', frameName: '' })
+      ).not.toThrow();
+    });
+  });
+
+  // PRIVATE MODE GUARD (cross-privacy routing): the fallback picks an
+  // ARBITRARY other window. For a private sender that window may well be a
+  // normal one on the default persistent session — the private page's URL
+  // would land in history, on persistent cookies, with wallet providers
+  // injected. There is no safe arbitrary window for a private action.
+  describe('ownerWindowOf fallback: private senders', () => {
+    test('drops a private new-window request rather than routing it to a normal window', () => {
+      const normalWindow = { isDestroyed: () => false, webContents: { id: 2, send: jest.fn() } };
+      const ctx = loadWebContentsSetupModule({
+        windows: [normalWindow],
+        isPrivateWebContents: (contents) => contents?.id === 44,
+      });
+      const contents = createContentsMock({ id: 44, type: 'webview' });
+
+      ctx.mod.registerWebContentsHandlers();
+      ctx.app.emit('web-contents-created', {}, contents);
+
+      // With the gesture a popup needs, so the popup blocker is not what
+      // stops it.
+      gesture(contents);
+      const result = contents.windowOpenHandler({
+        url: 'https://secret.example/leak',
+        frameName: '',
+      });
+
+      expect(normalWindow.webContents.send).not.toHaveBeenCalled();
+      // The popup is still denied, as before — nothing opens anywhere.
+      expect(result).toEqual({ action: 'deny' });
+    });
+
+    test('drops a private custom-protocol navigation rather than routing it', () => {
+      const normalWindow = { isDestroyed: () => false, webContents: { id: 2, send: jest.fn() } };
+      const ctx = loadWebContentsSetupModule({
+        windows: [normalWindow],
+        isPrivateWebContents: (contents) => contents?.id === 44,
+      });
+      const contents = createContentsMock({ id: 44, type: 'webview' });
+
+      ctx.mod.registerWebContentsHandlers();
+      ctx.app.emit('web-contents-created', {}, contents);
+
+      const navEvent = { preventDefault: jest.fn() };
+      contents.emit('will-navigate', navEvent, 'bzz://secret.eth/page');
+
+      expect(navEvent.preventDefault).toHaveBeenCalled();
+      expect(normalWindow.webContents.send).not.toHaveBeenCalled();
+    });
+
+    test('a NORMAL sender still degrades to the old routing (guard is not a blanket drop)', () => {
+      const otherWindow = { isDestroyed: () => false, webContents: { id: 2, send: jest.fn() } };
+      const ctx = loadWebContentsSetupModule({ windows: [otherWindow] });
+      const contents = createContentsMock({ id: 44, type: 'webview' });
+
+      ctx.mod.registerWebContentsHandlers();
+      ctx.app.emit('web-contents-created', {}, contents);
+
+      contents.emit('will-navigate', { preventDefault: jest.fn() }, 'freedom://settings');
+
+      expect(otherWindow.webContents.send).toHaveBeenCalledWith(
+        'navigate-to-url',
+        'freedom://settings'
+      );
+    });
+
+    test('fails closed: an isPrivateWebContents that throws drops the action', () => {
+      const normalWindow = { isDestroyed: () => false, webContents: { id: 2, send: jest.fn() } };
+      const ctx = loadWebContentsSetupModule({
+        windows: [normalWindow],
+        isPrivateWebContents: () => {
+          throw new Error('Object has been destroyed');
+        },
+      });
+      const contents = createContentsMock({ id: 44, type: 'webview' });
+
+      ctx.mod.registerWebContentsHandlers();
+      ctx.app.emit('web-contents-created', {}, contents);
+
+      expect(() =>
+        contents.emit('will-navigate', { preventDefault: jest.fn() }, 'freedom://settings')
+      ).not.toThrow();
+      expect(normalWindow.webContents.send).not.toHaveBeenCalled();
+    });
   });
 
   test('registers global process failure handlers on the app', () => {

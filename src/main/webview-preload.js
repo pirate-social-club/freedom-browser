@@ -8,24 +8,623 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('freedomBrowser', {
-  isFreedomBrowser: true,
-});
-
-// Internal pages list — canonical source is src/shared/internal-pages.json,
-// served by the main process via sync IPC so preloads don't need require().
-let internalPages = { routable: {}, other: [] };
-try {
-  internalPages = ipcRenderer.sendSync('internal:get-pages') || internalPages;
-} catch (err) {
-  console.warn('[webview-preload] Failed to load internal page list:', err);
+// ============================================
+// Ad blocking — scriptlets (document start, main world)
+// ============================================
+//
+// Some ads can't be blocked on the network: YouTube streams its video ads
+// from the same hosts as the video, and whether one plays is decided by
+// fields in the player JSON. Filter lists handle that with scriptlets
+// (`youtube.com##+js(json-prune, adPlacements …)`) that patch JSON.parse /
+// fetch before the page's own scripts read the config (#410).
+//
+// That only works if they run first, so this is the first thing the preload
+// does: a synchronous lookup (the engine lives in the main process, which
+// applies the master toggle, category toggles and the tab's allowlist), then
+// the code runs in the page's main world through executeInMainWorld — which,
+// like the ethereum provider below, is not subject to the page's CSP. Only
+// web frames: internal pages are file:, and dweb frames (bzz/ipfs/web3)
+// carry no list-targeted ads.
+//
+// The lookup stays synchronous on purpose (#512). Its answer depends on the
+// frame's URL and the live engine/settings/allowlist, so it can't ride on the
+// renderer's command line like the constants below; and an async answer
+// would land after the parser has run the page's first inline scripts —
+// exactly the ones a YouTube watch page uses to read its player config. No
+// main-process hook reaches a document before that either (see the
+// about:blank note further down). What #512 changed instead is what the
+// lookup waits on: the engine build no longer runs on the main thread, so a
+// list update or category toggle doesn't hold every frame's lookup for the
+// length of a parse.
+//
+// about:srcdoc and blob: documents are web frames too: they inherit their
+// creator's origin, so a same-origin page can reach straight into one and
+// pick up an unpatched global (`iframe.contentWindow.JSON.parse`). As in
+// uBlock Origin they get the scriptlets of the document they inherit from,
+// matched on that document's URL (scriptletMatchUrl). The preload runs in
+// them because webcontents-setup.js turns on nodeIntegrationInSubFrames.
+function scriptletMatchUrl() {
+  const loc = globalThis.location;
+  if (!loc) return null;
+  if (loc.protocol === 'http:' || loc.protocol === 'https:') return loc.href;
+  if (loc.protocol !== 'about:' && loc.protocol !== 'blob:') return null;
+  // The inherited origin; opaque ('null') for sandboxed/data: documents,
+  // which nothing outside can reach into anyway.
+  const origin = globalThis.origin;
+  if (typeof origin !== 'string' || !/^https?:\/\//.test(origin)) return null;
+  // Prefer the full URL of the nearest same-origin ancestor web document
+  // (skipping about: documents in between), so path-scoped rules match
+  // like they do for the parent itself; else fall back to the origin.
+  try {
+    let frame = globalThis.window;
+    while (frame && frame.parent && frame.parent !== frame) {
+      frame = frame.parent;
+      if (frame.origin !== origin) break;
+      const protocol = frame.location.protocol;
+      if (protocol === 'http:' || protocol === 'https:') return frame.location.href;
+      if (protocol !== 'about:' && protocol !== 'blob:') break;
+    }
+  } catch {
+    // Cross-origin ancestor: its URL isn't ours to read.
+  }
+  return `${origin}/`;
 }
 
+// about:blank is the exception: Electron never runs the preload in an
+// about:blank document — neither a script-created iframe's initial one nor
+// an explicit src="about:blank" (probed in real Chromium; about:srcdoc and
+// every http(s) document do get it). No main-process hook helps either:
+// `frame-created` and WebFrameMain.executeJavaScript are asynchronous, while
+// a page can append an iframe and call `iframe.contentWindow.JSON.parse` in
+// the same synchronous run. So the parent patches such a child itself, from
+// its own main world: inheritScriptletsIntoChildRealms below is appended to
+// the scriptlet bundle and runs the same scriptlets (the parent's, i.e.
+// matched on the inheriting document's URL) in a same-origin about:blank
+// child's realm before the page can touch it — and installs the same hooks
+// there, for nesting. Two routes lead into a child, so it hooks both:
+//
+// - `iframe.contentWindow` / `contentDocument` (and <frame>/<object>'s):
+//   the getters are wrapped and adopt the child before handing it back.
+// - `window[i]` / `window.frames[i]` (#414): indexed WindowProxy access has
+//   no accessor to wrap. But a frame only comes into existence when a frame
+//   element is inserted into a document, and every wrappable way to insert
+//   one (appendChild … replaceChildren, innerHTML/outerHTML, insertAdjacent*,
+//   setHTML*, document.write, Range#insertNode, the document.body setter,
+//   execCommand, the table caption/tHead/tFoot setters, select.add and
+//   select.options.add) is wrapped to sweep the inserting document's
+//   `window[i]` right after the call — before the inserting script's next
+//   line. Probed
+//   in real Chromium: even an iframe whose src is a cross-origin or
+//   same-origin http URL is reachable as a same-origin about:blank realm
+//   until its navigation commits, and no load event fires synchronously on
+//   insertion, so the sweep (not an event) is what closes this. Frames the
+//   parser inserts are swept by a MutationObserver instead: the parser runs
+//   a microtask checkpoint before each script, so the observer has fired
+//   before the next inline script can read `frames[i]`. It sweeps one last
+//   time and disconnects at DOMContentLoaded, after which only script
+//   insertions remain.
+//
+// Page code can also run *inside* a wrapped insertion, before its sweep:
+// custom-element reactions (connectedCallback and the other lifecycle
+// callbacks) fire at the end of the native call, with the new frame already
+// in the document (probed in Chromium: a fragment [iframe, x-a] appended to
+// body, x-a's connectedCallback reading frames[frames.length - 1].JSON.parse
+// got the unpatched one). customElements.define is wrapped so every
+// lifecycle callback it registers sweeps the element's window first.
+//
+// These wrappers sit on hot DOM APIs, so the sweep is kept cheap: it only
+// looks at the one window whose document the call inserted into, not
+// recursively (a frame is always born empty, so a new one can't bring
+// grandchildren along), and only at WindowProxies it hasn't seen before —
+// a child is adopted, or found cross-origin, once in its lifetime. Remaining
+// gaps: a `<script>` inserted in the same call as a frame, or inside markup
+// written by document.write, runs before the sweep does, and so does a
+// custom element's constructor when the insertion upgrades it (an element
+// created before its define(), or parsed by innerHTML) — the constructor
+// is the class itself and can't be swapped without changing what
+// customElements.get returns; an existing frame
+// navigated to about:blank later is re-adopted only through
+// contentWindow/contentDocument; and the indexed setters `select[i] = option`
+// / `select.options[i] = option` (an <option> can carry an <iframe> child)
+// can't be wrapped at all — a legacy platform object handles an indexed
+// [[Set]] itself, without consulting any prototype — so a frame inserted
+// that way is adopted by the next wrapped insertion's sweep of the same
+// window, by the parser-time observer, or through contentWindow.
+//
+// The wrappers keep the shape of what they replace — name, `length`, not a
+// constructor — and Function.prototype.toString is masked in every realm
+// they're installed in, so that realm's toString prints them as the native
+// they wrap: anti-adblock scripts fingerprint exactly these hot DOM methods
+// (`appendChild.length`, `/native code/.test(…)`), only on the pages where
+// scriptlets run. That is shape, not invisibility. Not masked: an
+// Error.stack thrown through a wrapper (`appendChild(null)`) or through the
+// masked toString (`toString.call({})`) carries an extra frame pointing into
+// this bundle; and another realm's own toString prints the wrapper's source
+// — a same-origin child realm not adopted by this bundle (one inserted
+// through `select[i] =` before any sweep, see above) or one that ran its own
+// bundle (srcdoc/blob:/http(s) children keep a mask table of their own).
+// Nor, while customElements.define() runs, the lent lifecycle callbacks:
+// page code define() calls back into before it returns (an
+// observedAttributes / formAssociated / disabledFeatures getter, the
+// constructor of an element it upgrades) reads the prototype's callback as
+// a different, non-enumerable function (masked toString, same name and
+// `length`, but not === the page's); the prototype is put back once
+// define() returns or throws.
+//
+// Runs in the page's main world, stringified into the bundle: no closures
+// over this file. Everything it needs later is captured up front, since page
+// scripts run between install and the first hooked access — so no call below
+// goes through a page-replaceable global or prototype method (String,
+// String.prototype.startsWith, Array iteration, window.length…) once the page
+// has run. Serialized into the page by buildScriptletBundle, so it must be
+// self-contained: `istanbul ignore` keeps coverage counters (which only exist
+// in the test runner's realm) from being compiled into its source.
+/* istanbul ignore next */
+function inheritScriptletsIntoChildRealms(runIn) {
+  const { apply } = Reflect;
+  const { defineProperty, getOwnPropertyDescriptor } = Object;
+  const { startsWith } = String.prototype;
+  const adopted = new WeakSet();
+  const seen = new WeakSet();
+  const { has, add } = WeakSet.prototype;
+  // wrapper -> the native it stands in for, read by the masked toString.
+  const masks = new WeakMap();
+  const { get: maskGet, set: maskSet } = WeakMap.prototype;
+  const mask = (wrapper, native) => {
+    apply(maskSet, masks, [wrapper, native]);
+    return wrapper;
+  };
+  const root = globalThis;
+  const CTORS = ['HTMLIFrameElement', 'HTMLFrameElement', 'HTMLObjectElement'];
+  const PROPS = ['contentWindow', 'contentDocument'];
+  // Everything that can put a frame element into a document, by the
+  // interface that owns it. ShadowRoot inherits DocumentFragment's append &
+  // co., which is why a fragment's are wrapped too.
+  const CHILD_NODE = ['before', 'after', 'replaceWith'];
+  const PARENT_NODE = ['append', 'prepend', 'replaceChildren'];
+  const INSERT_METHODS = [
+    ['Node', ['appendChild', 'insertBefore', 'replaceChild']],
+    [
+      'Element',
+      [
+        ...CHILD_NODE,
+        ...PARENT_NODE,
+        'insertAdjacentElement',
+        'insertAdjacentHTML',
+        'setHTMLUnsafe',
+        'setHTML',
+      ],
+    ],
+    ['CharacterData', CHILD_NODE],
+    ['DocumentType', CHILD_NODE],
+    ['Document', [...PARENT_NODE, 'write', 'writeln', 'execCommand']],
+    ['DocumentFragment', PARENT_NODE],
+    ['ShadowRoot', ['setHTMLUnsafe', 'setHTML']],
+    ['Range', ['insertNode', 'surroundContents']],
+    // An <option>/<optgroup> can carry a frame element.
+    ['HTMLSelectElement', ['add']],
+    ['HTMLOptionsCollection', ['add']],
+  ];
+  const INSERT_SETTERS = [
+    ['Element', ['innerHTML', 'outerHTML']],
+    ['ShadowRoot', ['innerHTML']],
+    ['Document', ['body']],
+    ['HTMLTableElement', ['caption', 'tHead', 'tFoot']],
+  ];
+  // [Replaceable]: a page can shadow `window.length` with its own value, so
+  // read the native getter.
+  // Looked up the prototype chain: Range's startContainer, say, lives on
+  // AbstractRange.prototype. Install time only, before any page script.
+  const getter = (ctor, prop) => {
+    for (let o = ctor && (ctor.prototype || ctor); o; o = Object.getPrototypeOf(o)) {
+      const desc = getOwnPropertyDescriptor(o, prop);
+      if (desc) return typeof desc.get === 'function' ? desc.get : null;
+    }
+    return null;
+  };
+  const lengthGet = getter(root, 'length');
+  const ownerDocumentGet = getter(root.Node, 'ownerDocument');
+  const defaultViewGet = getter(root.Document, 'defaultView');
+  const startContainerGet = getter(root.Range, 'startContainer');
+  const adopt = (win) => {
+    try {
+      // Cross-origin children throw here; http(s)/srcdoc documents ran
+      // their own scriptlets from the preload at document start.
+      if (!win) return;
+      const href = win.location.href;
+      if (typeof href !== 'string' || !apply(startsWith, href, ['about:blank'])) return;
+      // Keyed on a realm intrinsic: the WindowProxy survives navigation, the
+      // realm (and its Object) doesn't.
+      const realm = win.Object;
+      if (apply(has, adopted, [realm])) return;
+      apply(add, adopted, [realm]);
+      runIn(win);
+      install(win);
+    } catch {
+      // Leave the child as it is rather than break the page.
+    }
+  };
+  // Adopt the frames of `win` not seen before. Never throws: it runs after
+  // the page's own DOM call, whose result or exception must stand.
+  const sweep = (win) => {
+    try {
+      const length = lengthGet ? apply(lengthGet, win, []) : win.length;
+      for (let i = 0; i < length; i++) {
+        const child = win[i];
+        if (!child || apply(has, seen, [child])) continue;
+        apply(add, seen, [child]);
+        adopt(child);
+      }
+    } catch {
+      // Nothing to sweep (no browsing context, or not a window).
+    }
+  };
+  // The window a call inserted into: that of the node's document (a
+  // Document is its own), or of a Range's start container. Taken from the
+  // node rather than the realm, so the parent's appendChild applied to a
+  // child's node sweeps the child.
+  const windowOfNode = (node) => {
+    const doc = (node && apply(ownerDocumentGet, node, [])) || node;
+    return apply(defaultViewGet, doc, []);
+  };
+  const windowOfRange = (range) => windowOfNode(apply(startContainerGet, range, []));
+  // An HTMLOptionsCollection isn't a node and doesn't expose its <select>,
+  // but the element it just inserted is now in that select's document.
+  const windowOfInserted = (_collection, args) => windowOfNode(args[0]);
+  const sweepAfter = (target, windowOf, args) => {
+    let win;
+    try {
+      win = windowOf(target, args);
+    } catch {
+      return;
+    }
+    if (win) sweep(win);
+  };
+  // Custom-element reactions (connectedCallback & co.) run inside the
+  // native insertion, at the end of its [CEReactions] scope — after the
+  // frame is in the document but before our wrapper's own sweep. define()
+  // reads each lifecycle callback off the prototype once, at define time, so
+  // the wrapper hands it a sweeping version for that one read and puts the
+  // prototype back as it was: the class, its prototype and customElements.get
+  // are left untouched. The list is every lifecycle callback define() reads —
+  // the form-associated four included (read only for a `formAssociated`
+  // class): inserting into a <form> or a disabled <fieldset> enqueues
+  // formAssociatedCallback / formDisabledCallback in the same scope.
+  const CE_CALLBACKS = [
+    'connectedCallback',
+    'disconnectedCallback',
+    'adoptedCallback',
+    'attributeChangedCallback',
+    'connectedMoveCallback',
+    'formAssociatedCallback',
+    'formResetCallback',
+    'formDisabledCallback',
+    'formStateRestoreCallback',
+  ];
+  const { deleteProperty } = Reflect;
+  const lend = (proto, name) => {
+    const callback = proto[name];
+    if (typeof callback !== 'function') return null;
+    const own = getOwnPropertyDescriptor(proto, name);
+    if (own && !own.configurable) return null;
+    const value = {
+      [name](...args) {
+        sweepAfter(this, windowOfNode);
+        return apply(callback, this, args);
+      },
+    }[name];
+    const lengthDesc = getOwnPropertyDescriptor(callback, 'length');
+    if (lengthDesc) defineProperty(value, 'length', lengthDesc);
+    defineProperty(proto, name, {
+      value: mask(value, callback),
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+    return () => (own ? defineProperty(proto, name, own) : deleteProperty(proto, name));
+  };
+  const install = (realm) => {
+    // Mask toString first, so every wrapper below prints as its native.
+    try {
+      const fnProto = realm.Function.prototype;
+      const desc = getOwnPropertyDescriptor(fnProto, 'toString');
+      if (desc && typeof desc.value === 'function') {
+        const nativeToString = desc.value;
+        const value = {
+          toString() {
+            const native = apply(maskGet, masks, [this]);
+            return apply(nativeToString, native === undefined ? this : native, []);
+          },
+        }.toString;
+        defineProperty(fnProto, 'toString', { ...desc, value: mask(value, nativeToString) });
+      }
+    } catch {
+      // Wrappers still work, they just print as themselves.
+    }
+    // Indexed loops and reads, not for…of or array destructuring: install()
+    // also runs for a child at hooked-access time, and both would call the
+    // page's Array iterator.
+    for (let i = 0; i < CTORS.length; i++) {
+      const ctor = CTORS[i];
+      const proto = realm[ctor] && realm[ctor].prototype;
+      if (!proto) continue;
+      for (let j = 0; j < PROPS.length; j++) {
+        const prop = PROPS[j];
+        const desc = getOwnPropertyDescriptor(proto, prop);
+        if (!desc || typeof desc.get !== 'function') continue;
+        const nativeGet = desc.get;
+        const toWindow = prop === 'contentWindow' ? (v) => v : (v) => v.defaultView;
+        const { get } = getOwnPropertyDescriptor(
+          {
+            get [prop]() {
+              const value = apply(nativeGet, this, []);
+              if (value) adopt(toWindow(value));
+              return value;
+            },
+          },
+          prop
+        );
+        defineProperty(proto, prop, { ...desc, get: mask(get, nativeGet) });
+      }
+    }
+    for (let i = 0; i < INSERT_METHODS.length; i++) {
+      const ctor = INSERT_METHODS[i][0];
+      const names = INSERT_METHODS[i][1];
+      const proto = realm[ctor] && realm[ctor].prototype;
+      if (!proto) continue;
+      for (let j = 0; j < names.length; j++) {
+        const name = names[j];
+        const desc = getOwnPropertyDescriptor(proto, name);
+        if (!desc || typeof desc.value !== 'function') continue;
+        const native = desc.value;
+        const windowOf =
+          ctor === 'Range'
+            ? windowOfRange
+            : ctor === 'HTMLOptionsCollection'
+              ? windowOfInserted
+              : windowOfNode;
+        // A method definition: keeps the name and, like the native, is not
+        // a constructor. Its `length` (0, from the rest parameter) is reset
+        // to the native's below.
+        const value = {
+          [name](...args) {
+            try {
+              return apply(native, this, args);
+            } finally {
+              sweepAfter(this, windowOf, args);
+            }
+          },
+        }[name];
+        const lengthDesc = getOwnPropertyDescriptor(native, 'length');
+        if (lengthDesc) defineProperty(value, 'length', lengthDesc);
+        defineProperty(proto, name, { ...desc, value: mask(value, native) });
+      }
+    }
+    for (let i = 0; i < INSERT_SETTERS.length; i++) {
+      const ctor = INSERT_SETTERS[i][0];
+      const names = INSERT_SETTERS[i][1];
+      const proto = realm[ctor] && realm[ctor].prototype;
+      if (!proto) continue;
+      for (let j = 0; j < names.length; j++) {
+        const name = names[j];
+        const desc = getOwnPropertyDescriptor(proto, name);
+        if (!desc || typeof desc.set !== 'function') continue;
+        const nativeSet = desc.set;
+        const { set } = getOwnPropertyDescriptor(
+          {
+            set [name](v) {
+              try {
+                apply(nativeSet, this, [v]);
+              } finally {
+                sweepAfter(this, windowOfNode);
+              }
+            },
+          },
+          name
+        );
+        defineProperty(proto, name, { ...desc, set: mask(set, nativeSet) });
+      }
+    }
+    try {
+      const registryProto = realm.CustomElementRegistry && realm.CustomElementRegistry.prototype;
+      const desc = registryProto && getOwnPropertyDescriptor(registryProto, 'define');
+      if (desc && typeof desc.value === 'function') {
+        const nativeDefine = desc.value;
+        const value = {
+          define(...args) {
+            // Null-prototype: an index write can't hit a page setter on
+            // Array.prototype.
+            const restore = { __proto__: null };
+            let lent = 0;
+            try {
+              const proto = args[1] && args[1].prototype;
+              if (proto && (typeof proto === 'object' || typeof proto === 'function')) {
+                for (let i = 0; i < CE_CALLBACKS.length; i++) {
+                  const undo = lend(proto, CE_CALLBACKS[i]);
+                  if (undo) restore[lent++] = undo;
+                }
+              }
+            } catch {
+              // Frozen prototype, throwing getter…: define sees it as it is.
+            }
+            try {
+              return apply(nativeDefine, this, args);
+            } finally {
+              for (let i = lent - 1; i >= 0; i--) {
+                try {
+                  restore[i]();
+                } catch {
+                  // Left lent: still the page's callback, just sweeping first.
+                }
+              }
+            }
+          },
+        }.define;
+        const lengthDesc = getOwnPropertyDescriptor(nativeDefine, 'length');
+        if (lengthDesc) defineProperty(value, 'length', lengthDesc);
+        defineProperty(registryProto, 'define', { ...desc, value: mask(value, nativeDefine) });
+      }
+    } catch {
+      // No custom elements in this realm.
+    }
+  };
+  apply(add, adopted, [Object]);
+  install(root);
+  // Parser-inserted frames: swept at the microtask checkpoint the parser
+  // runs before each script, and one last time at DOMContentLoaded (window,
+  // capture: ahead of every page listener), when parsing is over. The
+  // readyState check covers a document.open() having erased that listener.
+  try {
+    const doc = root.document;
+    const MO = root.MutationObserver;
+    const readyStateGet = getter(root.Document, 'readyState');
+    const addEventListener = root.EventTarget && root.EventTarget.prototype.addEventListener;
+    if (doc && MO && readyStateGet && addEventListener) {
+      const { observe, disconnect } = MO.prototype;
+      const observer = new MO(() => {
+        sweep(root);
+        if (apply(readyStateGet, doc, []) !== 'loading') apply(disconnect, observer, []);
+      });
+      apply(observe, observer, [doc, { childList: true, subtree: true }]);
+      apply(addEventListener, root, [
+        'DOMContentLoaded',
+        () => {
+          sweep(root);
+          apply(disconnect, observer, []);
+        },
+        true,
+      ]);
+    }
+  } catch {
+    // No observer: script insertions are still covered.
+  }
+}
+
+// The main-world bundle: the frame's scriptlets for its own realm, then the
+// child-realm hooks carrying a second copy wrapped in `with (childWindow)`, so
+// every global the scriptlets touch (globalThis, self, JSON, fetch, Response…)
+// resolves to the child's. Built with `new Function` here in the isolated
+// world, where the page's CSP doesn't apply.
+function buildScriptletBundle(script) {
+  return new Function(
+    `${script}\n;(${inheritScriptletsIntoChildRealms})(` +
+      `function (__freedomRealm) { with (__freedomRealm) {\n${script}\n} });`
+  );
+}
+
+(function injectAdblockScriptlets() {
+  const url = scriptletMatchUrl();
+  if (!url) return;
+  let script = '';
+  try {
+    const res = ipcRenderer.sendSync('adblock:scriptlets', { url });
+    if (res && typeof res.script === 'string') script = res.script;
+  } catch {
+    return; // Main process unavailable — leave the page unmodified.
+  }
+  if (!script) return;
+  try {
+    // The source is the packaged, sha256-pinned scriptlet resources compiled
+    // by the main-process engine; page content never contributes code here.
+    contextBridge.executeInMainWorld({ func: buildScriptletBundle(script) });
+  } catch (err) {
+    console.warn('[webview-preload] adblock scriptlet injection failed:', err);
+  }
+})();
+
+// Sub-frames: the main process turns on nodeIntegrationInSubFrames for tab
+// webviews (webcontents-setup.js) only so that iframes — an embedded YouTube
+// player, say — get the scriptlets above. Nothing else in this file is meant
+// for them (wallet providers, freedomAPI, context menu, cosmetic filtering
+// all stay main-frame only, as before), so stop here. Sandboxed preloads run
+// inside a function wrapper, which is what makes this top-level return legal.
+if (globalThis.window && globalThis.window.top !== globalThis.window) {
+  return;
+}
+
+// Per-load constants, delivered with the renderer process (#512): the main
+// process puts them on this webview's command line when it attaches
+// (src/main/webview-boot.js, webcontents-setup.js), so reading them here costs
+// no round trip to the main thread — before, each was a sync IPC that held the
+// page while the main process was busy. A renderer started without the switch
+// (or with a malformed one) falls back to the sync IPC, which still answers.
+// Keep in sync with WEBVIEW_BOOT_SWITCH in webview-boot.js (a sandboxed preload
+// cannot require it; webview-boot.test.js pins the two together).
+const WEBVIEW_BOOT_SWITCH = '--freedom-webview-boot=';
+function readWebviewBoot() {
+  try {
+    // `process` is the sandboxed preload's own binding (its wrapper's
+    // parameter), not a global: globalThis.process is undefined here.
+    const argv = typeof process !== 'undefined' && Array.isArray(process.argv) ? process.argv : [];
+    const args = argv.filter(
+      (arg) => typeof arg === 'string' && arg.startsWith(WEBVIEW_BOOT_SWITCH)
+    );
+    // Main drops any copy the embedder supplied; two would be a bug — ask.
+    if (args.length !== 1) return null;
+    const binary = atob(args[0].slice(WEBVIEW_BOOT_SWITCH.length));
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    const boot = JSON.parse(new TextDecoder().decode(bytes));
+    if (typeof boot?.isPrivate !== 'boolean' || !boot.internalPages?.routable) return null;
+    if (!boot.isPrivate && typeof boot.ethereum?.source !== 'string') return null;
+    return boot;
+  } catch {
+    return null;
+  }
+}
+const WEBVIEW_BOOT = readWebviewBoot();
+
+// EIP-6963's uuid is per page session: one per preload run (each document),
+// stable across requestProvider re-announcements, as the sync-IPC path mints
+// it. crypto.randomUUID is secure-context only, so build the v4 uuid by hand.
+function mintUuidV4() {
+  const b = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const hex = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+contextBridge.exposeInMainWorld('freedomBrowser', { isFreedomBrowser: true });
+
+// PRIVATE MODE GUARD (providers): webviews in private windows never get
+// the wallet providers. `window.ethereum` / `window.swarm` are not
+// injected and the request/response bridges are not installed, so a dApp
+// probing for a wallet sees nothing and EIP-6963's requestProvider gets
+// no announcement (silent). Resolved before any page script can run: from
+// the boot switch, which main derives from this webview's window and
+// partition at attach time, or else synchronously via the main process
+// (src/main/ipc-handlers.js), which checks this webContents' session/window
+// against the private-window registry (src/main/private/private-windows.js).
+const IS_PRIVATE_WINDOW = WEBVIEW_BOOT
+  ? WEBVIEW_BOOT.isPrivate
+  : ipcRenderer.sendSync('private:is-private') === true;
+
+// The webview preload runs in a sandbox — require() is restricted to a small
+// whitelist (electron, events, timers, url), so we cannot read provider
+// injection sources from disk here. The main process reads them and hands
+// them over with the boot switch (sync IPC as the fallback). Only needed
+// outside private windows, which never get a provider.
+function ethereumInjectSource() {
+  if (!WEBVIEW_BOOT) return ipcRenderer.sendSync('internal:get-ethereum-inject-source');
+  // Same shape as the IPC answer (webview-boot.js buildEthereumInjectSource),
+  // '<' escaped so a field can't close the fallback <script> tag.
+  const info = JSON.stringify({ ...WEBVIEW_BOOT.ethereum.info, uuid: mintUuidV4() }).replace(
+    /</g,
+    '\\u003c'
+  );
+  return `window.__FREEDOM_PROVIDER_CONFIG__ = ${info};\n${WEBVIEW_BOOT.ethereum.source}`;
+}
+const ETHEREUM_INJECT_SOURCE = IS_PRIVATE_WINDOW ? '' : ethereumInjectSource();
+
+// Internal pages list — canonical source is src/shared/internal-pages.json,
+// handed over with the boot switch (sync IPC as the fallback) so preloads
+// don't need require().
+const internalPages = WEBVIEW_BOOT
+  ? WEBVIEW_BOOT.internalPages
+  : ipcRenderer.sendSync('internal:get-pages');
+
 // Whitelist of all internal page files (routable + other like error.html)
-const ALLOWED_FILES = [
-  ...Object.values(internalPages.routable || {}),
-  ...(internalPages.other || []),
-];
+const ALLOWED_FILES = [...Object.values(internalPages.routable), ...internalPages.other];
 
 const isInternalPage = () => {
   const location = globalThis.location;
@@ -33,6 +632,27 @@ const isInternalPage = () => {
   const pathname = location.pathname || '';
   return ALLOWED_FILES.some((file) => pathname.endsWith(`/pages/${file}`));
 };
+
+const isSettingsPage = () => {
+  const location = globalThis.location;
+  if (!location || location.protocol !== 'file:') return false;
+  const pathname = location.pathname || '';
+  const settingsFile = internalPages.routable?.settings || 'settings.html';
+  return pathname.endsWith(`/pages/${settingsFile}`);
+};
+
+const isProfilesPage = () => {
+  const location = globalThis.location;
+  if (!location || location.protocol !== 'file:') return false;
+  const pathname = location.pathname || '';
+  const profilesFile = internalPages.routable?.profiles || 'profiles.html';
+  return pathname.endsWith(`/pages/${profilesFile}`);
+};
+
+// Profile management (rename / delete / import / open + the create-modal
+// trigger) is allowed from the settings Profile section and the dedicated
+// freedom://profiles manager page.
+const isProfileManagerPage = () => isSettingsPage() || isProfilesPage();
 
 const guardInternal =
   (name, fn) =>
@@ -45,24 +665,350 @@ const guardInternal =
     return fn(...args);
   };
 
+const guardSettingsPage =
+  (name, fn) =>
+  (...args) => {
+    if (!isSettingsPage()) {
+      const url = globalThis.location?.href || 'unknown';
+      console.warn(`[freedomAPI] blocked settings-only "${name}" on page: ${url}`);
+      return Promise.reject(new Error('freedomAPI profile changes are only available on settings'));
+    }
+    return fn(...args);
+  };
+
+const guardProfileManagerPage =
+  (name, fn) =>
+  (...args) => {
+    if (!isProfileManagerPage()) {
+      const url = globalThis.location?.href || 'unknown';
+      console.warn(`[freedomAPI] blocked profile-management "${name}" on page: ${url}`);
+      return Promise.reject(
+        new Error('freedomAPI profile changes are only available on profile management pages')
+      );
+    }
+    return fn(...args);
+  };
+
+// Webviews reuse the same webContents across navigations, so ipcRenderer
+// listeners registered by one page survive into the next. Track every
+// subscription and tear them all down on pagehide so callers don't have to.
+const activeSubscriptions = new Set();
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => {
+    for (const unsubscribe of activeSubscriptions) {
+      try {
+        unsubscribe();
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    activeSubscriptions.clear();
+  });
+}
+
+// APPEARANCE THEME (internal pages only)
+//
+// Settings > Appearance promises to apply to "both the browser chrome and
+// internal pages", but the chrome is the only renderer that reads the
+// setting: every internal page used to style itself from
+// `@media (prefers-color-scheme: …)` alone. `nativeTheme.themeSource` does
+// not reach `prefers-color-scheme` in the renderer on every platform (Linux
+// in particular — see #233), so on a system whose scheme differs from the
+// app setting the result was a dark toolbar over white pages.
+//
+// The preload runs at document-start, before any page script or first paint,
+// so it resolves the setting here and stamps the answer on <html> as
+// `data-theme="dark" | "light"`. Pages carry their light palette under
+// `:where(html[data-theme='light'])` and declare `color-scheme` from the same
+// attribute, so scrollbars and form controls follow too.
+//
+// 'system' keeps behaving exactly as it does today: it resolves through
+// `prefers-color-scheme` and tracks OS changes live.
+const THEME_ATTRIBUTE = 'data-theme';
+const prefersDarkQuery =
+  typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-color-scheme: dark)')
+    : null;
+
+// Dark is every internal page's default palette, so an unreadable/unknown
+// setting and a missing matchMedia both fall back to it.
+const resolveTheme = (theme) => {
+  if (theme === 'light' || theme === 'dark') return theme;
+  return prefersDarkQuery && !prefersDarkQuery.matches ? 'light' : 'dark';
+};
+
+function installInternalPageTheme() {
+  let configuredTheme = 'system';
+  try {
+    configuredTheme = ipcRenderer.sendSync('internal:get-theme') || 'system';
+  } catch {
+    // Main process unavailable (teardown): fall through to 'system'.
+  }
+
+  const applyTheme = () => {
+    const root = document.documentElement;
+    if (!root) return false;
+    root.setAttribute(THEME_ATTRIBUTE, resolveTheme(configuredTheme));
+    return true;
+  };
+
+  // At document-start <html> may not exist yet. Observing `document` lets us
+  // stamp the attribute the instant the element is parsed, still before the
+  // stylesheet paints, instead of waiting for DOMContentLoaded (which would
+  // flash the wrong theme).
+  if (!applyTheme() && typeof MutationObserver === 'function') {
+    const observer = new MutationObserver(() => {
+      if (applyTheme()) observer.disconnect();
+    });
+    observer.observe(document, { childList: true });
+  }
+
+  // Live updates: the Appearance dropdown saves through the settings store,
+  // which broadcasts to every webContents including these webviews.
+  const onSettingsUpdated = (_event, settings) => {
+    configuredTheme = settings?.theme || 'system';
+    applyTheme();
+  };
+  ipcRenderer.on('settings:updated', onSettingsUpdated);
+  const unsubscribe = () => {
+    ipcRenderer.removeListener('settings:updated', onSettingsUpdated);
+    activeSubscriptions.delete(unsubscribe);
+  };
+  activeSubscriptions.add(unsubscribe);
+
+  prefersDarkQuery?.addEventListener('change', () => {
+    if (configuredTheme !== 'light' && configuredTheme !== 'dark') applyTheme();
+  });
+}
+
+if (isInternalPage()) {
+  installInternalPageTheme();
+}
+
+const guardInternalSubscription = (name, channel) => (callback) => {
+  if (!isInternalPage()) {
+    console.warn(`[freedomAPI] blocked subscription "${name}" on non-internal page`);
+    return () => {};
+  }
+  const handler = (_event, payload) => callback(payload);
+  ipcRenderer.on(channel, handler);
+  const unsubscribe = () => {
+    ipcRenderer.removeListener(channel, handler);
+    activeSubscriptions.delete(unsubscribe);
+  };
+  activeSubscriptions.add(unsubscribe);
+  return unsubscribe;
+};
+
+const findClosestAnchor = (start) => {
+  let element = start;
+  while (element && element !== document.body) {
+    if (element.tagName === 'A') return element;
+    element = element.parentElement;
+  }
+  return null;
+};
+
+const getRawDwebHref = (anchor) => {
+  const rawHref = anchor?.getAttribute?.('href')?.trim();
+  if (!rawHref) return null;
+  if (/^(ipfs|ipns|web3):\/\//i.test(rawHref)) return rawHref;
+  return null;
+};
+
+const getHostRoutedHref = (anchor) => {
+  const rawHref = anchor?.getAttribute?.('href')?.trim();
+  if (!rawHref) return null;
+  const rawDwebHref = getRawDwebHref(anchor);
+  if (rawDwebHref) return rawDwebHref;
+  if (globalThis.location?.protocol === 'web3:') {
+    if (anchor?.hasAttribute?.('download')) return null;
+    try {
+      const resolved = new URL(rawHref, globalThis.location.href);
+      if (
+        [
+          'web3:',
+          'http:',
+          'https:',
+          'bzz:',
+          'ipfs:',
+          'ipns:',
+          'rad:',
+          'ens:',
+          'freedom:',
+          'ethereum:',
+        ].includes(resolved.protocol)
+      ) {
+        return resolved.toString();
+      }
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
+// Intercept dweb links before Chromium resolves the anchor href. `ipfs:` and
+// `ipns:` are standard schemes, so the browser lowercases the host segment
+// before will-navigate fires (and before setWindowOpenHandler fires for
+// _blank / Cmd+Click new windows); that destroys CIDv0/CIDv1-base58btc/
+// base58 IPNS keys. The raw DOM attribute still has the original case, so
+// route it through the host renderer's loadTarget/formatIpfsUrl pipeline
+// while the bytes are recoverable. Same-tab and new-tab dispositions are
+// both handled here so the new-window code path (Chromium →
+// setWindowOpenHandler → tab:new-with-url in the main process) never gets
+// the lowercased URL — see `src/main/webcontents-setup.js#setWindowOpenHandler`.
+// The same early path preserves Freedom's friendly
+// `web3://<contract>:<chain>` input before Chromium rejects the bare all-hex
+// host; renderer navigation canonicalizes it to `<contract>.eip155-<chain>`.
+//
+// Two listeners — one each for `click` (primary button) and `auxclick`
+// (non-primary, i.e. middle/right). Per the UI Events spec, modern
+// Chromium dispatches `click` only for the primary button; middle-click
+// link activations arrive via `auxclick` exclusively. A previous version
+// only listened to `click` and relied on `event.button === 1` inside that
+// handler, which never fired for real middle-clicks (it only matched
+// dispatched-from-script synthetic events used by the unit tests).
+const handleDwebLinkActivation = (event) => {
+  if (event.defaultPrevented) return;
+  // Primary (0, click) or middle (1, auxclick) — that's the only
+  // intersection our two listeners care about. Right-click (2) is owned
+  // by the contextmenu listener.
+  if (event.button !== 0 && event.button !== 1) return;
+
+  const anchor = findClosestAnchor(event.target);
+  const href = getHostRoutedHref(anchor);
+  if (!href) return;
+
+  // Onchain documents cannot navigate themselves. Only a real user
+  // activation may ask the browser chrome to leave the isolated app; a page
+  // dispatching a synthetic click is equivalent to a scripted redirect.
+  if (globalThis.location?.protocol === 'web3:' && event.isTrusted !== true) return;
+
+  // Mirror Chromium's link disposition heuristic (#303):
+  //
+  //   Ctrl/Cmd+click, middle-click        → background tab (stay on this page)
+  //   Ctrl/Cmd+Shift+click, Shift+middle  → foreground tab
+  //   Shift+click                         → new window
+  //   target="_blank" / named target      → foreground tab
+  //   anything else                       → this tab
+  //
+  // The modifiers win over the target attribute for foreground-vs-background,
+  // as in Chrome: Ctrl+clicking a `target="_blank"` link still leaves you on
+  // the current page. A named target is still forwarded in every case so the
+  // renderer can reuse that name's tab.
+  //
+  // The target attribute is forwarded so the host renderer can route
+  // through the same named-tab reuse path that Chromium's
+  // setWindowOpenHandler → tab:new-with-url uses for non-dweb links.
+  // Without this, a named target on a dweb link would silently fall
+  // into the unconditional newTab branch and lose its tab-reuse
+  // semantics. (`_blank` / `_self` / `_parent` / `_top` are passed
+  // through too but the renderer only treats names without a leading
+  // underscore as named targets, mirroring webcontents-setup.js.)
+  const target = anchor.getAttribute?.('target') || '';
+  const isBlank = /^_blank$/i.test(target);
+  const isNamedTarget = target && !target.startsWith('_');
+  const isMiddleClick = event.button === 1;
+  const wantsNewTab = isMiddleClick || event.metaKey || event.ctrlKey;
+
+  let disposition;
+  if (wantsNewTab) {
+    disposition = event.shiftKey ? 'newTab' : 'newBackgroundTab';
+  } else if (event.shiftKey) {
+    disposition = 'newWindow';
+  } else if (isBlank || isNamedTarget) {
+    disposition = 'newTab';
+  } else {
+    disposition = 'currentTab';
+  }
+
+  event.preventDefault();
+  const payload = { url: href, disposition, target: target || null };
+  if (disposition === 'currentTab') {
+    // A same-tab link needs no gesture: it is no more than the page setting
+    // `location`.
+    ipcRenderer.sendToHost('link:navigate', payload);
+    return;
+  }
+
+  // A new tab or window is a popup, and goes through the same popup blocker
+  // Chromium's own window-open path does (src/main/popup-blocker.js, #442):
+  // it needs a user gesture on this tab within the last 5 s — consumed, so
+  // one gesture opens one tab — or the site's "Always allow pop-ups".
+  // The event is cancelled either way, or Chromium would open the tab itself
+  // through setWindowOpenHandler (lowercasing a CIDv0 host on the way).
+  //
+  // Main decides, not this preload: it tracks the guest's trusted input and
+  // spends one budget for every popup and external-app launch, so a click
+  // that opened a dweb tab cannot also pay for a `window.open` (or the other
+  // way round), and a scripted `anchor.click()` gets exactly what a scripted
+  // `window.open` would. A blocked popup is reported to the tab's window by
+  // main (the address-bar "Pop-up blocked" icon), so nothing is sent here.
+  //
+  // A plain named-target link (`target="viewer"`) is marked `reuseOnly`: if
+  // it is blocked, the host may still re-navigate the tab that already
+  // carries that name, in place and without switching to it — Chromium needs
+  // no gesture to navigate an existing named browsing context, only to
+  // create one. The host scopes that to the tab that opened the named tab
+  // (tabs.js `namedTargetOpeners`), so an unrelated site in another tab
+  // can't re-navigate it by name.
+  const reuseOnly = disposition === 'newTab' && isNamedTarget && !wantsNewTab && !event.shiftKey;
+  const claim = ipcRenderer.invoke('popups:claim', {
+    url: href,
+    targetName: isNamedTarget ? target : null,
+    reuseOnly,
+  });
+  Promise.resolve(claim)
+    .then((allowed) => {
+      if (allowed === true) ipcRenderer.sendToHost('link:navigate', payload);
+    })
+    .catch(() => {});
+};
+
+document.addEventListener('click', handleDwebLinkActivation, true);
+document.addEventListener('auxclick', handleDwebLinkActivation, true);
+
+// Notify the host renderer when the cursor enters/leaves the bottom-left
+// region of the viewport so the link-hover URL preview can flip to the
+// opposite corner (matches Chrome's status-bubble behaviour). Only emits
+// on zone transitions to keep IPC traffic minimal — for typical browsing
+// the channel is silent.
+//
+// Width must track the actual bar's `max-width: min(70%, 640px)` from
+// link-status.css. Both reference the webview content area — the CSS
+// `%` resolves against the bar's positioning ancestor `.content-page`,
+// and `window.innerWidth` here is the guest webview's viewport, which
+// is the same width as `.content-page`. Keeping these consistent
+// matters when the sidebar is open: a `vw`-based CSS width plus a
+// webview-relative zone width would diverge by the sidebar's 320 px
+// and leave a band where the bar covers the link the user is hovering.
+const LINK_STATUS_ZONE_BAND_PX = 28; // bottom band height (~bar height)
+const LINK_STATUS_ZONE_MAX_WIDTH_PX = 640;
+const LINK_STATUS_ZONE_CONTENT_FRACTION = 0.7;
+const linkStatusZoneWidth = () =>
+  Math.min(LINK_STATUS_ZONE_MAX_WIDTH_PX, window.innerWidth * LINK_STATUS_ZONE_CONTENT_FRACTION);
+let linkStatusInZone = false;
+const sendLinkStatusZone = (inZone) => {
+  if (linkStatusInZone === inZone) return;
+  linkStatusInZone = inZone;
+  ipcRenderer.sendToHost('link-status:zone', { inLeftZone: inZone });
+};
+document.addEventListener(
+  'mousemove',
+  (event) => {
+    const inZone =
+      event.clientY > window.innerHeight - LINK_STATUS_ZONE_BAND_PX &&
+      event.clientX < linkStatusZoneWidth();
+    sendLinkStatusZone(inZone);
+  },
+  { passive: true, capture: true }
+);
+document.addEventListener('mouseleave', () => sendLinkStatusZone(false));
+window.addEventListener('blur', () => sendLinkStatusZone(false));
+
 // Expose APIs to internal pages (guarded for safety)
 contextBridge.exposeInMainWorld('freedomAPI', {
-  // History
-  getHistory: guardInternal('getHistory', (options) => ipcRenderer.invoke('history:get', options)),
-  addHistory: guardInternal('addHistory', (entry) => ipcRenderer.invoke('history:add', entry)),
-  removeHistory: guardInternal('removeHistory', (id) => ipcRenderer.invoke('history:remove', id)),
-  clearHistory: guardInternal('clearHistory', () => ipcRenderer.invoke('history:clear')),
-
-  // Settings (read-only for internal pages)
-  getSettings: guardInternal('getSettings', () => ipcRenderer.invoke('settings:get')),
-
-  // Window
-  getPlatform: guardInternal('getPlatform', () => ipcRenderer.invoke('window:get-platform')),
-
-  // Service registry (read-only for internal pages)
-  getServiceRegistry: guardInternal('getServiceRegistry', () =>
-    ipcRenderer.invoke('service-registry:get')
-  ),
   onServiceRegistryUpdate: guardInternal('onServiceRegistryUpdate', (callback) => {
     if (typeof callback !== 'function') {
       return () => {};
@@ -77,29 +1023,9 @@ contextBridge.exposeInMainWorld('freedomAPI', {
   }),
 
   // Bookmarks (read-only for internal pages)
-  getBookmarks: guardInternal('getBookmarks', () => ipcRenderer.invoke('bookmarks:get')),
-
-  // Navigation
-  openInNewTab: guardInternal('openInNewTab', (url) =>
-    ipcRenderer.invoke('internal:open-url-in-new-tab', url)
-  ),
-
-  // Favicons
-  getCachedFavicon: guardInternal('getCachedFavicon', (url) =>
-    ipcRenderer.invoke('favicon:get-cached', url)
-  ),
-
-  // Radicle
-  seedRadicle: guardInternal('seedRadicle', (rid) => ipcRenderer.invoke('radicle:seed', rid)),
-  getRadicleStatus: guardInternal('getRadicleStatus', () => ipcRenderer.invoke('radicle:getStatus')),
   getRadicleRepoPayload: guardInternal('getRadicleRepoPayload', (rid) =>
     ipcRenderer.invoke('radicle:getRepoPayload', rid)
   ),
-  syncRadicleRepo: guardInternal('syncRadicleRepo', (rid) =>
-    ipcRenderer.invoke('radicle:syncRepo', rid)
-  ),
-
-  // JackTrip
   getJacktripStatus: guardInternal('getJacktripStatus', () =>
     ipcRenderer.invoke('jacktrip:getStatus')
   ),
@@ -166,14 +1092,429 @@ contextBridge.exposeInMainWorld('freedomAPI', {
       ipcRenderer.removeListener('jacktrip:statusUpdate', handler);
     };
   }),
+  // History
+  getHistory: guardInternal('getHistory', (options) => ipcRenderer.invoke('history:get', options)),
+  // One page of the History page's list: `{ query, sort, offset, limit }` →
+  // `{ entries, matched, total }` (#503).
+  getHistoryPage: guardInternal('getHistoryPage', (options) =>
+    ipcRenderer.invoke('history:page', options)
+  ),
+  addHistory: guardInternal('addHistory', (entry) => ipcRenderer.invoke('history:add', entry)),
+  removeHistory: guardInternal('removeHistory', (id) => ipcRenderer.invoke('history:remove', id)),
+  clearHistory: guardInternal('clearHistory', () => ipcRenderer.invoke('history:clear')),
+
+  // Downloads (freedom://downloads page). Open / show-in-folder resolve the
+  // file path in the main process from the stored row id — no path crosses
+  // this boundary.
+  getDownloads: guardInternal('getDownloads', (options) =>
+    ipcRenderer.invoke('downloads:get', options)
+  ),
+  pauseDownload: guardInternal('pauseDownload', (id) => ipcRenderer.invoke('downloads:pause', id)),
+  resumeDownload: guardInternal('resumeDownload', (id) =>
+    ipcRenderer.invoke('downloads:resume', id)
+  ),
+  cancelDownload: guardInternal('cancelDownload', (id) =>
+    ipcRenderer.invoke('downloads:cancel', id)
+  ),
+  openDownloadedFile: guardInternal('openDownloadedFile', (id) =>
+    ipcRenderer.invoke('downloads:open-file', id)
+  ),
+  showDownloadInFolder: guardInternal('showDownloadInFolder', (id) =>
+    ipcRenderer.invoke('downloads:show-in-folder', id)
+  ),
+  removeDownload: guardInternal('removeDownload', (id) =>
+    ipcRenderer.invoke('downloads:remove', id)
+  ),
+  clearDownloads: guardInternal('clearDownloads', () => ipcRenderer.invoke('downloads:clear')),
+
+  // Unified payment history (read-only — producers record in main directly).
+  getPayments: guardInternal('getPayments', (filters) =>
+    ipcRenderer.invoke('payments:get-recent', filters)
+  ),
+  getPaymentsCount: guardInternal('getPaymentsCount', (filters) =>
+    ipcRenderer.invoke('payments:get-count', filters)
+  ),
+  clearPayments: guardInternal('clearPayments', () => ipcRenderer.invoke('payments:clear')),
+
+  // Token registry — used by the payments page to resolve asset
+  // metadata (symbol, decimals) per chainId:address.
+  getTokens: guardInternal('getTokens', (chainId) =>
+    ipcRenderer.invoke('tokens:get-tokens', chainId)
+  ),
+
+  // Settings
+  getSettings: guardInternal('getSettings', () => ipcRenderer.invoke('settings:get')),
+  saveSettings: guardInternal('saveSettings', (settings) =>
+    ipcRenderer.invoke('settings:save', settings)
+  ),
+  relaunchApp: guardInternal('relaunchApp', () => ipcRenderer.send('app:relaunch')),
+
+  // Ad blocking (settings page)
+  adblockGetStatus: guardInternal('adblockGetStatus', () =>
+    ipcRenderer.invoke('adblock:get-status')
+  ),
+  adblockGetAllowlist: guardInternal('adblockGetAllowlist', () =>
+    ipcRenderer.invoke('adblock:get-allowlist')
+  ),
+  adblockAddAllowlistHost: guardSettingsPage('adblockAddAllowlistHost', (host) =>
+    ipcRenderer.invoke('adblock:add-allowlist-host', host)
+  ),
+  adblockRemoveAllowlistHost: guardSettingsPage('adblockRemoveAllowlistHost', (host) =>
+    ipcRenderer.invoke('adblock:remove-allowlist-host', host)
+  ),
+  // Keyboard shortcuts (Settings > Shortcuts). Reads are internal-page
+  // wide; anything that changes bindings is settings-only, matching the
+  // profile-write guards. previewShortcutBinding is a pure computation
+  // (validation + conflict lookup for a captured keydown) but only the
+  // settings page has any business calling it.
+  getShortcuts: guardInternal('getShortcuts', () => ipcRenderer.invoke('shortcuts:get-state')),
+  previewShortcutBinding: guardSettingsPage('previewShortcutBinding', (payload) =>
+    ipcRenderer.invoke('shortcuts:preview-binding', payload)
+  ),
+  setShortcutOverride: guardSettingsPage('setShortcutOverride', (payload) =>
+    ipcRenderer.invoke('shortcuts:set-override', payload)
+  ),
+  resetShortcut: guardSettingsPage('resetShortcut', (id) =>
+    ipcRenderer.invoke('shortcuts:reset', { id })
+  ),
+  resetAllShortcuts: guardSettingsPage('resetAllShortcuts', () =>
+    ipcRenderer.invoke('shortcuts:reset', {})
+  ),
+  // A recording has to receive the chord it records, including Next/Previous
+  // Tab, which main otherwise claims before the page sees it (#556).
+  setShortcutRecording: guardSettingsPage('setShortcutRecording', (recording) =>
+    ipcRenderer.invoke('shortcuts:set-recording', recording === true)
+  ),
+
+  // Platform / environment info needed by settings page
+  getPlatform: guardInternal('getPlatform', () => ipcRenderer.invoke('window:get-platform')),
+  getActiveProfile: guardInternal('getActiveProfile', () =>
+    ipcRenderer.invoke('profile:get-active')
+  ),
+  checkRadicleBinary: guardSettingsPage('checkRadicleBinary', () =>
+    ipcRenderer.invoke('radicle:checkBinary')
+  ),
+  // Whether this build bundles an Arti binary — the settings page shows the
+  // Tor rows only where there is one to drive (or where the integration is
+  // already enabled). Same shape as checkRadicleBinary: `{ available }`.
+  checkTorBinary: guardSettingsPage('checkTorBinary', () => ipcRenderer.invoke('tor:checkBinary')),
+  // Settings → Nodes → Swarm cache (#579): how much the cache holds, read
+  // from the node's `/v0/cache` by the main process; the sizes on offer and
+  // the current one; applying one (live, on the Swarm node Freedom runs);
+  // and clearing the cache (pinned and published content is kept).
+  getSwarmCacheStatus: guardSettingsPage('getSwarmCacheStatus', () =>
+    ipcRenderer.invoke('ant:cache-status')
+  ),
+  getSwarmCacheSettings: guardSettingsPage('getSwarmCacheSettings', () =>
+    ipcRenderer.invoke('ant:cache-get-settings')
+  ),
+  setSwarmCacheSize: guardSettingsPage('setSwarmCacheSize', (bytes) =>
+    ipcRenderer.invoke('ant:cache-set-size', bytes)
+  ),
+  clearSwarmCache: guardSettingsPage('clearSwarmCache', () =>
+    ipcRenderer.invoke('ant:cache-clear')
+  ),
+  onProfileUpdated: guardInternalSubscription('onProfileUpdated', 'profile:updated'),
+  listProfiles: guardInternal('listProfiles', () => ipcRenderer.invoke('profile:list')),
+  createProfile: guardProfileManagerPage('createProfile', (profile) =>
+    ipcRenderer.invoke('profile:create', profile)
+  ),
+  importProfile: guardProfileManagerPage('importProfile', (id) =>
+    ipcRenderer.invoke('profile:import', { id })
+  ),
+  renameProfile: guardProfileManagerPage('renameProfile', (id, displayName) =>
+    ipcRenderer.invoke('profile:rename', { id, displayName })
+  ),
+  openProfile: guardProfileManagerPage('openProfile', (id) =>
+    ipcRenderer.invoke('profile:open', { id })
+  ),
+  // Opens the profile and lands its window on the Profile settings page (where
+  // renaming now lives). The intent is a boolean flag — main maps it to the
+  // internal deep-link so an arbitrary URL never crosses this boundary.
+  openProfileSettings: guardProfileManagerPage('openProfileSettings', (id) =>
+    ipcRenderer.invoke('profile:open', { id, openSettings: true })
+  ),
+  deleteProfile: guardProfileManagerPage('deleteProfile', (id, confirmDisplayName) =>
+    ipcRenderer.invoke('profile:delete', { id, confirmDisplayName })
+  ),
+  updateProfileNodeConfig: guardSettingsPage('updateProfileNodeConfig', (protocol, config) =>
+    ipcRenderer.invoke('profile:update-node-config', { protocol, config })
+  ),
+  // Asks main to open the chrome's shared create-profile modal over this
+  // webview's owning window.
+  requestCreateProfileModal: guardProfileManagerPage('requestCreateProfileModal', () =>
+    ipcRenderer.send('profile:request-create-modal')
+  ),
+
+  // Network configuration (the Networks settings page + the ENS lens).
+  getNetworkConfig: guardInternal('getNetworkConfig', () =>
+    ipcRenderer.invoke('networks:get-config')
+  ),
+  updateNetwork: guardInternal('updateNetwork', (chainId, patch) =>
+    ipcRenderer.invoke('networks:update-network', chainId, patch)
+  ),
+  upsertEndpointSource: guardInternal('upsertEndpointSource', (id, source) =>
+    ipcRenderer.invoke('networks:upsert-source', id, source)
+  ),
+  removeEndpointSource: guardInternal('removeEndpointSource', (id) =>
+    ipcRenderer.invoke('networks:remove-source', id)
+  ),
+  restoreEndpointSource: guardInternal('restoreEndpointSource', (id) =>
+    ipcRenderer.invoke('networks:restore-source', id)
+  ),
+  resetEndpointSourceCoverage: guardInternal('resetEndpointSourceCoverage', (id, chainId) =>
+    ipcRenderer.invoke('networks:reset-source-coverage', id, chainId)
+  ),
+  setNetworkApiKey: guardInternal('setNetworkApiKey', (providerId, apiKey) =>
+    ipcRenderer.invoke('networks:set-api-key', providerId, apiKey)
+  ),
+  removeNetworkApiKey: guardInternal('removeNetworkApiKey', (providerId) =>
+    ipcRenderer.invoke('networks:remove-api-key', providerId)
+  ),
+  testNetworkApiKey: guardInternal('testNetworkApiKey', (providerId, apiKey) =>
+    ipcRenderer.invoke('networks:test-api-key', providerId, apiKey)
+  ),
+  searchChains: guardInternal('searchChains', (query) =>
+    ipcRenderer.invoke('networks:search-chains', query)
+  ),
+  getCatalogChain: guardInternal('getCatalogChain', (chainId) =>
+    ipcRenderer.invoke('networks:get-catalog-chain', chainId)
+  ),
+  addChain: guardInternal('addChain', (chain, rpcUrls) =>
+    ipcRenderer.invoke('networks:add-chain', chain, rpcUrls)
+  ),
+  removeChain: guardInternal('removeChain', (chainId) =>
+    ipcRenderer.invoke('networks:remove-chain', chainId)
+  ),
+
+  // Service registry snapshot (read-only).
+  getServiceRegistry: guardInternal('getServiceRegistry', () =>
+    ipcRenderer.invoke('service-registry:get')
+  ),
+  getMyotisStatus: guardInternal('getMyotisStatus', (chainId) =>
+    chainId == null
+      ? ipcRenderer.invoke('myotis:getStatus')
+      : ipcRenderer.invoke('myotis:getStatus', chainId)
+  ),
+
+  // Opens the sidebar's publish setup (`target` 'setup', the default) or
+  // storage screen ('storage') in the host window.
+  openPublishSetup: guardInternal('openPublishSetup', (target) =>
+    ipcRenderer.invoke('sidebar:open-publish-setup', target === 'storage' ? 'storage' : 'setup')
+  ),
+  // Swarm publish readiness and setup state (publish-setup-service.js).
+  getPublishSetupState: guardInternal('getPublishSetupState', () =>
+    ipcRenderer.invoke('swarm:setup-get-state')
+  ),
+
+  // Auto-unsubscribed on pagehide.
+  onSettingsUpdated: guardInternalSubscription('onSettingsUpdated', 'settings:updated'),
+  onPublishSetupState: guardInternalSubscription('onPublishSetupState', 'swarm:setup-state'),
+  // freedom://downloads uses this for live progress — the row is already
+  // written when it fires, so the page just re-queries.
+  onDownloadsChanged: guardInternalSubscription('onDownloadsChanged', 'downloads:changed'),
+  // freedom://payments uses this for live refresh on settlements (no
+  // user-driven event for a server-acknowledged paid request).
+  onPaymentRecorded: guardInternalSubscription('onPaymentRecorded', 'payments:tx-recorded'),
+
+  // Site permissions (web permission prompts). Reads are internal-page
+  // wide; revokes are settings-only, matching the profile-write guards.
+  getSitePermissions: guardInternal('getSitePermissions', () =>
+    ipcRenderer.invoke('permissions:get-all')
+  ),
+  revokeSitePermission: guardSettingsPage('revokeSitePermission', (origin, permission) =>
+    ipcRenderer.invoke('permissions:revoke', origin, permission)
+  ),
+  revokeSitePermissionOrigin: guardSettingsPage('revokeSitePermissionOrigin', (origin) =>
+    ipcRenderer.invoke('permissions:revoke-origin', origin)
+  ),
+  revokeAllSitePermissions: guardSettingsPage('revokeAllSitePermissions', () =>
+    ipcRenderer.invoke('permissions:revoke-all')
+  ),
+  onSitePermissionsChanged: guardInternalSubscription(
+    'onSitePermissionsChanged',
+    'permissions:changed'
+  ),
+
+  // Settings → About Freedom → Updates (#87). The state is a snapshot of the main-process
+  // updater (updater.js / update-state.js); `onUpdateState` gets every change,
+  // `getUpdateState` hydrates a page opened after the last broadcast. Check
+  // and install are settings-only, like every other action in Settings —
+  // install quits the app.
+  getUpdateState: guardSettingsPage('getUpdateState', () =>
+    ipcRenderer.invoke('update:get-state')
+  ),
+  checkForUpdates: guardSettingsPage('checkForUpdates', () => {
+    ipcRenderer.send('update:check');
+  }),
+  restartToUpdate: guardSettingsPage('restartToUpdate', () => {
+    ipcRenderer.send('update:restart-and-install');
+  }),
+  onUpdateState: guardInternalSubscription('onUpdateState', 'update:state'),
+
+  // Bookmarks (read-only for internal pages)
+  getBookmarks: guardInternal('getBookmarks', () => ipcRenderer.invoke('bookmarks:get')),
+
+  // Navigation
+  openInNewTab: guardInternal('openInNewTab', (url) =>
+    ipcRenderer.invoke('internal:open-url-in-new-tab', url)
+  ),
+
+  // Signals from ENS interstitial pages back to the address-bar shell.
+  // Uses sendToHost because the shell is the webview's parent frame, not
+  // the main process — shorter, avoids a main round-trip. Both sides of
+  // this channel are renderer code; preload's sandbox blocks relative
+  // require, and navigation.js is ESM and can't import the CommonJS
+  // shared module — strings are kept hardcoded on both ends.
+  ensContinueUnverified: guardInternal('ensContinueUnverified', (name) => {
+    ipcRenderer.sendToHost('ens:continue-unverified', { name });
+  }),
+  ensOpenSettings: guardInternal('ensOpenSettings', () => {
+    ipcRenderer.sendToHost('ens:open-settings');
+  }),
+
+  // "← Go back" on a block interstitial. The shell traverses, rather than
+  // the page calling `window.history.back()` itself: a *renderer*-initiated
+  // traversal onto a custom-scheme entry (`ipfs://name.eth/…`, the shape
+  // #86's refresh appends this interstitial after) is caught by the main
+  // process' `will-navigate` intercept and replayed through `loadTarget` as a
+  // fresh navigation, which re-resolves the name and raises this same
+  // interstitial again — the button loops with nothing to show for it. The
+  // shell's `webview.goBack()` is browser-initiated, so no intercept sees it;
+  // it restores the entry the traversal marked for a trust refresh, and falls
+  // back to the home page when there is nothing behind the interstitial.
+  interstitialGoBack: guardInternal('interstitialGoBack', () => {
+    ipcRenderer.sendToHost('interstitial:go-back');
+  }),
+
+  // Signals from the onchain-app trust interstitial. The opaque approval
+  // token is minted and consumed by the web3: protocol handler; the shell
+  // only carries it back on the next top-level navigation.
+  onchainContinueUnverified: guardInternal('onchainContinueUnverified', (payload) => {
+    ipcRenderer.sendToHost('onchain:continue-unverified', payload);
+  }),
+  onchainRetry: guardInternal('onchainRetry', (target) => {
+    ipcRenderer.sendToHost('onchain:retry', { target });
+  }),
+  onchainOpenRpcSettings: guardInternal('onchainOpenRpcSettings', () => {
+    ipcRenderer.sendToHost('onchain:open-rpc-settings');
+  }),
+
+  // Favicons
+  getCachedFavicon: guardInternal('getCachedFavicon', (url) =>
+    ipcRenderer.invoke('favicon:get-cached', url)
+  ),
+
+  // Radicle
+  seedRadicle: guardInternal('seedRadicle', (rid) => ipcRenderer.invoke('radicle:seed', rid)),
+  getRadicleStatus: guardInternal('getRadicleStatus', () =>
+    ipcRenderer.invoke('radicle:getStatus')
+  ),
+  syncRadicleRepo: guardInternal('syncRadicleRepo', (rid) =>
+    ipcRenderer.invoke('radicle:syncRepo', rid)
+  ),
+  getRadicleSeedStatus: guardInternal('getRadicleSeedStatus', (rid) =>
+    ipcRenderer.invoke('radicle:getSeedStatus', rid)
+  ),
+  onRadicleSeedStatus: guardInternalSubscription('onRadicleSeedStatus', 'radicle:seedStatusUpdate'),
+
+  // Clipboard
+  copyText: guardInternal('copyText', (text) => ipcRenderer.invoke('clipboard:copy-text', text)),
+
+  // Swarm publishing (internal-only, path-based methods)
+  swarm: {
+    publishData: guardInternal('swarm.publishData', (data) =>
+      ipcRenderer.invoke('swarm:publish-data', data)
+    ),
+    publishFilePath: guardInternal('swarm.publishFilePath', (filePath) =>
+      ipcRenderer.invoke('swarm:publish-file', filePath)
+    ),
+    publishDirectoryPath: guardInternal('swarm.publishDirectoryPath', (dirPath) =>
+      ipcRenderer.invoke('swarm:publish-directory', dirPath)
+    ),
+    getUploadStatus: guardInternal('swarm.getUploadStatus', (tagUid) =>
+      ipcRenderer.invoke('swarm:get-upload-status', tagUid)
+    ),
+    getStamps: guardInternal('swarm.getStamps', () => ipcRenderer.invoke('swarm:get-stamps')),
+    pickFileForPublish: guardInternal('swarm.pickFileForPublish', () =>
+      ipcRenderer.invoke('swarm:pick-file')
+    ),
+    pickDirectoryForPublish: guardInternal('swarm.pickDirectoryForPublish', () =>
+      ipcRenderer.invoke('swarm:pick-directory')
+    ),
+    getPublishHistory: guardInternal('swarm.getPublishHistory', () =>
+      ipcRenderer.invoke('swarm:get-publish-history')
+    ),
+    clearPublishHistory: guardInternal('swarm.clearPublishHistory', () =>
+      ipcRenderer.invoke('swarm:clear-publish-history')
+    ),
+  },
 });
 
 // ============================================
 // Context Menu Handler (works on all pages)
 // ============================================
 
-// Get context information when right-clicking
-document.addEventListener(
+// The elements a `contextmenu` really passed through, innermost first, up to
+// (but not including) `document.body` — the same bound the plain ancestor walk
+// this replaces stopped at. Falls back to the ancestor chain if the event
+// carries no `composedPath` (a hand-rolled object in a unit test).
+const composedElementPath = (event) => {
+  const path = [];
+  const composed = typeof event.composedPath === 'function' ? event.composedPath() : null;
+  if (composed && composed.length) {
+    for (const node of composed) {
+      if (node === document.body) break;
+      // Elements only: the path also carries shadow roots, the document and
+      // the window, none of which have tagName/parentElement.
+      if (node && node.nodeType === 1) path.push(node);
+    }
+    return path;
+  }
+  let element = event.target;
+  while (element && element !== document.body) {
+    path.push(element);
+    element = element.parentElement;
+  }
+  return path;
+};
+
+// The element that really holds focus. `document.activeElement` retargets to
+// the shadow host for a node inside an open shadow root, so a password field a
+// site renders in a shadow tree would read as an ordinary `<div>`/custom
+// element here; each root's own `activeElement` walks the rest of the way down.
+//
+// A *closed* root has no `shadowRoot` to walk, so the descent stops at the host
+// and the real field stays unidentifiable — which is why the caller withholds
+// the selection instead of reading a type off whatever it landed on.
+const deepActiveElement = () => {
+  let element = document.activeElement;
+  while (element?.shadowRoot?.activeElement) {
+    element = element.shadowRoot.activeElement;
+  }
+  return element;
+};
+
+// Whether `element` is a form control whose own selection this preload can
+// actually read and classify. A shadow host is not: for a closed root there is
+// nothing behind `element.shadowRoot` to look at.
+const isReadableFormField = (element) =>
+  element?.tagName === 'INPUT' || element?.tagName === 'TEXTAREA';
+
+// ...and whether that control is a password field.
+const isPasswordInput = (element) =>
+  element?.tagName === 'INPUT' && String(element.type).toLowerCase() === 'password';
+
+// Get context information when right-clicking.
+//
+// Registered on window in the capture phase: window is the first node in the
+// capture path and the preload runs before any page script, so no page
+// handler (not even a window-level capture listener calling
+// stopPropagation()) can starve the interceptor. The send is deferred with
+// setTimeout so the defaultPrevented check happens after the full dispatch,
+// honoring only a genuine preventDefault() from the page (standard browser
+// semantics).
+window.addEventListener(
   'contextmenu',
   (event) => {
     const context = {
@@ -187,6 +1528,9 @@ document.addEventListener(
       imageSrc: null,
       imageAlt: null,
       isEditable: false,
+      // Set once chrome must not publish `selectedText` — see the withholding
+      // rule at the end of this handler. #330.
+      withholdSelection: false,
       mediaType: null,
     };
 
@@ -196,12 +1540,19 @@ document.addEventListener(
       context.selectedText = selection.toString();
     }
 
-    // Walk up the DOM tree to find links, images, etc.
-    let element = event.target;
-    while (element && element !== document.body) {
+    // Walk from the real target outwards to find links, images, etc.
+    //
+    // `event.target` is retargeted to the shadow *host* for anything inside an
+    // open shadow root, and `element.parentElement` is null at a shadow
+    // boundary anyway, so an ancestor walk alone never sees the element a site
+    // actually rendered inside a shadow tree (LWC/Stencil components, embedded
+    // auth widgets). `composedPath()` is the event's real capture path — the
+    // inner nodes first, then each host, in the same inner-to-outer order the
+    // walk used — so it covers the light DOM and every open root above it. #330.
+    for (const element of composedElementPath(event)) {
       // Check for links
       if (element.tagName === 'A' && element.href) {
-        context.linkUrl = element.href;
+        context.linkUrl = getRawDwebHref(element) || element.href;
         context.linkText = element.textContent?.trim() || '';
       }
 
@@ -239,16 +1590,63 @@ document.addEventListener(
         element.isContentEditable
       ) {
         context.isEditable = true;
+        // Chromium reports a selection inside a password field as the masking
+        // bullets, not the password (probed in the shipping app on Electron
+        // 44, 2026-09), so `selectedText` above is already `••••••`. Withhold
+        // it from anything that would publish that string — "Search <Engine>
+        // for "•••••"" is not an offer Chrome makes and not a query worth
+        // sending to a search engine. #330.
+        if (isPasswordInput(element)) {
+          context.withholdSelection = true;
+        }
       }
-
-      element = element.parentElement;
     }
 
-    // Prevent the default context menu
-    event.preventDefault();
+    // The walk above only sees the field the menu was raised over, but the
+    // selection Chromium reports comes from the focused field wherever that
+    // is: a page can select a password field's contents and then dispatch a
+    // synthetic `contextmenu` at some unrelated element, and the bullets would
+    // reach chrome unflagged.
+    //
+    // Which source a selection has is readable off the *document's* own range.
+    // A selection reported while that range is collapsed did not come from the
+    // document at all — it is the internal selection of the focused form
+    // control, which the document range never covers. Probed in the shipping
+    // app on Electron 44 (2026-09): a password field in the light DOM, in an
+    // open shadow root and in a closed shadow root all report
+    // `isCollapsed: true` with `anchorNode` on `<body>` while `toString()`
+    // returns the masking bullets, for a real mouse drag as much as for
+    // `setSelectionRange`; a genuine page selection (including one inside a
+    // contenteditable) reports `isCollapsed: false` with `anchorNode` in the
+    // selected content.
+    //
+    // So a collapsed range means the focused control is the only source of the
+    // text, and the selection may only be published once that control has been
+    // identified as an ordinary, non-password field. That identification can
+    // fail outright: `deepActiveElement()` descends open roots, but a closed
+    // one exposes no `shadowRoot` to descend and `composedPath()` stops at the
+    // host, so a login form inside `attachShadow({ mode: 'closed' })` is
+    // unreachable from every angle. Text whose source cannot be attributed is
+    // withheld rather than published — losing the item over a closed
+    // component's field is a far smaller cost than handing a password's exact
+    // length to the configured search engine and to the local history and
+    // autocomplete index. #330.
+    if (context.selectedText && selection?.isCollapsed !== false) {
+      const focused = deepActiveElement();
+      if (!isReadableFormField(focused) || isPasswordInput(focused)) {
+        context.withholdSelection = true;
+      }
+    }
 
-    // Send context info to the host renderer
-    ipcRenderer.sendToHost('context-menu', context);
+    // Decide after page handlers have run (setTimeout fires after the
+    // event dispatch completes; a microtask would run between listeners).
+    setTimeout(() => {
+      // The page suppressed the menu with preventDefault() — honor it.
+      if (event.defaultPrevented) return;
+
+      // Send context info to the host renderer
+      ipcRenderer.sendToHost('context-menu', context);
+    }, 0);
   },
   true
 );
@@ -280,233 +1678,611 @@ ipcRenderer.on('context-menu-action', (_event, action, data) => {
 // Ethereum Provider (EIP-1193)
 // ============================================
 
-// Pending requests waiting for response
-const pendingRequests = new Map();
-let requestId = 0;
+// Injected into the page realm so dapps see window.ethereum as an own-property
+// of their own window, which many wallet-detection libraries require.
+// The preload realm only bridges messages to/from the host renderer (below).
+//
+// PRIVATE MODE GUARD (providers): skipped entirely in private windows —
+// no injection, no bridges. Nothing announces via EIP-6963.
+if (!IS_PRIVATE_WINDOW) {
+  try {
+    // Preloads finish before Chromium executes the document's inline scripts.
+    // Execute Freedom's trusted provider source synchronously in the page's
+    // main world so an eager dapp may capture `window.ethereum` while parsing.
+    // A DOMContentLoaded <script> was too late: apps that saved the initial
+    // undefined value could never recover even though the provider appeared
+    // later. `new Function` runs only our packaged source fetched over sync
+    // IPC; contract HTML never contributes code to this compilation step.
+    const installProvider = new Function(ETHEREUM_INJECT_SOURCE);
+    contextBridge.executeInMainWorld({ func: installProvider });
+  } catch (err) {
+    console.error('[webview-preload] Failed early ethereum provider injection:', err);
 
-// Event listeners
-const eventListeners = {
-  connect: [],
-  disconnect: [],
-  chainChanged: [],
-  accountsChanged: [],
-  message: [],
-};
-
-// Provider state (updated by renderer)
-let providerState = {
-  chainId: null,
-  accounts: [],
-  isConnected: false,
-};
-
-/**
- * Generate unique request ID
- */
-function getNextRequestId() {
-  return ++requestId;
-}
-
-/**
- * EIP-1193 Provider Error
- */
-class ProviderRpcError extends Error {
-  constructor(code, message, data) {
-    super(message);
-    this.code = code;
-    this.data = data;
-    this.name = 'ProviderRpcError';
-  }
-}
-
-/**
- * The Ethereum provider object injected as window.ethereum
- */
-const ethereumProvider = {
-  // MetaMask compatibility
-  isMetaMask: true,
-  isFreedomBrowser: true,
-
-  // State getters
-  get chainId() {
-    return providerState.chainId;
-  },
-  get selectedAddress() {
-    return providerState.accounts[0] || null;
-  },
-  get networkVersion() {
-    if (!providerState.chainId) return null;
-    return String(parseInt(providerState.chainId, 16));
-  },
-
-  /**
-   * Check if connected to the network
-   */
-  isConnected() {
-    return providerState.isConnected;
-  },
-
-  /**
-   * EIP-1193 request method - main entry point
-   */
-  async request({ method, params }) {
-    if (!method) {
-      throw new ProviderRpcError(4200, 'Invalid request: method is required');
+    // Defensive compatibility fallback for an Electron/runtime regression.
+    // The provider source is idempotent, so a partially completed early
+    // install will not be replaced or receive duplicate listeners.
+    try {
+      const script = document.createElement('script');
+      script.textContent = ETHEREUM_INJECT_SOURCE;
+      const inject = () => {
+        const head = document.head || document.documentElement;
+        head.insertBefore(script, head.firstChild);
+        script.remove();
+      };
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', inject, { once: true });
+      } else {
+        inject();
+      }
+    } catch (fallbackErr) {
+      console.error('[webview-preload] Failed fallback ethereum provider injection:', fallbackErr);
     }
+  }
 
-    const id = getNextRequestId();
-    const origin = window.location.origin;
+  // Bridge postMessage from page to IPC
+  window.addEventListener('message', (event) => {
+    if (event.source !== window) return;
+    if (event.data.type === 'FREEDOM_ETHEREUM_REQUEST') {
+      const { id, method, params } = event.data;
+      const origin = window.location.origin;
 
-    return new Promise((resolve, reject) => {
-      // Store the pending request
-      pendingRequests.set(id, { resolve, reject, method });
-
-      // Send request to renderer via host
       ipcRenderer.sendToHost('dapp:provider-request', {
         id,
         method,
-        params: params || [],
+        params,
         origin,
       });
-
-      // Timeout after 5 minutes for transactions, 60 seconds for other requests
-      const timeout = method === 'eth_sendTransaction' ? 300000 : 60000;
-      setTimeout(() => {
-        if (pendingRequests.has(id)) {
-          pendingRequests.delete(id);
-          reject(new ProviderRpcError(4200, 'Request timed out'));
-        }
-      }, timeout);
-    });
-  },
-
-  /**
-   * Add event listener
-   */
-  on(event, handler) {
-    if (eventListeners[event]) {
-      eventListeners[event].push(handler);
     }
-    return this;
-  },
+  });
 
-  /**
-   * Remove event listener
-   */
-  removeListener(event, handler) {
-    if (eventListeners[event]) {
-      const index = eventListeners[event].indexOf(handler);
-      if (index > -1) {
-        eventListeners[event].splice(index, 1);
-      }
-    }
-    return this;
-  },
+  // Bridge IPC responses back to page
+  ipcRenderer.on('dapp:provider-response', (_event, { id, result, error }) => {
+    console.log('[webview-preload] Received provider response:', { id, result, error });
+    window.postMessage(
+      {
+        type: 'FREEDOM_ETHEREUM_RESPONSE',
+        id,
+        result,
+        error,
+      },
+      window.location.origin
+    );
+  });
 
-  /**
-   * Add event listener (alias)
-   */
-  addListener(event, handler) {
-    return this.on(event, handler);
-  },
-
-  /**
-   * Remove all listeners for an event
-   */
-  removeAllListeners(event) {
-    if (event && eventListeners[event]) {
-      eventListeners[event] = [];
-    }
-    return this;
-  },
-
-  // Legacy methods for compatibility
-  enable() {
-    return this.request({ method: 'eth_requestAccounts' });
-  },
-
-  send(methodOrPayload, paramsOrCallback) {
-    // Handle different call signatures
-    if (typeof methodOrPayload === 'string') {
-      return this.request({ method: methodOrPayload, params: paramsOrCallback });
-    }
-    // Legacy payload format
-    if (typeof paramsOrCallback === 'function') {
-      this.sendAsync(methodOrPayload, paramsOrCallback);
-      return;
-    }
-    return this.request({ method: methodOrPayload.method, params: methodOrPayload.params });
-  },
-
-  sendAsync(payload, callback) {
-    this.request({ method: payload.method, params: payload.params })
-      .then((result) => {
-        callback(null, { id: payload.id, jsonrpc: '2.0', result });
-      })
-      .catch((error) => {
-        callback(error, null);
-      });
-  },
-};
-
-/**
- * Emit event to listeners
- */
-function emitProviderEvent(event, data) {
-  if (eventListeners[event]) {
-    eventListeners[event].forEach((handler) => {
-      try {
-        handler(data);
-      } catch (err) {
-        console.error(`[Ethereum Provider] Error in ${event} handler:`, err);
-      }
-    });
-  }
+  ipcRenderer.on('dapp:provider-event', (_event, { event, data }) => {
+    window.postMessage(
+      {
+        type: 'FREEDOM_ETHEREUM_EVENT',
+        event,
+        data,
+      },
+      window.location.origin
+    );
+  });
 }
 
-// Handle responses from renderer
-ipcRenderer.on('dapp:provider-response', (_event, { id, result, error }) => {
-  const pending = pendingRequests.get(id);
-  if (pending) {
-    pendingRequests.delete(id);
-    if (error) {
-      pending.reject(new ProviderRpcError(error.code || 4000, error.message, error.data));
-    } else {
-      pending.resolve(result);
-    }
-  }
-});
+// ============================================
+// Swarm Provider (window.swarm)
+// ============================================
 
-// Handle events from renderer (accountsChanged, chainChanged, etc.)
-ipcRenderer.on('dapp:provider-event', (_event, { event, data }) => {
-  // Update internal state
-  if (event === 'chainChanged') {
-    providerState.chainId = data;
-  } else if (event === 'accountsChanged') {
-    providerState.accounts = data || [];
-  } else if (event === 'connect') {
-    providerState.isConnected = true;
-    providerState.chainId = data?.chainId || null;
-  } else if (event === 'disconnect') {
-    providerState.isConnected = false;
-    providerState.accounts = [];
-  }
-
-  // Emit to dApp listeners
-  emitProviderEvent(event, data);
-});
-
-// Handle state sync from renderer (initial state)
-ipcRenderer.on('dapp:provider-state', (_event, state) => {
-  providerState = { ...providerState, ...state };
-});
-
-// Expose window.ethereum at preload time so synchronous page scripts can detect it.
 try {
-  contextBridge.exposeInMainWorld('ethereum', ethereumProvider);
-  window.dispatchEvent?.(new Event('ethereum#initialized'));
+  const swarmScript = document.createElement('script');
+  swarmScript.textContent = `
+    (function() {
+      const pendingRequests = new Map();
+      let requestId = 0;
+      const eventListeners = { connect: [], disconnect: [], message: [] };
+
+      function emitEvent(event, data) {
+        if (eventListeners[event]) {
+          eventListeners[event].forEach(h => { try { h(data); } catch(e) {} });
+        }
+      }
+
+      window.swarm = {
+        isFreedomBrowser: true,
+
+        async request({ method, params }) {
+          if (!method) throw new Error('method is required');
+          const id = ++requestId;
+          return new Promise((resolve, reject) => {
+            pendingRequests.set(id, { resolve, reject });
+            window.postMessage({ type: 'FREEDOM_SWARM_REQUEST', id, method, params: params || {} }, '*');
+            const longRunning = method.startsWith('swarm_publish') ||
+              method.startsWith('swarm_send') ||
+              method === 'swarm_createFeed' ||
+              method === 'swarm_updateFeed' ||
+              method === 'swarm_writeFeedEntry' ||
+              method === 'swarm_writeSingleOwnerChunk' ||
+              method === 'swarm_getSigningIdentity' ||
+              method === 'swarm_getMessagingIdentity' ||
+              method === 'swarm_subscribe';
+            const timeout = longRunning ? 300000 : 60000;
+            setTimeout(() => {
+              if (pendingRequests.has(id)) {
+                pendingRequests.delete(id);
+                const err = new Error('Request timed out');
+                err.code = -32603;
+                reject(err);
+              }
+            }, timeout);
+          });
+        },
+
+        requestAccess() { return this.request({ method: 'swarm_requestAccess' }); },
+        getCapabilities() { return this.request({ method: 'swarm_getCapabilities' }); },
+        publishData(params) { return this.request({ method: 'swarm_publishData', params: params }); },
+        publishFiles(params) { return this.request({ method: 'swarm_publishFiles', params: params }); },
+        getUploadStatus(params) { return this.request({ method: 'swarm_getUploadStatus', params: params }); },
+        createFeed(params) { return this.request({ method: 'swarm_createFeed', params: params }); },
+        updateFeed(params) { return this.request({ method: 'swarm_updateFeed', params: params }); },
+        writeFeedEntry(params) { return this.request({ method: 'swarm_writeFeedEntry', params: params }); },
+        readFeedEntry(params) { return this.request({ method: 'swarm_readFeedEntry', params: params }); },
+        listFeeds() { return this.request({ method: 'swarm_listFeeds' }); },
+        publishChunk(params) { return this.request({ method: 'swarm_publishChunk', params: params }); },
+        readChunk(params) { return this.request({ method: 'swarm_readChunk', params: params }); },
+        writeSingleOwnerChunk(params) { return this.request({ method: 'swarm_writeSingleOwnerChunk', params: params }); },
+        readSingleOwnerChunk(params) { return this.request({ method: 'swarm_readSingleOwnerChunk', params: params }); },
+        getSigningIdentity() { return this.request({ method: 'swarm_getSigningIdentity' }); },
+        getMessagingIdentity() { return this.request({ method: 'swarm_getMessagingIdentity' }); },
+        subscribe(params) { return this.request({ method: 'swarm_subscribe', params: params }); },
+        unsubscribe(params) { return this.request({ method: 'swarm_unsubscribe', params: params }); },
+        sendPss(params) { return this.request({ method: 'swarm_sendPss', params: params }); },
+        sendGsoc(params) { return this.request({ method: 'swarm_sendGsoc', params: params }); },
+
+        on(event, handler) { if (eventListeners[event]) eventListeners[event].push(handler); return this; },
+        removeListener(event, handler) {
+          if (eventListeners[event]) {
+            const i = eventListeners[event].indexOf(handler);
+            if (i > -1) eventListeners[event].splice(i, 1);
+          }
+          return this;
+        },
+        addListener(event, handler) { return this.on(event, handler); },
+        removeAllListeners(event) {
+          if (event && eventListeners[event]) eventListeners[event] = [];
+          if (!event) Object.keys(eventListeners).forEach((key) => { eventListeners[key] = []; });
+          return this;
+        },
+      };
+
+      window.addEventListener('message', function(event) {
+        if (event.source !== window) return;
+        if (event.data.type === 'FREEDOM_SWARM_RESPONSE') {
+          const pending = pendingRequests.get(event.data.id);
+          if (pending) {
+            pendingRequests.delete(event.data.id);
+            if (event.data.error) {
+              const err = new Error(event.data.error.message);
+              err.code = event.data.error.code;
+              err.data = event.data.error.data;
+              pending.reject(err);
+            } else {
+              pending.resolve(event.data.result);
+            }
+          }
+        } else if (event.data.type === 'FREEDOM_SWARM_EVENT') {
+          emitEvent(event.data.event, event.data.data);
+        }
+      });
+    })();
+  `;
+
+  const injectSwarm = () => {
+    const head = document.head || document.documentElement;
+    head.insertBefore(swarmScript, head.firstChild);
+    swarmScript.remove();
+  };
+
+  // PRIVATE MODE GUARD (providers): window.swarm is not injected in
+  // private windows — same policy as window.ethereum above.
+  // Internal pages don't get it either: they talk to main through freedomAPI,
+  // and their CSP (`script-src 'self'`, #432) refuses this inline <script>, so
+  // injecting it there would only log a violation.
+  if (!IS_PRIVATE_WINDOW && !isInternalPage()) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', injectSwarm, { once: true });
+    } else {
+      injectSwarm();
+    }
+  }
 } catch (err) {
-  console.error('[webview-preload] Failed to inject ethereum provider:', err);
+  console.error('[webview-preload] Failed to inject swarm provider:', err);
 }
 
-console.log('[webview-preload] Loaded (freedomAPI + context menu + ethereum provider)');
+if (!IS_PRIVATE_WINDOW) {
+  // Bridge postMessage from page to IPC (Swarm)
+  window.addEventListener('message', (event) => {
+    if (event.source !== window) return;
+    if (event.data.type === 'FREEDOM_SWARM_REQUEST') {
+      const { id, method, params } = event.data;
+      ipcRenderer.sendToHost('swarm:provider-request', { id, method, params });
+    }
+  });
+
+  // Bridge IPC responses back to page (Swarm)
+  ipcRenderer.on('swarm:provider-response', (_event, { id, result, error }) => {
+    window.postMessage(
+      {
+        type: 'FREEDOM_SWARM_RESPONSE',
+        id,
+        result,
+        error,
+      },
+      window.location.origin
+    );
+  });
+
+  ipcRenderer.on('swarm:provider-event', (_event, { event, data }) => {
+    window.postMessage(
+      {
+        type: 'FREEDOM_SWARM_EVENT',
+        event,
+        data,
+      },
+      window.location.origin
+    );
+  });
+}
+
+// ============================================
+// Radicle Provider (window.radicle)
+// ============================================
+// Actions-only provider: reads of public repo data are plain
+// fetch('rad:<rid>/…') calls resolved by the main-process rad: protocol
+// handler — no provider involvement. See docs/radicle-provider-api.md.
+
+try {
+  const radicleScript = document.createElement('script');
+  radicleScript.textContent = `
+    (function() {
+      const pendingRequests = new Map();
+      let requestId = 0;
+      const eventListeners = { connect: [], disconnect: [], seedStatus: [] };
+
+      function emitEvent(event, data) {
+        if (eventListeners[event]) {
+          eventListeners[event].forEach(h => { try { h(data); } catch(e) {} });
+        }
+      }
+
+      window.radicle = {
+        isFreedomBrowser: true,
+
+        async request({ method, params }) {
+          if (!method) throw new Error('method is required');
+          const id = ++requestId;
+          return new Promise((resolve, reject) => {
+            pendingRequests.set(id, { resolve, reject });
+            window.postMessage({ type: 'FREEDOM_RADICLE_REQUEST', id, method, params: params || {} }, '*');
+            // Execution itself is prompt — seed/sync hand the network fetch
+            // to a background tracker (seedStatus events report progress;
+            // radicle_getSeedStatus restores a snapshot after reload). But the
+            // methods below can first block on a consent prompt while the
+            // user deliberates; timing those out at 60s rejects the page
+            // promise while the grant and the write still land in main, so
+            // the dApp retries and duplicates the COB. Match the swarm
+            // sibling's 300s budget for anything that can prompt.
+            const canPrompt = method === 'radicle_requestAccess' ||
+              method === 'radicle_seed' ||
+              method === 'radicle_getIdentity' ||
+              method === 'radicle_createIssue' ||
+              method === 'radicle_commentIssue' ||
+              method === 'radicle_editIssueState' ||
+              method === 'radicle_commentPatch';
+            const timeout = canPrompt ? 300000 : 60000;
+            setTimeout(() => {
+              if (pendingRequests.has(id)) {
+                pendingRequests.delete(id);
+                const err = new Error('Request timed out');
+                err.code = -32603;
+                reject(err);
+              }
+            }, timeout);
+          });
+        },
+
+        requestAccess() { return this.request({ method: 'radicle_requestAccess' }); },
+        disconnect() { return this.request({ method: 'radicle_disconnect' }); },
+        getCapabilities() { return this.request({ method: 'radicle_getCapabilities' }); },
+        getNodeStatus() { return this.request({ method: 'radicle_getNodeStatus' }); },
+        listSeededRepos() { return this.request({ method: 'radicle_listSeededRepos' }); },
+        seed(params) { return this.request({ method: 'radicle_seed', params: params }); },
+        unseed(params) { return this.request({ method: 'radicle_unseed', params: params }); },
+        sync(params) { return this.request({ method: 'radicle_sync', params: params }); },
+        getSeedStatus(params) { return this.request({ method: 'radicle_getSeedStatus', params: params }); },
+        getIdentity() { return this.request({ method: 'radicle_getIdentity' }); },
+        createIssue(params) { return this.request({ method: 'radicle_createIssue', params: params }); },
+        commentIssue(params) { return this.request({ method: 'radicle_commentIssue', params: params }); },
+        editIssueState(params) { return this.request({ method: 'radicle_editIssueState', params: params }); },
+        commentPatch(params) { return this.request({ method: 'radicle_commentPatch', params: params }); },
+
+        on(event, handler) { if (eventListeners[event]) eventListeners[event].push(handler); return this; },
+        removeListener(event, handler) {
+          if (eventListeners[event]) {
+            const i = eventListeners[event].indexOf(handler);
+            if (i > -1) eventListeners[event].splice(i, 1);
+          }
+          return this;
+        },
+        addListener(event, handler) { return this.on(event, handler); },
+        removeAllListeners(event) {
+          if (event && eventListeners[event]) eventListeners[event] = [];
+          if (!event) Object.keys(eventListeners).forEach((key) => { eventListeners[key] = []; });
+          return this;
+        },
+      };
+
+      window.addEventListener('message', function(event) {
+        if (event.source !== window) return;
+        if (event.data.type === 'FREEDOM_RADICLE_RESPONSE') {
+          const pending = pendingRequests.get(event.data.id);
+          if (pending) {
+            pendingRequests.delete(event.data.id);
+            if (event.data.error) {
+              const err = new Error(event.data.error.message);
+              err.code = event.data.error.code;
+              err.data = event.data.error.data;
+              pending.reject(err);
+            } else {
+              pending.resolve(event.data.result);
+            }
+          }
+        } else if (event.data.type === 'FREEDOM_RADICLE_EVENT') {
+          emitEvent(event.data.event, event.data.data);
+        }
+      });
+    })();
+  `;
+
+  const injectRadicle = () => {
+    const head = document.head || document.documentElement;
+    head.insertBefore(radicleScript, head.firstChild);
+    radicleScript.remove();
+  };
+
+  // PRIVATE MODE GUARD (providers): window.radicle is not injected in
+  // private windows — same policy as window.ethereum / window.swarm above.
+  // Skipped on internal pages for the same reason as window.swarm (#432).
+  if (!IS_PRIVATE_WINDOW && !isInternalPage()) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', injectRadicle, { once: true });
+    } else {
+      injectRadicle();
+    }
+  }
+} catch (err) {
+  console.error('[webview-preload] Failed to inject radicle provider:', err);
+}
+
+if (!IS_PRIVATE_WINDOW) {
+  // Bridge postMessage from page to IPC (Radicle)
+  window.addEventListener('message', (event) => {
+    if (event.source !== window) return;
+    if (event.data.type === 'FREEDOM_RADICLE_REQUEST') {
+      const { id, method, params } = event.data;
+      ipcRenderer.sendToHost('radicle:provider-request', { id, method, params });
+    }
+  });
+
+  // Bridge IPC responses back to page (Radicle)
+  ipcRenderer.on('radicle:provider-response', (_event, { id, result, error }) => {
+    window.postMessage(
+      {
+        type: 'FREEDOM_RADICLE_RESPONSE',
+        id,
+        result,
+        error,
+      },
+      window.location.origin
+    );
+  });
+
+  ipcRenderer.on('radicle:provider-event', (_event, { event, data }) => {
+    window.postMessage(
+      {
+        type: 'FREEDOM_RADICLE_EVENT',
+        event,
+        data,
+      },
+      window.location.origin
+    );
+  });
+}
+
+// Note: transient 404/500 recovery for bzz:// sub-resources is handled by the
+// main-process `bzz:` protocol handler in `src/main/swarm/bzz-protocol.js`,
+// not by in-page JavaScript. See README "Swarm Content Retrieval".
+
+// ============================================
+// Ad blocking — cosmetic filtering (element hiding)
+// ============================================
+//
+// The filter engine lives in the main process (it can't be required in this
+// sandboxed preload). This thin client extracts DOM features, asks the engine
+// for matching element-hiding CSS over IPC, and injects it as a <style>.
+// Two phases: an initial request for the frame's hostname-specific rules, then
+// generic rules for the classes/ids/hrefs actually present, refreshed as the
+// DOM mutates. Network blocking already removes the requests; this hides the
+// leftover ad containers/placeholders.
+(function setupCosmeticFiltering() {
+  const loc = globalThis.location;
+  // Only real web frames — internal pages and dweb hashes carry no ad markup.
+  if (!loc || (loc.protocol !== 'http:' && loc.protocol !== 'https:')) return;
+  if (isInternalPage()) return;
+
+  const IGNORED_TAGS = new Set(['br', 'head', 'link', 'meta', 'script', 'style', 's']);
+  let active = true;
+  let styleEl = null;
+  let observer = null;
+
+  const stopObserving = () => {
+    if (observer) {
+      observer.disconnect();
+      observer = null;
+    }
+  };
+
+  const injectStyles = (css) => {
+    if (!css) return;
+    if (styleEl === null) {
+      styleEl = document.createElement('style');
+      styleEl.setAttribute('data-freedom-adblock', 'cosmetic');
+    }
+    styleEl.appendChild(document.createTextNode(`${css}\n`));
+    if (!styleEl.isConnected) {
+      const parent = document.head || document.documentElement;
+      if (parent) parent.appendChild(styleEl);
+    }
+  };
+
+  const newFeatures = () => ({ classes: new Set(), ids: new Set(), hrefs: new Set() });
+
+  // Read one element's own class/id/href (mirrors the per-element half of
+  // @ghostery/adblocker-content's extractFeaturesFromDOM, kept self-contained
+  // because sandboxed preloads can't require it).
+  const collectOwn = (el, out) => {
+    if (!el || !el.nodeName || IGNORED_TAGS.has(el.nodeName.toLowerCase())) return;
+    const id = el.getAttribute?.('id');
+    if (id) out.ids.add(id);
+    if (el.classList) for (const cls of el.classList) out.classes.add(cls);
+    const href = el.getAttribute?.('href');
+    if (href) out.hrefs.add(href);
+  };
+
+  // Scan an element and its subtree. Used only for added nodes — an attribute
+  // change touches only its target, so those take collectOwn (no re-walk).
+  const collectSubtree = (root, out) => {
+    if (!root) return;
+    collectOwn(root, out);
+    if (root.querySelectorAll) {
+      for (const el of root.querySelectorAll(
+        '[id]:not(html):not(body),[class]:not(html):not(body),[href]'
+      )) {
+        collectOwn(el, out);
+      }
+    }
+  };
+
+  // Only forward tokens not seen before, so mutation batches stay small and
+  // the engine isn't re-queried for the same selectors. Capped so a page with
+  // pathologically many distinct tokens (esp. hrefs) can't grow these Sets or
+  // the query rate without bound.
+  const KNOWN_MAX = 8192;
+  const knownClasses = new Set();
+  const knownIds = new Set();
+  const knownHrefs = new Set();
+  const pick = (set, known) => {
+    const fresh = [];
+    for (const value of set) {
+      if (known.has(value)) continue;
+      if (known.size >= KNOWN_MAX) break; // cap reached — stop tracking/forwarding
+      known.add(value);
+      fresh.push(value);
+    }
+    return fresh;
+  };
+
+  const requestCosmetics = async (payload) => {
+    if (!active) return;
+    try {
+      const res = await ipcRenderer.invoke('adblock:cosmetic', { url: loc.href, ...payload });
+      if (!res || res.active === false) {
+        // Disabled, allowlisted, or no engine — stop all DOM work for this frame.
+        active = false;
+        stopObserving();
+        return;
+      }
+      injectStyles(res.styles);
+    } catch {
+      // Main process unavailable — leave the page unmodified.
+    }
+  };
+
+  // Forward whatever new tokens `out` holds, if any.
+  const forwardNew = (out) => {
+    const fresh = {
+      classes: pick(out.classes, knownClasses),
+      ids: pick(out.ids, knownIds),
+      hrefs: pick(out.hrefs, knownHrefs),
+    };
+    if (fresh.classes.length || fresh.ids.length || fresh.hrefs.length) {
+      requestCosmetics(fresh);
+    }
+  };
+
+  // Phase 1: hostname-specific rules, before the DOM is populated.
+  requestCosmetics({ initial: true });
+
+  // Phase 2: generic rules for whatever the initial DOM contains, then watch
+  // for dynamically-added nodes / attribute changes.
+  const onReady = () => {
+    if (!active || !document.documentElement) return;
+    const initial = newFeatures();
+    collectSubtree(document.documentElement, initial);
+    forwardNew(initial);
+    if (typeof MutationObserver === 'undefined') return;
+
+    const attrTargets = new Set(); // shallow: only their own attrs changed
+    const addedRoots = new Set(); // deep: scan their subtrees
+    let debounceTimer = null;
+    let maxWaitTimer = null;
+    const pendingCount = () => attrTargets.size + addedRoots.size;
+    const flush = () => {
+      clearTimeout(debounceTimer);
+      clearTimeout(maxWaitTimer);
+      maxWaitTimer = null;
+      if (!active) {
+        attrTargets.clear();
+        addedRoots.clear();
+        return;
+      }
+      if (pendingCount() === 0) return;
+      const out = newFeatures();
+      for (const el of attrTargets) collectOwn(el, out);
+      for (const root of addedRoots) collectSubtree(root, out);
+      attrTargets.clear();
+      addedRoots.clear();
+      forwardNew(out);
+    };
+    observer = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.type === 'attributes') {
+          if (m.target) attrTargets.add(m.target);
+        } else {
+          for (const node of m.addedNodes || []) {
+            if (node.nodeType === 1) addedRoots.add(node);
+          }
+        }
+      }
+      if (pendingCount() === 0) return;
+      // Bounded debounce: coalesce bursts, but cap latency and bail out if a
+      // hostile page floods mutations to keep the sets from growing unbounded.
+      if (pendingCount() > 512) {
+        flush();
+        return;
+      }
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(flush, 25);
+      if (maxWaitTimer === null) maxWaitTimer = setTimeout(flush, 1000);
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class', 'id', 'href'],
+      childList: true,
+      subtree: true,
+    });
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', onReady, { once: true });
+  } else {
+    onReady();
+  }
+})();
+
+console.log(
+  IS_PRIVATE_WINDOW
+    ? '[webview-preload] Loaded (freedomAPI + context menu — private window, providers disabled)'
+    : '[webview-preload] Loaded (freedomAPI + context menu + ethereum + swarm + radicle providers)'
+);

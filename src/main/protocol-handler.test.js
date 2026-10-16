@@ -1,4 +1,5 @@
 const path = require('path');
+const { showPreviousRoutingNotice } = require('./session-routing-notice');
 const {
   createFreedomProtocolHandler,
   findFreedomUrl,
@@ -35,6 +36,34 @@ function createWindowMock() {
 }
 
 describe('protocol-handler', () => {
+  test('queues external URLs while Electron is ready but notice acknowledgment and browser setup are pending', async () => {
+    const app = createAppMock();
+    const windows = [];
+    let browserReady = false;
+    const createMainWindow = jest.fn(() => { windows.push(createWindowMock()); });
+    const handler = createFreedomProtocolHandler({ app, createMainWindow,
+      getMainWindows: () => windows, isBrowserReady: () => browserReady });
+    let acknowledge;
+    const store = { read: () => ({ code: 'pac_resource_failed' }), acknowledge: jest.fn() };
+    const startup = showPreviousRoutingNotice(store, {
+      showMessageBox: () => new Promise((resolve) => { acknowledge = resolve; }),
+    }).then(() => { browserReady = true; handler.flushPendingUrls(); });
+    app.emit('open-url', { preventDefault: jest.fn() }, 'freedom://history');
+    app.emit('second-instance', {}, ['/usr/bin/freedom', 'freedom://live-room?roomId=lr_pending']);
+    handler.flushPendingUrls();
+    await Promise.resolve();
+    expect(app.isReady()).toBe(true);
+    expect(createMainWindow).not.toHaveBeenCalled();
+    acknowledge({ response: 0 });
+    await startup;
+    expect(createMainWindow).toHaveBeenCalledTimes(1);
+    expect(createMainWindow).toHaveBeenCalledWith('freedom://history');
+    expect(windows[0].webContents.send).toHaveBeenCalledTimes(1);
+    expect(windows[0].webContents.send).toHaveBeenCalledWith('navigate-to-url', 'freedom://live-room?roomId=lr_pending');
+    handler.flushPendingUrls();
+    expect(createMainWindow).toHaveBeenCalledTimes(1);
+    expect(windows[0].webContents.send).toHaveBeenCalledTimes(1);
+  });
   test('normalizes only routable freedom URLs and preserves live-room params', () => {
     expect(normalizeFreedomUrl('freedom://live-room?roomId=lr_1&communityId=cmt_1')).toBe(
       'freedom://live-room?roomId=lr_1&communityId=cmt_1'

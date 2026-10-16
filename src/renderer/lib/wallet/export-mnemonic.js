@@ -5,6 +5,7 @@
  */
 
 import { walletState, registerScreenHider } from './wallet-state.js';
+import { refuseSubscreenWhileInFlight } from './signature-flight.js';
 
 // DOM references
 let exportMnemonicScreen;
@@ -17,7 +18,9 @@ let exportPasswordSection;
 let switchTabFn = null;
 
 // Local state
-let exportMnemonicPassword = null;
+// The phrase currently on screen, cleared with the screen. Replaces the
+// vault password this module used to keep around for re-exporting.
+let exportedMnemonic = null;
 
 export function initExportMnemonic(switchTab) {
   switchTabFn = switchTab;
@@ -70,6 +73,8 @@ function setupExportMnemonicListeners() {
 }
 
 async function openExportMnemonic() {
+  if (refuseSubscreenWhileInFlight('Recovery phrase screen')) return;
+
   walletState.identityView?.classList.add('hidden');
   exportMnemonicScreen?.classList.remove('hidden');
 
@@ -86,7 +91,7 @@ export async function closeExportMnemonic() {
     wordsContainer.innerHTML = '';
   }
 
-  exportMnemonicPassword = null;
+  exportedMnemonic = null;
   const passwordInput = document.getElementById('export-password-input');
   if (passwordInput) {
     passwordInput.value = '';
@@ -160,18 +165,14 @@ async function handleExportTouchIdUnlock() {
   const errorEl = document.getElementById('export-unlock-error');
 
   try {
-    const result = await window.quickUnlock.unlock();
+    // Main runs Touch ID, unlocks the vault and exports the phrase itself —
+    // the stored vault password never reaches this renderer (audit O-8).
+    const result = await window.quickUnlock.exportMnemonic();
     if (!result.success) {
       throw new Error(result.error || 'Touch ID cancelled');
     }
 
-    const password = result.password;
-    const unlockResult = await window.identity.unlock(password);
-    if (!unlockResult.success) {
-      throw new Error(unlockResult.error || 'Failed to unlock vault');
-    }
-
-    await showMnemonicWords(password);
+    renderMnemonicWords(result);
   } catch (err) {
     console.error('[WalletUI] Touch ID unlock failed:', err);
     if (errorEl && err.message !== 'Touch ID cancelled') {
@@ -211,9 +212,11 @@ async function handleExportPasswordUnlock() {
 }
 
 async function showMnemonicWords(password) {
+  renderMnemonicWords(await window.identity.exportMnemonic(password));
+}
+
+function renderMnemonicWords(result) {
   try {
-    if (password) exportMnemonicPassword = password;
-    const result = await window.identity.exportMnemonic(exportMnemonicPassword);
     if (!result.success) {
       throw new Error(result.error || 'Failed to export mnemonic');
     }
@@ -233,6 +236,7 @@ async function showMnemonicWords(password) {
       container.appendChild(wordEl);
     });
 
+    exportedMnemonic = result.mnemonic;
     showExportView('mnemonic');
   } catch (err) {
     console.error('[WalletUI] Failed to show mnemonic:', err);
@@ -246,12 +250,13 @@ async function showMnemonicWords(password) {
 
 async function copyMnemonicToClipboard() {
   try {
-    const result = await window.identity.exportMnemonic(exportMnemonicPassword);
-    if (!result.success) {
-      throw new Error(result.error);
+    // The phrase already on screen — copying needs no second secret (the
+    // Touch ID path never had the password to re-export with).
+    if (!exportedMnemonic) {
+      throw new Error('Recovery phrase is not shown');
     }
 
-    await window.electronAPI.copyText(result.mnemonic);
+    await window.electronAPI.copyText(exportedMnemonic);
 
     const btn = document.getElementById('copy-mnemonic-btn');
     if (btn) {

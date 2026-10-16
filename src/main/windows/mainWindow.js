@@ -2,6 +2,8 @@ const log = require('../logger');
 const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { loadSettings } = require('../settings-store');
+const { TEST_HARNESS_RENDERER_ARG } = require('../test-mode');
 
 let currentWindowTitle = 'Freedom';
 
@@ -24,13 +26,35 @@ function getIconPath() {
   return iconPath;
 }
 
-function createMainWindow(initialUrl = null) {
+function createMainWindow(initialUrl = null, options = {}) {
+  // Private windows carry their non-persisted partition name; it reaches
+  // the renderer as a query parameter (same channel as initialUrl) so
+  // tabs.js can stamp it on every webview before first load.
+  const privatePartition =
+    typeof options.privatePartition === 'string' && options.privatePartition
+      ? options.privatePartition
+      : null;
   const isMac = process.platform === 'darwin';
+  const isLinux = process.platform === 'linux';
+  // Linux only: tab strip doubles as the titlebar when the user opts in.
+  // `frame` can't change on a live window, so this is read once at creation.
+  const linuxFrameless = isLinux && loadSettings().tabsInTitlebar === true;
+
+  // Opt-in test switch: keep the window hidden. The renderer still loads and
+  // is driveable via Playwright (DOM/JS), but a never-shown window has no
+  // reliable frame clock (~1 fps or none under xvfb), so Playwright's
+  // click/check actionability waits can stall and a click can land on the
+  // page under freshly-shown chrome (#479, #536). No e2e fixture sets this;
+  // several pin it to '0'. Only ci.yml's Myotis live step exports it, for a
+  // spec that never clicks. To avoid a popped-up window locally, run the
+  // suites under `xvfb-run -a` instead of setting this.
+  const hideWindow = process.env.FREEDOM_TEST_HIDE_WINDOW === '1';
 
   const window = new BrowserWindow({
     width: 1200,
     height: 800,
     title: 'Freedom',
+    show: !hideWindow,
     backgroundColor: '#1f2020',
     // Set icon for Linux/Windows (macOS uses the app bundle icon)
     // Also hide the menu bar on Windows/Linux
@@ -43,13 +67,31 @@ function createMainWindow(initialUrl = null) {
       titleBarStyle: 'hiddenInset',
       trafficLightPosition: { x: 14, y: 14 },
     }),
+    // Linux: drop the OS frame so the in-app tab strip is the titlebar
+    ...(linuxFrameless && { frame: false }),
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload.js'),
+      // Pinned explicitly rather than left to Electron's defaults, so a
+      // future default change or a stray option can't silently weaken the
+      // renderer that holds the privileged preload API
+      // (docs/security-audit-electron.md, E-4).
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      nodeIntegrationInWorker: false,
+      nodeIntegrationInSubFrames: false,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false,
       webviewTag: true,
-      enableRemoteModule: false,
+      // Tells preload.js to expose the E2E harness bridge. Decided here, from
+      // test-mode.js's verdict, rather than by the preload reading
+      // FREEDOM_TEST_MODE itself: a packaged build honours that variable only
+      // under an honoured CDP debug port (docs/security-audit-electron.md,
+      // O-4/O-12), which the renderer cannot see.
+      ...(require('../test-harness').isTestMode() && {
+        additionalArguments: [TEST_HARNESS_RENDERER_ARG],
+      }),
     },
   });
 
@@ -61,10 +103,13 @@ function createMainWindow(initialUrl = null) {
     wc.setWindowOpenHandler(() => ({ action: 'deny' }));
   }
 
-  // Load index.html with optional initial URL as query parameter
+  // Load the installed UI with the initial URL and private partition.
   const indexPath = path.join(__dirname, '..', '..', 'renderer', 'index.html');
-  if (initialUrl) {
-    window.loadFile(indexPath, { query: { initialUrl } });
+  const query = {};
+  if (initialUrl) query.initialUrl = initialUrl;
+  if (privatePartition) query.privatePartition = privatePartition;
+  if (Object.keys(query).length > 0) {
+    window.loadFile(indexPath, { query });
   } else {
     window.loadFile(indexPath);
   }
@@ -72,19 +117,38 @@ function createMainWindow(initialUrl = null) {
   // Track this window
   mainWindows.add(window);
 
+  // PRIVATE MODE GUARD (window title): `currentWindowTitle` is the shared
+  // last-seen title, and private senders deliberately never seed it. Private
+  // windows must not CONSUME it either — otherwise a fresh private window's
+  // native title (taskbar / window switcher) advertises whatever page the
+  // user last had focused in a NORMAL window, e.g. "mybank - Freedom", until
+  // its own renderer sends the first window:set-title. Wrong page attributed
+  // to the wrong window, in the most visible chrome there is.
+  const titleForThisWindow = () => (privatePartition ? 'Freedom' : currentWindowTitle);
+
   window.on('ready-to-show', () => {
-    window.setTitle(currentWindowTitle);
+    window.setTitle(titleForThisWindow());
+
+    // Linux cold start: a freshly-spawned profile process has no valid
+    // startup-activation token, so Mutter denies focus to the new window and
+    // posts a "'Freedom' is ready" notification instead of raising it. Nudge
+    // focus with the always-on-top toggle, which bypasses focus-stealing
+    // prevention. Skip the headless test path, which deliberately stays hidden.
+    if (isLinux && !hideWindow) {
+      window.setAlwaysOnTop(true);
+      window.focus();
+      window.setAlwaysOnTop(false);
+    }
   });
 
   window.on('page-title-updated', (event) => {
     event.preventDefault();
-    window.setTitle(currentWindowTitle);
+    window.setTitle(titleForThisWindow());
   });
 
   window.on('closed', () => {
     mainWindows.delete(window);
   });
-
 
   // Close renderer menus when window loses focus (e.g., clicking system menu)
   window.on('blur', () => {
@@ -103,6 +167,74 @@ function createMainWindow(initialUrl = null) {
     });
   }
 
+  return window;
+}
+
+function focusBrowserWindow(window) {
+  if (!window || window.isDestroyed()) {
+    return false;
+  }
+
+  if (window.isMinimized()) {
+    window.restore();
+  }
+  if (!window.isVisible()) {
+    window.show();
+  }
+
+  try {
+    if (process.platform === 'darwin' && app.focus) {
+      app.focus({ steal: true });
+    } else if (process.platform === 'win32') {
+      // Windows foreground-stealing prevention ignores focus() from a
+      // process that isn't already foreground (the cross-profile switch
+      // case). Briefly toggling always-on-top raises and activates the
+      // window without permanently changing its z-order.
+      window.setAlwaysOnTop(true);
+      window.focus();
+      window.setAlwaysOnTop(false);
+      if (!window.isFocused()) {
+        window.flashFrame(true);
+        window.once('focus', () => window.flashFrame(false));
+      }
+    } else if (process.platform === 'linux') {
+      // Warm profile switch: this process was asked to focus by a file
+      // request from another profile's process, not by input it received, so
+      // an X11 window manager with focus-stealing prevention may refuse a bare
+      // focus() and mark the window "demands attention" instead (GNOME turns
+      // that into a "'Freedom' is ready" notification). Same always-on-top
+      // nudge the cold-start path uses in ready-to-show. Deliberately no
+      // flashFrame() fallback here: on Linux that *sets* demands-attention,
+      // i.e. it would post the very notification this is trying to avoid.
+      // Unproven, kept for parity with cold start: headless mutter 50.1 on
+      // X11 (probed 2026-10, PR #470) accepted a bare focus() here too, so this
+      // only matters for stricter WMs (e.g. KWin focus-stealing "medium"/
+      // "high"), which nobody has tested. Wayland-native windows ignore it, and
+      // that is where #142 still reproduces: raising another process's window
+      // needs an xdg-activation token, which Electron can't mint or pass on.
+      window.setAlwaysOnTop(true);
+      window.focus();
+      window.setAlwaysOnTop(false);
+    }
+  } catch {
+    // Best-effort only; BrowserWindow.focus() below is the real fallback.
+  }
+
+  window.focus();
+  return true;
+}
+
+function focusOrCreateMainWindow(initialUrl = null) {
+  let window = [...mainWindows].find((candidate) => !candidate.isDestroyed());
+  if (!window) {
+    window = createMainWindow(initialUrl);
+  } else if (initialUrl) {
+    // A window already exists, so createMainWindow's initialUrl path doesn't
+    // run — open the target in a new tab on the existing window instead (e.g.
+    // the Profiles manager's edit button focusing an already-running profile).
+    window.webContents.send('tab:new-with-url', initialUrl);
+  }
+  focusBrowserWindow(window);
   return window;
 }
 
@@ -126,6 +258,8 @@ function getMainWindows() {
 
 module.exports = {
   createMainWindow,
+  focusBrowserWindow,
+  focusOrCreateMainWindow,
   setWindowTitle,
   getWindowTitle,
   isMainBrowserWindow,

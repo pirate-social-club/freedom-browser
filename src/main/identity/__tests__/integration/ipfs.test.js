@@ -1,8 +1,10 @@
 /**
- * Integration test: IPFS key injection
+ * Legacy Kubo integration test: IPFS key injection
  *
  * Tests that a derived Ed25519 key can be injected into IPFS and the node
- * starts with the expected PeerID.
+ * starts with the expected PeerID. The app no longer calls this path for
+ * native freedom-ipfs, so it only runs when FREEDOM_TEST_KUBO_LEGACY=1 and a
+ * local Kubo binary is present under ipfs-bin/.
  */
 
 const { spawn, execSync } = require('child_process');
@@ -17,6 +19,7 @@ const { injectIpfsKey } = require('../../injection');
 // Test mnemonic
 const TEST_MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+const RUN_LEGACY_KUBO_TESTS = process.env.FREEDOM_TEST_KUBO_LEGACY === '1';
 
 // Find IPFS binary
 function getIpfsBinaryPath() {
@@ -116,8 +119,12 @@ describe('IPFS Integration', () => {
   const TEST_GATEWAY_PORT = 18080;
 
   beforeAll(() => {
+    if (!RUN_LEGACY_KUBO_TESTS) {
+      console.log('FREEDOM_TEST_KUBO_LEGACY=1 not set, skipping legacy Kubo IPFS tests');
+      return;
+    }
     if (!ipfsBinary) {
-      console.log('IPFS binary not found, skipping integration tests');
+      console.log('Kubo IPFS binary not found, skipping legacy integration tests');
     }
   });
 
@@ -130,8 +137,12 @@ describe('IPFS Integration', () => {
     if (ipfsProcess && !ipfsProcess.killed) {
       ipfsProcess.kill('SIGTERM');
       await new Promise((resolve) => {
-        ipfsProcess.on('exit', resolve);
-        setTimeout(resolve, 3000);
+        const timer = setTimeout(resolve, 3000);
+        timer.unref?.();
+        ipfsProcess.on('exit', () => {
+          clearTimeout(timer);
+          resolve();
+        });
       });
     }
 
@@ -141,7 +152,7 @@ describe('IPFS Integration', () => {
     }
   });
 
-  const maybeTest = ipfsBinary ? test : test.skip;
+  const maybeTest = RUN_LEGACY_KUBO_TESTS && ipfsBinary ? test : test.skip;
 
   maybeTest(
     'starts with injected key and reports correct PeerID',

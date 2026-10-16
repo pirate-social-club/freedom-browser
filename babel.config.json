@@ -8,5 +8,17 @@
         }
       }
     ]
+  ],
+  "overrides": [
+    {
+      "test": "./src/main/webview-preload.js",
+      "parserOpts": {
+        "allowReturnOutsideFunction": true
+      }
+    },
+    {
+      "test": "./node_modules/@spacesprotocol/libveritas",
+      "plugins": ["./test/helpers/babel-import-meta-url.js"]
+    }
   ]
 }

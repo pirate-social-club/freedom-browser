@@ -1,617 +1,92 @@
 # Freedom Browser
 
-[![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL_3.0_or_later-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
-[![Platform](https://img.shields.io/badge/platform-macOS%20|%20Linux%20|%20Windows-lightgrey)](https://github.com/pirate-social-club/freedom-browser/releases)
+[![CI](https://github.com/pirate-social-club/freedom-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/pirate-social-club/freedom-browser/actions/workflows/ci.yml)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL_3.0_or_later-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS%20|%20Linux%20|%20Windows-lightgrey)](https://freedom.baby)
 
-Freedom is a browser for the decentralized web, with Swarm, IPFS, Radicle, and ENS as first-class protocols.
-It ships with integrated Swarm, IPFS, and Radicle nodes, enabling direct peer-to-peer network access without relying on centralized HTTP gateways. Radicle is available on macOS and Linux; the Windows build ships without Radicle until official Windows binaries are published upstream.
+Freedom is a browser for the decentralized web, with Swarm, IPFS, onchain applications, Radicle, ENS, and Tezos Domains as first-class protocols. Integrated Ant, freedom-ipfs, Radicle, experimental Myotis, and Tor components provide direct access to decentralized and onion networks without relying on centralized HTTP gateways.
 
-For the `0.7.12` release, bundled Handshake browsing and Sentinel dVPN are supported on Linux x64 only. Their settings remain visible but disabled with an explanation on macOS, Windows, and Linux ARM. This limitation is encoded in `src/shared/platform-capabilities.json` and enforced during packaging.
+This fork adds Handshake DNSSEC/DANE browsing on Linux x64 and evaluates Spaces integration. Evaluation packages disable upstream updating and require a reviewed package for manual replacement. The Linux evaluation is deb-only and omits bundled Myotis and Arti. HNS and dVPN remain unavailable on the other platform targets, as enforced by `src/shared/platform-capabilities.json`. Secure Spaces browsing is unfinished.
 
----
+## Download
 
-## Quick Start
+Download the latest build for macOS, Linux, or Windows from the official download page at [freedom.baby](https://freedom.baby).
 
-1. **Install Node.js 22+**
+Radicle is available on macOS, Linux, and Windows (x64 and ARM64). The release workflow bundles the Tor (Arti) client for macOS arm64, Linux x64/arm64 and Windows x64. Windows x64 bundling landed in September 2026, so only releases cut after that carry Arti on Windows — an earlier Windows install has none, and updating to the latest build is the fix. No Windows ARM64 build is published at all, so `.onion` access is unavailable on that architecture.
 
-2. **Install dependencies:**
+## What Freedom supports
 
-   ```bash
-   npm install
-   ```
+- Native `bzz://`, `ipfs://`, `ipns://`, `web3://`, and `rad://` navigation, plus optional `.onion` routing through Tor.
+- Contract-hosted applications (draft ERC-8244) loaded straight from an Ethereum-compatible chain, with no HTTP gateway.
+- Integrated Ant (Swarm), freedom-ipfs, Radicle, experimental Myotis, and Tor components with per-profile configuration.
+- ENS, WNS, GNS, and Tezos Domains resolution, including `.eth`, `.box`, `.wei`, `.gwei`, and `.tez` names.
+- Tabs, sidebar, bookmarks, history, downloads, find-in-page, shortcuts, themes, permissions, and automatic updates.
+- Ad blocking with signed list updates and per-site allowlisting.
+- Wallet and dApp flows, x402 payments, hardware-wallet support, and Swarm/Radicle provider APIs.
+- Custom protocol origins so decentralized applications can use relative assets, storage, service workers, and range requests naturally.
 
-3. **Download the node binaries (first time only):**
+See the [feature guide](docs/features.md) for the detailed capability list.
 
-   ```bash
-   npm run bee:download
-   npm run ipfs:download
-   npm run radicle:download
-   ```
+## Run from source
 
-4. **Launch the app:**
+Development uses Node.js 24 LTS. The exact repository version is pinned in [`.nvmrc`](.nvmrc).
 
-   ```bash
-   npm start
-   ```
+```bash
+nvm install
+nvm use
+npm ci
+npm run ant:download
+npm run ipfs:download
+npm run myotis:download
+npm run myotis:build-supervisor
+npm start
+```
 
-5. Swarm and IPFS nodes start automatically by default. To use `rad://`, first enable **Settings → Experimental → Enable Radicle integration (Beta)**. Enter a Swarm hash, IPFS CID, Radicle ID, `bzz://` URL, `ipfs://` URL, `rad://` URL, or `.eth`/`.box` domain in the address bar.
-
----
+Swarm and IPFS start automatically. Radicle and Myotis are opt-in under **Settings → Nodes → Startup**. Run `npm run radicle:download` before enabling Radicle under **Settings → Nodes**; run `npm run tor:download` (macOS, Linux, and Windows) before enabling Tor under **Settings → Advanced** — the Tor rows only appear once that build exists. For prerequisites, platform notes, tests, debugging, and local builds, read the [development guide](docs/development.md).
 
 ## Architecture
 
-Freedom Browser is an Electron application. Protocol logic lives in the main process; the renderer is a modular UI layer that talks to it over IPC (channels defined in `src/shared/ipc-channels.js`). The main process manages node lifecycles (`bee-manager.js`, `ipfs-manager.js`, `radicle-manager.js`), URL rewriting (`request-rewriter.js`), and persistent data (settings, bookmarks, history). A central `service-registry.js` tracks node endpoints, modes, and status, and broadcasts state to all windows — both node managers and the request rewriter read from it.
+Freedom is an Electron application. Protocol, node-lifecycle, permission, wallet, download, and persistence logic lives in the main process. The renderer is a modular UI layer that communicates with the main process through the allowlisted channels in `src/shared/ipc-channels.js`.
 
-When a user enters a `bzz://`, `ipfs://`, `ipns://`, `rad://`, or ENS URL, the main process rewrites it to the active gateway URL via the registry, and subsequent webview requests are normalized to stay within the active hash/CID/RID base. `rad://` handling is gated by the Radicle integration setting.
+The main process handles `bzz:`, `ipfs:`, `ipns:`, `web3:`, `rad:`, and `.onion` navigation, manages per-profile nodes and storage, and resolves supported decentralized names. `web3:` needs no node or gateway: the handler reads the contract's ERC-8244 `html()` document through the same chain-data router the wallet uses. Security-sensitive capabilities stay out of page and renderer contexts unless exposed through a narrow preload or IPC API.
 
----
+| Directory       | Responsibility                                                                         |
+| --------------- | -------------------------------------------------------------------------------------- |
+| `src/main/`     | Electron main process, services, native nodes, protocol handlers, IPC, and persistence |
+| `src/renderer/` | Browser UI, internal pages, navigation, settings, and dApp integration                 |
+| `src/shared/`   | Constants and utilities shared across processes                                        |
+| `test-e2e/`     | Playwright harness and live Electron tests                                             |
+| `config/`       | Runtime templates, default data, and platform entitlements                             |
+| `scripts/`      | Build, download, smoke-test, and maintenance tooling                                   |
+| `docs/`         | User, protocol, contributor, and maintainer documentation                              |
 
-## Features
+Contributors changing process responsibilities or adding IPC channels must follow the [architecture boundaries](docs/agent-playbooks/architecture-boundaries.md).
 
-### Platform capabilities
+## Security model
 
-| Capability | Linux x64 | Linux ARM64 | macOS x64/ARM64 | Windows x64 |
-| --- | --- | --- | --- | --- |
-| Handshake browsing | Supported | Unavailable | Unavailable | Unavailable |
-| Sentinel dVPN | Supported | Unavailable | Unavailable | Unavailable |
-| Swarm and IPFS | Supported | Supported | Supported | Supported |
-| Radicle | Supported | Supported | Supported | Unavailable |
+- Electron runs with context isolation enabled and Node integration disabled in web content.
+- Privileged internal APIs are restricted to trusted `freedom://` pages or narrow provider surfaces.
+- Web permissions are denied by default and granted through per-site prompts.
+- Nodes run locally by default; external endpoints are explicit per-profile settings.
+- ENS resolution uses public RPC fallbacks unless a custom or locally verified endpoint is configured.
 
-Build validation fails when a capability marked supported is missing any declared runtime artifact. Unsupported capabilities are disabled in both the main process and Settings UI rather than failing later at startup.
+Do not post credentials, seed phrases, private keys, or sensitive logs in public issues. See [CONTRIBUTING.md](CONTRIBUTING.md) for disclosure guidance.
 
-### Triple Node Architecture
+## Documentation
 
-Freedom runs Swarm, IPFS, and Radicle nodes, giving you access to three major decentralized networks from a single interface.
+- [Documentation index](docs/README.md)
+- [Development](docs/development.md)
+- [Configuration](docs/configuration.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Swarm content retrieval and migration](docs/protocols/swarm.md)
+- [IPFS/IPNS content retrieval and migration](docs/protocols/ipfs.md)
+- [Contract-hosted applications (ERC-8244)](docs/protocols/onchain-apps.md)
+- [Radicle provider API](docs/radicle-provider-api.md)
+- [Native IPFS desktop integration](docs/freedom-ipfs-native-desktop.md)
+- [Changelog](CHANGELOG.md)
 
-|                      | Swarm                                         | IPFS                                 | Radicle                      |
-| -------------------- | --------------------------------------------- | ------------------------------------ | ---------------------------- |
-| **Protocol**         | `bzz://`                                      | `ipfs://`, `ipns://`                 | `rad://`                     |
-| **Node Software**    | Bee                                           | Kubo                                 | radicle-node + radicle-httpd |
-| **Hash Format**      | 64 or 128-char hex (encrypted refs supported) | CIDv0 (`Qm...`) or CIDv1 (`bafy...`) | Repository ID (`z...`)       |
-| **Gateway Port**     | 1633                                          | 8080                                 | 8780                         |
-| **API Port**         | 1633                                          | 5001                                 | 8780                         |
-| **Route Prefix**     | `/bzz/{hash}/`                                | `/ipfs/{cid}/`, `/ipns/{name}/`      | `/api/v1/repos/{rid}/`       |
-| **Data Directory**   | `bee-data/`                                   | `ipfs-data/`                         | `radicle-data/`              |
-| **Binary Directory** | `bee-bin/`                                    | `ipfs-bin/`                          | `radicle-bin/`               |
+## Contributing
 
-### Smart Node Connection
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request. It explains issue scope, local verification, commit conventions, licensing, and the policy for AI-assisted contributions.
 
-Freedom intelligently manages node connections:
-
-1. **Detect Existing Nodes**: On launch, checks if Swarm, IPFS, or Radicle nodes are already running on default ports
-2. **Reuse When Available**: If a healthy node is detected, Freedom connects to it instead of starting a new one
-3. **Automatic Fallback**: If default ports are busy (but not by a compatible node), Freedom starts bundled nodes on alternative ports
-4. **Visual Feedback**: The Nodes panel shows connection status, including when using an external node or fallback port
-
-This means Freedom works seamlessly whether you:
-
-- Run it standalone (bundled Swarm and IPFS nodes start automatically; Radicle is optional and behind an Experimental setting)
-- Already have system-wide Bee/IPFS/Radicle daemons running (Freedom reuses them)
-- Have port conflicts with other software (Freedom finds available ports)
-
-### Integrated Swarm Bee Node
-
-- **Toolbar Toggle**: Click the network icon to access the Nodes panel with independent on/off switches.
-- **Live Statistics**: View connected peers, visible network peers, and Bee version in real-time.
-- **DHT Client Mode**: Runs in ultra-light mode for minimal bandwidth and resource usage.
-- **Automatic Configuration**: First-run setup generates keys and config automatically.
-
-### Integrated IPFS Kubo Node
-
-- **Independent Toggle**: Start and stop IPFS separately from Swarm.
-- **Live Statistics**: View peer count, bandwidth usage, and Kubo version.
-- **Low-bandwidth Mode**: Configured as DHT client with reduced connection limits.
-
-### Integrated Radicle Node (macOS & Linux)
-
-- **Two-Process Architecture**: Manages both `radicle-node` (P2P network) and `radicle-httpd` (HTTP API) as a coordinated pair.
-- **Automatic Identity**: Creates a Radicle identity on first run (no manual setup required).
-- **Experimental Gate**: Radicle is controlled via **Settings → Experimental → Enable Radicle integration (Beta)**.
-- **Node Toggle**: Once enabled, start and stop Radicle from the Nodes panel.
-- **Live Statistics**: View connected peers, seeded repos, version, and Node ID.
-- **Repository Seeding**: Seed Radicle repositories directly from the browser to help replicate them across the network.
-- **Stale Socket Cleanup**: Automatically cleans up control sockets from unclean shutdowns.
-- **Port Conflict Resolution**: Falls back to ports 8781+ if default port 8780 is unavailable.
-- **Windows**: Radicle is not available on Windows yet (no upstream binaries). The Experimental settings section is hidden on Windows builds.
-
-### Universal Address Bar
-
-Enter any of the following in the address bar:
-
-| Input Type  | Example                                         |
-| ----------- | ----------------------------------------------- |
-| Swarm Hash  | `a1b2c3...` (64 hex characters)                 |
-| Swarm URL   | `bzz://a1b2c3.../path/to/file.html`             |
-| IPFS CID    | `QmHash...` or `bafybeic...`                    |
-| IPFS URL    | `ipfs://QmHash.../path`                         |
-| IPNS URL    | `ipns://k51...` or `ipns://domain.eth`          |
-| Radicle ID  | `rad://z3gqc...`                                |
-| ENS Domain  | `workspace_owner.eth`, `mysite.box`, `mysite.eth/about` |
-| HTTP(S) URL | `https://example.com`                           |
-| Domain      | `example.com` (auto-prefixes `https://`)        |
-
-The address bar also provides **autocomplete suggestions** from browsing history as you type.
-
-### ENS Resolution
-
-- **Automatic Resolution**: `.eth` and `.box` domains resolve to their Swarm, IPFS, or IPNS content.
-- **CCIP-Read Support**: `.box` domains resolve via offchain CCIP-Read (EIP-3668) through 3dns.xyz.
-- **Protocol Detection**: Automatically detects and routes to Swarm (`bzz://`), IPFS (`ipfs://`), or IPNS (`ipns://`) content.
-- **Address Bar Preservation**: ENS names stay visible in the address bar during navigation.
-- **Path Forwarding**: Paths appended to ENS names (e.g., `mysite.eth/docs`) are preserved after resolution.
-
-### Tabbed Browsing
-
-- **Multiple Tabs**: Open multiple pages simultaneously with `Cmd+T`.
-- **Tab Management**: Close tabs with `Cmd+W` or middle-click.
-- **Drag & Drop Reordering**: Rearrange tabs by dragging.
-- **Per-Tab State**: Each tab maintains its own navigation history, address bar state, and bzz/ipfs base.
-- **Link Handling**: Links that open new windows are captured and opened in new tabs instead.
-
-### Navigation Controls
-
-- **Back/Forward**: Standard browser history navigation per tab.
-- **Reload**: Refresh the current page (ignores cache). On error pages, retries the original URL.
-- **Stop**: Cancel page loading mid-request.
-- **Home**: Return to the welcome page.
-- **Keyboard Shortcuts**:
-  - `Cmd+N` / `Ctrl+N`: New window
-  - `Cmd+T` / `Ctrl+T`: New tab
-  - `Cmd+W` / `Ctrl+W` / `Ctrl+F4`: Close tab
-  - `Cmd+Shift+T` / `Ctrl+Shift+T`: Reopen last closed tab
-  - `Alt+1` through `Alt+8`: Switch to tab 1 through 8
-  - `Alt+9`: Switch to the last tab
-  - `Ctrl+PgDn` / `Ctrl+Tab`: Next tab
-  - `Ctrl+PgUp` / `Ctrl+Shift+Tab`: Previous tab
-  - `Ctrl+Shift+PgDn`: Move tab right
-  - `Ctrl+Shift+PgUp`: Move tab left
-  - `Cmd+R` / `Ctrl+R`: Reload (from cache)
-  - `Cmd+Shift+R` / `Ctrl+Shift+R`: Hard reload (bypass cache)
-  - `Cmd+Shift+B` / `Ctrl+Shift+B`: Toggle bookmark bar
-  - `F11`: Toggle fullscreen
-  - `F12` / `Cmd+Alt+I` / `Ctrl+Shift+I`: Developer Tools
-  - `Cmd+=` / `Ctrl+=`: Zoom in
-  - `Cmd+-` / `Ctrl+-`: Zoom out
-  - `Cmd+0` / `Ctrl+0`: Reset zoom
-  - `Cmd+P` / `Ctrl+P`: Print
-  - `Escape`: Stop loading or restore address bar
-
-### Bookmarks
-
-- **Address Bar Star**: Click the star icon to bookmark or unbookmark the current page.
-- **Supported Protocols**: Bookmark any `bzz://`, `ipfs://`, `ipns://`, `rad://`, `http://`, or `https://` URL.
-- **Named Bookmarks**: Name and edit bookmarks via modal or right-click.
-- **Bookmarks Bar**: Quick access below the toolbar, with an overflow menu when bookmarks don't fit. Always visible on the new tab page; toggle visibility on other pages with `Cmd+Shift+B` / `Ctrl+Shift+B` (persisted across sessions).
-
-### Browsing History
-
-- **Automatic Recording**: Pages are recorded as you browse.
-- **History Page**: View and search your browsing history at `freedom://history`.
-
-### Context Menus
-
-Right-click on pages for context-sensitive actions:
-
-- **Page Context**: Back, Forward, Reload, View Page Source, Inspect
-- **Link Context**: Open Link in New Tab, Open Link in New Window, Copy Link Address
-- **Selection Context**: Copy selected text
-- **Image Context**: Open Image in New Tab, Save Image As, Copy Image, Copy Image Address
-- **View Page Source**: Opens `view-source:` URL in a new tab
-
-### Request Rewriting
-
-- **Automatic Path Rewriting**: Absolute paths in decentralized content (e.g., `/images/logo.png`) are automatically rewritten to stay within the current hash/CID.
-- **Cross-Protocol Support**: Works for both Swarm (`/bzz/`) and IPFS (`/ipfs/`, `/ipns/`) content.
-- **Per-Tab Tracking**: Each tab tracks its own content base for correct path resolution.
-
-### Debug Console
-
-- **Toggle via Menu**: Open the hamburger menu (☰) and click "Debug Console".
-- **Console Logs**: Captures JavaScript console output from loaded pages.
-- **Navigation Events**: Shows page load, navigation, and error events.
-- **Timestamps**: All messages include timestamps for debugging.
-- **Clear/Close**: Clear the log or close the panel with dedicated buttons.
-- **CLI Logging**: Debug messages also appear in the terminal.
-
-### Internal Pages
-
-Access built-in browser pages using the `freedom://` protocol:
-
-| Page                      | Description                  |
-| ------------------------- | ---------------------------- |
-| `freedom://home`          | Welcome/home page            |
-| `freedom://history`       | Browsing history             |
-| `freedom://links`         | Link behavior test page      |
-| `freedom://protocol-test` | Protocol and media test page |
-| `rad://{rid}`             | Radicle repository browser   |
-
-### Settings & UI
-
-- **Theme**: Light, Dark, or System (follows OS preference).
-- **Node Auto-start**: Toggle whether Swarm and IPFS nodes start automatically at launch (enabled by default).
-- **Experimental**: Enable Radicle integration (Beta) and set `Start Radicle node when Freedom opens`.
-- **Auto-Updates**: Toggle automatic update checks (enabled by default).
-- **Protocol Icons**: Address bar shows Swarm (hexagon), IPFS (cube), Radicle (seedling), or HTTP (globe) icon based on current protocol.
-- **Hamburger Menu**: Access browser features (New Tab, New Window, History, Zoom, Print, Developer Tools, Settings, About).
-
-### Error Handling
-
-- **Friendly Error Pages**: Clear error messages with the original URL preserved.
-- **Feature-Gated Radicle Errors**: Opening `rad://` while integration is disabled shows: `Radicle integration is disabled. Enable it in Settings > Experimental`.
-- **Retry on Reload**: Pressing reload on an error page retries the original request.
-- **Graceful Degradation**: Navigation errors don't crash the browser.
-
----
-
-## Configuration
-
-### Node Endpoints
-
-Freedom automatically manages node connections. By default:
-
-- **Swarm Bee**: `http://127.0.0.1:1633`
-- **IPFS Gateway**: `http://127.0.0.1:8080`
-- **IPFS API**: `http://127.0.0.1:5001`
-- **Radicle httpd**: `http://127.0.0.1:8780`
-
-The browser automatically detects existing nodes and handles port conflicts. For advanced users who need to override the defaults (e.g., connecting to a remote node), use environment variables:
-
-```bash
-# Connect to a remote Swarm node
-export BEE_API="http://remote-host:1633"
-
-# Connect to a remote IPFS gateway
-export IPFS_GATEWAY="http://remote-host:8080"
-
-npm start
-```
-
-### ENS Resolution (Ethereum)
-
-ENS domains are resolved using Ethereum JSON-RPC. The browser tries multiple public RPC providers in sequence (see `src/main/ens-resolver.js` for the current list). You can prepend your own endpoint by setting the `ETH_RPC` environment variable.
-
-**Recommended: Helios Light Client**
-
-For trustless Ethereum data verification without running a full node, use [Helios](https://github.com/a16z/helios):
-
-```bash
-# Install Helios
-curl https://raw.githubusercontent.com/a16z/helios/master/heliosup/install | bash
-heliosup
-
-# Run with an RPC provider
-helios ethereum --execution-rpc https://eth-mainnet.g.alchemy.com/v2/YOUR_API_KEY
-
-# Configure Freedom to use local Helios
-export ETH_RPC="http://127.0.0.1:8545"
-npm start
-```
-
-### Home Page
-
-Edit `src/renderer/pages/home.html` to customize the welcome view shown on startup or when clicking Home.
-
----
-
-## NPM Scripts
-
-| Script                                                            | Description                                            |
-| ----------------------------------------------------------------- | ------------------------------------------------------ |
-| `npm start`                                                       | Launch the Electron app                                |
-| `npm test`                                                        | Run unit tests (Jest)                                  |
-| `npm run bee:download`                                            | Download the Bee binary for your platform              |
-| `npm run ipfs:download`                                           | Download the Kubo binary for your platform             |
-| `npm run bee:start` / `bee:stop` / `bee:status` / `bee:reset`     | Manage Bee outside the app                             |
-| `npm run ipfs:start` / `ipfs:stop` / `ipfs:status` / `ipfs:reset` | Manage IPFS outside the app                            |
-| `npm run build -- --mac --unsigned`                               | Build unsigned macOS app (for local testing)           |
-| `npm run dist -- --mac`                                           | Build signed macOS distributable (DMG + ZIP)           |
-| `npm run dist:mac:prepare-notary`                                 | Build signed macOS artifacts without notarization wait |
-| `npm run dist:mac:submit-notary`                                  | Submit macOS artifacts to Apple asynchronously         |
-| `npm run dist:mac:notary-status`                                  | Check notarization status from saved receipts          |
-| `npm run dist:mac:notary-log -- <submission-id>`                  | Fetch notarization log JSON for a submission ID        |
-| `npm run dist:mac:staple-notary`                                  | Staple and validate accepted notarized artifacts       |
-| `npm run dist:linux:arm64:docker`                                 | Build Linux ARM64 via Docker (recommended)             |
-| `npm run dist:linux:x64:docker`                                   | Build Linux x64 via Docker                             |
-| `npm run dist -- --win`                                           | Build Windows x64 distributable (NSIS + ZIP)           |
-
-The `build` and `dist` scripts accept `--mac`, `--linux`, or `--win` with optional `--arm64`, `--x64`, `--unsigned`, `--no-notarize`, and `--verbose` flags. See `scripts/build.js` for details.
-
-### Radicle Scripts
-
-| Script                     | Description                                     |
-| -------------------------- | ----------------------------------------------- |
-| `npm run radicle:download` | Download the Radicle binaries for your platform |
-| `npm run radicle:init`     | Initialize Radicle identity and configuration   |
-| `npm run radicle:status`   | Check Radicle httpd API status                  |
-| `npm run radicle:reset`    | Delete all Radicle data and start fresh         |
-
----
-
-## Project Structure
-
-| Directory             | Contents                                                                                                                  |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `src/main/`           | Electron main process — node managers (Bee, IPFS, Radicle), ENS resolver, IPC, settings, history, bookmarks, auto-updater |
-| `src/renderer/`       | UI — tabs, navigation, address bar, menus, context menus, bookmarks bar, debug console, settings modal                    |
-| `src/renderer/pages/` | Internal pages (home, history, error, links, protocol-test, rad-browser)                                                  |
-| `src/shared/`         | Constants shared between main and renderer                                                                                |
-| `config/`             | Bee config template, default bookmarks, macOS entitlements                                                                |
-| `scripts/`            | Build and setup helpers (binary downloads, Bee/IPFS/Radicle init)                                                         |
-| `assets/`             | App icons                                                                                                                 |
-
----
-
-## Development
-
-### Testing
-
-Run all tests:
-
-```bash
-npm test
-```
-
-The test suite covers:
-
-- **url-utils**: Swarm hash parsing, IPFS CID validation (CIDv0/CIDv1), IPFS/IPNS URL parsing, Radicle ID validation, ENS name preservation, display value derivation, edge cases
-- **tabs**: Tab creation, management, and state handling
-- **request-rewriter**: Swarm, IPFS, and Radicle path rewriting for absolute and relative paths
-
-### Logging
-
-The main process uses [electron-log](https://github.com/megahertz/electron-log) with level-based transports:
-
-| Environment                 | Console output      | File output      |
-| --------------------------- | ------------------- | ---------------- |
-| Development (`npm start`)   | `info` and above    | `info` and above |
-| Production (packaged app)   | `warn` and above    | `info` and above |
-| `DEBUG=1` (any environment) | `verbose` and above | `info` and above |
-
-Log files are written to the standard electron-log location (`~/Library/Logs/Freedom/` on macOS).
-
-To enable verbose logging in a packaged app:
-
-```bash
-DEBUG=1 /Applications/Freedom.app/Contents/MacOS/Freedom
-```
-
-### Debugging
-
-- Toggle the debug panel via **Menu (☰) > Debug Console**.
-- Check the terminal for main process logs (visible at `info` level and above in development):
-  - Bee/IPFS/Radicle stdout and stderr
-  - IPC events
-  - Request rewrites
-  - ENS resolution
-- Use Chrome DevTools in the webview (right-click > Inspect Element when available).
-
-### Building
-
-#### macOS
-
-Create a distributable macOS app:
-
-```bash
-npm run dist -- --mac
-```
-
-For local testing without code signing:
-
-```bash
-npm run build -- --mac --unsigned
-```
-
-Output goes to the `dist/` folder as DMG and ZIP archives.
-
-The build includes:
-
-- Bundled Bee, Kubo, and Radicle binaries
-- Bee configuration template
-- All renderer assets
-
-#### Linux
-
-Freedom uses `better-sqlite3` for history and favicon caching, which is a native Node.js module. When cross-compiling for Linux from macOS, the native module must be compiled for the target platform.
-
-**Docker is required for Linux builds with working SQLite support:**
-
-```bash
-# Build for Linux ARM64 (e.g., Raspberry Pi, ARM servers)
-npm run dist:linux:arm64:docker
-
-# Build for Linux x64
-npm run dist:linux:x64:docker
-```
-
-These commands run the build inside a Linux Docker container, ensuring native modules are compiled correctly. Docker Desktop must be running.
-
-**Note:** The non-Docker Linux build commands (`npm run dist -- --linux --arm64`, `npm run dist -- --linux --x64`) only work when building on a native Linux machine of the matching architecture.
-
-#### Windows
-
-```bash
-# Build Windows x64 distributable
-npm run dist -- --win --x64
-
-# Build Windows ARM64 distributable
-npm run dist -- --win --arm64
-```
-
-Output goes to the `dist/` folder as NSIS installer and ZIP archive.
-
-**Note:** Windows builds do not include Radicle binaries (no official upstream release yet). The Experimental settings section is hidden automatically on Windows.
-
-### GitHub Releases
-
-Tagged GitHub releases are built by `.github/workflows/release.yml`.
-
-- Push a tag like `v0.7.1` to build and publish release assets to GitHub Releases
-- The workflow checks out `Sentinel-Autonomybuilder/blue-ai-connect` as a sibling checkout so the current `file:../../blue-ai-connect` dependency resolves the same way it does locally
-- Tagged releases currently publish Linux (`x64`) and Windows (`x64`) artifacts; macOS distribution is disabled until signing and notarization credentials are available
-- Published artifact formats are Linux (`.AppImage`, `.deb`) and Windows (`.exe`, `.zip`)
-- Manual workflow dispatches continue to build unsigned macOS (`x64`, `arm64`) artifacts for packaging preflight only; those artifacts are never attached to a GitHub release
-- The publish step uses the preinstalled GitHub CLI plus `GITHUB_TOKEN` instead of a third-party release action
-- Unsigned macOS builds are preflight artifacts only and must not be distributed as trusted releases
-- GitHub Releases are for distribution artifacts; the in-app auto-updater still reads from `https://freedom.baby/downloads/`
-
-#### Apple Code Signing & Notarization
-
-For signed macOS builds with notarization, copy `.env.example` to `.env` and
-fill in your Apple credentials:
-
-```bash
-APPLE_ID="your-apple-id@example.com"
-APPLE_TEAM_ID="YOUR_TEAM_ID"
-APPLE_APP_SPECIFIC_PASSWORD="xxxx-xxxx-xxxx-xxxx"
-```
-
-The `.env` file is automatically loaded by the build scripts (via `dotenv-cli`),
-so you don't need to manually export these variables. The signed build commands
-(`npm run dist -- --mac`, `npm run dist -- --mac --x64`) will automatically use
-these credentials for code signing and notarization.
-
-**Note:** The `.env` file is git-ignored. Keep credentials out of the repo.
-
-#### Non-blocking notarization (submit now, resume later)
-
-If Apple notarization might take a long time, you can split distribution into
-two phases so your terminal does not block:
-
-1. Build signed artifacts without waiting for notarization:
-
-   ```bash
-   npm run dist:mac:prepare-notary
-   ```
-
-2. Submit artifacts to Apple asynchronously (no `--wait`):
-
-   ```bash
-   npm run dist:mac:submit-notary
-   ```
-
-3. Check notarization status later (safe after reboot/shutdown):
-
-   ```bash
-   npm run dist:mac:notary-status
-   ```
-
-   Inspect Apple processing details for a specific submission:
-
-   ```bash
-   npm run dist:mac:notary-log -- <submission-id>
-   ```
-
-4. Once all submissions are `Accepted`, staple and validate artifacts:
-
-   ```bash
-   npm run dist:mac:staple-notary
-   ```
-
-Submission receipts are stored in `dist/notary-submissions/` so the process can
-be resumed later. These scripts load the same `.env` Apple credentials used by
-`electron-builder` (`APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_SPECIFIC_PASSWORD`),
-so only one credential source needs to be maintained. If preferred, you can use
-a keychain profile instead with `NOTARY_PROFILE=your-profile`.
-
-### Deploying Updates
-
-Freedom includes **non-intrusive auto-update functionality** that silently checks for and downloads updates in the background.
-
-**Update Experience:**
-
-- Silent background downloads - no interruptions
-- Updates install automatically on quit, or manually via menu
-- Users stay in control - can disable in Settings
-
-**Server Setup:**
-
-After building distributable packages with `npm run dist -- --mac`, upload the following files to `https://freedom.baby/downloads/`:
-
-```
-latest-mac.yml       # Auto-generated update metadata
-Freedom-{version}-arm64-mac.zip
-Freedom-{version}-arm64.dmg
-Freedom-{version}-arm64-mac.zip.blockmap
-Freedom-{version}-arm64.dmg.blockmap
-```
-
-**Update Flow:**
-
-1. App checks for updates 10 seconds after launch
-2. Checks again every 6 hours
-3. If new version available → downloads silently in background
-4. Small notification: "Update downloading..."
-5. When ready → notification: "Update ready. Click to restart."
-6. Update installs automatically on quit, or via "Restart to Install Update" menu
-
-**Manual Update Check:**
-
-Users can manually check for updates via **Menu (☰) → Check for Updates**.
-
-**Disable Auto-Updates:**
-
-Users can disable automatic update checks in **Settings → Updates**.
-
-**Testing Updates Locally:**
-
-```bash
-# Terminal 1: Start local update server
-npm run serve:updates
-
-# Terminal 2: Start app with updates enabled
-npm run start:test-updater
-```
-
----
-
-## Security Notes
-
-- **Context Isolation**: Uses `contextIsolation: true` and `nodeIntegration: false`.
-- **Remote Module Disabled**: The remote module is not available.
-- **Minimal API Surface**: Only necessary IPC methods are exposed to the renderer. The `freedomAPI` (history, bookmarks, etc.) is restricted to internal `freedom://` pages — external websites cannot call it.
-- **Local Nodes**: Bee, IPFS, and Radicle run locally; no external services required for basic operation.
-- **Permission Handling**: Pointer lock and fullscreen permissions are granted for better UX in Swarm/IPFS apps.
-- **Public RPC Fallback**: ENS resolution uses public RPCs by default. For trustless verification, use a local Helios client.
-
----
-
-## Troubleshooting
-
-### Bee fails to start
-
-- Freedom automatically detects port conflicts and uses fallback ports
-- If the node still fails, check terminal output for specific error messages
-- Reset Bee data: `npm run bee:reset`
-
-### IPFS fails to start
-
-- Freedom automatically detects port conflicts and uses fallback ports
-- Check for stale lock file: the app should auto-clean, but you can manually delete `ipfs-data/repo.lock`
-- Reset IPFS data: `npm run ipfs:reset`
-
-### Radicle fails to start
-
-- Ensure **Settings → Experimental → Enable Radicle integration (Beta)** is enabled
-- Freedom automatically detects port conflicts and uses fallback ports
-- Ensure both `radicle-node` and `radicle-httpd` binaries exist in `radicle-bin/`
-- If starting for the first time, Freedom creates a Radicle identity automatically
-- Check terminal output for specific error messages
-- Reset Radicle data: `npm run radicle:reset`
-
-### Using an external node
-
-- If you have a system-wide Bee, IPFS, or Radicle daemon running, Freedom will detect and reuse it
-- The Nodes panel will show "Node: localhost:PORT" when connected to an external node
-- The toggle switch is disabled for external nodes (can't stop a node Freedom didn't start)
-
-### ENS resolution not working
-
-- Verify internet connectivity
-- Check if public RPC providers are accessible
-- For reliability, set a custom `ETH_RPC` endpoint
-
-### Content not loading
-
-- Ensure the respective node (Bee, IPFS, or Radicle) is running (check Nodes panel, for Radicle, first enable it in **Settings → Experimental**)
-- Verify the Swarm reference (64 or 128 hex), CID, or Radicle ID is correct
-- Check the debug console for error messages
+This fork of Freedom Browser is available under the [GNU Affero General Public License, version 3 or later](LICENSE). Code taken from upstream Freedom Browser remains under the Mozilla Public License 2.0 within this larger work. Third-party notices are recorded in [NOTICES](NOTICES), and the component audit in [LICENSE_AUDIT.md](LICENSE_AUDIT.md).

@@ -19,7 +19,6 @@ const loadGithubBridgeModule = async (options = {}) => {
   jest.resetModules();
 
   const state = {
-    enableRadicleIntegration: options.enableRadicleIntegration ?? true,
     currentRadicleStatus: options.currentRadicleStatus || 'running',
   };
   const bridgeBtn = createElement('button', {
@@ -202,7 +201,6 @@ describe('github-bridge-ui', () => {
     await ctx.mod.updateGithubBridgeIcon();
     expect(ctx.elements.bridgeBtn.classList.contains('hidden')).toBe(true);
 
-    ctx.state.enableRadicleIntegration = false;
     ctx.windowHandlers['settings:updated']();
     await flushMicrotasks();
     expect(ctx.elements.bridgeBtn.classList.contains('hidden')).toBe(true);
@@ -255,7 +253,7 @@ describe('github-bridge-ui', () => {
 
   test('shows prereq and import errors and supports retry', async () => {
     const ctx = await loadGithubBridgeModule({
-      enableRadicleIntegration: false,
+      currentRadicleStatus: 'stopped',
     });
 
     ctx.mod.initGithubBridgeUi();
@@ -265,10 +263,9 @@ describe('github-bridge-ui', () => {
 
     expect(ctx.elements.prereqErrorState.classList.contains('hidden')).toBe(false);
     expect(ctx.elements.prereqTextEl.textContent).toBe(
-      'Radicle integration is disabled. Enable it in Settings > Experimental'
+      'Radicle node is not running. Enable it from the Nodes menu in the toolbar.'
     );
 
-    ctx.state.enableRadicleIntegration = true;
     ctx.state.currentRadicleStatus = 'running';
     ctx.githubBridge.import.mockResolvedValueOnce({
       success: false,
@@ -330,10 +327,19 @@ describe('github-bridge-ui', () => {
     await flushMicrotasks();
     expect(ctx.electronAPI.copyText).toHaveBeenCalledWith('rad:zexisting');
 
-    ctx.documentHandlers.keydown({
-      key: 'Escape',
-    });
+    const escape = { key: 'Escape', preventDefault: jest.fn() };
+    ctx.documentHandlers.keydown(escape);
     expect(ctx.elements.panel.classList.contains('hidden')).toBe(true);
+    // Closing the panel consumes the press — navigation.js's window-level
+    // Escape (stop loading) stands down on `defaultPrevented`, so dismissing
+    // this panel over a loading page doesn't also cancel the load (#306).
+    expect(escape.preventDefault).toHaveBeenCalled();
+
+    // With the panel already closed the press is left alone for the surfaces
+    // behind it.
+    const escapeAgain = { key: 'Escape', preventDefault: jest.fn() };
+    ctx.documentHandlers.keydown(escapeAgain);
+    expect(escapeAgain.preventDefault).not.toHaveBeenCalled();
 
     ctx.elements.bridgeBtn.classList.remove('hidden');
     ctx.elements.bridgeBtn.dispatch('click', {
@@ -344,5 +350,34 @@ describe('github-bridge-ui', () => {
       target: createElement('div'),
     });
     expect(ctx.elements.panel.classList.contains('hidden')).toBe(true);
+  });
+
+  // #306, dialog sibling: a modal <dialog> raised over the panel is the top
+  // layer, so the press is its own close request — and consuming it here would
+  // cancel that close outright, leaving the dialog open.
+  test('a modal dialog above the panel owns the Escape', async () => {
+    const ctx = await loadGithubBridgeModule();
+
+    ctx.mod.initGithubBridgeUi();
+    await ctx.mod.updateGithubBridgeIcon();
+
+    ctx.elements.bridgeBtn.dispatch('click', { stopPropagation: jest.fn() });
+    await flushMicrotasks();
+    expect(ctx.elements.panel.classList.contains('hidden')).toBe(false);
+
+    const dialog = createElement('dialog');
+    dialog.setAttribute('open', '');
+    global.document.body.appendChild(dialog);
+
+    const escape = { key: 'Escape', preventDefault: jest.fn() };
+    ctx.documentHandlers.keydown(escape);
+    expect(ctx.elements.panel.classList.contains('hidden')).toBe(false);
+    expect(escape.preventDefault).not.toHaveBeenCalled();
+
+    dialog.remove();
+    const next = { key: 'Escape', preventDefault: jest.fn() };
+    ctx.documentHandlers.keydown(next);
+    expect(ctx.elements.panel.classList.contains('hidden')).toBe(true);
+    expect(next.preventDefault).toHaveBeenCalled();
   });
 });

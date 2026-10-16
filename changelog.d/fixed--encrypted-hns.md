@@ -1,0 +1,1 @@
+- HNS lookups use encrypted transport with local DNSSEC/DANE verification and refuse navigation during resolver recovery.

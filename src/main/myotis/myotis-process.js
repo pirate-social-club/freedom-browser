@@ -1,0 +1,390 @@
+// Main requires a native terminal receipt and supervisor OS exit for data reuse.
+const { fork } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const { randomUUID } = require('crypto');
+
+const MAX_ACTIVE = 1;
+const MAX_QUEUED = 16;
+const REQUEST_MS = 10000;
+const NATIVE_REQUEST_MS = 100000; // Host liveness policy, not native cancellation.
+const START_MS = 15000;
+const STOP_GRACE_MS = 1500;
+const EXIT_WAIT_MS = 5000;
+const MAX_MESSAGE_BYTES = 2 * 1024 * 1024;
+
+function childEnvironment() {
+  // Do not inherit NODE_OPTIONS, wallet/provider credentials, model tokens, or
+  // shell configuration. The executable and profile data path are absolute.
+  const env = { ELECTRON_RUN_AS_NODE: '1' };
+  for (const key of ['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'TZ']) {
+    if (process.env[key]) env[key] = process.env[key];
+  }
+  return env;
+}
+
+function supervisorPath() {
+  const os = { darwin: 'mac', linux: 'linux', win32: 'win' }[process.platform];
+  const binary = `myotis-supervisor${process.platform === 'win32' ? '.exe' : ''}`;
+  return (process.resourcesPath && fs.existsSync(path.join(process.resourcesPath, 'myotis-node', binary)))
+    ? path.join(process.resourcesPath, 'myotis-node', binary)
+    : path.join(__dirname, '../../..', 'myotis-bin', `${os}-${process.arch}`, binary);
+}
+
+// The engine's fork watch (Myotis v0.1.14+, biafra23/myotis#561): `null`, or
+// what enough distinct peer networks announce about a fork this build's
+// schedule lacks. It is peer-supplied and unverified — upstream derives it
+// from discv5 ENRs and libp2p Status digests, never from anything
+// verification reads — so it is display-only here: nothing in main routes
+// or gates on it. Every field must match upstream's documented shape or the
+// whole advisory is dropped; a partial one would say something nobody sent.
+const ADVISORY_PHASES = new Set(['SCHEDULED', 'ACTIVE']);
+// Seconds since the epoch; 0 = unknown. Year 9999 keeps it a valid Date.
+const MAX_ADVISORY_TIME = 253402300799;
+// Distinct peer networks (IPv4 /24, IPv6 /48) that voted; upstream needs 3.
+const MAX_ADVISORY_PEERS = 100000;
+
+function upgradeAdvisory(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const { phase, activationTime, forkId, observedPeers } = value;
+  if (!ADVISORY_PHASES.has(phase)) return null;
+  if (!Number.isSafeInteger(activationTime) || activationTime < 0 || activationTime > MAX_ADVISORY_TIME) return null;
+  // `0x00000000` = unknown (upstream: a blob-parameter-only fork rotates the
+  // digest to a value this build cannot compute).
+  if (typeof forkId !== 'string' || !/^0x[0-9a-f]{8}$/i.test(forkId)) return null;
+  if (!Number.isSafeInteger(observedPeers) || observedPeers < 1 || observedPeers > MAX_ADVISORY_PEERS) return null;
+  return { phase, activationTime, forkId: forkId.toLowerCase(), observedPeers };
+}
+
+function statusSnapshot(status) {
+  const snapshot = {};
+  for (const key of ['beaconState', 'currentPeriod', 'targetPeriod', 'peerCount', 'snapPeers', 'snapServingPeers',
+    'finalizedBlockNumber', 'executionBlockNumber', 'wsBoundPeriods', 'running', 'paused',
+    'elReaderAvailable', 'elHunting', 'finalizedSlot', 'finalizedRootHex']) {
+    const value = status?.[key];
+    if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)) ||
+      (typeof value === 'string' && value.length <= 64)) snapshot[key] = value;
+  }
+  if (typeof status?.optimisticBlockNumber === 'number' && Number.isFinite(status.optimisticBlockNumber)) {
+    snapshot.optimisticBlockNumber = status.optimisticBlockNumber;
+  }
+  const advisory = upgradeAdvisory(status?.upgradeAdvisory);
+  if (advisory) snapshot.upgradeAdvisory = advisory;
+  return snapshot;
+}
+
+function unavailable(message, uncertain = false) {
+  const error = new Error(uncertain
+    ? 'Myotis broadcast outcome uncertain; check the signed transaction hash before retrying'
+    : message);
+  error.code = uncertain ? 'MYOTIS_BROADCAST_UNCERTAIN' : 'MYOTIS_UNAVAILABLE';
+  return error;
+}
+
+class MyotisProcess {
+  constructor({ addonPath, network, dataDir, checkpoint = null, bootEnodes = [], onStatus, onUnavailable, onExit, onLifecycle = () => {} }) {
+    this.generation = randomUUID();
+    this.dataDir = dataDir;
+    this.onLifecycle = onLifecycle;
+    this.lifecycleEvents = new Set();
+    this.report('start-attempt');
+    this.nextId = 0;
+    this.active = new Map();
+    this.queue = [];
+    this.accepting = false;
+    this.exited = false;
+    this.stopping = false;
+    this.onStatus = onStatus;
+    this.onUnavailable = onUnavailable;
+    this.onExit = onExit;
+    this.exitPromise = new Promise((resolve) => { this.resolveExit = resolve; });
+    this.startPromise = new Promise((resolve) => { this.resolveStart = resolve; });
+    const helper = supervisorPath();
+    fs.accessSync(helper, fs.constants.X_OK);
+    fs.mkdirSync(dataDir, { recursive: true });
+    this.receiptBuffer = '';
+    this.child = fork(path.join(__dirname, 'myotis-child.js'), [this.generation, dataDir], {
+      execPath: helper,
+      env: childEnvironment(),
+      execArgv: [process.execPath],
+      stdio: ['pipe', 'pipe', 'ignore', 'ipc'],
+      serialization: 'json',
+      // Keep the native owner out of libuv's Windows kill-on-parent-exit job
+      // so it can process control EOF and retire its child. Pipes stay referenced.
+      detached: process.platform === 'win32',
+    });
+    this.child.on('message', (message) => this.receive(message));
+    this.child.once('exit', (code, signal) => {
+      this.supervisorExit = { code, signal };
+      this.finishExit();
+    });
+    this.child.stdout.on('data', (chunk) => {
+      if (this.receiptInvalid) return;
+      this.receiptBuffer += chunk.toString('utf8');
+      if (this.receiptBuffer.length > 1024) { this.invalidReceipt(); return; }
+      let end;
+      while ((end = this.receiptBuffer.indexOf('\n')) >= 0) {
+        const line = this.receiptBuffer.slice(0, end);
+        this.receiptBuffer = this.receiptBuffer.slice(end + 1);
+        let receipt;
+        try { receipt = JSON.parse(line); } catch { this.invalidReceipt(); return; }
+        if (receipt.generation !== this.generation) { this.invalidReceipt(); return; }
+        if (receipt.type === 'owned' && !this.owned) {
+          this.owned = true;
+          if (!this.stopping) this.send({ type: 'start', addonPath, network, dataDir, checkpoint, bootEnodes });
+        } else if (receipt.type === 'reaped' && this.owned && !this.terminalReceipt &&
+          typeof receipt.forced === 'boolean' &&
+          Number.isInteger(receipt.exitCode) && receipt.exitCode >= -1 && receipt.exitCode <= 0xffffffff &&
+          Number.isInteger(receipt.signal) && receipt.signal >= 0 && receipt.signal <= 128) {
+          this.terminalReceipt = receipt;
+        } else { this.invalidReceipt(); return; }
+      }
+      this.finishExit();
+    });
+    this.child.stdout.on('error', () => this.invalidReceipt());
+    this.child.stdout.once('end', () => { this.receiptsEnded = true; this.finishExit(); });
+    this.child.stdin.on('error', () => this.fail('Myotis supervisor control failed'));
+    this.child.on('error', () => this.fail('Myotis supervisor failed'));
+    this.child.on('disconnect', () => {
+      if (!this.exited && !this.stopping) this.fail('Myotis child disconnected');
+    });
+    this.startTimer = setTimeout(() => this.fail('Myotis startup timed out'), START_MS);
+
+  }
+
+  // At most one of each fixed lifecycle event per generation. Never pass raw
+  // addon exceptions, paths, request arguments or engine diagnostics here.
+  report(event, fields = {}) {
+    if (this.lifecycleEvents.has(event)) return;
+    this.lifecycleEvents.add(event);
+    this.onLifecycle({ generation: this.generation, event, ...fields });
+  }
+
+  invalidReceipt() {
+    this.receiptInvalid = true;
+    this.receiptBuffer = '';
+    this.fail('Invalid Myotis supervisor receipt');
+  }
+
+  send(message) {
+    if (this.exited) return;
+    try {
+      this.child.send({ ...message, generation: this.generation }, (error) => {
+        if (error && !this.exited && !this.stopping) this.fail('Myotis child transport failed');
+      });
+    } catch {
+      if (!this.stopping) this.fail('Myotis child transport failed');
+    }
+  }
+
+  receive(message) {
+    if (this.exited || !message || message.generation !== this.generation) return;
+    if (message.type === 'started' && !this.stopping) {
+      clearTimeout(this.startTimer);
+      if (!message.ok) {
+        const failure = ['configuration', 'load', 'methods', 'abi', 'create', 'start', 'checkpoint-unsupported', 'anchor-mismatch'].includes(message.failure)
+          ? message.failure : 'unknown';
+        this.report('startup-failed', { failure });
+        this.failureCode = failure === 'checkpoint-unsupported' ? 'CHECKPOINT_UNSUPPORTED' :
+          failure === 'anchor-mismatch' ? 'CHECKPOINT_STORAGE' :
+            ['load', 'methods', 'abi'].includes(failure) ? 'CHECKPOINT_INSTALLATION' : null;
+        this.fail('Myotis native startup failed (check addon ABI and installation)');
+        return;
+      }
+      this.checkpointSupported = message.checkpointSupported === true;
+      if (Number.isInteger(message.seedPinsCount) && message.seedPinsCount > 0 && message.seedPinsCount <= 64) {
+        this.report('seed-pins', { count: message.seedPinsCount, applied: message.seedPinsApplied === true });
+      }
+      this.report('started');
+      this.accepting = true;
+      this.resolveStart(true);
+      return;
+    }
+    if (message.type !== 'reply') return;
+    const request = this.active.get(message.id);
+    if (!request || request.op !== message.op) return;
+    // A native completion (including a late one) can release its own slot.
+    this.active.delete(request.id);
+    clearTimeout(request.timer);
+    clearTimeout(request.nativeTimer);
+    if (!this.stopping) {
+      if (request.expired) { this.pump(); return; }
+      if (message.ok && JSON.stringify(message.result ?? null).length <= MAX_MESSAGE_BYTES) {
+        if (request.op === 'status') this.onStatus(statusSnapshot(message.result));
+        request.resolve(message.result);
+      } else {
+        request.reject(unavailable('Myotis native operation failed', request.op === 'broadcast'));
+      }
+      this.pump();
+    }
+  }
+
+  request(op, args = [], timeoutMs = REQUEST_MS) {
+    if (!this.accepting || this.stopping) return Promise.reject(unavailable('Myotis is unavailable'));
+    if (JSON.stringify(args).length > MAX_MESSAGE_BYTES) {
+      return Promise.reject(unavailable('Myotis request exceeds size limit'));
+    }
+    // Status is one bounded control request, independent of the read queue.
+    const control = op === 'status';
+    if (control && [...this.active.values()].some((entry) => entry.op === 'status')) {
+      return Promise.reject(unavailable('Myotis status already pending'));
+    }
+    if (!control && this.queue.length >= MAX_QUEUED) {
+      return Promise.reject(unavailable('Myotis request queue is full'));
+    }
+    return new Promise((resolve, reject) => {
+      const request = { op, args, resolve, reject, deadlineAt: Date.now() + timeoutMs };
+      request.timer = setTimeout(() => {
+        const index = this.queue.indexOf(request);
+        if (index >= 0) {
+          this.queue.splice(index, 1);
+          reject(unavailable('Myotis queue deadline exceeded'));
+          return;
+        }
+        if (control) { this.fail('Myotis status timed out'); return; }
+        // Caller patience is not native completion or cancellation. Retain the
+        // actual native slot until its Promise reply or verified owner exit.
+        request.expired = true;
+        reject(unavailable('Myotis caller deadline exceeded', op === 'broadcast'));
+      }, timeoutMs);
+      if (control) this.dispatch(request);
+      else {
+        this.queue.push(request);
+        this.pump();
+      }
+    });
+  }
+
+  pump() {
+    while (this.accepting && !this.stopping && this.queue.length &&
+      [...this.active.values()].filter((entry) => entry.op !== 'status').length < MAX_ACTIVE) {
+      const request = this.queue.shift();
+      // A delayed timer callback must not forward already-expired queued work.
+      if (Date.now() >= request.deadlineAt) {
+        clearTimeout(request.timer);
+        request.reject(unavailable('Myotis queue deadline exceeded'));
+        continue;
+      }
+      this.dispatch(request);
+    }
+  }
+
+  dispatch(request) {
+    request.id = ++this.nextId;
+    this.active.set(request.id, request);
+    if (request.op !== 'status') {
+      request.nativeTimer = setTimeout(() => this.fail('Myotis native liveness deadline exceeded'), NATIVE_REQUEST_MS);
+    }
+    this.send({ type: 'request', id: request.id, op: request.op, args: request.args });
+  }
+
+  fail(message) {
+    if (this.exited || this.stopping) return;
+    this.report('unavailable', { reason: message });
+    this.onUnavailable(message, this.failureCode);
+    this.stop();
+  }
+
+  stop() {
+    if (this.exited) return Promise.resolve(true);
+    // A previous timeout is not a permanent verdict. Once the supervisor has
+    // actually exited, native locks/receipts can establish the child's exit.
+    if (this.stopping && this.supervisorExit && this.receiptsEnded) return this.recoverExit();
+    if (this.stopPromise) return this.stopPromise;
+    this.report('stop-requested');
+    this.stopping = true;
+    this.accepting = false;
+    clearTimeout(this.startTimer);
+    this.resolveStart(false);
+    for (const request of [...this.queue, ...this.active.values()]) {
+      clearTimeout(request.timer);
+      clearTimeout(request.nativeTimer);
+      request.reject(unavailable('Myotis stopped',
+        request.op === 'broadcast' && this.active.has(request.id)));
+    }
+    this.queue.length = 0;
+    this.send({ type: 'stop' });
+    this.killTimer = setTimeout(() => {
+      // EOF revokes the native supervisor's control lease. Only native code
+      // owns the unreaped child and may signal it; JS never signals a PID.
+      if (!this.exited) this.child.stdin.end();
+    }, STOP_GRACE_MS);
+    this.stopPromise = new Promise((resolve) => {
+      this.exitWaitTimer = setTimeout(() => resolve(false), EXIT_WAIT_MS);
+      this.exitPromise.then(() => {
+        clearTimeout(this.exitWaitTimer);
+        resolve(true);
+      });
+    });
+    return this.supervisorExit && this.receiptsEnded ? this.recoverExit() : this.stopPromise;
+  }
+
+  finishExit() {
+    if (!this.supervisorExit || !this.receiptsEnded) return;
+    const verified = !this.receiptInvalid && this.terminalReceipt &&
+      this.supervisorExit.code === 0 && !this.supervisorExit.signal;
+    this.report('supervisor-exit', {
+      classification: verified ? 'verified' : 'unconfirmed',
+      code: Number.isInteger(this.supervisorExit.code) ? this.supervisorExit.code : null,
+      signal: /^SIG[A-Z0-9]{1,12}$/.test(this.supervisorExit.signal) ? this.supervisorExit.signal : null,
+      receipt: this.receiptInvalid ? 'invalid' : this.terminalReceipt ? 'reaped' : 'missing',
+      childExitCode: this.terminalReceipt?.exitCode ?? null,
+      childSignal: this.terminalReceipt?.signal ?? null,
+      forced: this.terminalReceipt?.forced ?? null,
+    });
+    if (verified) {
+      this.didExit();
+    } else {
+      this.fail('Myotis supervisor exit unconfirmed; data directory quarantined');
+      this.recoverExit();
+    }
+  }
+
+  recoverExit() {
+    if (this.exited) return Promise.resolve(true);
+    if (!this.supervisorExit || !this.receiptsEnded) return Promise.resolve(false);
+    if (this.recoveryExitPromise) return this.recoveryExitPromise;
+    // Lazy import avoids a module cycle: the helper launcher uses the trusted
+    // supervisor path/environment defined here. It never scans or kills PIDs.
+    const { recoverOwner } = require('./ownership-recovery');
+    const pending = recoverOwner(this.dataDir).then(() => {
+      this.recoveryFailureCode = null;
+      this.report('exit-recovered');
+      this.didExit();
+      return true;
+    }, (error) => {
+      // Keep the helper's verdict so a failed stop can say "restart the
+      // computer" rather than collapsing every refusal into ownership.
+      this.recoveryFailureCode = error?.code === 'CHECKPOINT_REBOOT_REQUIRED'
+        ? 'CHECKPOINT_REBOOT_REQUIRED' : 'CHECKPOINT_OWNERSHIP';
+      return false;
+    });
+    this.recoveryExitPromise = pending;
+    pending.finally(() => {
+      if (this.recoveryExitPromise === pending) this.recoveryExitPromise = null;
+    });
+    return pending;
+  }
+
+  didExit() {
+    if (this.exited) return;
+    if (!this.stopping) this.onUnavailable('Myotis child exited unexpectedly');
+    this.exited = true;
+    this.accepting = false;
+    clearTimeout(this.startTimer);
+    clearTimeout(this.killTimer);
+    this.resolveStart(false);
+    for (const request of [...this.queue, ...this.active.values()]) {
+      clearTimeout(request.timer);
+      clearTimeout(request.nativeTimer);
+      request.reject(unavailable('Myotis child exited',
+        request.op === 'broadcast' && this.active.has(request.id)));
+    }
+    this.queue.length = 0;
+    this.active.clear();
+    this.resolveExit(true);
+    this.onExit();
+  }
+}
+
+module.exports = { MyotisProcess, childEnvironment, supervisorPath, upgradeAdvisory };

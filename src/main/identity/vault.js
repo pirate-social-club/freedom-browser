@@ -11,6 +11,7 @@ const { encrypt, decrypt } = require('@metamask/browser-passworder');
 const fs = require('fs');
 const path = require('path');
 const { isValidMnemonic, createMnemonic, deriveUserWallet } = require('./derivation');
+const { VAULT_LOCKED_MESSAGE } = require('../wallet/vault-errors');
 
 // Vault state
 let unlockedMnemonic = null;
@@ -184,6 +185,11 @@ function resetAutoLockTimer(autoLockMs = DEFAULT_AUTO_LOCK_MS) {
       console.log('[Vault] Auto-locking due to inactivity');
       lockVault();
     }, autoLockMs);
+    // Don't keep the event loop alive solely for this timer. Production
+    // Electron stays running via windows / IPC handles, so the timer still
+    // fires normally; in Jest, the worker can exit cleanly once tests finish
+    // without waiting for a pending auto-lock to elapse.
+    autoLockTimer.unref();
   }
 }
 
@@ -252,7 +258,7 @@ async function verifyPassword(dataDir, password) {
  */
 function exportMnemonic() {
   if (!unlockedMnemonic) {
-    throw new Error('Vault is locked');
+    throw new Error(VAULT_LOCKED_MESSAGE);
   }
   return unlockedMnemonic;
 }
@@ -265,7 +271,7 @@ function exportMnemonic() {
  */
 function exportPrivateKey(accountIndex = 0) {
   if (!unlockedMnemonic) {
-    throw new Error('Vault is locked');
+    throw new Error(VAULT_LOCKED_MESSAGE);
   }
   const wallet = deriveUserWallet(unlockedMnemonic, accountIndex);
   return wallet.privateKey;

@@ -3,9 +3,23 @@ const { app, ipcMain } = require('electron');
 const path = require('path');
 const Database = require('better-sqlite3');
 const IPC = require('../shared/ipc-channels');
+const { isPrivateWebContents } = require('./private/private-windows');
+const historySearch = require('./history-search');
+const {
+  runInWorker,
+  stopWorker,
+  HistorySearchUnavailable,
+  HistorySearchTimeout,
+} = require('./history-search-host');
+
+// `history:get` without a limit used to return the whole table (#503); it is
+// capped now. The address bar and the History page use the bounded
+// `history:autocomplete` / `history:page` queries instead.
+const HISTORY_GET_MAX = historySearch.PAGE_SIZE_MAX;
 
 // Database instance (singleton)
 let db = null;
+let dbPath = null;
 
 /**
  * Get or create the database connection
@@ -14,7 +28,7 @@ let db = null;
 function getDb() {
   if (db) return db;
 
-  const dbPath = path.join(app.getPath('userData'), 'history.sqlite');
+  dbPath = path.join(app.getPath('userData'), 'history.sqlite');
   log.info('[History] Opening database:', dbPath);
 
   db = new Database(dbPath);
@@ -32,10 +46,12 @@ function getDb() {
  * Close the database connection
  */
 function closeDb() {
+  stopWorker();
   if (db) {
     log.info('[History] Closing database');
     db.close();
     db = null;
+    statements = null;
   }
 }
 
@@ -125,7 +141,8 @@ function addHistoryEntry(entry) {
   const stmt = getStatements().upsert;
   const result = stmt.run(url, title || '', timestamp, protocol || 'unknown');
 
-  log.info('[History] Added/updated entry:', url, '(changes:', result.changes, ')');
+  // Every navigation lands here: verbose keeps it out of main.log (#511).
+  log.verbose('[History] Added/updated entry:', url, '(changes:', result.changes, ')');
 
   return {
     id: result.lastInsertRowid,
@@ -205,26 +222,92 @@ function getHistoryCount() {
 }
 
 /**
+ * Run a bounded history query (history-search.js) in the search worker,
+ * answering on the main thread only if the worker cannot run at all.
+ * @param {'autocomplete'|'page'} op
+ * @param {object} payload - `{ query }` or `{ options }`
+ */
+async function runHistorySearch(op, payload) {
+  // The main connection creates the file and its schema; the worker opens
+  // it read-only.
+  getDb();
+  try {
+    return await runInWorker(dbPath, op, payload);
+  } catch (err) {
+    if (!(err instanceof HistorySearchUnavailable)) throw err;
+    return op === 'autocomplete'
+      ? historySearch.autocompleteHistory(getDb(), payload.query)
+      : historySearch.historyPage(getDb(), payload.options);
+  }
+}
+
+/**
+ * Address-bar suggestion candidates for `query` (see history-search.js).
+ * @param {string} query
+ * @returns {Promise<Array>} most recent first
+ */
+async function autocompleteHistory(query) {
+  try {
+    return await runHistorySearch('autocomplete', { query });
+  } catch (err) {
+    // Suggestions are best-effort: a slow or failed lookup shows tabs and
+    // bookmarks only rather than an error.
+    if (!(err instanceof HistorySearchTimeout)) {
+      log.warn('[History] Autocomplete query failed:', err.message);
+    }
+    return [];
+  }
+}
+
+/**
+ * One page of history for the History page (see history-search.js).
+ * @param {object} options - `{ query, sort, offset, limit }`
+ * @returns {Promise<{ entries: Array, matched: number, total: number }>}
+ */
+function getHistoryPage(options = {}) {
+  return runHistorySearch('page', {
+    options: options && typeof options === 'object' ? options : {},
+  });
+}
+
+/**
  * Register IPC handlers for history operations
  */
 function registerHistoryIpc() {
   // Get history (with optional limit)
   ipcMain.handle(IPC.HISTORY_GET, (_event, options = {}) => {
-    const { limit, query } = options;
+    const { query } = options || {};
+    // A positive integer, capped. Anything else (missing, 0, negative,
+    // fractional, NaN) takes the default: SQLite reads a negative LIMIT as
+    // "no limit", which would hand back the whole table.
+    const requested = Math.floor(Number(options?.limit));
+    const hasLimit = Number.isFinite(requested) && requested > 0;
+    const limit = hasLimit ? Math.min(requested, HISTORY_GET_MAX) : HISTORY_GET_MAX;
 
     if (query) {
-      return searchHistory(query, limit || 50);
+      return searchHistory(query, hasLimit ? limit : 50);
     }
 
-    if (limit) {
-      return getRecentHistory(limit);
-    }
-
-    return getAllHistory();
+    return getRecentHistory(limit);
   });
 
+  ipcMain.handle(IPC.HISTORY_AUTOCOMPLETE, (_event, options = {}) => {
+    const query = typeof options?.query === 'string' ? options.query : '';
+    return autocompleteHistory(query);
+  });
+
+  ipcMain.handle(IPC.HISTORY_PAGE, (_event, options = {}) => getHistoryPage(options));
+
   // Add history entry
-  ipcMain.handle(IPC.HISTORY_ADD, (_event, entry) => {
+  ipcMain.handle(IPC.HISTORY_ADD, (event, entry) => {
+    // PRIVATE MODE GUARD (history): navigations in private windows are
+    // never recorded. The private window's renderer already skips the
+    // call (src/renderer/lib/navigation.js); this is the main-process
+    // belt-and-braces so no code path can write private history.
+    if (isPrivateWebContents(event?.sender)) {
+      log.info('[History] Ignoring history:add from private window');
+      return null;
+    }
     if (!entry?.url) {
       log.warn('[History] Attempted to add entry without URL');
       return null;
@@ -255,5 +338,7 @@ module.exports = {
   removeHistoryEntry,
   clearHistory,
   getHistoryCount,
+  autocompleteHistory,
+  getHistoryPage,
   registerHistoryIpc,
 };

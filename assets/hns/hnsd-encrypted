@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+: "${FREEDOM_HNSD_BINARY:?Owned hnsd binary is required}"
+: "${FREEDOM_HNSD_CONFIG:?Owned validator configuration is required}"
+: "${FREEDOM_HNSD_PIDFILE:?Owned generation receipt is required}"
+native_value=0
+for native_arg do
+  if [ "$native_value" -eq 1 ]; then
+    native_value=0
+    continue
+  fi
+  case "$native_arg" in
+    -n|-r|-x|-s|-p) native_value=1 ;;
+    -t) ;;
+    *) exit 1 ;;
+  esac
+done
+[ "$native_value" -eq 0 ]
+umask 077
+set -C
+IFS= read -r native_stat < "/proc/$$/stat"
+printf '%s\n' "$native_stat" > "$FREEDOM_HNSD_PIDFILE"
+exec "$FREEDOM_HNSD_BINARY" -u "$FREEDOM_HNSD_CONFIG" "$@"

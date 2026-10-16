@@ -5,6 +5,7 @@
  */
 
 import { walletState, registerScreenHider } from './wallet-state.js';
+import { refuseSubscreenWhileInFlight } from './signature-flight.js';
 import { selectWallet } from './wallet-selector.js';
 
 // DOM references
@@ -97,6 +98,8 @@ function setupWalletSettingsScreen() {
 }
 
 function openWalletSettings() {
+  if (refuseSubscreenWhileInFlight('Wallet settings screen')) return;
+
   const activeWallet = walletState.derivedWallets.find(w => w.index === walletState.activeWalletIndex);
   if (!activeWallet) {
     console.error('[WalletUI] No active wallet found');
@@ -139,7 +142,16 @@ async function handleWalletSettingsDelete() {
     return;
   }
 
-  if (!confirm(`Delete "${activeWallet.name}"?\n\nThe wallet can be recovered from your mnemonic phrase, but any custom name will be lost.`)) {
+  // Deleting a Safe discards its half-signed state with it — say so.
+  let pendingNote = '';
+  if (activeWallet.type === 'safe') {
+    const pending = await window.wallet.safeState(activeWallet.index).catch(() => null);
+    if (pending?.state) {
+      pendingNote = '\n\nIts waiting transaction and all collected signatures will be discarded.';
+    }
+  }
+
+  if (!confirm(`Delete "${activeWallet.name}"?\n\nThe wallet can be recovered from your mnemonic phrase, but any custom name will be lost.${pendingNote}`)) {
     return;
   }
 
@@ -227,18 +239,14 @@ function showExportPkView(view) {
 
 async function handleExportPkTouchIdUnlock() {
   try {
-    const result = await window.quickUnlock.unlock();
+    // Main runs Touch ID, unlocks the vault and exports the key itself —
+    // the stored vault password never reaches this renderer (audit O-8).
+    const result = await window.quickUnlock.exportPrivateKey(walletState.activeWalletIndex);
     if (!result.success) {
       throw new Error(result.error || 'Touch ID cancelled');
     }
 
-    const password = result.password;
-    const unlockResult = await window.identity.unlock(password);
-    if (!unlockResult.success) {
-      throw new Error(unlockResult.error || 'Failed to unlock vault');
-    }
-
-    await showPrivateKey(password);
+    showPrivateKeyResult(result);
   } catch (err) {
     console.error('[WalletUI] Touch ID unlock failed:', err);
     if (err.message !== 'Touch ID cancelled') {
@@ -275,8 +283,13 @@ function showExportPkError(message) {
 }
 
 async function showPrivateKey(password) {
+  showPrivateKeyResult(
+    await window.identity.exportPrivateKey(walletState.activeWalletIndex, password)
+  );
+}
+
+function showPrivateKeyResult(result) {
   try {
-    const result = await window.identity.exportPrivateKey(walletState.activeWalletIndex, password);
     if (!result.success) {
       throw new Error(result.error || 'Failed to export private key');
     }

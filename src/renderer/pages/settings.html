@@ -1,0 +1,1900 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; object-src 'none'; base-uri 'none'; form-action 'none';"
+    />
+    <title>Settings</title>
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjOGI5NDllIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMyIvPjxwYXRoIGQ9Ik0xOS40IDE1YTEuNjUgMS42NSAwIDAgMCAuMzMgMS44MmwuMDYuMDZhMiAyIDAgMSAxLTIuODMgMi44M2wtLjA2LS4wNmExLjY1IDEuNjUgMCAwIDAtMS44Mi0uMzMgMS42NSAxLjY1IDAgMCAwLTEgMS41MVYyMWEyIDIgMCAwIDEtNCAwdi0uMDlBMS42NSAxLjY1IDAgMCAwIDkgMTkuNGExLjY1IDEuNjUgMCAwIDAtMS44Mi4zM2wtLjA2LjA2YTIgMiAwIDEgMS0yLjgzLTIuODNsLjA2LS4wNmExLjY1IDEuNjUgMCAwIDAgLjMzLTEuODIgMS42NSAxLjY1IDAgMCAwLTEuNTEtMUgzYTIgMiAwIDAgMSAwLTRoLjA5QTEuNjUgMS42NSAwIDAgMCA0LjYgOWExLjY1IDEuNjUgMCAwIDAtLjMzLTEuODJsLS4wNi0uMDZhMiAyIDAgMSAxIDIuODMtMi44M2wuMDYuMDZhMS42NSAxLjY1IDAgMCAwIDEuODIuMzNIOWExLjY1IDEuNjUgMCAwIDAgMS0xLjUxVjNhMiAyIDAgMCAxIDQgMHYuMDlhMS42NSAxLjY1IDAgMCAwIDEgMS41MSAxLjY1IDEuNjUgMCAwIDAgMS44Mi0uMzNsLjA2LS4wNmEyIDIgMCAxIDEgMi44MyAyLjgzbC0uMDYuMDZhMS42NSAxLjY1IDAgMCAwLS4zMyAxLjgyVjlhMS42NSAxLjY1IDAgMCAwIDEuNTEgMUgyMWEyIDIgMCAwIDEgMCA0aC0uMDlhMS42NSAxLjY1IDAgMCAwLTEuNTEgMXoiLz48L3N2Zz4="
+    />
+    <link rel="stylesheet" href="styles/theme.css" />
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      /* The document never scrolls; `.layout` does (#604). A scrolled
+         document painted Settings blank, or shifted down under a seam, in
+         the window's capture, and the page gradient, sized to the window,
+         repeated with a visible edge every window-height. */
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+      }
+
+      body {
+        font-family:
+          'IBM Plex Sans',
+          -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+        background: var(--page-gradient);
+        color: var(--text);
+        min-height: 100vh;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 260px 1fr;
+        height: 100vh;
+        overflow-y: auto;
+      }
+
+      /* Focused programmatically so PageDown, Space and End scroll it before
+         the user has clicked into the page; not a control, so no ring. */
+      .layout:focus {
+        outline: none;
+      }
+
+      /* Print the whole section, not the first screen of the scroller. */
+      @media print {
+        html,
+        body,
+        .layout {
+          height: auto;
+          overflow: visible;
+        }
+      }
+
+      /* Sidebar */
+      .sidebar {
+        position: sticky;
+        top: 0;
+        align-self: start;
+        height: 100vh;
+        padding: 40px 20px 40px 32px;
+        border-right: 1px solid var(--border);
+        background: var(--sidebar-translucent);
+        backdrop-filter: blur(6px);
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      .sidebar-title {
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: -0.3px;
+        color: var(--accent);
+        margin: 0 0 12px 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .nav {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .nav-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 12px;
+        border-radius: 8px;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 14px;
+        background: transparent;
+        border: 0;
+        text-align: left;
+        font-family: inherit;
+        transition:
+          background 0.1s,
+          color 0.1s;
+      }
+
+      .nav-item:hover {
+        background: var(--bg-card);
+        color: var(--text);
+      }
+
+      .nav-item.active {
+        background: var(--accent-muted);
+        color: var(--accent);
+      }
+
+      .nav-item svg {
+        flex-shrink: 0;
+      }
+
+      /* Chrome separates its settings groups with a rule; #268 puts one
+         before the last two entries (Advanced, About Freedom). */
+      .nav-rule {
+        height: 1px;
+        margin: 8px 4px;
+        background: var(--border);
+      }
+
+      /* Search settings (#281). The field sits in the sidebar header, where
+         Chrome keeps its own, and is the same control as `#shortcut-search`:
+         an `.rpc-input` in a flex wrapper that sizes it, with the page font
+         put back (a search box is not a URL or a key — see
+         docs/agent-playbooks/ui-consistency.md). */
+      .sidebar-search {
+        display: flex;
+      }
+
+      .sidebar-search input {
+        flex: 1;
+        font-family: inherit;
+      }
+
+      /* Content */
+      .content {
+        padding: 48px 56px 80px 56px;
+        max-width: 820px;
+      }
+
+      .section {
+        margin-bottom: 48px;
+        /* A search result that reveals a whole section aligns it to the top of
+           the view (`settingsSearchScrollBlock`). Without this the heading
+           lands flush against the window edge, 48px higher than the same
+           section sits after a nav click — this keeps `.content`'s own top
+           padding under it, so both ways in look the same. */
+        scroll-margin-top: 48px;
+      }
+
+      .section.hidden {
+        display: none;
+      }
+
+      .section-title {
+        font-size: 18px;
+        font-weight: 600;
+        margin: 0 0 16px 0;
+        color: var(--text);
+      }
+
+      /* Sub-heading inside a section (#255). A route carries exactly one
+         `.section-title`; anything nested under it uses this 12 px uppercase
+         category style or `h3.row-label`, never a second large heading
+         (docs/agent-playbooks/ui-consistency.md, lands with #247).
+         Deliberately identical to `.shortcut-category` below, which is the
+         same heading for the Shortcuts list; that rule stays on its own
+         selector because `settings-styles.test.js` pins it by prelude
+         (#223). */
+      .subsection-title {
+        margin: 20px 0 8px 0;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+        color: var(--text-muted);
+      }
+
+      /* Since #268 one nav entry can own several panels (Privacy and security
+         is Ad Blocking + Site Permissions, Networks is Chains + RPC Providers +
+         Name Resolution, …). The entry's own `h2.section-title` names the
+         page; each panel under it is named by an `h3.panel-title`, a step
+         below it and a step above a panel's own 12 px uppercase
+         `.subsection-title`s, so a route still carries exactly one large
+         heading (docs/agent-playbooks/ui-consistency.md). */
+      .panel-title {
+        font-size: 15px;
+        font-weight: 600;
+        margin: 0 0 12px 0;
+        color: var(--text);
+      }
+
+      /* Panels after the first sit closer together than separate pages
+         would: they are one page now. */
+      .section.panel {
+        margin-bottom: 36px;
+      }
+
+      /* The heading-only section that names a multi-panel entry: its `<h2>`
+         carries the spacing to the first panel. */
+      .section.page-head {
+        margin-bottom: 0;
+      }
+
+      /* A chain's own page and the add-a-chain form take Networks over: the
+         chain list's siblings (the page heading, RPC Providers, Name
+         Resolution) step aside while one is open, the way the list itself
+         does. The Chains controller sets the class. */
+      .content.networks-chain-focus #networks,
+      .content.networks-chain-focus #rpc,
+      .content.networks-chain-focus #ens {
+        display: none;
+      }
+
+      /* A section title that carries a section-level action beside it (#272):
+         Site Permissions' "Remove all" sits next to the `<h2>`, where the
+         page's other section-level actions live, instead of inside the list
+         it acts on. */
+      .section-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 0 0 16px 0;
+      }
+
+      /* The heading's own bottom margin now belongs to the flex row, which
+         also has to centre it against the button. */
+      .section-header .section-title,
+      .section-header .panel-title {
+        margin: 0;
+      }
+
+      /* One search result: a `.row` that is also a button, so the whole line
+         is the target, plus the section it lives in on the right — the answer
+         to "I know the word, I don't know the section" (#281). */
+      .settings-search-result {
+        width: 100%;
+        border-left: 0;
+        border-right: 0;
+        border-top: 0;
+        background: transparent;
+        color: var(--text);
+        font-family: inherit;
+        font-size: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .settings-search-result:hover {
+        background: var(--bg-elev);
+      }
+
+      .settings-search-section {
+        flex-shrink: 0;
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
+      .card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px 18px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .row:last-child {
+        border-bottom: 0;
+      }
+
+      .row-body {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .row-label {
+        font-size: 14px;
+        color: var(--text);
+        margin: 0;
+      }
+
+      .row-help {
+        font-size: 12px;
+        color: var(--text-muted);
+        margin: 4px 0 0 0;
+      }
+
+      /* Anchors inside settings copy (#234). A bare <a> in a help paragraph
+         used to fall through to the UA's default blue — barely readable on
+         the dark palette — while the resolver-row links carry `.row-help`
+         themselves and rendered muted. One rule covers both shapes: a link
+         inside a help paragraph, and a link that *is* one. */
+      .row-help a,
+      a.row-help {
+        color: var(--accent);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+
+      .row-control {
+        flex-shrink: 0;
+      }
+
+      .row.sub {
+        padding-left: 40px;
+        background: var(--row-sub-bg);
+      }
+
+      .row.disabled {
+        opacity: 0.55;
+      }
+
+      /* The Updates section download bar (#87). Track and fill are the shared
+         border/accent tokens, so both themes come from theme.css. */
+      .update-progress {
+        height: 4px;
+        margin-top: 8px;
+        border-radius: 2px;
+        background: var(--border);
+        overflow: hidden;
+      }
+
+      .update-progress-bar {
+        width: 0;
+        height: 100%;
+        background: var(--accent);
+        transition: width 0.2s ease;
+      }
+
+      /* The ad-blocking category rows carry a help line only once the engine
+         reports a rule count; until then the empty paragraph would still add
+         its top margin under the label. */
+      #adblock .row-help:empty {
+        display: none;
+      }
+
+      /* Same for the Swarm cache row's result line, empty until a size is
+         picked (#579). */
+      #swarm-cache-status:empty,
+      #swarm-cache-clear-status:empty {
+        display: none;
+      }
+
+      /* The row a search result jumped to (#281), marked so the eye lands on
+         the control rather than on the section it is somewhere inside. The
+         accent wash alone is 12% alpha and disappears under `.row.sub`'s own
+         fill, hence the accent edge; the selector carries `.row` so it wins
+         against `.row.sub`, declared just above, and `.net-row` for the same
+         reason — a chain master-list row declares its own `background` far
+         below this rule, and one class each would leave the jumped-to chain
+         with the edge and no wash. */
+      .settings-search-hit,
+      .row.settings-search-hit,
+      .net-row.settings-search-hit {
+        background: var(--accent-muted);
+        box-shadow: inset 3px 0 0 var(--accent);
+      }
+
+      .resolver-list {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .resolver-method {
+        display: grid;
+        grid-template-columns: 24px 28px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        padding: 16px 18px;
+        border-bottom: 1px solid var(--border);
+        transition:
+          opacity 0.12s,
+          box-shadow 0.12s,
+          background 0.12s;
+      }
+
+      .resolver-method.disabled {
+        opacity: 0.58;
+      }
+
+      .resolver-method.dragging {
+        opacity: 0.35;
+      }
+
+      .resolver-method.drop-before {
+        box-shadow: inset 0 2px var(--accent);
+        background: var(--accent-muted);
+      }
+
+      .resolver-method.drop-after {
+        box-shadow: inset 0 -2px var(--accent);
+        background: var(--accent-muted);
+      }
+
+      .resolver-drag-handle {
+        width: 24px;
+        height: 32px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: var(--text-subtle);
+        font: inherit;
+        font-size: 17px;
+        line-height: 1;
+        cursor: grab;
+      }
+
+      .resolver-drag-handle:hover:not(:disabled),
+      .resolver-drag-handle:focus-visible {
+        color: var(--text);
+      }
+
+      .resolver-drag-handle:active {
+        cursor: grabbing;
+      }
+
+      .resolver-drag-handle:disabled {
+        cursor: default;
+        opacity: 0.25;
+      }
+
+      .resolver-rank {
+        display: grid;
+        place-items: center;
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        background: var(--bg-elev);
+        color: var(--text-muted);
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .resolver-method.disabled .resolver-rank {
+        background: transparent;
+        border: 1px dashed var(--border-strong);
+      }
+
+      .resolver-title-line {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .resolver-badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 20px;
+        padding: 2px 7px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        color: var(--text-muted);
+        font-size: 11px;
+        line-height: 1.2;
+      }
+
+      .resolver-badge.ready,
+      .resolver-badge.verified {
+        border-color: rgba(63, 185, 80, 0.45);
+        color: var(--success);
+      }
+
+      .resolver-badge.warning {
+        border-color: rgba(210, 153, 34, 0.5);
+        color: var(--warn);
+      }
+
+      .resolver-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      /* Per-row progressive disclosure (#270): a network source's technical
+         name and mechanism, and the settings only someone who knows them
+         needs (the proof server, the agreement threshold), sit collapsed
+         under the plain label and help line. */
+      .row-advanced {
+        margin-top: 6px;
+      }
+
+      .row-advanced > summary {
+        width: fit-content;
+        cursor: pointer;
+        color: var(--text-muted);
+        font-size: 12px;
+      }
+
+      .row-advanced > summary:hover {
+        color: var(--text);
+      }
+
+      .row-advanced > .row-help {
+        margin-top: 6px;
+      }
+
+      /* An open disclosure makes the row tall; the handle, rank and toggle
+         stay level with the label they belong to instead of drifting to
+         the middle of the expanded text. */
+      .resolver-method:has(> .row-body > .row-advanced[open]) {
+        align-items: start;
+      }
+
+      /* A method's own settings, inside its open disclosure (#270): the
+         sub-row fill, inset into the row body. */
+      .resolver-config {
+        margin-top: 10px;
+        padding: 12px 14px;
+        border-radius: 6px;
+        background: var(--row-sub-bg);
+      }
+
+      /* Wraps: in the row body the proof server's URL gets a line of its
+         own rather than half of one — its placeholder is the default URL
+         and has to read in full. */
+      .resolver-config-line {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px 14px;
+      }
+
+      .resolver-config-line > .rpc-input {
+        flex-basis: 100%;
+      }
+
+      .resolver-quorum-fields {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--text-muted);
+        font-size: 13px;
+        white-space: nowrap;
+      }
+
+      .resolver-quorum-fields select {
+        min-width: 62px;
+      }
+
+      .resolver-status {
+        margin-top: 10px;
+        padding: 0 18px;
+      }
+
+      /* Select */
+      select {
+        appearance: none;
+        -webkit-appearance: none;
+        background: var(--bg-elev)
+          url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="%238b949e" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>')
+          no-repeat right 10px center;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 7px 32px 7px 12px;
+        color: var(--text);
+        font-size: 13px;
+        font-family: inherit;
+        outline: none;
+        cursor: pointer;
+        transition: border-color 0.1s;
+      }
+
+      select:focus {
+        border-color: var(--accent);
+      }
+
+      select:hover {
+        border-color: var(--border-strong);
+      }
+
+      /* Toggle switch */
+      .toggle {
+        position: relative;
+        display: inline-block;
+        width: 38px;
+        height: 22px;
+        flex-shrink: 0;
+      }
+
+      .toggle input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+
+      .toggle .slider {
+        position: absolute;
+        inset: 0;
+        background: var(--bg-elev);
+        border: 1px solid var(--border);
+        border-radius: 22px;
+        cursor: pointer;
+        transition:
+          background 0.15s,
+          border-color 0.15s;
+      }
+
+      .toggle .slider::before {
+        content: '';
+        position: absolute;
+        left: 2px;
+        top: 2px;
+        width: 16px;
+        height: 16px;
+        background: var(--text-muted);
+        border-radius: 50%;
+        transition:
+          transform 0.15s,
+          background 0.15s;
+      }
+
+      .toggle input:checked + .slider {
+        background: var(--accent);
+        border-color: var(--accent);
+      }
+
+      .toggle input:checked + .slider::before {
+        transform: translateX(16px);
+        background: var(--toggle-knob-on);
+      }
+
+      .toggle input:disabled + .slider {
+        cursor: not-allowed;
+        opacity: 0.5;
+      }
+
+      /* Input + test button */
+      .rpc-block {
+        padding: 16px 18px;
+        border-top: 1px solid var(--border);
+        background: var(--rpc-block-bg);
+      }
+
+      .rpc-block.hidden {
+        display: none;
+      }
+
+      .rpc-row {
+        display: flex;
+        gap: 8px;
+      }
+
+      .rpc-input {
+        flex: 1;
+        min-width: 0;
+        padding: 8px 12px;
+        background: var(--bg-elev);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--text);
+        font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+        font-size: 13px;
+        outline: none;
+        transition: border-color 0.1s;
+      }
+
+      .rpc-input:focus {
+        border-color: var(--accent);
+      }
+
+      .rpc-input::placeholder {
+        color: var(--text-subtle);
+      }
+
+      .btn {
+        padding: 8px 14px;
+        background: var(--bg-elev);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--text);
+        font-size: 13px;
+        font-family: inherit;
+        cursor: pointer;
+        transition:
+          border-color 0.1s,
+          background 0.1s;
+      }
+
+      .btn:hover:not(:disabled) {
+        border-color: var(--border-strong);
+        background: var(--bg-card);
+      }
+
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .rpc-hint {
+        font-size: 12px;
+        color: var(--text-muted);
+        margin: 8px 0 0 0;
+      }
+
+      .rpc-status {
+        font-size: 12px;
+        margin-top: 8px;
+        min-height: 16px;
+      }
+
+      .rpc-status.success {
+        color: var(--success);
+      }
+
+      .rpc-status.error {
+        color: var(--danger);
+      }
+
+      .rpc-status.testing {
+        color: var(--warn);
+      }
+
+      /* Networks master-detail */
+      .net-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        width: 100%;
+        padding: 14px 18px;
+        background: transparent;
+        border: none;
+        border-top: 1px solid var(--border);
+        color: var(--text);
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .net-row:first-child {
+        border-top: none;
+      }
+
+      .net-row:hover {
+        background: var(--accent-muted);
+      }
+
+      .net-row-text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .net-row-name {
+        font-size: 14px;
+        font-weight: 500;
+      }
+
+      .net-row-sub {
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
+      .net-chevron {
+        color: var(--text-subtle);
+        font-size: 20px;
+        line-height: 1;
+      }
+
+      .back-link {
+        display: inline-flex;
+        align-items: center;
+        margin-bottom: 12px;
+        padding: 4px 0;
+        background: none;
+        border: none;
+        color: var(--accent);
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      .back-link:hover {
+        text-decoration: underline;
+      }
+
+      .profile-name-control {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 280px;
+      }
+
+      .profile-node {
+        display: grid;
+        grid-template-columns: minmax(110px, 0.7fr) minmax(0, 1fr);
+        gap: 12px;
+        padding: 16px 18px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .profile-node:last-child {
+        border-bottom: 0;
+      }
+
+      .profile-node-main {
+        min-width: 0;
+      }
+
+      .profile-node-name {
+        margin: 0;
+        color: var(--text);
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .profile-node-mode {
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        min-height: 22px;
+        margin-top: 7px;
+        padding: 0 8px;
+        border-radius: 8px;
+        background: var(--accent-muted);
+        color: var(--accent);
+        font-size: 12px;
+      }
+
+      .profile-node-status {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        min-width: 0;
+      }
+
+      .profile-node-status-line {
+        color: var(--text);
+        font-size: 13px;
+      }
+
+      .profile-node-detail {
+        color: var(--text-muted);
+        font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+        font-size: 12px;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+      }
+
+      .profile-node-detail + .profile-node-detail {
+        margin-top: 1px;
+      }
+
+      .profile-node-empty {
+        padding: 18px;
+        color: var(--text-muted);
+        font-size: 13px;
+      }
+
+      .profile-node-editor {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .profile-node-editor[hidden] {
+        display: none;
+      }
+
+      .profile-node-field {
+        display: grid;
+        grid-template-columns: 84px minmax(0, 1fr);
+        align-items: center;
+        gap: 8px;
+      }
+
+      .profile-node-field label {
+        color: var(--text-muted);
+        font-size: 12px;
+      }
+
+      .profile-node-note {
+        margin: 0;
+        color: var(--text-muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      /* Nodes commit on change (#271): a row that could not be saved — an
+         external switch with an empty endpoint, or one the main process
+         refused — says so inline and flags the field. */
+      .profile-node-error {
+        margin: 0;
+        color: var(--danger);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .profile-node-error[hidden] {
+        display: none;
+      }
+
+      .profile-node-field .rpc-input[aria-invalid='true'] {
+        border-color: var(--danger);
+      }
+
+      .btn.danger {
+        border-color: rgba(248, 81, 73, 0.45);
+        color: var(--danger);
+      }
+
+      .btn.danger:hover:not(:disabled) {
+        border-color: var(--danger);
+      }
+
+      .search-provider-actions {
+        display: flex;
+        flex-shrink: 0;
+        gap: 8px;
+      }
+
+      /* Shortcuts */
+      .shortcut-toolbar {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+
+      .shortcut-toolbar input {
+        flex: 1;
+        font-family: inherit;
+      }
+
+      /* Same type styles as `.subsection-title` above (see the note there). */
+      .shortcut-category {
+        margin: 20px 0 8px 0;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+        color: var(--text-muted);
+      }
+
+      .shortcut-category:first-child {
+        margin-top: 0;
+      }
+
+      .shortcut-kbd {
+        display: inline-block;
+        padding: 3px 8px;
+        background: var(--bg-elev);
+        border: 1px solid var(--border);
+        border-bottom-width: 2px;
+        border-radius: 6px;
+        color: var(--text);
+        font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+        font-size: 12px;
+        line-height: 1.4;
+        white-space: nowrap;
+      }
+
+      .shortcut-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .shortcut-binding {
+        padding: 5px 8px;
+      }
+
+      .shortcut-binding.recording {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      .shortcut-locked {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--text-subtle);
+        font-size: 12px;
+      }
+
+      .shortcut-note {
+        margin: 6px 0 0 0;
+        font-size: 12px;
+        color: var(--warn);
+      }
+
+      .row.shortcut-conflict {
+        justify-content: space-between;
+        background: rgba(210, 153, 34, 0.08);
+        font-size: 13px;
+      }
+
+      .shortcut-conflict-actions {
+        display: flex;
+        flex-shrink: 0;
+        gap: 8px;
+      }
+
+      .search-provider-form[hidden] {
+        display: none;
+      }
+
+      .search-provider-fields {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout" tabindex="-1">
+      <aside class="sidebar">
+        <h2 class="sidebar-title">
+          <svg
+            width="22"
+            height="22"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="12" cy="12" r="3"></circle>
+            <path
+              d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+            ></path>
+          </svg>
+          Settings
+        </h2>
+        <div class="sidebar-search">
+          <input
+            type="search"
+            id="settings-search"
+            class="rpc-input"
+            placeholder="Search settings…"
+            spellcheck="false"
+            autocomplete="off"
+            aria-label="Search settings"
+          />
+        </div>
+        <nav class="nav" id="nav">
+          <button type="button" class="nav-item" data-target="profile">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M20 21a8 8 0 0 0-16 0"></path>
+              <circle cx="12" cy="7" r="4"></circle>
+            </svg>
+            Profile
+          </button>
+          <button type="button" class="nav-item" data-target="appearance">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="12" cy="12" r="5"></circle>
+              <line x1="12" y1="1" x2="12" y2="3"></line>
+              <line x1="12" y1="21" x2="12" y2="23"></line>
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+              <line x1="1" y1="12" x2="3" y2="12"></line>
+              <line x1="21" y1="12" x2="23" y2="12"></line>
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+            </svg>
+            Appearance
+          </button>
+          <button type="button" class="nav-item" data-target="search">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            Search
+          </button>
+          <button type="button" class="nav-item" data-target="downloads">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            Downloads
+          </button>
+          <button type="button" class="nav-item" data-target="shortcuts">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="2" y="6" width="20" height="12" rx="2"></rect>
+              <line x1="6" y1="10" x2="6" y2="10"></line>
+              <line x1="10" y1="10" x2="10" y2="10"></line>
+              <line x1="14" y1="10" x2="14" y2="10"></line>
+              <line x1="18" y1="10" x2="18" y2="10"></line>
+              <line x1="7" y1="14" x2="17" y2="14"></line>
+            </svg>
+            Shortcuts
+          </button>
+          <button type="button" class="nav-item" data-target="privacy">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            </svg>
+            Privacy and security
+          </button>
+          <button type="button" class="nav-item" data-target="networks">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="12" cy="5" r="3"></circle>
+              <circle cx="5" cy="19" r="3"></circle>
+              <circle cx="19" cy="19" r="3"></circle>
+              <line x1="11" y1="7.5" x2="6" y2="16.5"></line>
+              <line x1="13" y1="7.5" x2="18" y2="16.5"></line>
+            </svg>
+            Networks
+          </button>
+          <button type="button" class="nav-item" data-target="nodes">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+              <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+              <line x1="6" y1="6" x2="6.01" y2="6"></line>
+              <line x1="6" y1="18" x2="6.01" y2="18"></line>
+            </svg>
+            Nodes
+          </button>
+          <div class="nav-rule" role="separator"></div>
+          <button type="button" class="nav-item" data-target="advanced">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M10 2v7.31"></path>
+              <path d="M14 9.3V2"></path>
+              <path d="M8.5 2h7"></path>
+              <path d="M14 9.3a6.5 6.5 0 1 1-4 0"></path>
+            </svg>
+            Advanced
+          </button>
+          <button type="button" class="nav-item" data-target="about">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="16" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            About Freedom
+          </button>
+        </nav>
+      </aside>
+
+      <main class="content">
+        <!-- Search results (#281). Not a nav target: it replaces whichever
+             section is open while the field has a query, and hands that
+             section back when the field is cleared. -->
+        <section class="section hidden" id="settings-search-results">
+          <h2 class="section-title">Search results</h2>
+          <p class="row-help" id="settings-search-summary" style="margin-bottom: 16px"></p>
+          <div class="card" id="settings-search-list"></div>
+        </section>
+
+        <!-- Profile (current profile identity) -->
+        <section class="section" id="profile" data-nav="profile">
+          <h2 class="section-title">Profile</h2>
+          <div class="card">
+            <div class="row">
+              <div class="row-body">
+                <p class="row-label">Name</p>
+              </div>
+              <div class="row-control profile-name-control">
+                <input
+                  type="text"
+                  id="profile-name-input"
+                  class="rpc-input"
+                  spellcheck="false"
+                  placeholder="Profile name"
+                />
+              </div>
+            </div>
+          </div>
+          <div class="card" style="margin-top: 12px">
+            <div class="rpc-block" style="border-top: none">
+              <button type="button" class="btn" id="manage-profiles-link">Manage profiles</button>
+            </div>
+          </div>
+          <p id="profile-save-status" class="rpc-status"></p>
+        </section>
+
+        <!-- Appearance -->
+        <section class="section" id="appearance" data-nav="appearance">
+          <h2 class="section-title">Appearance</h2>
+          <div class="card">
+            <div class="row">
+              <div class="row-body">
+                <p class="row-label">Theme</p>
+                <p class="row-help">Applies to both the browser chrome and internal pages.</p>
+              </div>
+              <div class="row-control">
+                <select id="theme-mode">
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                  <option value="system">System</option>
+                </select>
+              </div>
+            </div>
+            <div class="row" data-linux-only>
+              <div class="row-body">
+                <p class="row-label">Tabs in title bar</p>
+                <p class="row-help">
+                  Use the tab strip as the window title bar. Takes effect after restart.
+                </p>
+              </div>
+              <div class="row-control">
+                <button type="button" id="tabs-titlebar-restart" class="btn" hidden>
+                  Restart now
+                </button>
+                <label class="toggle">
+                  <input type="checkbox" id="tabs-in-titlebar" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="row">
+              <div class="row-body">
+                <p class="row-label">Show IPFS load progress in the status bar</p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="show-ipfs-progress-status" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Search -->
+        <section class="section" id="search" data-nav="search">
+          <h2 class="section-title">Search</h2>
+          <div class="card">
+            <div class="row">
+              <div class="row-body">
+                <p class="row-label">Search engine</p>
+                <p class="row-help">
+                  Used when the address bar input is not a URL, hash, or name, and by the
+                  &ldquo;Search &hellip; for&rdquo; item on a page&rsquo;s right-click menu.
+                </p>
+              </div>
+              <div class="row-control">
+                <!-- Values mirror SEARCH_PROVIDERS in renderer/lib/search-utils.js -->
+                <select id="search-provider">
+                  <optgroup label="Built-in">
+                    <option value="google">Google</option>
+                    <option value="duckduckgo">DuckDuckGo</option>
+                    <option value="bing">Bing</option>
+                    <option value="brave">Brave Search</option>
+                    <option value="ecosia">Ecosia</option>
+                    <option value="startpage">Startpage</option>
+                  </optgroup>
+                  <optgroup
+                    id="custom-search-provider-options"
+                    label="Your search engines"
+                    hidden
+                  ></optgroup>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="card" style="margin-top: 12px">
+            <div id="custom-search-provider-list"></div>
+            <div class="rpc-block" style="border-top: none">
+              <button type="button" class="btn" id="add-search-provider">Add search engine</button>
+            </div>
+            <div class="rpc-block search-provider-form" id="search-provider-form" hidden>
+              <div class="search-provider-fields">
+                <input
+                  type="text"
+                  class="rpc-input"
+                  id="custom-search-provider-name"
+                  maxlength="64"
+                  placeholder="Search engine name"
+                  spellcheck="false"
+                />
+                <input
+                  type="text"
+                  class="rpc-input"
+                  id="custom-search-provider-template"
+                  maxlength="2048"
+                  placeholder="https://search.example/?q={searchTerms}"
+                  spellcheck="false"
+                />
+              </div>
+              <p class="rpc-hint">
+                Put <code>{searchTerms}</code> where the encoded query belongs. HTTPS is required
+                except for localhost.
+              </p>
+              <div style="margin-top: 12px">
+                <button type="button" class="btn" id="save-search-provider">Save</button>
+                <button type="button" class="btn" id="cancel-search-provider">Cancel</button>
+              </div>
+            </div>
+          </div>
+          <p id="search-provider-status" class="rpc-status"></p>
+        </section>
+
+        <!-- Downloads -->
+        <section class="section" id="downloads" data-nav="downloads">
+          <h2 class="section-title">Downloads</h2>
+          <div class="card">
+            <div class="row">
+              <div class="row-body">
+                <p class="row-label">Ask where to save each file</p>
+                <p class="row-help">Otherwise: ~/Downloads</p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="ask-where-to-save" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Shortcuts -->
+        <section class="section" id="shortcuts" data-nav="shortcuts">
+          <h2 class="section-title">Shortcuts</h2>
+          <p class="row-help" style="margin-bottom: 16px">
+            Click a binding, press the new key combination, done — changes apply immediately. Press
+            Esc while recording to cancel.
+          </p>
+          <div class="shortcut-toolbar">
+            <input
+              type="search"
+              id="shortcut-search"
+              class="rpc-input"
+              placeholder="Search shortcuts…"
+              spellcheck="false"
+            />
+            <button type="button" class="btn danger" id="shortcuts-restore-defaults">
+              Restore defaults
+            </button>
+          </div>
+          <div id="shortcuts-view"></div>
+          <p id="shortcuts-status" class="rpc-status"></p>
+        </section>
+
+        <!-- Privacy and security (#268): Ad Blocking + Site Permissions. -->
+        <section class="section page-head" id="privacy" data-nav="privacy">
+          <h2 class="section-title">Privacy and security</h2>
+        </section>
+
+        <!-- Ad Blocking -->
+        <section class="section panel" id="adblock" data-nav="privacy">
+          <h3 class="panel-title">Ad Blocking</h3>
+          <div class="card">
+            <div class="row" id="adblock-enabled-row">
+              <div class="row-body">
+                <p class="row-label">Enable ad blocking</p>
+                <p class="row-help" id="adblock-status">Loading…</p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="adblock-enabled" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="row sub" id="adblock-ads-row">
+              <div class="row-body">
+                <p class="row-label">Block ads</p>
+                <p class="row-help" id="adblock-ads-help"></p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="adblock-ads" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="row sub" id="adblock-privacy-row">
+              <div class="row-body">
+                <p class="row-label">Block trackers</p>
+                <p class="row-help" id="adblock-privacy-help"></p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="adblock-privacy" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="row sub" id="adblock-cookies-row">
+              <div class="row-body">
+                <p class="row-label">Block cookie banners</p>
+                <p class="row-help" id="adblock-cookies-help"></p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="adblock-cookies" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="row sub" id="adblock-annoyances-row">
+              <div class="row-body">
+                <p class="row-label">Block other annoyances</p>
+                <p class="row-help" id="adblock-annoyances-help"></p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="adblock-annoyances" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="row sub" id="adblock-autoupdate-row">
+              <div class="row-body">
+                <p class="row-label">Keep filter lists up to date</p>
+                <p class="row-help">Pulls refreshed lists from Swarm automatically.</p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="adblock-autoupdate" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+          <div class="card" style="margin-top: 12px">
+            <div class="row">
+              <div class="row-body">
+                <p class="row-label">Allowlisted sites</p>
+                <p class="row-help">Ad blocking is off on these sites and their subdomains.</p>
+              </div>
+              <div class="row-control">
+                <input
+                  type="text"
+                  id="adblock-allowlist-input"
+                  class="rpc-input"
+                  spellcheck="false"
+                  placeholder="example.com"
+                />
+                <button type="button" class="btn" id="adblock-allowlist-add">Add</button>
+              </div>
+            </div>
+            <div id="adblock-allowlist-list"></div>
+          </div>
+          <p class="row-help" style="margin-top: 16px">
+            Filter lists © the
+            <a href="https://easylist.to/" target="_blank" rel="noreferrer">EasyList authors</a>,
+            redistributed under CC BY-SA. uBlock filters and scriptlets © Raymond Hill and the
+            <a href="https://github.com/uBlockOrigin/uAssets" target="_blank" rel="noreferrer"
+              >uBlock Origin contributors</a
+            >; licence terms in NOTICES.
+          </p>
+        </section>
+
+        <!-- Site Permissions -->
+        <section class="section panel" id="permissions" data-nav="privacy">
+          <div class="section-header">
+            <h3 class="panel-title">Site Permissions</h3>
+            <button type="button" class="btn danger" id="permissions-revoke-all" disabled>
+              Remove all
+            </button>
+          </div>
+          <div id="permissions-view"></div>
+        </section>
+
+        <!-- Networks (#268): Chains + RPC Providers + Name Resolution, which all
+             read and write the same network configuration. -->
+        <section class="section page-head" id="networks" data-nav="networks">
+          <h2 class="section-title">Networks</h2>
+        </section>
+
+        <!-- Chains -->
+        <section class="section panel" id="chains" data-nav="networks" data-title="Chains">
+          <div id="chains-view"></div>
+          <p id="chains-status" class="rpc-status"></p>
+        </section>
+
+        <!-- RPC Providers -->
+        <section class="section panel" id="rpc" data-nav="networks" data-title="RPC Providers">
+          <div id="rpc-view"></div>
+          <p id="rpc-status" class="rpc-status"></p>
+        </section>
+
+        <!-- Ethereum Name Resolution — a focused lens on the Ethereum network -->
+        <section class="section panel" id="ens" data-nav="networks">
+          <h3 class="panel-title">Name Resolution</h3>
+          <p class="row-help" style="margin-bottom: 16px">
+            How Freedom resolves <code>.eth</code>, <code>.box</code>, <code>.wei</code>, and
+            <code>.gwei</code> names. These records live on Ethereum — choose which servers Freedom
+            asks under <a href="#networks">Chains settings</a>.
+          </p>
+          <h3 class="subsection-title">Resolution order</h3>
+          <p class="row-help" style="margin: 0 0 12px 0">
+            Freedom tries enabled methods from top to bottom. Drag the handle to change priority;
+            with the handle focused, the arrow keys work too.
+          </p>
+          <div class="card" id="ens-method-card">
+            <div id="ens-method-list" class="resolver-list"></div>
+            <p id="ens-policy-status" class="rpc-status resolver-status"></p>
+            <div class="row">
+              <div class="row-body">
+                <p class="row-label">Prefer verified answers</p>
+                <p class="row-help">
+                  Keep an unverified answer as a fallback while later enabled methods try to produce
+                  a verified result.
+                </p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="ens-prefer-verified" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <h3 class="subsection-title">Safety</h3>
+          <div class="card">
+            <div class="row">
+              <div class="row-body">
+                <p class="row-label">When only an unverified answer is available</p>
+                <p class="row-help">Unverified answers always keep the amber shield indicator.</p>
+              </div>
+              <div class="row-control">
+                <select id="unverified-ens-action">
+                  <option value="ask">Ask before opening</option>
+                  <option value="open">Open directly</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Nodes (per-profile node configuration) -->
+        <section class="section panel" id="nodes" data-nav="nodes">
+          <h2 class="section-title">Nodes</h2>
+          <div class="card" id="profile-nodes-card">
+            <div class="profile-node-empty">Loading…</div>
+          </div>
+          <p id="profile-nodes-status" class="rpc-status"></p>
+          <div class="card" style="margin-top: 12px">
+            <div class="row" id="swarm-publishing-row">
+              <div class="row-body">
+                <p class="row-label">Swarm publishing</p>
+                <p class="row-help" id="swarm-publishing-help">Loading…</p>
+              </div>
+              <div class="row-control">
+                <button type="button" id="swarm-publishing-btn" class="btn" hidden></button>
+              </div>
+            </div>
+            <!-- #579: the Swarm node's disk cache, the one place Freedom shows it.
+                 The usage line is read from the node's /debugstore by the main
+                 process (swarm/ant-cache.js) while this section is on screen;
+                 the note under it says why a figure is missing and is hidden
+                 while there is one. The sizes come from the main process too;
+                 the running node takes a new one live (Ant v0.5.61+). -->
+            <div class="row" id="swarm-cache-row">
+              <div class="row-body">
+                <p class="row-label"><label for="swarm-cache-size">Swarm cache size</label></p>
+                <p class="row-help" id="swarm-cache-usage">
+                  In use: <span id="swarm-cache-usage-text">Unknown</span>
+                </p>
+                <p class="row-help" id="swarm-cache-usage-note" hidden></p>
+                <p class="row-help" id="swarm-cache-help">
+                  How much disk space the Swarm node keeps for pages and files you've opened, so
+                  they load faster next time. Pinned and published content doesn't count towards it.
+                </p>
+                <p class="row-help" id="swarm-cache-note">
+                  A running node takes a new size at once, and a smaller one removes the oldest
+                  cached content straight away. Picked while the node is stopped, the size applies
+                  when it next starts, and a smaller one frees space only as new content is cached.
+                  A cache made by an older Freedom may not give the storage back right away.
+                </p>
+                <p class="row-help" id="swarm-cache-status" role="status" aria-live="polite"></p>
+              </div>
+              <div class="row-control">
+                <select
+                  id="swarm-cache-size"
+                  aria-describedby="swarm-cache-usage swarm-cache-usage-note swarm-cache-help swarm-cache-note swarm-cache-status"
+                  disabled
+                ></select>
+              </div>
+            </div>
+            <!-- #579: Clear cache, POST /v0/cache/clear from the main process
+                 (swarm/ant-cache.js). Offered only while the node Freedom runs
+                 is up with a disk cache; otherwise the reason line says why.
+                 The result ("Freed 1.3 GB") lands in a polite live region. -->
+            <div class="row" id="swarm-cache-clear-row">
+              <div class="row-body">
+                <p class="row-label">Clear Swarm cache</p>
+                <p class="row-help" id="swarm-cache-clear-help">
+                  Removes the Swarm pages and files the node has kept. Pinned and published content
+                  is kept.
+                </p>
+                <p class="row-help" id="swarm-cache-clear-reason" hidden></p>
+                <p
+                  class="row-help"
+                  id="swarm-cache-clear-status"
+                  role="status"
+                  aria-live="polite"
+                ></p>
+              </div>
+              <div class="row-control">
+                <button
+                  type="button"
+                  class="btn"
+                  id="swarm-cache-clear"
+                  aria-describedby="swarm-cache-clear-help swarm-cache-clear-reason swarm-cache-clear-status"
+                  disabled
+                >
+                  Clear cache
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Startup -->
+        <section class="section panel" id="startup" data-nav="nodes">
+          <h3 class="panel-title">Startup</h3>
+          <div class="card">
+            <div class="row">
+              <div class="row-body">
+                <p class="row-label">Start Swarm node</p>
+                <p class="row-help">Restart to apply.</p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="start-ant-at-launch" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="row">
+              <div class="row-body">
+                <p class="row-label">Start IPFS node</p>
+                <p class="row-help">Restart to apply.</p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="start-ipfs-at-launch" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="row" id="radicle-launch-row">
+              <div class="row-body">
+                <p class="row-label">Start Radicle node</p>
+                <p class="row-help" id="radicle-launch-help">Restart to apply.</p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="start-radicle-at-launch" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="row" id="myotis-launch-row">
+              <div class="row-body">
+                <p class="row-label">
+                  Start Ethereum node
+                  <span class="resolver-badge">Beta</span>
+                </p>
+                <p class="row-help" id="myotis-launch-help">Restart to apply.</p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="start-myotis-at-launch" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="row" id="myotis-gnosis-launch-row">
+              <div class="row-body">
+                <p class="row-label">
+                  Start Gnosis node
+                  <span class="resolver-badge">Beta</span>
+                </p>
+                <p class="row-help" id="myotis-gnosis-launch-help">Restart to apply.</p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="start-myotis-gnosis-at-launch" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="row" id="start-tor-row" data-tor>
+              <div class="row-body">
+                <p class="row-label">Start Tor when Freedom opens</p>
+                <p class="row-help" id="start-tor-help">Restart to apply.</p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="start-tor-at-launch" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Advanced (was Experimental): the Beta features. -->
+        <section class="section" id="experimental" data-nav="advanced">
+          <h2 class="section-title">Advanced</h2>
+          <div class="card">
+            <div class="row">
+              <div class="row-body">
+                <p class="row-label">
+                  Enable Identity &amp; Wallet
+                  <span class="resolver-badge">Beta</span>
+                </p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="enable-identity-wallet" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="row" data-tor>
+              <div class="row-body">
+                <p class="row-label">
+                  Enable Tor (.onion access)
+                  <span class="resolver-badge">Beta</span>
+                </p>
+                <p class="row-help">
+                  Routes only <code>.onion</code> addresses through the bundled Tor (Arti) client.
+                  Clearnet traffic stays direct.
+                </p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="enable-tor-integration" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- About Freedom (#268): Updates, whose status row (#87) names the
+             running version — so the entry needs no version line of its own. -->
+        <section class="section page-head" id="about" data-nav="about">
+          <h2 class="section-title">About Freedom</h2>
+        </section>
+
+        <!-- Updates -->
+        <section class="section panel" id="updates" data-nav="about">
+          <h3 class="panel-title">Updates</h3>
+          <div class="card">
+            <div class="row" id="update-status-row" data-update-status="unsupported">
+              <div class="row-body">
+                <p class="row-label" id="update-current-version">Freedom</p>
+                <p class="row-help" id="update-status-message" role="status" aria-live="polite">
+                  Loading…
+                </p>
+                <div
+                  class="update-progress"
+                  id="update-progress"
+                  role="progressbar"
+                  aria-label="Update download"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  hidden
+                >
+                  <div class="update-progress-bar" id="update-progress-bar"></div>
+                </div>
+                <p class="row-help" id="update-status-detail" hidden></p>
+                <p class="row-help" id="update-last-checked" hidden></p>
+              </div>
+              <div class="row-control">
+                <button type="button" class="btn" id="update-check-now" disabled>Check now</button>
+                <button type="button" class="btn" id="update-restart" hidden>
+                  Restart to update
+                </button>
+              </div>
+            </div>
+            <div class="row">
+              <div class="row-body">
+                <p class="row-label">Updates are disabled for this evaluation build</p>
+              </div>
+              <div class="row-control">
+                <label class="toggle">
+                  <input type="checkbox" id="auto-update" disabled />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="scripts/settings.js"></script>
+    <script src="scripts/settings-updates.js"></script>
+  </body>
+</html>

@@ -1,0 +1,38 @@
+--- a/src/rs.c
++++ b/src/rs.c
+@@ -220,7 +220,7 @@
+   if (ub_ctx_set_option(ns->ub, "root-hints:", "") != 0)
+     return false;
+ 
+-  if (ub_ctx_set_option(ns->ub, "do-tcp:", "no") != 0)
++  if (ub_ctx_set_option(ns->ub, "do-tcp:", "yes") != 0)
+     return false;
+ 
+   char stub[HSK_MAX_HOST];
+@@ -442,6 +442,10 @@
+   if (result->why_bogus)
+     hsk_rs_log(ns, "  why_bogus: %s\n", result->why_bogus);
+ 
++  // libunbound can retain answer data and rcode=NOERROR for a bogus result.
++  if (result->bogus)
++    goto fail;
++
+   uint8_t *data = result->answer_packet;
+   size_t data_len = result->answer_len;
+ 
+--- a/src/dns.c
++++ b/src/dns.c
+@@ -302,10 +302,9 @@
+ 
+   flags |= HSK_DNS_TC;
+ 
+-  // We would normally set the truncate bit,
+-  // but we don't support TCP yet.
+-  // msg[2] = (flags >> 8) & 0xff;
+-  // msg[3] = flags & 0xff;
++  // Never present an incomplete message as a validated complete response.
++  msg[2] = (flags >> 8) & 0xff;
++  msg[3] = flags & 0xff;
+ 
+   msg[4] = (counts[0] >> 8) & 0xff;
+   msg[5] = counts[0] & 0xff;

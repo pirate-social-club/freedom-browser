@@ -1,0 +1,320 @@
+// Packaged smoke — step 5 of the release-process.md §6 checklist:
+// "confirm Ant, native IPFS, and Radicle start cleanly".
+//
+// The specs in test-e2e/packaged/ drive the packaged binary with
+// FREEDOM_TEST_MODE, which stubs every node away. These ones go through the
+// live fixtures instead: no test mode, so the artifact's *own* bundled antd,
+// freedom-ipfs addon, libradicle addon and Arti binary are what start. That is
+// the packaging bug this catches — an extraResources rule that only resolves
+// in a source tree, or an addon built for the wrong arch, launches fine and
+// only fails when its manager tries to use it.
+//
+// One test per node, each with its own app instance seeded to start only the
+// node under test, so a failure names the culprit and no node pays for
+// another's boot time. The live fixtures give every test a fresh temp root
+// (userData + ant-data + ipfs-data + identity, with Radicle's and Tor's data
+// dirs defaulting under that same scratch userData), which is what keeps the
+// deb/AppImage, dmg/zip and installer/portable legs — which run back to back
+// on one runner — from inheriting each other's node state.
+//
+// What is asserted is deliberately only "the manager reports running, within a
+// bounded time" — plus, for Ant, that its local HTTP API answers /health on the
+// port the app itself published, and for native IPFS, that quitting with the
+// node running exits 0 rather than aborting (issue #345, which reproduces in
+// the packaged build; see that test). Peer counts and content retrieval depend
+// on peer discovery, which is slow and nondeterministic on a CI runner. Tor is
+// the one node whose "running" itself depends on reaching the network; see the
+// comment in its test for how that is kept out of the release gate.
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const { test: liveTest, expect, watchProcessExit } = require('../live-fixtures');
+
+// The embedded Radicle node binds a Unix socket at $RAD_HOME/node/control.sock,
+// and sockaddr_un caps that path at ~104 bytes on macOS. The live fixtures' own
+// temp root is already over the limit on a macOS runner
+// (/var/folders/<44 chars>/T/freedom-live-e2e-XXXXXX/userData/radicle-data/node/control.sock
+// measures 111), so hand the node a short home of its own — the same thing
+// radicle-fixtures.js does, and for the same reason. '/tmp' is short and real
+// on macOS and Linux; Windows has no sockaddr_un limit to dodge (and no /tmp),
+// so it keeps os.tmpdir().
+function makeShortRadicleHome() {
+  const prefix = process.platform === 'win32' ? path.join(os.tmpdir(), 'rad-') : '/tmp/rad-';
+  return fs.mkdtempSync(prefix);
+}
+
+// Applied to every test in the file rather than only the Radicle one: it costs
+// an empty temp directory, and it keeps the launch environment identical
+// across the four node tests.
+const test = liveTest.extend({
+  // eslint-disable-next-line no-empty-pattern
+  launchEnv: async ({}, use) => {
+    const radicleHome = makeShortRadicleHome();
+    await use({ FREEDOM_RADICLE_DATA: radicleHome });
+    try {
+      fs.rmSync(radicleHome, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup — leftover dirs in /tmp are harmless.
+    }
+  },
+});
+
+// One budget for all three, sized from the slowest thing measured rather than
+// from a round number: antd's own startup poll gives up after 60 attempts × 1s
+// and reports "Startup timed out", and the libradicle addon reported running
+// in ~5s on an offline box but took ~60s on a networked one (it dials its
+// seeds while starting). 180s is roughly 3× that worst case, which is the
+// headroom a cold packaged launch on a shared arm64 runner can need.
+const NODE_START_TIMEOUT_MS = 180_000;
+// Arti has to bootstrap a Tor circuit before it reports running — same budget
+// tor-onion.spec.js uses.
+const TOR_START_TIMEOUT_MS = 180_000;
+// The API is already answering by the time the manager says running (that is
+// how it decides); this only covers the hop from the app's health probe to
+// ours.
+const HEALTH_TIMEOUT_MS = 30_000;
+const HEALTH_REQUEST_TIMEOUT_MS = 5_000;
+// How long the IPFS leg waits for the quit it drives itself to land. The
+// wind-down's own watchdog gives up at 20s (src/main/index.js
+// SHUTDOWN_WATCHDOG_MS) and quits regardless, so a process still alive well
+// past that is wedged, not slow — 60s is the same budget
+// live/ipfs-quit.spec.js uses, with room for a cold packaged teardown.
+const QUIT_TIMEOUT_MS = 60_000;
+
+// Every node off. Each test turns exactly one back on.
+const NODES_OFF = {
+  startAntAtLaunch: false,
+  startIpfsAtLaunch: false,
+  startRadicleAtLaunch: false,
+  enableTorIntegration: false,
+  startTorAtLaunch: false,
+};
+
+// Poll until the manager reaches a state it will not leave on its own —
+// 'running' or 'error'. Waiting for 'running' directly would spend the whole
+// budget on a node that already reported 'error' and then fail with a bare
+// timeout instead of the manager's own message.
+async function waitForNodeToSettle(window, api, { label, timeout }) {
+  let last = null;
+
+  await expect
+    .poll(
+      async () => {
+        last = await window.evaluate((name) => window[name].getStatus(), api);
+        return last.status === 'running' || last.status === 'error';
+      },
+      {
+        message: `Waiting for the packaged ${label} node to finish starting`,
+        timeout,
+        intervals: [1_000, 2_000],
+      }
+    )
+    .toBe(true);
+
+  return last;
+}
+
+async function expectNodeRunning(window, api, { label, timeout }) {
+  const status = await waitForNodeToSettle(window, api, { label, timeout });
+
+  expect(status.status, `${label} did not start: ${status.error || 'no error reported'}`).toBe(
+    'running'
+  );
+
+  return status;
+}
+
+// The address the app itself published for a service, e.g.
+// 'http://127.0.0.1:1634' for Ant. Read from the registry rather than
+// hardcoded: the configured port is per profile, and a busy port makes the
+// manager fall back to the next free one (both true on a dev machine that
+// already runs a node).
+const registryEntry = (window, service) =>
+  window.evaluate(async (name) => (await window.serviceRegistry.getRegistry())[name], service);
+
+test.describe('packaged bundled nodes', () => {
+  test.describe('Ant', () => {
+    test.use({ seedSettings: { ...NODES_OFF, startAntAtLaunch: true } });
+
+    test('the bundled Ant node starts and its local API answers /health', async ({ window }) => {
+      // The artifact ships an antd for this platform and arch at all — checked
+      // through the manager's own path resolution, so a missing
+      // extraResources entry fails here with the reason rather than as a
+      // startup timeout below.
+      expect(await window.evaluate(() => window.ant.checkBinary())).toEqual({ available: true });
+
+      await expectNodeRunning(window, 'ant', { label: 'Ant', timeout: NODE_START_TIMEOUT_MS });
+
+      const ant = await registryEntry(window, 'ant');
+      // 'bundled' — not 'reused'. If something else on the machine is already
+      // serving the Ant API on the ecosystem default port (a
+      // `npm run system-ant:start` node, or an antd a previous smoke leg left
+      // behind), the manager adopts it and the artifact's own antd never runs,
+      // which would make this leg pass without testing anything.
+      expect(ant.mode, `expected the artifact's own antd, got mode "${ant.mode}"`).toBe('bundled');
+      expect(ant.api).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+
+      // The status above is the app's own view. This is the same check a user
+      // (or `npm run ant:status`) would make from outside the app: the node is
+      // really listening on the port the app advertises.
+      await expect
+        .poll(
+          async () => {
+            try {
+              const response = await fetch(`${ant.api}/health`, {
+                signal: AbortSignal.timeout(HEALTH_REQUEST_TIMEOUT_MS),
+              });
+              return response.status;
+            } catch (error) {
+              // Returned, not swallowed: the poll keeps retrying and the
+              // failure message ends up carrying this string.
+              return `request failed: ${error.message}`;
+            }
+          },
+          {
+            message: `Waiting for ${ant.api}/health to answer`,
+            timeout: HEALTH_TIMEOUT_MS,
+            intervals: [500, 1_000],
+          }
+        )
+        .toBe(200);
+    });
+  });
+
+  test.describe('native IPFS', () => {
+    test.use({ seedSettings: { ...NODES_OFF, startIpfsAtLaunch: true } });
+
+    test('the bundled native IPFS node starts and quits cleanly', async ({
+      window,
+      electronApp,
+    }) => {
+      // Armed before the node starts, so a fatal line printed anywhere in the
+      // run is captured. Asserted after the quit at the end of this test.
+      const expectCleanExit = watchProcessExit(electronApp, { timeout: QUIT_TIMEOUT_MS });
+
+      await expectNodeRunning(window, 'ipfs', {
+        label: 'native IPFS',
+        timeout: NODE_START_TIMEOUT_MS,
+      });
+
+      // The native node has no HTTP port (getActivePort() is always null), so
+      // the registry entry is the only thing that says which implementation
+      // came up: 'bundled' + the freedom-ipfs backend is the addon shipped in
+      // this artifact, not an external node the runner happened to have.
+      const ipfs = await registryEntry(window, 'ipfs');
+      expect(ipfs.mode).toBe('bundled');
+      expect(ipfs.backend).toBe('freedom-ipfs');
+
+      // Teardown is an assertion here, not just cleanup. Issue #345 aborted
+      // the main process (SIGABRT out of the native event dispatcher) on quit
+      // with this node running, and it reproduces in the packaged build — a
+      // stale or wrong-arch freedom-ipfs addon in the artifact can behave
+      // differently on teardown while every other packaged leg stays green,
+      // because live/ipfs-quit.spec.js (source tree) is otherwise the only
+      // place exit status is checked at all. The live fixtures' own
+      // app.close() would swallow that: it is wrapped in try/catch and never
+      // looks at how the process went away.
+      //
+      // Only this leg quits explicitly. Ant, Radicle and Tor tear down through
+      // the fixture as before — #345 is an IPFS-dispatcher bug, the Tor leg can
+      // skip out mid-test, and giving all four a driven quit would add their
+      // SIGKILL budgets (10s Tor, 5s Ant) to every release smoke run.
+      try {
+        await electronApp.close();
+      } catch {
+        // A crashing quit can break the CDP connection before close() returns;
+        // the exit status is what this is asserting on.
+      }
+
+      await expectCleanExit();
+    });
+  });
+
+  test.describe('Radicle', () => {
+    test.use({ seedSettings: { ...NODES_OFF, startRadicleAtLaunch: true } });
+
+    test('the bundled Radicle node starts', async ({ window }) => {
+      await expectNodeRunning(window, 'radicle', {
+        label: 'Radicle',
+        timeout: NODE_START_TIMEOUT_MS,
+      });
+
+      // 'embedded' is the mode that means the libradicle addon in this
+      // artifact loaded and is serving radapi:.
+      const radicle = await registryEntry(window, 'radicle');
+      expect(radicle.mode).toBe('embedded');
+      expect(radicle.api).toBe('radapi://local');
+    });
+  });
+
+  test.describe('Tor', () => {
+    // Tor is off by default and gated behind the Experimental toggle, so both
+    // settings are needed before the manager will start Arti at launch.
+    test.use({
+      seedSettings: { ...NODES_OFF, enableTorIntegration: true, startTorAtLaunch: true },
+    });
+
+    test('the bundled Arti binary starts, when the build bundles one', async ({ window }) => {
+      // Arti is only bundled when the build ran `npm run tor:download` — every
+      // release platform does (Windows x64 included since #337), but a
+      // `bundle_tor=false` dispatch run and a cross-built package do not. Ask
+      // the app, which resolves the path through tor-manager's own
+      // getArtiBinaryPath() — resources/arti-bin/arti(.exe) in a package —
+      // rather than guessing a layout from the outside. Every smoke job in the
+      // release workflow asserts that file separately, in both of the
+      // artifacts its platform ships — all six legs: the `.deb` and the
+      // extracted AppImage (x64 and arm64), the app out of the `.dmg` and the
+      // one out of the `-mac.zip`, the installed NSIS package and the portable
+      // zip — each gated on the same `BUNDLE_TOR` expression as the build
+      // jobs. So this skip cannot hide a dropped `extraResources` entry on any
+      // platform, and no artifact relies on this leg for that guarantee.
+      const { available } = await window.evaluate(() => window.tor.checkBinary());
+      test.skip(
+        !available,
+        'This build bundles no Arti binary (expected on builds made without `npm run tor:download`)'
+      );
+
+      // Executes resources/arti-bin/arti --version through the manager's own
+      // path resolution. This is the packaging half of the check and it is
+      // fully deterministic: a binary built for the wrong arch, or missing a
+      // shared library, fails here rather than as a startup timeout.
+      const version = await window.evaluate(() => window.tor.getVersion());
+      expect(version, `arti --version failed: ${JSON.stringify(version)}`).toMatchObject({
+        success: true,
+        name: 'Arti',
+      });
+      expect(version.version).toMatch(/^\d+\.\d+/);
+
+      const status = await waitForNodeToSettle(window, 'tor', {
+        label: 'Tor',
+        timeout: TOR_START_TIMEOUT_MS,
+      });
+
+      // Unlike the other three, Arti only reports running once it has
+      // bootstrapped a circuit *through the Tor network*, and tor-manager gives
+      // that ~120s before it kills the process with "Startup timed out". On a
+      // GitHub runner that budget is occasionally not enough (observed once in
+      // eight smoke legs on 2026-09-04, alongside successful bootstraps of
+      // 7.7s–38.4s), which is a property of the network path, not of the
+      // artifact — and the artifact is what this suite gates. So that one
+      // error, and only that one, degrades to a visible skip; every other
+      // failure (spawn error, wrong-arch binary, unexpected exit code) still
+      // fails the leg. Real onion retrieval stays in live/tor-onion.spec.js.
+      test.skip(
+        status.status === 'error' && /startup timed out/i.test(status.error || ''),
+        `Arti did not finish bootstrapping inside tor-manager's own budget on this runner (${status.error}). The bundled binary is present and runs (Arti ${version.version}); reaching the Tor network is not this suite's assertion.`
+      );
+
+      expect(status.status, `Tor did not start: ${status.error || 'no error reported'}`).toBe(
+        'running'
+      );
+
+      // Running means Arti's SOCKS proxy is listening — that address is what
+      // the session proxy routes .onion traffic through.
+      const tor = await registryEntry(window, 'tor');
+      expect(tor.socks).toMatch(/^127\.0\.0\.1:\d+$/);
+    });
+  });
+});

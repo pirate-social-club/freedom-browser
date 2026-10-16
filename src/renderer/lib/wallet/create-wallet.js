@@ -5,6 +5,7 @@
  */
 
 import { walletState, registerScreenHider } from './wallet-state.js';
+import { refuseSubscreenWhileInFlight } from './signature-flight.js';
 import { loadDerivedWallets, updateWalletSelectorDisplay } from './wallet-selector.js';
 import { refreshBalances } from './balance-display.js';
 
@@ -69,6 +70,8 @@ function setupCreateWalletSubscreen() {
 }
 
 export async function openCreateWallet() {
+  if (refuseSubscreenWhileInFlight('Create wallet screen')) return;
+
   walletState.identityView?.classList.add('hidden');
   createWalletScreen?.classList.remove('hidden');
 
@@ -160,11 +163,6 @@ async function handleCreateWalletTouchIdUnlock() {
       throw new Error(result.error || 'Touch ID cancelled');
     }
 
-    const unlockResult = await window.identity.unlock(result.password);
-    if (!unlockResult.success) {
-      throw new Error(unlockResult.error || 'Failed to unlock vault');
-    }
-
     showCreateWalletStep('name');
   } catch (err) {
     console.error('[WalletUI] Touch ID unlock failed:', err);
@@ -217,7 +215,7 @@ async function handleCreateWalletSubmit() {
 
   if (createWalletSubmitBtn) {
     createWalletSubmitBtn.disabled = true;
-    createWalletSubmitBtn.textContent = 'Creating...';
+    createWalletSubmitBtn.textContent = 'Creating…';
   }
 
   try {

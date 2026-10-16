@@ -1,0 +1,300 @@
+{
+  "status": "approved_by_workspace_owner",
+  "applied": true,
+  "advisory": "GHSA-ch52-4w7c-c8xp",
+  "advisory_url": "https://github.com/advisories/GHSA-ch52-4w7c-c8xp",
+  "package": "http-cache-semantics",
+  "affected_range": "<=4.2.0",
+  "severity": "high",
+  "npm_source": 1240991,
+  "expires_at": "2026-10-10T00:00:00Z",
+  "candidate_lock_sha256": "c7e48d41401eee66868051c04f13fccefd40d196aad338c34f325a75de7ea3d2",
+  "scope": "CI development validation only, on these exact pinned development dependency paths. No packaging or release acceptance.",
+  "allowed_findings": {
+    "@electron/get": {
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "got"
+      ],
+      "nodes": {
+        "node_modules/app-builder-lib/node_modules/@electron/get": {
+          "version": "3.1.0",
+          "resolved": "https://registry.npmjs.org/@electron/get/-/get-3.1.0.tgz",
+          "integrity": "sha512-F+nKc0xW+kVbBRhFzaMgPy3KwmuNTYX1fx6+FxxoSnNgwYX6LD7AKBTWkU0MQ6IBoe7dz069CNkR673sPAgkCQ==",
+          "dev": true,
+          "license": "MIT",
+          "dependencies": {
+            "debug": "^4.1.1",
+            "env-paths": "^2.2.0",
+            "fs-extra": "^8.1.0",
+            "got": "^11.8.5",
+            "progress": "^2.0.3",
+            "semver": "^6.2.0",
+            "sumchecker": "^3.0.1"
+          },
+          "engines": {
+            "node": ">=14"
+          },
+          "optionalDependencies": {
+            "global-agent": "^3.0.0"
+          }
+        }
+      }
+    },
+    "app-builder-lib": {
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "@electron/get",
+        "dmg-builder",
+        "electron-builder-squirrel-windows"
+      ],
+      "nodes": {
+        "node_modules/app-builder-lib": {
+          "version": "26.15.3",
+          "resolved": "https://registry.npmjs.org/app-builder-lib/-/app-builder-lib-26.15.3.tgz",
+          "integrity": "sha512-2VnyWkqsP5v5XbBhL3tD5Syx8iNPBYsoU7kY4S2fz7wg8Rj/nztWKCUzGKaFRTv0Xwf3/H058CR1Kvtd/3lRow==",
+          "dev": true,
+          "license": "MIT",
+          "dependencies": {
+            "@electron/asar": "3.4.1",
+            "@electron/fuses": "^1.8.0",
+            "@electron/get": "^3.0.0",
+            "@electron/notarize": "2.5.0",
+            "@electron/osx-sign": "1.3.3",
+            "@electron/rebuild": "^4.0.4",
+            "@electron/universal": "2.0.3",
+            "@malept/flatpak-bundler": "^0.4.0",
+            "@noble/hashes": "^2.2.0",
+            "@peculiar/webcrypto": "^1.7.1",
+            "@types/fs-extra": "9.0.13",
+            "ajv": "^8.18.0",
+            "asn1js": "^3.0.10",
+            "async-exit-hook": "^2.0.1",
+            "builder-util": "26.15.3",
+            "builder-util-runtime": "9.7.0",
+            "chromium-pickle-js": "^0.2.0",
+            "ci-info": "4.3.1",
+            "debug": "^4.3.4",
+            "dotenv": "^16.4.5",
+            "dotenv-expand": "^11.0.6",
+            "ejs": "^3.1.8",
+            "electron-publish": "26.15.3",
+            "fs-extra": "^10.1.0",
+            "hosted-git-info": "^4.1.0",
+            "isbinaryfile": "^5.0.0",
+            "jiti": "^2.4.2",
+            "js-yaml": "^4.1.0",
+            "json5": "^2.2.3",
+            "lazy-val": "^1.0.5",
+            "minimatch": "^10.2.5",
+            "pkijs": "^3.4.0",
+            "plist": "3.1.0",
+            "proper-lockfile": "^4.1.2",
+            "resedit": "^1.7.0",
+            "semver": "~7.7.3",
+            "tar": "^7.5.7",
+            "temp-file": "^3.4.0",
+            "tiny-async-pool": "1.3.0",
+            "unzipper": "^0.12.3",
+            "which": "^5.0.0"
+          },
+          "engines": {
+            "node": ">=14.0.0"
+          },
+          "peerDependencies": {
+            "dmg-builder": "26.15.3",
+            "electron-builder-squirrel-windows": "26.15.3"
+          }
+        }
+      }
+    },
+    "cacheable-request": {
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "http-cache-semantics"
+      ],
+      "nodes": {
+        "node_modules/cacheable-request": {
+          "version": "7.0.4",
+          "resolved": "https://registry.npmjs.org/cacheable-request/-/cacheable-request-7.0.4.tgz",
+          "integrity": "sha512-v+p6ongsrp0yTGbJXjgxPow2+DL93DASP4kXCDKb8/bwRtt9OEF3whggkkDkGNzgcWy2XaF4a8nZglC7uElscg==",
+          "dev": true,
+          "license": "MIT",
+          "dependencies": {
+            "clone-response": "^1.0.2",
+            "get-stream": "^5.1.0",
+            "http-cache-semantics": "^4.0.0",
+            "keyv": "^4.0.0",
+            "lowercase-keys": "^2.0.0",
+            "normalize-url": "^6.0.1",
+            "responselike": "^2.0.0"
+          },
+          "engines": {
+            "node": ">=8"
+          }
+        }
+      }
+    },
+    "dmg-builder": {
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "app-builder-lib"
+      ],
+      "nodes": {
+        "node_modules/dmg-builder": {
+          "version": "26.15.3",
+          "resolved": "https://registry.npmjs.org/dmg-builder/-/dmg-builder-26.15.3.tgz",
+          "integrity": "sha512-O3zJUFUYHJKgzPqioHxfxzBzlSC1eXCSr79gMSBKBP5AgjjpmrydMsMLotEg9fAJF36vdUncb+4ndRNxoPdlSQ==",
+          "dev": true,
+          "license": "MIT",
+          "dependencies": {
+            "app-builder-lib": "26.15.3",
+            "builder-util": "26.15.3",
+            "fs-extra": "^10.1.0",
+            "js-yaml": "^4.1.0"
+          }
+        }
+      }
+    },
+    "electron-builder": {
+      "severity": "high",
+      "isDirect": true,
+      "via": [
+        "app-builder-lib",
+        "dmg-builder"
+      ],
+      "nodes": {
+        "node_modules/electron-builder": {
+          "version": "26.15.3",
+          "resolved": "https://registry.npmjs.org/electron-builder/-/electron-builder-26.15.3.tgz",
+          "integrity": "sha512-a1KM5heqS3gQCZzizXEI8RjJy3QVogULPdeSknt76uLDpBIW/HDGsMg/XgP0riP6PI9COsRvFITKKGDqA8fJxA==",
+          "dev": true,
+          "license": "MIT",
+          "dependencies": {
+            "app-builder-lib": "26.15.3",
+            "builder-util": "26.15.3",
+            "builder-util-runtime": "9.7.0",
+            "chalk": "^4.1.2",
+            "ci-info": "^4.2.0",
+            "dmg-builder": "26.15.3",
+            "fs-extra": "^10.1.0",
+            "lazy-val": "^1.0.5",
+            "simple-update-notifier": "2.0.0",
+            "yargs": "^17.6.2"
+          },
+          "bin": {
+            "electron-builder": "cli.js",
+            "install-app-deps": "install-app-deps.js"
+          },
+          "engines": {
+            "node": ">=14.0.0"
+          }
+        }
+      }
+    },
+    "electron-builder-squirrel-windows": {
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "app-builder-lib"
+      ],
+      "nodes": {
+        "node_modules/electron-builder-squirrel-windows": {
+          "version": "26.15.3",
+          "resolved": "https://registry.npmjs.org/electron-builder-squirrel-windows/-/electron-builder-squirrel-windows-26.15.3.tgz",
+          "integrity": "sha512-Jc19XPV9y9+2bAdZPkXuVNGNIEFBq9poHC61l8Kv6FdK7DRG3+Ic0rerC0DXOaeHNz8yW0fg/JnF8GQROOF5MA==",
+          "dev": true,
+          "license": "MIT",
+          "peer": true,
+          "dependencies": {
+            "app-builder-lib": "26.15.3",
+            "builder-util": "26.15.3",
+            "electron-winstaller": "5.4.0"
+          }
+        }
+      }
+    },
+    "got": {
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "cacheable-request"
+      ],
+      "nodes": {
+        "node_modules/got": {
+          "version": "11.8.6",
+          "resolved": "https://registry.npmjs.org/got/-/got-11.8.6.tgz",
+          "integrity": "sha512-6tfZ91bOr7bOXnK7PRDCGBLa1H4U080YHNaAQ2KsMGlLEzRbk44nsZF2E1IeRc3vtJHPVbKCYgdFbaGO2ljd8g==",
+          "dev": true,
+          "license": "MIT",
+          "dependencies": {
+            "@sindresorhus/is": "^4.0.0",
+            "@szmarczak/http-timer": "^4.0.5",
+            "@types/cacheable-request": "^6.0.1",
+            "@types/responselike": "^1.0.0",
+            "cacheable-lookup": "^5.0.3",
+            "cacheable-request": "^7.0.2",
+            "decompress-response": "^6.0.0",
+            "http2-wrapper": "^1.0.0-beta.5.2",
+            "lowercase-keys": "^2.0.0",
+            "p-cancelable": "^2.0.0",
+            "responselike": "^2.0.0"
+          },
+          "engines": {
+            "node": ">=10.19.0"
+          },
+          "funding": {
+            "url": "https://github.com/sindresorhus/got?sponsor=1"
+          }
+        }
+      }
+    },
+    "http-cache-semantics": {
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1240991,
+          "name": "http-cache-semantics",
+          "dependency": "http-cache-semantics",
+          "title": "http-cache-semantics max-stale handling can disclose cross-user cached responses",
+          "url": "https://github.com/advisories/GHSA-ch52-4w7c-c8xp",
+          "severity": "high",
+          "cwe": [
+            "CWE-524"
+          ],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+          },
+          "range": "<=4.2.0"
+        }
+      ],
+      "nodes": {
+        "node_modules/http-cache-semantics": {
+          "version": "4.2.0",
+          "resolved": "https://registry.npmjs.org/http-cache-semantics/-/http-cache-semantics-4.2.0.tgz",
+          "integrity": "sha512-dTxcvPXqPvXBQpq5dUr6mEMJX4oIEFv6bwom3FDwKRDsuIjjJGANqhBuoAn9c1RQJIdAKav33ED65E2ys+87QQ==",
+          "dev": true,
+          "license": "BSD-2-Clause"
+        }
+      }
+    }
+  },
+  "requirements": [
+    "Run and retain the complete full audit JSON and actual nonzero result. Report a separate owner-approved scoped-exception verdict; never report the full audit as clean.",
+    "Bind finding identities, exact node paths and complete lock records, registry origins/integrities, severities, directness and resolved dependency/optional/peer edges to this candidate. Each admitted finding must reach this one structured advisory.",
+    "Require no production dependency or optional-dependency root reaches the affected leaf. Refuse additional copies, changed ancestry or runtime reachability.",
+    "Reject unknown advisories, new findings, malformed responses, unresolved or unrooted components, severity escalation and lock drift. Expire automatically with no automatic renewal.",
+    "Before packaging, independently establish effective downloader configuration, cache ownership/isolation and absence of the affected modules from actual packaged runtime bytes. Credentials or cross-user shared caches invalidate the rationale.",
+    "Keep the separate installed-browser, ordinary Mullvad, three-public-host release and exact tagged-candidate approval gates."
+  ],
+  "rationale": "No patched version is published and stable builder releases retain Get3. Read-only source shows Got cache defaults to undefined and cacheable-request is used only for truthy options.cache; callers may enable it. That is conditional source evidence, not proof of runtime exclusion. A bare Get5 override is incompatible; a reviewed consumer migration remains a separate clean-remediation route.",
+  "authority": "workspace_owner",
+  "approved_on": "2026-10-03",
+  "approved_proposal_sha256": "5ceced656f753bb0021beda8728d8ae36f09fd6ec978ca7d1fe1269669fca9de"
+}

@@ -1,10 +1,23 @@
 {
   "routable": {
     "home": "home.html",
+    "downloads": "downloads.html",
     "history": "history.html",
     "live-room": "live-room.html",
     "links": "links.html",
-    "protocol-test": "protocol-test.html"
+    "payments": "payments.html",
+    "private": "private.html",
+    "profiles": "profiles.html",
+    "protocol-test": "protocol-test.html",
+    "publish": "publish.html",
+    "settings": "settings.html"
   },
-  "other": ["error.html", "rad-browser.html", "space-browser.html"]
+  "other": [
+    "error.html",
+    "rad-browser.html",
+    "space-browser.html",
+    "ens-conflict.html",
+    "ens-unverified.html",
+    "onchain-unverified.html"
+  ]
 }

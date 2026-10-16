@@ -1,0 +1,73 @@
+name: Scoped Jest lock refresh
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-lock-refresh-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/integration/upstream-0.8.6-spaces') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.number == 39 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'integration/upstream-0.8.6-spaces')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact workflow source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up pinned Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24.14.0
+      - name: Generate and verify the scoped repair
+        shell: bash
+        env:
+          FREEDOM_REFRESH_SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
+          FREEDOM_REFRESH_OUTPUT: ${{ runner.temp }}/freedom-jest-refresh-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          refresh_unit="freedom-jest-refresh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.service"
+          refresh_stop_code=0
+          cleanup() {
+            if timeout --kill-after=2s 7s sudo systemctl stop "$refresh_unit" >/dev/null 2>&1; then
+              refresh_stop_code=0
+            else
+              refresh_stop_code=$?
+            fi
+          }
+          trap cleanup EXIT
+          set +e
+          sudo systemd-run --unit="$refresh_unit" --wait --pipe --collect \
+            --uid="$(id -u)" --gid="$(id -g)" --working-directory="$GITHUB_WORKSPACE" \
+            --property=CPUQuota=100% --property=AllowedCPUs=0 --property=CPUAffinity=0 \
+            --property=Nice=19 --property=MemoryMax=3221225472 --property=MemorySwapMax=0 \
+            --property=RuntimeMaxSec=720 --property=TimeoutStopSec=5 --property=KillMode=control-group \
+            --setenv="PATH=$PATH" --setenv=CI=1 --setenv=NODE_OPTIONS=--max-old-space-size=1536 \
+            --setenv=PYTHONDONTWRITEBYTECODE=1 --setenv=FREEDOM_DISPOSABLE_HOSTED=1 \
+            --setenv="FREEDOM_REFRESH_UNIT=$refresh_unit" \
+            --setenv="FREEDOM_REFRESH_SOURCE=$FREEDOM_REFRESH_SOURCE" \
+            --setenv="FREEDOM_REFRESH_OUTPUT=$FREEDOM_REFRESH_OUTPUT" \
+            /usr/bin/python3 ops/dependency-repair/refresh-jest-lock.py --apply
+          refresh_code=$?
+          set -e
+          cleanup
+          python3 ops/dependency-repair/verify-refresh-cleanup.py "$refresh_unit" "$FREEDOM_REFRESH_OUTPUT" "$refresh_stop_code"
+          exit "$refresh_code"
+      - name: Upload public repair evidence only
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scoped-jest-lock-refresh
+          path: ${{ runner.temp }}/freedom-jest-refresh-${{ github.run_id }}-${{ github.run_attempt }}/public/
+          if-no-files-found: error
+          retention-days: 7

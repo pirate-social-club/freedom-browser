@@ -1,0 +1,9 @@
+{
+  "source": "https://blockstream.info/api/blocks/{height}",
+  "first_height": 30240,
+  "last_height": 32258,
+  "headers": 2019,
+  "sha256": "9b08340200364550c088f58db471deb139e706ee985f43ffa0fcd23c44719fbc",
+  "all_hashes_and_links_recomputed": true,
+  "purpose": "Historical conformance data; no checkpoint approval or anchor proof."
+}

@@ -20,6 +20,10 @@
           {
             "name": "PROVENANCE.md",
             "executable": false
+          },
+          {
+            "name": "encrypted-validator.json",
+            "executable": false
           }
         ],
         "win": [
@@ -50,28 +54,12 @@
           {
             "name": "v2ray",
             "executable": true
-          },
-          {
-            "name": "geoip.dat",
-            "executable": false
-          },
-          {
-            "name": "geosite.dat",
-            "executable": false
           }
         ],
         "win": [
           {
             "name": "v2ray.exe",
             "executable": true
-          },
-          {
-            "name": "geoip.dat",
-            "executable": false
-          },
-          {
-            "name": "geosite.dat",
-            "executable": false
           }
         ]
       },

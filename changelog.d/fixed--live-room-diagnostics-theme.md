@@ -1,0 +1,1 @@
+- Live room diagnostic output follows the selected Appearance theme.

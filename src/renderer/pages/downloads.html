@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; object-src 'none'; base-uri 'none'; form-action 'none';"
+    />
+    <title>Downloads</title>
+    <link rel="stylesheet" href="styles/theme.css" />
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        font-family:
+          'IBM Plex Sans',
+          -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+        background: var(--page-gradient);
+        color: var(--text);
+        padding: 48px;
+        box-sizing: border-box;
+        min-height: 100vh;
+      }
+      h1 {
+        font-size: 28px;
+        margin-bottom: 8px;
+        color: var(--accent);
+        font-weight: 600;
+        letter-spacing: -0.5px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .subtitle {
+        color: var(--text-muted);
+        margin-bottom: 24px;
+        font-size: 14px;
+      }
+      .toolbar {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 24px;
+        align-items: center;
+      }
+      .search-input {
+        flex: 1;
+        max-width: 400px;
+        padding: 10px 16px;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text);
+        font-size: 14px;
+        font-family: inherit;
+        outline: none;
+        transition: border-color 0.15s;
+      }
+      .search-input:focus {
+        border-color: var(--accent);
+      }
+      .search-input::placeholder {
+        color: var(--text-subtle);
+      }
+      .toolbar-right {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        margin-left: auto;
+      }
+      .btn {
+        padding: 10px 16px;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text);
+        font-size: 14px;
+        font-family: inherit;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .btn:hover {
+        background: var(--bg-raised);
+        border-color: var(--border-strong);
+      }
+      .btn.danger {
+        color: var(--danger);
+      }
+      .btn.danger:hover {
+        border-color: var(--danger);
+        background: var(--danger-bg);
+      }
+      .download-list {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .download-item {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 14px 16px;
+        background: var(--surface-translucent);
+        border: 1px solid transparent;
+        border-radius: 8px;
+        transition: all 0.15s ease;
+      }
+      .download-item:hover {
+        background: var(--bg-card);
+        border-color: var(--border);
+      }
+      .file-icon {
+        width: 32px;
+        height: 32px;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 6px;
+        background: #388bfd33;
+        color: #58a6ff;
+      }
+      .download-item.state-cancelled .file-icon,
+      .download-item.state-interrupted .file-icon {
+        background: #6e768133;
+        color: #8b949e;
+      }
+      .download-content {
+        flex: 1;
+        min-width: 0;
+      }
+      .download-name {
+        font-size: 14px;
+        color: var(--text-strong);
+        margin-bottom: 4px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      /* Entries from private windows: shown while the window lives, purged
+         with it. */
+      .private-badge {
+        display: inline-block;
+        margin-left: 8px;
+        padding: 1px 8px;
+        border-radius: 999px;
+        background: #3a2f52;
+        border: 1px solid #55447a;
+        color: #cfc4ea;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        vertical-align: 2px;
+      }
+      .download-url {
+        font-size: 12px;
+        color: var(--accent);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .download-status {
+        font-size: 12px;
+        color: var(--text-muted);
+        margin-top: 4px;
+      }
+      .download-status.error {
+        color: var(--danger);
+      }
+      .progress-bar {
+        height: 4px;
+        margin-top: 8px;
+        border-radius: 2px;
+        background: var(--border);
+        overflow: hidden;
+      }
+      .progress-fill {
+        height: 100%;
+        border-radius: 2px;
+        background: var(--accent);
+        transition: width 0.2s ease;
+      }
+      .download-meta {
+        flex-shrink: 0;
+        color: var(--text-meta);
+        font-size: 12px;
+        min-width: 100px;
+        text-align: right;
+      }
+      .download-actions {
+        display: flex;
+        gap: 6px;
+        flex-shrink: 0;
+      }
+      .action-btn {
+        padding: 6px 10px;
+        background: transparent;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 600;
+        font-family: inherit;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: all 0.15s;
+      }
+      .action-btn:hover {
+        background: var(--bg-card-hover);
+        border-color: var(--border-strong);
+      }
+      .action-btn.danger {
+        color: var(--danger);
+      }
+      .action-btn.danger:hover {
+        border-color: var(--danger);
+        background: var(--danger-bg);
+      }
+      .remove-btn {
+        opacity: 0;
+        padding: 6px;
+        background: transparent;
+        border: none;
+        border-radius: 4px;
+        color: var(--text-meta);
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .download-item:hover .remove-btn {
+        opacity: 1;
+      }
+      .remove-btn:hover {
+        color: var(--danger);
+        background: var(--danger-bg);
+      }
+      .empty-state {
+        text-align: center;
+        padding: 64px;
+        color: var(--text-meta);
+      }
+      .empty-state svg {
+        width: 64px;
+        height: 64px;
+        margin-bottom: 16px;
+        opacity: 0.5;
+      }
+      .empty-state p {
+        margin: 0;
+        font-size: 14px;
+      }
+      .loading {
+        text-align: center;
+        padding: 64px;
+        color: var(--text-meta);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>
+      <svg
+        width="28"
+        height="28"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="7 10 12 15 17 10"></polyline>
+        <line x1="12" y1="15" x2="12" y2="3"></line>
+      </svg>
+      Downloads
+    </h1>
+    <p class="subtitle" id="stats">Loading…</p>
+
+    <div class="toolbar">
+      <input
+        type="text"
+        class="search-input"
+        id="search-input"
+        placeholder="Search downloads…"
+        autofocus
+      />
+      <div class="toolbar-right">
+        <button class="btn danger" id="clear-btn">
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path
+              d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+            ></path>
+          </svg>
+          Clear All
+        </button>
+      </div>
+    </div>
+
+    <div id="downloads-container">
+      <div class="loading">Loading downloads…</div>
+    </div>
+
+    <script src="scripts/downloads.js"></script>
+  </body>
+</html>

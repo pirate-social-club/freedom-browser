@@ -1,0 +1,15 @@
+name: Install Linux native dependencies
+description: Install system libraries required to build Ledger USB dependencies on Linux
+
+runs:
+  using: composite
+  steps:
+    - name: Install native USB build dependencies
+      shell: bash
+      run: |
+        # `install` refreshes the image's package index first; cached entries
+        # can point to package builds that Ubuntu mirrors have already rotated
+        # out. Both the refresh and the install run through the shared apt
+        # hardening wrapper so a stalled mirror is bounded and retried rather
+        # than hanging until the job's timeout-minutes.
+        "$GITHUB_WORKSPACE/scripts/ci/apt-hardening.sh" install libudev-dev libusb-1.0-0-dev

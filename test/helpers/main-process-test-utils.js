@@ -93,6 +93,7 @@ function createContextBridgeMock() {
 
   return {
     exposedValues,
+    executeInMainWorld: jest.fn(),
     exposeInMainWorld: jest.fn((key, value) => {
       exposedValues[key] = value;
     }),
@@ -101,10 +102,15 @@ function createContextBridgeMock() {
 
 function createAppMock(options = {}) {
   const handlers = new Map();
+  const appPaths = {
+    userData: options.userDataDir ?? os.tmpdir(),
+    ...(options.appPaths || {}),
+  };
 
   return {
     handlers,
     isPackaged: options.isPackaged ?? false,
+    name: options.name || 'Freedom',
     on: jest.fn((event, handler) => {
       handlers.set(event, handler);
     }),
@@ -114,17 +120,18 @@ function createAppMock(options = {}) {
       return handler(...args);
     },
     getPath: jest.fn((name) => {
-      if (name === 'userData') {
-        return options.userDataDir ?? os.tmpdir();
-      }
-
-      if (options.appPaths?.[name]) {
-        return options.appPaths[name];
+      if (appPaths[name]) {
+        return appPaths[name];
       }
 
       return path.join(os.tmpdir(), name);
     }),
-    disableHardwareAcceleration: jest.fn(),
+    setPath: jest.fn((name, value) => {
+      appPaths[name] = value;
+    }),
+    setName: jest.fn(function setName(name) {
+      this.name = name;
+    }),
     showAboutPanel: jest.fn(),
   };
 }
@@ -148,7 +155,13 @@ function loadMainModule(modulePath, options = {}) {
   const BrowserWindow = options.BrowserWindow || {
     getAllWindows: jest.fn(() => options.windows ?? []),
   };
-  const dialog = options.dialog || { showSaveDialog: jest.fn() };
+  const webContentsMock = options.webContents || {
+    getAllWebContents: jest.fn(() => options.webContentsList ?? []),
+  };
+  const dialog = options.dialog || {
+    showErrorBox: jest.fn(),
+    showSaveDialog: jest.fn(),
+  };
   const clipboard = options.clipboard || {
     writeText: jest.fn(),
     writeImage: jest.fn(),
@@ -165,6 +178,7 @@ function loadMainModule(modulePath, options = {}) {
     ipcRenderer,
     nativeTheme,
     BrowserWindow,
+    webContents: webContentsMock,
     contextBridge,
     dialog,
     clipboard,
@@ -173,9 +187,8 @@ function loadMainModule(modulePath, options = {}) {
   }));
 
   if (options.extraMocks) {
-    const virtualMocks = new Set(options.virtualMocks || []);
     for (const [request, mockFactory] of Object.entries(options.extraMocks)) {
-      jest.doMock(request, mockFactory, virtualMocks.has(request) ? { virtual: true } : undefined);
+      jest.doMock(request, mockFactory);
     }
   }
 
@@ -188,6 +201,7 @@ function loadMainModule(modulePath, options = {}) {
     ipcRenderer,
     nativeTheme,
     BrowserWindow,
+    webContents: webContentsMock,
     contextBridge,
     dialog,
     clipboard,

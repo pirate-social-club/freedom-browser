@@ -61,8 +61,7 @@ const createElement = (initialClasses = []) => {
 };
 
 const flushMicrotasks = async () => {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let i = 0; i < 10; i += 1) await Promise.resolve();
 };
 
 const loadAutocompleteModule = async (options = {}) => {
@@ -108,14 +107,19 @@ const loadAutocompleteModule = async (options = {}) => {
   const addressInput = createElement();
   const webviewElement = createElement();
   const electronAPI = {
+    autocompleteHistory: jest.fn().mockResolvedValue(history),
     getHistory: jest.fn().mockResolvedValue(history),
     getBookmarks: jest.fn().mockResolvedValue(bookmarks),
     getCachedFavicon: jest.fn((url) => faviconBehavior(url)),
   };
+  // Per-tab navigation state the address-bar edit tracker writes through
+  // (`address-bar-edit.js` reads it via `getActiveTabState`).
+  const navState = { addressBarPendingInput: null, addressBarPendingSelection: null };
   const tabsMocks = {
     getOpenTabs: jest.fn(() => openTabs),
     switchTab: jest.fn(),
     hideTabContextMenu: jest.fn(),
+    getActiveTabState: jest.fn(() => navState),
   };
   const menusMocks = {
     closeMenus: jest.fn(),
@@ -252,6 +256,7 @@ const loadAutocompleteModule = async (options = {}) => {
 
   return {
     mod,
+    navState,
     dropdown,
     addressInput,
     webviewElement,
@@ -325,9 +330,9 @@ describe('autocomplete', () => {
     mod.initAutocomplete();
     await flushMicrotasks();
 
-    expect(debugMocks.pushDebug).toHaveBeenCalledWith(
-      '[Autocomplete] Cache refreshed: 1 history, 1 bookmarks'
-    );
+    expect(debugMocks.pushDebug).toHaveBeenCalledWith('[Autocomplete] Cache refreshed: 1 bookmarks');
+    // History is queried per keystroke, never read whole (#503).
+    expect(electronAPI.getHistory).not.toHaveBeenCalled();
     expect(debugMocks.pushDebug).toHaveBeenCalledWith('[Autocomplete] Initialized');
 
     addressInput.value = 'example';
@@ -335,6 +340,7 @@ describe('autocomplete', () => {
     jest.runAllTimers();
     await flushMicrotasks();
 
+    expect(electronAPI.autocompleteHistory).toHaveBeenCalledWith('example');
     expect(autocompleteUtilsMocks.generateSuggestions).toHaveBeenCalledWith('example', {
       openTabs: [{ id: 11, title: 'Open Tab', url: 'https://tab.example' }],
       historyItems: [{ title: 'History Entry', url: 'https://history.example' }],
@@ -364,7 +370,7 @@ describe('autocomplete', () => {
   test('supports keyboard navigation for switching tabs, navigating, tab completion, and escape', async () => {
     jest.useFakeTimers();
 
-    const { mod, dropdown, addressInput, tabsMocks, backdropMocks } =
+    const { mod, navState, dropdown, addressInput, tabsMocks, backdropMocks } =
       await loadAutocompleteModule({
         suggestionResolver: () => [
           {
@@ -409,24 +415,35 @@ describe('autocomplete', () => {
       block: 'nearest',
     });
 
+    // Previewing a row is an uncommitted edit of this tab's address bar, so
+    // it is tracked as one (page commits must not clobber it — #305).
+    expect(navState.addressBarPendingInput).toBe('https://tab.example');
+
     addressInput.handlers.keydown({
       key: 'Enter',
       preventDefault: jest.fn(),
     });
 
-    expect(tabsMocks.switchTab).toHaveBeenCalledWith(11);
+    // The switch is flagged as address-bar-driven so the tab being left does
+    // not adopt the previewed target URL as its own page display (#310 M3).
+    expect(tabsMocks.switchTab).toHaveBeenCalledWith(11, { fromAddressBarCommit: true });
     expect(addressInput.blur).toHaveBeenCalled();
     expect(backdropMocks.hideMenuBackdrop).toHaveBeenCalled();
+    // Committing a suggestion ends the edit for the tab being left.
+    expect(navState.addressBarPendingInput).toBeNull();
 
     addressInput.value = 'nav';
     addressInput.handlers.input();
     jest.runAllTimers();
     await flushMicrotasks();
 
-    addressInput.handlers.keydown({
-      key: 'ArrowUp',
-      preventDefault: jest.fn(),
-    });
+    // ArrowDown stops on the last row instead of wrapping to the first (#313).
+    addressInput.handlers.keydown({ key: 'ArrowDown', preventDefault: jest.fn() });
+    addressInput.handlers.keydown({ key: 'ArrowDown', preventDefault: jest.fn() });
+    expect(addressInput.value).toBe('https://navigate.example');
+    addressInput.handlers.keydown({ key: 'ArrowDown', preventDefault: jest.fn() });
+    expect(addressInput.value).toBe('https://navigate.example');
+
     addressInput.handlers.keydown({
       key: 'Tab',
       preventDefault: jest.fn(),
@@ -439,16 +456,16 @@ describe('autocomplete', () => {
     jest.runAllTimers();
     await flushMicrotasks();
 
-    addressInput.handlers.keydown({
-      key: 'ArrowUp',
-      preventDefault: jest.fn(),
-    });
+    addressInput.handlers.keydown({ key: 'ArrowDown', preventDefault: jest.fn() });
+    addressInput.handlers.keydown({ key: 'ArrowDown', preventDefault: jest.fn() });
     addressInput.handlers.keydown({
       key: 'Enter',
       preventDefault: jest.fn(),
     });
 
-    expect(onNavigate).toHaveBeenCalledWith('https://navigate.example');
+    expect(onNavigate).toHaveBeenCalledWith('https://navigate.example', {
+      commitsAddressBar: true,
+    });
     expect(addressInput.value).toBe('https://navigate.example');
 
     addressInput.value = 'nav';
@@ -459,8 +476,140 @@ describe('autocomplete', () => {
     addressInput.handlers.keydown({
       key: 'Escape',
       preventDefault: jest.fn(),
+      stopPropagation: jest.fn(),
     });
 
+    expect(dropdown.classList.add).toHaveBeenCalledWith('hidden');
+  });
+
+  test('arrow keys stop at both ends of the list and return to the typed text', async () => {
+    jest.useFakeTimers();
+
+    const { mod, navState, dropdown, addressInput } = await loadAutocompleteModule({
+      suggestionResolver: () => [
+        { title: 'First', url: 'https://first.example', protocol: 'https', type: 'history' },
+        { title: 'Second', url: 'https://second.example', protocol: 'https', type: 'history' },
+      ],
+    });
+
+    mod.initAutocomplete();
+    await flushMicrotasks();
+
+    addressInput.value = 'bzz';
+    addressInput.handlers.input();
+    jest.runAllTimers();
+    await flushMicrotasks();
+
+    // ArrowUp with nothing highlighted stays on the typed text — it must not
+    // teleport to the bottom of the list (#313).
+    addressInput.handlers.keydown({ key: 'ArrowUp', preventDefault: jest.fn() });
+    expect(addressInput.value).toBe('bzz');
+    expect(mod.isSuggestionPreviewActive()).toBe(false);
+
+    addressInput.handlers.keydown({ key: 'ArrowDown', preventDefault: jest.fn() });
+    expect(addressInput.value).toBe('https://first.example');
+    expect(mod.isSuggestionPreviewActive()).toBe(true);
+
+    // ArrowUp off the first suggestion goes back to what the user typed,
+    // with nothing highlighted, and stays there.
+    addressInput.handlers.keydown({ key: 'ArrowUp', preventDefault: jest.fn() });
+    expect(addressInput.value).toBe('bzz');
+    expect(navState.addressBarPendingInput).toBe('bzz');
+    expect(mod.isSuggestionPreviewActive()).toBe(false);
+    expect(dropdown.querySelectorAll('.autocomplete-item')[0].classList.toggle).toHaveBeenCalledWith(
+      'selected',
+      false
+    );
+
+    addressInput.handlers.keydown({ key: 'ArrowUp', preventDefault: jest.fn() });
+    expect(addressInput.value).toBe('bzz');
+
+    // Hovering a row moves the highlight, so Enter commits the row under the
+    // cursor rather than the typed text (#313) — but it leaves the bar's text
+    // alone, so it does not count as a preview and does not cost the user an
+    // extra Escape press (#310).
+    dropdown.handlers.mousemove({
+      target: { closest: () => ({ dataset: { index: '1' } }) },
+    });
+    expect(mod.isSuggestionPreviewActive()).toBe(false);
+    expect(addressInput.value).toBe('bzz');
+    const onNavigate = jest.fn();
+    mod.setOnNavigate(onNavigate);
+    addressInput.handlers.keydown({ key: 'Enter', preventDefault: jest.fn() });
+    expect(onNavigate).toHaveBeenCalledWith('https://second.example', {
+      commitsAddressBar: true,
+    });
+  });
+
+  test('escape with a previewed suggestion restores the typed text and keeps focus', async () => {
+    jest.useFakeTimers();
+
+    const { mod, dropdown, addressInput } = await loadAutocompleteModule({
+      suggestionResolver: () => [
+        { title: 'First', url: 'https://first.example', protocol: 'https', type: 'history' },
+      ],
+    });
+
+    mod.initAutocomplete();
+    await flushMicrotasks();
+
+    addressInput.value = 'bzz';
+    addressInput.handlers.input();
+    jest.runAllTimers();
+    await flushMicrotasks();
+    addressInput.handlers.keydown({ key: 'ArrowDown', preventDefault: jest.fn() });
+    expect(addressInput.value).toBe('https://first.example');
+
+    const escape = {
+      key: 'Escape',
+      preventDefault: jest.fn(),
+      stopPropagation: jest.fn(),
+    };
+    addressInput.handlers.keydown(escape);
+
+    // The typed text comes back, the list closes, focus stays in the bar and
+    // navigation.js' handler is left out of this press (#310).
+    expect(addressInput.value).toBe('bzz');
+    expect(dropdown.classList.add).toHaveBeenCalledWith('hidden');
+    expect(escape.stopPropagation).toHaveBeenCalled();
+    expect(addressInput.blur).not.toHaveBeenCalled();
+    expect(mod.isSuggestionPreviewActive()).toBe(false);
+  });
+
+  test('escape after a mere hover leaves the bar to navigation.js (#310)', async () => {
+    jest.useFakeTimers();
+
+    const { mod, dropdown, addressInput } = await loadAutocompleteModule({
+      suggestionResolver: () => [
+        { title: 'First', url: 'https://first.example', protocol: 'https', type: 'history' },
+      ],
+    });
+
+    mod.initAutocomplete();
+    await flushMicrotasks();
+
+    addressInput.value = 'bzz';
+    addressInput.handlers.input();
+    jest.runAllTimers();
+    await flushMicrotasks();
+
+    // Hover highlights the row but never rewrites the bar…
+    dropdown.handlers.mousemove({
+      target: { closest: () => ({ dataset: { index: '0' } }) },
+    });
+    expect(addressInput.value).toBe('bzz');
+    expect(mod.isSuggestionPreviewActive()).toBe(false);
+
+    // …so this module has nothing to restore: it only closes the list, and
+    // navigation.js (whose listener ran first, since it stood down only for a
+    // real preview) keeps its revert to the page URL. One press, like Chrome.
+    addressInput.value = 'display:https://page-a.example/';
+    addressInput.handlers.keydown({
+      key: 'Escape',
+      preventDefault: jest.fn(),
+      stopPropagation: jest.fn(),
+    });
+    expect(addressInput.value).toBe('display:https://page-a.example/');
     expect(dropdown.classList.add).toHaveBeenCalledWith('hidden');
   });
 
@@ -517,7 +666,7 @@ describe('autocomplete', () => {
         })),
       },
     });
-    expect(tabsMocks.switchTab).toHaveBeenCalledWith(11);
+    expect(tabsMocks.switchTab).toHaveBeenCalledWith(11, { fromAddressBarCommit: true });
 
     addressInput.value = 'navigate';
     addressInput.handlers.input();
@@ -533,7 +682,9 @@ describe('autocomplete', () => {
         })),
       },
     });
-    expect(onNavigate).toHaveBeenCalledWith('https://navigate.example');
+    expect(onNavigate).toHaveBeenCalledWith('https://navigate.example', {
+      commitsAddressBar: true,
+    });
 
     dropdown.handlers.click({
       target: {
@@ -541,18 +692,103 @@ describe('autocomplete', () => {
       },
     });
 
-    webviewElement.handlers.focus();
-    webviewElement.handlers.mousedown();
     windowHandlers.blur();
 
     expect(dropdown.classList.add).toHaveBeenCalledWith('hidden');
+    // The `#bzz-webview` focus/mousedown dismissal is gone: webviews are
+    // created id-less, so the lookup was always null and those listeners never
+    // existed (#306). The fake DOM does resolve that id, so this asserts they
+    // are really gone rather than merely never firing.
+    expect(webviewElement.handlers.focus).toBeUndefined();
+    expect(webviewElement.handlers.mousedown).toBeUndefined();
 
-    electronAPI.getHistory.mockRejectedValueOnce(new Error('history unavailable'));
+    electronAPI.getBookmarks.mockRejectedValueOnce(new Error('bookmarks unavailable'));
     await mod.refreshCache();
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       '[Autocomplete] Failed to refresh cache:',
       expect.any(Error)
     );
+  });
+  describe('history is looked up per query (#503)', () => {
+    const deferred = () => {
+      let resolve;
+      const promise = new Promise((r) => (resolve = r));
+      return { promise, resolve };
+    };
+
+    const type = async (ctx, value) => {
+      ctx.addressInput.value = value;
+      ctx.addressInput.handlers.input();
+      jest.runAllTimers();
+      await flushMicrotasks();
+    };
+
+    test('a lookup that lands after the user committed never opens the list', async () => {
+      jest.useFakeTimers();
+      const ctx = await loadAutocompleteModule();
+      ctx.mod.initAutocomplete();
+      await flushMicrotasks();
+      const lookup = deferred();
+      ctx.electronAPI.autocompleteHistory.mockReturnValueOnce(lookup.promise);
+
+      await type(ctx, 'exa');
+      expect(ctx.electronAPI.autocompleteHistory).toHaveBeenCalledWith('exa');
+      // Enter while the list is still closed: the navigation has started.
+      ctx.addressInput.handlers.keydown({ key: 'Enter', preventDefault: jest.fn() });
+      lookup.resolve([{ title: 'Late', url: 'https://late.example' }]);
+      await flushMicrotasks();
+
+      expect(ctx.autocompleteUtilsMocks.generateSuggestions).not.toHaveBeenCalled();
+      expect(ctx.dropdown.classList.remove).not.toHaveBeenCalledWith('hidden');
+    });
+
+    test('only the latest query is rendered; ones typed meanwhile are skipped', async () => {
+      jest.useFakeTimers();
+      const ctx = await loadAutocompleteModule();
+      ctx.mod.initAutocomplete();
+      await flushMicrotasks();
+      const first = deferred();
+      ctx.electronAPI.autocompleteHistory.mockReturnValueOnce(first.promise);
+
+      await type(ctx, 'e');
+      await type(ctx, 'ex');
+      await type(ctx, 'exa');
+      // One lookup in flight; the queries typed meanwhile wait, newest only.
+      expect(ctx.electronAPI.autocompleteHistory.mock.calls).toEqual([['e']]);
+
+      first.resolve([{ title: 'Stale', url: 'https://stale.example' }]);
+      await flushMicrotasks();
+
+      expect(ctx.electronAPI.autocompleteHistory.mock.calls).toEqual([['e'], ['exa']]);
+      expect(ctx.autocompleteUtilsMocks.generateSuggestions).toHaveBeenCalledTimes(1);
+      expect(ctx.autocompleteUtilsMocks.generateSuggestions).toHaveBeenCalledWith(
+        'exa',
+        expect.objectContaining({
+          historyItems: [{ title: 'History Entry', url: 'https://history.example' }],
+        })
+      );
+    });
+
+    test('a failed lookup still suggests tabs and bookmarks', async () => {
+      jest.useFakeTimers();
+      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const ctx = await loadAutocompleteModule();
+      ctx.mod.initAutocomplete();
+      await flushMicrotasks();
+      ctx.electronAPI.autocompleteHistory.mockRejectedValueOnce(new Error('worker gone'));
+
+      await type(ctx, 'exa');
+
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        '[Autocomplete] History lookup failed:',
+        expect.any(Error)
+      );
+      expect(ctx.autocompleteUtilsMocks.generateSuggestions).toHaveBeenCalledWith(
+        'exa',
+        expect.objectContaining({ historyItems: [] })
+      );
+      expect(ctx.dropdown.classList.remove).toHaveBeenCalledWith('hidden');
+    });
   });
 });

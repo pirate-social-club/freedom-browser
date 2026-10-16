@@ -1,6 +1,19 @@
 const log = require('./logger');
-const { app } = require('electron');
-const { activeBzzBases, activeIpfsBases, activeRadBases } = require('./state');
+const path = require('path');
+const { BrowserWindow, app } = require('electron');
+const { activeBzzBases } = require('./state');
+const { cleanupWebContents: cleanupX402WebContents } = require('./x402/intercept');
+const { cleanupAdblockWebContents } = require('./adblock/service');
+const {
+  isPrivateWebContents,
+  isPrivatePartition,
+  getPartitionForWebContents,
+} = require('./private/private-windows');
+const { WEBVIEW_BOOT_SWITCH, buildWebviewBootSwitch } = require('./webview-boot');
+const { isExternalProtocolUrl, trackUserGestures } = require('./external-protocol');
+const { requestOpenExternal } = require('./permissions/permissions-manager');
+const { claimPopup, reportBlockedPopup } = require('./popup-blocker');
+const { attachTabSwitchKeys } = require('./tab-switch-keys');
 
 const sanitizeUrlForLog = (rawUrl) => {
   if (!rawUrl || typeof rawUrl !== 'string') return 'unknown';
@@ -13,6 +26,7 @@ const sanitizeUrlForLog = (rawUrl) => {
       parsed.protocol === 'bzz:' ||
       parsed.protocol === 'ipfs:' ||
       parsed.protocol === 'ipns:' ||
+      parsed.protocol === 'web3:' ||
       parsed.protocol === 'freedom:'
     ) {
       return `${parsed.protocol}//<redacted>`;
@@ -23,6 +37,7 @@ const sanitizeUrlForLog = (rawUrl) => {
       rawUrl.startsWith('bzz://') ||
       rawUrl.startsWith('ipfs://') ||
       rawUrl.startsWith('ipns://') ||
+      rawUrl.startsWith('web3://') ||
       rawUrl.startsWith('freedom://')
     ) {
       return `${rawUrl.split('://')[0]}://<redacted>`;
@@ -50,20 +65,202 @@ const isFreedomLiveRoomUrl = (rawUrl) => {
   }
 };
 
+// PRIVATE MODE GUARD (navigation logging): `log.info` lands in the persistent
+// <userData>/logs/main.log, which outlives the private window and the app.
+// Even the sanitised form leaks where a private tab went (an http origin, or
+// the whole `rad:`/`ethereum:` URI, which has no origin to strip back to), so
+// private-window navigations log nothing beyond the fact that one happened.
+// Fails closed for the same reason ownerWindowOf does: if privacy cannot be
+// determined, redact. It also keeps the throw out of the will-navigate /
+// setWindowOpenHandler callbacks, where it would escape unhandled.
+const isPrivateSender = (contents) => {
+  try {
+    return isPrivateWebContents(contents);
+  } catch {
+    return true;
+  }
+};
+
+const navUrlForLog = (contents, rawUrl) =>
+  isPrivateSender(contents) ? '<private>' : sanitizeUrlForLog(rawUrl);
+
+// Resolve the BrowserWindow that hosts a webview's contents. Webviews carry
+// their chrome renderer as hostWebContents; routing through it (instead of
+// picking an arbitrary window) keeps tab-open requests in the window the
+// user clicked in — load-bearing for private windows, where a link opened
+// from a private page must never materialise as a tab in a normal window
+// (and vice versa). Returns null when no window can be resolved safely —
+// callers must treat that as "drop the action".
+function ownerWindowOf(contents) {
+  try {
+    const host = contents.hostWebContents || contents;
+    const win = BrowserWindow.fromWebContents(host);
+    if (win && !win.isDestroyed()) return win;
+  } catch {
+    // contents may be tearing down
+  }
+
+  // PRIVATE MODE GUARD (cross-privacy routing): the fallback below picks an
+  // *arbitrary* other window, which for a private sender can hand the private
+  // page's URL to a normal window on the default persistent session — a
+  // history row, persistent cookies and injected providers for a link the
+  // user opened privately. There is no safe arbitrary window for a private
+  // action, so an unresolvable private owner drops the action instead. The
+  // check fails closed: if privacy cannot be determined we assume private.
+  if (isPrivateSender(contents)) return null;
+
+  // Fallback: previous behaviour (any other window) so a race during window
+  // teardown degrades to the old routing instead of dropping the action.
+  //
+  // Every dereference below is guarded: a window that is mid-teardown stays
+  // in getAllWindows() while its webContents is ALREADY destroyed, so a bare
+  // `win.webContents.id` throws `Object has been destroyed` synchronously
+  // inside the setWindowOpenHandler / will-navigate callback and escapes as
+  // an unhandled main-process exception. (Same hazard bc5fbaa fixed in the
+  // e2e sweeps; this is the product-code sibling.)
+  try {
+    const senderId = contents?.id;
+    return (
+      BrowserWindow.getAllWindows().find((win) => {
+        try {
+          if (!win || win.isDestroyed?.()) return false;
+          const wc = win.webContents;
+          if (!wc || wc.isDestroyed?.()) return false;
+          return wc.id !== senderId;
+        } catch {
+          // This window went away between the guard and the read.
+          return false;
+        }
+      }) || null
+    );
+  } catch {
+    // getAllWindows() itself failed (app shutting down) — drop the action.
+    return null;
+  }
+}
+
+// The only preload a tab <webview> may run. tabs.js asks for it through
+// `internal:get-webview-preload-path`, which answers this same path.
+const WEBVIEW_PRELOAD_PATH = path.join(__dirname, 'webview-preload.js');
+
+// Guest preferences every tab <webview> gets regardless of what the embedder
+// asked for. tabs.js already requests these through the `webpreferences`
+// attribute, but that attribute is written by a renderer; the main process is
+// the only place a (compromised or buggy) chrome renderer cannot talk its way
+// past. Electron security checklist items 2-4, 6, 8, 9 and 12.
+const FORCED_WEBVIEW_PREFERENCES = Object.freeze({
+  nodeIntegration: false,
+  nodeIntegrationInWorker: false,
+  contextIsolation: true,
+  sandbox: true,
+  webSecurity: true,
+  allowRunningInsecureContent: false,
+  experimentalFeatures: false,
+  enableBlinkFeatures: undefined,
+});
+
+function hardenWebviewPreferences(webPreferences) {
+  for (const [key, value] of Object.entries(FORCED_WEBVIEW_PREFERENCES)) {
+    if (value === undefined) {
+      delete webPreferences[key];
+    } else {
+      webPreferences[key] = value;
+    }
+  }
+  // Pin the preload rather than trusting the path the renderer supplied: a
+  // guest that asked for a preload gets ours, never another file on disk.
+  if (webPreferences.preload || webPreferences.preloadURL) {
+    webPreferences.preload = WEBVIEW_PRELOAD_PATH;
+  }
+  delete webPreferences.preloadURL;
+}
+
+// The preload's per-load constants (webview-boot.js, #512) on the guest's
+// command line. Private is decided the way isPrivateWebContents decides it
+// for the guest — its window ever hosted a private session, or its partition
+// is a private one — and either one is enough (fails closed). Any switch of
+// the same name already in the list is dropped first: the embedder renderer
+// must not be able to hand the guest its own answer.
+function attachWebviewBoot(embedder, webPreferences, params) {
+  const partition = webPreferences.partition ?? params?.partition;
+  const isPrivate = isPrivateWebContents(embedder) || isPrivatePartition(partition);
+  const existing = Array.isArray(webPreferences.additionalArguments)
+    ? webPreferences.additionalArguments
+    : [];
+  webPreferences.additionalArguments = [
+    ...existing.filter((arg) => !String(arg).startsWith(WEBVIEW_BOOT_SWITCH)),
+    buildWebviewBootSwitch({ isPrivate }),
+  ];
+}
+
+// The chrome renderer (index.html) holds the full privileged preload API, so
+// its top frame must never leave index.html: a link or HTML file dropped on
+// the window outside a <webview>, or any scripted navigation, would otherwise
+// load that content with `window.electronAPI` et al. attached. It never
+// navigates itself (tabs navigate inside their webviews) and never opens
+// windows of its own.
+function lockChromeWindow(contents, tag) {
+  const block = (event, url) => {
+    log.warn(`${tag} blocked chrome-window navigation: ${navUrlForLog(contents, url)}`);
+    event.preventDefault();
+  };
+  contents.on('will-navigate', block);
+  contents.on('will-redirect', block);
+  contents.setWindowOpenHandler?.(({ url }) => {
+    log.warn(`${tag} blocked chrome-window popup: ${navUrlForLog(contents, url)}`);
+    return { action: 'deny' };
+  });
+}
+
 function registerWebContentsHandlers() {
   app.on('web-contents-created', (_event, contents) => {
     contents.once('destroyed', () => {
       activeBzzBases.delete(contents.id);
-      activeIpfsBases.delete(contents.id);
-      activeRadBases.delete(contents.id);
+      cleanupX402WebContents(contents.id);
+      cleanupAdblockWebContents(contents.id);
     });
 
     const id = contents.id;
     const type = contents.getType?.() || 'unknown';
     const tag = `[webcontents:${id}:${type}]`;
 
+    // Tab webviews: run the webview preload in sub-frames too, so an iframe
+    // (an embedded YouTube player, say) gets its adblock scriptlets at
+    // document start like the main frame does (#410). The preload returns
+    // right after the scriptlet step in a sub-frame, so no other preload
+    // surface — wallet providers, freedomAPI — reaches iframes. Node
+    // integration itself stays off (sandbox + contextIsolation, tabs.js).
+    // The <webview> `webpreferences` attribute can't set this; only the
+    // embedder's will-attach-webview can.
+    // Precedent (accepted by the maintainer in PR #412): this is how Electron
+    // adblockers do it. Ghostery's @ghostery/adblocker-electron registers its
+    // preload with `session.registerPreloadScript({ type: 'frame' })` and its
+    // example app turns this same flag on, because Electron only gives a
+    // child frame's preload working IPC with it set; browsers and extensions
+    // inject into every frame too (uBlock Origin's `all_frames`, Brave).
+    contents.on('will-attach-webview', (_event, webPreferences, params) => {
+      hardenWebviewPreferences(webPreferences);
+      webPreferences.nodeIntegrationInSubFrames = true;
+      if (webPreferences.preload) attachWebviewBoot(contents, webPreferences, params);
+    });
+
+    if (type === 'window') {
+      lockChromeWindow(contents, tag);
+    }
+
+    // Next/Previous Tab are claimed here, before the chrome or the page sees
+    // the key, so they work wherever focus is — see tab-switch-keys.js (#556).
+    if (type === 'window' || type === 'webview') {
+      attachTabSwitchKeys(contents);
+    }
+
     // For webview contents, fix dark defaults and intercept navigation
     if (type === 'webview') {
+      // An external-protocol launch (magnet:, mailto:, …) must follow real
+      // user input on the page; Electron does not report Chromium's gesture
+      // bit, so the guest's input stream stands in for it (#406).
+      trackUserGestures(contents);
+
       // Electron applies dark system colors (Canvas, CanvasText) to ALL pages when
       // nativeTheme is dark, even pages that don't opt in via color-scheme. This
       // makes pages without dark mode support unreadable (dark bg + unchanged text).
@@ -81,32 +278,111 @@ function registerWebContentsHandlers() {
         }
       });
 
-      contents.setWindowOpenHandler(({ url, frameName }) => {
+      contents.setWindowOpenHandler(({ url, frameName, disposition, referrer }) => {
         log.info(
-          `${tag} intercepted new window request: ${sanitizeUrlForLog(url)} (target: ${frameName || 'none'})`
+          `${tag} intercepted new window request: ${navUrlForLog(contents, url)} ` +
+            `(target: ${frameName || 'none'}, disposition: ${disposition || 'default'})`
         );
+        // Contract-hosted pages are not allowed to create windows themselves.
+        // Trusted anchor activations are intercepted in webview-preload and
+        // handed to the host renderer before this callback; anything reaching
+        // here from a web3: document is therefore denied without navigation.
+        if (contents.getURL().startsWith('web3://')) {
+          return { action: 'deny' };
+        }
+        // `target="_blank"` / `window.open` to an external scheme (magnet:,
+        // mailto:, …): Chrome launches it without leaving a tab behind. Opening
+        // a tab here would route the URL through the address bar's typed-URL
+        // path, which launches without asking — so it goes through the same
+        // per-site gate a same-tab link click does instead (#406). The
+        // window-open handler reports no frame, so the requesting frame is
+        // read from the referrer; with no referrer the top document is taken
+        // as the requester.
+        if (isExternalProtocolUrl(url)) {
+          requestOpenExternal({
+            webContents: contents,
+            url,
+            isMainFrame: false,
+            requestingUrl: referrer?.url || contents.getURL(),
+            privatePartition: getPartitionForWebContents(contents),
+          });
+          return { action: 'deny' };
+        }
         // Pass targetName for named link targets (e.g. target="mywindow")
         // Skip special targets (_blank, _self, _parent, _top) - they should use default behavior
-        const isNamedTarget = frameName && !frameName.startsWith('_');
-        sendToHostWebContents(contents, 'tab:new-with-url', url, isNamedTarget ? frameName : null);
+        const isNamedTarget = !!frameName && !frameName.startsWith('_');
+        // Popup blocker (#442): a new tab needs a user gesture on this page
+        // (consumed, so one click opens one tab), or the site's "Always
+        // allow pop-ups"; Freedom's internal pages are exempt. A blocked one
+        // is reported to the tab's window for the address-bar icon. See
+        // popup-blocker.js.
+        const verdict = claimPopup(contents);
+        if (!verdict.allowed) {
+          log.info(`${tag} blocked popup without a user gesture: ${navUrlForLog(contents, url)}`);
+          reportBlockedPopup(contents, {
+            url,
+            targetName: isNamedTarget ? frameName : null,
+            // A plain named open (no modifier, not a sized popup) may still
+            // re-navigate a tab that already carries the name, as in Chrome.
+            reuseOnly: isNamedTarget && disposition === 'foreground-tab',
+            origin: verdict.origin,
+          });
+          return { action: 'deny' };
+        }
+        // Send message to the owning BrowserWindow to open URL in new tab
+        const parentWindow = ownerWindowOf(contents);
+        if (parentWindow) {
+          // Chromium already resolved the activation's modifiers into a
+          // disposition: Ctrl/Cmd+click (and middle-click) give
+          // `background-tab`, Shift+click and sized `window.open` popups give
+          // `new-window`, a plain `target="_blank"` gives `foreground-tab`.
+          // Forward it instead of collapsing everything into a foreground tab
+          // the way this handler used to — that switched the user off the page
+          // they were reading on every Ctrl+click. See #303. The renderer turns
+          // `newWindow` back into the existing `window:new-with-url` request,
+          // which is where the private-window guard lives.
+          parentWindow.webContents.send('tab:new-with-url', url, isNamedTarget ? frameName : null, {
+            background: disposition === 'background-tab',
+            newWindow: disposition === 'new-window',
+            // The opener, so the renderer can record which tab opened a named
+            // target (a later gesture-less reuse is scoped to it).
+            openerGuestId: contents.id,
+          });
+        }
         return { action: 'deny' };
       });
 
-      // Intercept navigation to custom protocols (freedom://, bzz://, ipfs://, ipns://)
+      // Intercept navigation to custom protocols (freedom://, bzz://, ipfs://,
+      // ipns://, web3://, rad:, ethereum:, ens://). `ens://` is included so legacy
+      // links inside pages route through the renderer's ENS resolver instead
+      // of failing as an unknown scheme — bookmarks created before the
+      // transport-aware migration still carry the legacy prefix.
       contents.on('will-navigate', (event, url) => {
+        // A CSP sandbox is the primary boundary for contract-hosted HTML. This
+        // main-process guard is defence in depth: scripted location changes
+        // cannot replace the isolated app with a mutable web origin. Genuine
+        // link clicks are already routed through `link:navigate` by preload.
+        if (contents.getURL().startsWith('web3://')) {
+          log.info(`${tag} blocked onchain app navigation: ${navUrlForLog(contents, url)}`);
+          event.preventDefault();
+          return;
+        }
         if (
           url.startsWith('freedom://') ||
           url.startsWith('bzz://') ||
           url.startsWith('ipfs://') ||
           url.startsWith('ipns://') ||
-          url.startsWith('rad:')
+          url.startsWith('web3://') ||
+          url.startsWith('ens://') ||
+          url.startsWith('rad:') ||
+          url.startsWith('ethereum:')
         ) {
-          log.info(`${tag} intercepted custom protocol navigation: ${sanitizeUrlForLog(url)}`);
+          log.info(`${tag} intercepted custom protocol navigation: ${navUrlForLog(contents, url)}`);
           event.preventDefault();
-          if (isFreedomLiveRoomUrl(url)) {
-            sendToHostWebContents(contents, 'tab:new-with-url', url, null);
-          } else {
-            sendToHostWebContents(contents, 'navigate-to-url', url);
+          // Send to the owning window to handle via the browser's navigation system
+          const parentWindow = ownerWindowOf(contents);
+          if (parentWindow) {
+            parentWindow.webContents.send(isFreedomLiveRoomUrl(url) ? 'tab:new-with-url' : 'navigate-to-url', url);
           }
         }
       });
@@ -120,6 +396,7 @@ function registerWebContentsHandlers() {
         frameProcessId,
         frameRoutingId
       ) => {
+        if (isPrivateSender(contents)) return;
         const isPrivyFrame = String(validatedURL || '').startsWith('https://auth.privy.io/');
         const isBlocked = errorDescription === 'ERR_BLOCKED_BY_RESPONSE';
         if (!isPrivyFrame && !isBlocked) {
@@ -164,4 +441,5 @@ function registerWebContentsHandlers() {
 module.exports = {
   registerWebContentsHandlers,
   sendToHostWebContents,
+  WEBVIEW_PRELOAD_PATH,
 };

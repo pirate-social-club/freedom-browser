@@ -71,9 +71,11 @@ function createFreedomProtocolHandler({
   app,
   createMainWindow,
   getMainWindows,
+  isBrowserReady = () => true,
   log = console,
 } = {}) {
   const pendingUrls = [];
+  const canOpenWindow = () => (typeof app?.isReady !== 'function' || app.isReady()) && isBrowserReady();
 
   const openUrl = (rawUrl) => {
     const normalized = normalizeFreedomUrl(rawUrl);
@@ -81,7 +83,7 @@ function createFreedomProtocolHandler({
       return false;
     }
 
-    if (typeof app?.isReady === 'function' && !app.isReady()) {
+    if (!canOpenWindow()) {
       pendingUrls.push(normalized);
       return true;
     }
@@ -114,6 +116,7 @@ function createFreedomProtocolHandler({
   const consumePendingUrl = () => pendingUrls.shift() ?? null;
 
   const flushPendingUrls = () => {
+    if (!canOpenWindow()) return;
     while (pendingUrls.length > 0) {
       const next = pendingUrls.shift();
       if (!openUrl(next)) {

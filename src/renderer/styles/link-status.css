@@ -1,0 +1,93 @@
+/* Link hover URL preview (Chrome / Firefox style) */
+
+.content-page {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.content-page .webview-container {
+  flex: 1;
+  min-height: 0;
+}
+
+.link-status {
+  position: absolute;
+  left: 0;
+  right: auto;
+  bottom: 0;
+  z-index: 2;
+  /* Anchor max-width to the positioning context (.content-page), not the
+   * window viewport. A `vw` here would resolve against the host window,
+   * but inside the guest <webview> the preload's zone-tracker uses
+   * `window.innerWidth` — which is the *webview's* width. With the
+   * sidebar open (320 px), those two reference widths differ, and the
+   * trigger zone would lag behind the visible bar — exactly the
+   * cover-the-link case the trigger zone exists to prevent. `%`
+   * resolves against `.content-page`, which equals the webview width,
+   * keeping the bar and the zone in lockstep regardless of sidebar
+   * state. */
+  max-width: min(70%, 640px);
+  padding: 3px 8px 3px 12px;
+  border-top: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  border-left: none;
+  border-top-right-radius: 6px;
+  border-top-left-radius: 0;
+  background: var(--bg);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+
+.link-status.link-status--right {
+  left: auto;
+  right: 0;
+  padding-left: 8px;
+  padding-right: 12px;
+  border-right: none;
+  border-left: 1px solid var(--border);
+  border-top-right-radius: 0;
+  border-top-left-radius: 6px;
+}
+
+.link-status:not(.visible) {
+  transition-duration: 200ms;
+  transition-timing-function: ease-in;
+}
+
+[data-theme='light'] .link-status {
+  background: var(--toolbar);
+}
+
+.link-status.visible {
+  opacity: 1;
+}
+
+.link-status[hidden] {
+  display: none !important;
+}
+
+.link-status-url {
+  display: block;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: ltr;
+}
+
+[data-theme='light'] .link-status-url {
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .link-status {
+    transition: none;
+  }
+}

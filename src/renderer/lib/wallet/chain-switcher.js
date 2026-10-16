@@ -6,13 +6,14 @@
 
 import { walletState } from './wallet-state.js';
 import { escapeHtml } from './wallet-utils.js';
-import { renderAssetList } from './balance-display.js';
-import { broadcastProviderEvent } from '../dapp-provider.js';
+import { renderAssetList, loadChainRegistry } from './balance-display.js';
+import { getActiveWebview, emitChainChanged } from '../dapp-provider.js';
 
 // DOM references
 let chainSwitcherBtn;
 let chainSwitcherName;
 let chainSwitcherLogo;
+let chainSwitcherLogoPlaceholder;
 let chainSwitcherDropdown;
 let chainSwitcherList;
 
@@ -20,6 +21,7 @@ export function initChainSwitcher() {
   chainSwitcherBtn = document.getElementById('chain-switcher-btn');
   chainSwitcherName = document.getElementById('chain-switcher-name');
   chainSwitcherLogo = document.getElementById('chain-switcher-logo');
+  chainSwitcherLogoPlaceholder = document.getElementById('chain-switcher-logo-placeholder');
   chainSwitcherDropdown = document.getElementById('chain-switcher-dropdown');
   chainSwitcherList = document.getElementById('chain-switcher-list');
 
@@ -69,7 +71,22 @@ async function renderChainList() {
 
   chainSwitcherList.innerHTML = '';
 
-  const availableResult = await window.chainRegistry.getAvailableChains();
+  // Refresh the chain set first — a chain may have been added or removed
+  // on the settings page since the wallet loaded.
+  const [, availableResult] = await Promise.all([
+    loadChainRegistry(),
+    window.networks.getAvailableChains(),
+  ]);
+
+  // If the selected chain was removed, fall back to "All Chains" so the
+  // header and asset list don't keep filtering on a chain that's gone.
+  const selected = walletState.selectedChainId;
+  if (selected !== null && !walletState.registeredChains[selected]) {
+    walletState.selectedChainId = null;
+    updateChainSwitcherDisplay();
+    renderAssetList();
+  }
+
   const availableChains = availableResult.success ? availableResult.chains : {};
   const availableChainIds = new Set(Object.keys(availableChains));
   const availableCount = availableChainIds.size;
@@ -114,9 +131,12 @@ async function renderChainList() {
       item.classList.add('disabled');
     }
 
+    // Custom chains have no logo asset — show an initial-letter circle so
+    // the row stays aligned with chains that do have an icon.
+    const initial = (chain.name || '').trim().charAt(0) || '?';
     const logoHtml = chain.logo
       ? `<img class="chain-switcher-item-logo" src="assets/chains/${chain.logo}" alt="${chain.name}">`
-      : '';
+      : `<span class="chain-switcher-logo-fallback">${escapeHtml(initial)}</span>`;
 
     const unavailableHtml = !isAvailable
       ? '<span class="chain-switcher-item-unavailable">No RPC</span>'
@@ -152,11 +172,14 @@ function selectChain(chainId) {
   updateChainSwitcherDisplay();
   renderAssetList();
 
-  // Emit chainChanged event to all provider-enabled webviews if chain actually changed
+  // Emit chainChanged event to active webview if chain actually changed
   if (previousChainId !== chainId && chainId !== null) {
-    const chainIdHex = '0x' + chainId.toString(16);
-    broadcastProviderEvent('chainChanged', chainIdHex);
-    console.log('[WalletUI] Broadcast chainChanged to dApps:', chainIdHex);
+    const webview = getActiveWebview();
+    if (webview) {
+      const chainIdHex = '0x' + chainId.toString(16);
+      emitChainChanged(webview, chainIdHex);
+      console.log('[WalletUI] Emitted chainChanged to dApp:', chainIdHex);
+    }
   }
 }
 
@@ -164,18 +187,27 @@ function selectChain(chainId) {
  * Update chain switcher button display
  */
 export function updateChainSwitcherDisplay() {
-  if (walletState.selectedChainId === null) {
-    if (chainSwitcherName) chainSwitcherName.textContent = 'All Chains';
-    if (chainSwitcherLogo) chainSwitcherLogo.src = '';
-  } else {
-    const chain = walletState.registeredChains[walletState.selectedChainId];
-    if (chain) {
-      if (chainSwitcherName) chainSwitcherName.textContent = chain.name;
-      if (chainSwitcherLogo && chain.logo) {
-        chainSwitcherLogo.src = `assets/chains/${chain.logo}`;
-      } else if (chainSwitcherLogo) {
-        chainSwitcherLogo.src = '';
-      }
+  const chain = walletState.selectedChainId === null
+    ? null
+    : walletState.registeredChains[walletState.selectedChainId];
+
+  if (chainSwitcherName) {
+    chainSwitcherName.textContent =
+      walletState.selectedChainId === null ? 'All Chains' : (chain?.name || '');
+  }
+
+  // The chain's icon, an initial-letter placeholder, or neither ("All
+  // Chains"). The <img>'s empty-src CSS rule hides it when src is unset.
+  const hasLogo = !!chain?.logo;
+  if (chainSwitcherLogo) {
+    chainSwitcherLogo.src = hasLogo ? `assets/chains/${chain.logo}` : '';
+  }
+  if (chainSwitcherLogoPlaceholder) {
+    if (chain && !hasLogo) {
+      chainSwitcherLogoPlaceholder.textContent = (chain.name || '').trim().charAt(0) || '?';
+      chainSwitcherLogoPlaceholder.style.display = 'flex';
+    } else {
+      chainSwitcherLogoPlaceholder.style.display = 'none';
     }
   }
 }

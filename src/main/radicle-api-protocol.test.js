@@ -1,0 +1,535 @@
+jest.mock('./logger', () => ({
+  info: jest.fn(),
+  warn: jest.fn(),
+  error: jest.fn(),
+}));
+
+jest.mock('./radicle-embedded', () => ({
+  status: jest.fn(),
+  listRepos: jest.fn(),
+  buildRepoMeta: jest.fn(),
+  treeAtRaw: jest.fn(),
+  blobAtRaw: jest.fn(),
+  readmeAtRaw: jest.fn(),
+  commitsRaw: jest.fn(),
+  commitRaw: jest.fn(),
+  remotes: jest.fn(),
+  repoStats: jest.fn(),
+  issues: jest.fn(),
+  issue: jest.fn(),
+  patches: jest.fn(),
+  patch: jest.fn(),
+  repoInfo: jest.fn(),
+}));
+jest.mock('./radicle-manager', () => ({
+  isDisabledForProfile: jest.fn(() => false),
+}));
+jest.mock('./webrequest-dispatcher', () => ({
+  registerWebRequestHandler: jest.fn(),
+}));
+
+const embedded = require('./radicle-embedded');
+const { isDisabledForProfile } = require('./radicle-manager');
+const {
+  handleRadicleApiRequest,
+  registerRadicleApiProtocol,
+  guardRadicleApiRequest,
+  serveRepoApi,
+  decodeRepoApiPath,
+  mapWithConcurrency,
+  REPO_LIST_CONCURRENCY,
+} = require('./radicle-api-protocol');
+
+const INTERNAL_PAGE = 'file:///app/src/renderer/pages/rad-browser.html';
+
+const RID = 'rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5';
+const REVISION = '0123456789abcdef0123456789abcdef01234567';
+
+describe('radapi protocol', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    isDisabledForProfile.mockReturnValue(false);
+    embedded.status.mockResolvedValue({
+      version: '0.1.0',
+      connectedPeers: 3,
+    });
+    embedded.listRepos.mockResolvedValue(Array.from({ length: 7 }, (_, index) => ({ index })));
+    embedded.repoInfo.mockResolvedValue({ visibility: { type: 'public' } });
+  });
+
+  test('serves the root health check required by the repository viewer', async () => {
+    const response = await handleRadicleApiRequest(new Request('radapi://local/'));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ version: '0.1.0', mode: 'embedded' });
+    expect(embedded.status).toHaveBeenCalledTimes(1);
+  });
+
+  test('serves node health HEAD requests without a body', async () => {
+    const response = await handleRadicleApiRequest(
+      new Request('radapi://local/', { method: 'HEAD' })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe('');
+  });
+
+  test('serves the node stats shape used by the Nodes panel', async () => {
+    const response = await handleRadicleApiRequest(new Request('radapi://local/api/v1/stats'));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      repos: { total: 7 },
+      peers: { connected: 3 },
+    });
+  });
+
+  test('gates every endpoint on the active profile node mode', async () => {
+    isDisabledForProfile.mockReturnValue(true);
+    const response = await handleRadicleApiRequest(new Request('radapi://local/api/v1/stats'));
+    expect(response.status).toBe(403);
+    expect(embedded.status).not.toHaveBeenCalled();
+  });
+
+  // Chromium never sends `Origin` to a custom scheme's protocol.handle, so
+  // the old Origin check could not fire; a referrer, when there is one,
+  // does arrive and must name the internal viewer.
+  test('rejects a request referred by a page that is not the internal viewer', async () => {
+    const denied = await handleRadicleApiRequest(
+      new Request('radapi://local/', { referrer: 'https://hostile.example/' })
+    );
+    expect(denied.status).toBe(403);
+    expect(denied.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  test('serves the internal viewer, with or without a referrer', async () => {
+    const referred = await handleRadicleApiRequest(
+      new Request('radapi://local/', { referrer: INTERNAL_PAGE })
+    );
+    expect(referred.status).toBe(200);
+
+    // Chromium suppresses referrers from `file:` origins, so the viewer's
+    // own fetches arrive with none — the frame guard covers that case.
+    const unreferred = await handleRadicleApiRequest(new Request('radapi://local/'));
+    expect(unreferred.status).toBe(200);
+    expect(unreferred.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  describe('frame guard', () => {
+    const request = (frameUrl, url = 'radapi://local/api/v1/repos') => ({
+      url,
+      frame: frameUrl === null ? null : { url: frameUrl },
+    });
+
+    test('passes requests from the internal repository viewer', () => {
+      expect(guardRadicleApiRequest(request(INTERNAL_PAGE))).toBeNull();
+      expect(
+        guardRadicleApiRequest(request(`${INTERNAL_PAGE}?rid=z3gq&base=radapi%3A%2F%2Flocal`))
+      ).toBeNull();
+    });
+
+    // The demonstrated leak: node-level endpoints and private-repo reads
+    // were readable by any page that asked.
+    test.each([
+      ['a hostile web page', 'https://hostile.example/attack.html'],
+      ['a dweb page', 'bzz://somehash/index.html'],
+      ['another internal page', 'file:///app/src/renderer/pages/settings.html'],
+      ['a file path merely ending in the viewer name', 'file:///tmp/rad-browser.html'],
+      ['no frame at all', null],
+      ['a frame with no URL', undefined],
+    ])('cancels a radapi request from %s', (_label, frameUrl) => {
+      expect(guardRadicleApiRequest(request(frameUrl))).toEqual({ cancel: true });
+    });
+
+    test('cancels a top-level navigation to a node-level endpoint', () => {
+      expect(
+        guardRadicleApiRequest(request('https://hostile.example/', 'radapi://local/api/v1/repos'))
+      ).toEqual({ cancel: true });
+    });
+
+    test('ignores requests for every other scheme', () => {
+      expect(guardRadicleApiRequest(request('https://example.com/', 'https://example.com/x'))).toBeNull();
+      expect(guardRadicleApiRequest(request('https://example.com/', 'rad://z3gq/tree'))).toBeNull();
+    });
+  });
+
+  test('serves the local repository collection in viewer metadata shape', async () => {
+    embedded.listRepos.mockResolvedValueOnce([{ rid: RID }]);
+    embedded.buildRepoMeta.mockResolvedValueOnce({ rid: RID, payloads: {} });
+    const response = await handleRadicleApiRequest(
+      new Request('radapi://local/api/v1/repos?show=all')
+    );
+    await expect(response.json()).resolves.toEqual([{ rid: RID, payloads: {} }]);
+    expect(embedded.buildRepoMeta).toHaveBeenCalledWith(RID);
+  });
+
+  test('lists repositories with a bounded metadata fan-out, in listing order', async () => {
+    const rids = Array.from({ length: 9 }, (_, index) => `${RID}${index}`);
+    embedded.listRepos.mockResolvedValueOnce(rids.map((rid) => ({ rid })));
+    let inFlight = 0;
+    let peak = 0;
+    embedded.buildRepoMeta.mockImplementation(async (rid) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      // Later repos finish first, so order comes from the listing, not timing.
+      await new Promise((resolve) => setTimeout(resolve, 20 - rids.indexOf(rid) * 2));
+      inFlight -= 1;
+      return { rid };
+    });
+
+    const response = await handleRadicleApiRequest(new Request('radapi://local/api/v1/repos'));
+
+    await expect(response.json()).resolves.toEqual(rids.map((rid) => ({ rid })));
+    expect(REPO_LIST_CONCURRENCY).toBe(2);
+    expect(peak).toBe(REPO_LIST_CONCURRENCY);
+    expect(embedded.buildRepoMeta).toHaveBeenCalledTimes(rids.length);
+  });
+
+  test('a failing repository read still fails the whole listing', async () => {
+    embedded.listRepos.mockResolvedValueOnce([{ rid: RID }, { rid: `${RID}x` }]);
+    embedded.buildRepoMeta
+      .mockResolvedValueOnce({ rid: RID })
+      .mockRejectedValueOnce(new Error('storage gone'));
+    const response = await handleRadicleApiRequest(new Request('radapi://local/api/v1/repos'));
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: 'storage gone' });
+  });
+
+  describe('mapWithConcurrency', () => {
+    test('maps an empty list without calling the mapper', async () => {
+      const fn = jest.fn();
+      await expect(mapWithConcurrency([], 2, fn)).resolves.toEqual([]);
+      expect(fn).not.toHaveBeenCalled();
+    });
+
+    test('keeps input order and passes the index', async () => {
+      await expect(
+        mapWithConcurrency(['a', 'b', 'c'], 5, async (item, index) => `${item}${index}`)
+      ).resolves.toEqual(['a0', 'b1', 'c2']);
+    });
+
+    test('starts no further calls after one rejects', async () => {
+      const fn = jest.fn(async (item) => {
+        if (item === 1) throw new Error('nope');
+        return item;
+      });
+      await expect(mapWithConcurrency([0, 1, 2, 3, 4], 1, fn)).rejects.toThrow('nope');
+      expect(fn).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  test('routes repository metadata through the embedded serving core', async () => {
+    embedded.buildRepoMeta.mockResolvedValue({ rid: RID });
+
+    const response = await handleRadicleApiRequest(
+      new Request(`radapi://local/api/v1/repos/${RID}`)
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ rid: RID });
+    expect(embedded.buildRepoMeta).toHaveBeenCalledWith(RID);
+  });
+
+  test('preserves status and headers but strips bodies from HEAD responses', async () => {
+    embedded.buildRepoMeta.mockResolvedValue({ rid: RID });
+
+    const response = await handleRadicleApiRequest(
+      new Request(`radapi://local/api/v1/repos/${RID}`, { method: 'HEAD' })
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('application/json');
+    await expect(response.text()).resolves.toBe('');
+  });
+
+  test('serves filtered issue and patch reads', async () => {
+    embedded.issues.mockResolvedValue([
+      { id: 'open', state: { status: 'open' } },
+      { id: 'closed', state: { status: 'closed' } },
+    ]);
+    embedded.patch.mockResolvedValue({ id: 'abc123' });
+
+    const issues = await serveRepoApi(RID, '/issues', { search: '?status=open' });
+    await expect(issues.json()).resolves.toEqual([{ id: 'open', state: { status: 'open' } }]);
+    const patch = await serveRepoApi(RID, '/patches/abc123');
+    await expect(patch.json()).resolves.toEqual({ id: 'abc123' });
+    expect(embedded.patch).toHaveBeenCalledWith(RID, 'abc123');
+  });
+
+  test('pins tree, blob, and readme reads to the requested commit', async () => {
+    embedded.treeAtRaw.mockResolvedValue(
+      JSON.stringify({ entries: [], lastCommit: { id: REVISION } })
+    );
+    embedded.blobAtRaw.mockResolvedValue(JSON.stringify({ name: 'README.md', content: 'old' }));
+    embedded.readmeAtRaw.mockResolvedValue(JSON.stringify({ name: 'README.md', content: 'old' }));
+
+    const tree = await serveRepoApi(RID, `/tree/${REVISION}/src`);
+    const blob = await serveRepoApi(RID, `/blob/${REVISION}/README.md`);
+    const readme = await serveRepoApi(RID, `/readme/${REVISION}`);
+
+    expect(tree.status).toBe(200);
+    expect(blob.status).toBe(200);
+    expect(readme.status).toBe(200);
+    expect(embedded.treeAtRaw).toHaveBeenCalledWith(RID, REVISION, 'src');
+    expect(embedded.blobAtRaw).toHaveBeenCalledWith(RID, REVISION, 'README.md');
+    expect(embedded.readmeAtRaw).toHaveBeenCalledWith(RID, REVISION);
+  });
+
+  // #514: a big blob or diff must not be parsed and re-stringified on main.
+  // The addon's text is the body, byte for byte — spacing that
+  // JSON.stringify would never produce proves no round trip happened.
+  test.each([
+    ['tree', `/tree/${REVISION}`, 'treeAtRaw'],
+    ['blob', `/blob/${REVISION}/big.bin`, 'blobAtRaw'],
+    ['readme', `/readme/${REVISION}`, 'readmeAtRaw'],
+    ['commit diff', `/commits/${REVISION}`, 'commitRaw'],
+  ])('forwards the addon JSON text of a %s read untouched', async (_label, apiPath, fn) => {
+    const text = '{ "content" :  "x\\u0041" ,"binary":false }';
+    embedded[fn].mockResolvedValue(text);
+    for (const allowPrivate of [false, true]) {
+      const response = await serveRepoApi(RID, apiPath, { allowPrivate });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toBe('application/json');
+      expect(response.headers.get('access-control-allow-origin')).toBe(
+        allowPrivate ? null : '*'
+      );
+      await expect(response.text()).resolves.toBe(text);
+    }
+  });
+
+  test('forwards a commit history page untouched', async () => {
+    const text = '[ {"id": "x"} ]';
+    embedded.commitsRaw.mockResolvedValue(text);
+    const response = await serveRepoApi(RID, '/commits', { search: `?parent=${REVISION}` });
+    await expect(response.text()).resolves.toBe(text);
+  });
+
+  test('still maps a missing blob to 404 and other read failures to 500', async () => {
+    embedded.blobAtRaw.mockRejectedValueOnce(new Error("the path 'x' does not exist"));
+    expect((await serveRepoApi(RID, `/blob/${REVISION}/x`)).status).toBe(404);
+    embedded.commitRaw.mockRejectedValueOnce(new Error('odb corrupted'));
+    const failed = await serveRepoApi(RID, `/commits/${REVISION}`);
+    expect(failed.status).toBe(500);
+    await expect(failed.json()).resolves.toEqual({ error: 'odb corrupted' });
+  });
+
+  test('a missing readme is a 404', async () => {
+    embedded.readmeAtRaw.mockResolvedValue(null);
+    const response = await serveRepoApi(RID, `/readme/${REVISION}`);
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: 'no readme' });
+  });
+
+  test('serves signed remotes and revision-scoped repository stats', async () => {
+    embedded.remotes.mockResolvedValue([
+      { id: 'z6MkDelegate', delegate: true, heads: { main: REVISION } },
+    ]);
+    embedded.repoStats.mockResolvedValue({ commits: 42, branches: 3, contributors: 5 });
+
+    const remotes = await serveRepoApi(RID, '/remotes');
+    const stats = await serveRepoApi(RID, `/stats/tree/${REVISION}`);
+
+    await expect(remotes.json()).resolves.toEqual([
+      { id: 'z6MkDelegate', delegate: true, heads: { main: REVISION } },
+    ]);
+    await expect(stats.json()).resolves.toEqual({ commits: 42, branches: 3, contributors: 5 });
+    expect(embedded.remotes).toHaveBeenCalledWith(RID);
+    expect(embedded.repoStats).toHaveBeenCalledWith(RID, REVISION);
+  });
+
+  test('serves paginated commit history and structured commit diffs', async () => {
+    embedded.commitsRaw.mockResolvedValue(JSON.stringify([{ id: REVISION, summary: 'head' }]));
+    embedded.commitRaw.mockResolvedValue(
+      JSON.stringify({
+        commit: { id: REVISION, summary: 'head' },
+        diff: { stats: { insertions: 2, deletions: 1 }, files: [] },
+      })
+    );
+
+    const history = await serveRepoApi(RID, '/commits', {
+      search: `?parent=${REVISION}&page=2&perPage=5`,
+    });
+    const detail = await serveRepoApi(RID, `/commits/${REVISION}`);
+
+    await expect(history.json()).resolves.toEqual([{ id: REVISION, summary: 'head' }]);
+    await expect(detail.json()).resolves.toEqual({
+      commit: { id: REVISION, summary: 'head' },
+      diff: { stats: { insertions: 2, deletions: 1 }, files: [] },
+    });
+    expect(embedded.commitsRaw).toHaveBeenCalledWith(RID, REVISION, 2, 5);
+    expect(embedded.commitRaw).toHaveBeenCalledWith(RID, REVISION);
+  });
+
+  test('bounds commit pagination before crossing the native boundary', async () => {
+    embedded.commitsRaw.mockResolvedValue('[]');
+    await serveRepoApi(RID, '/commits', {
+      search: `?parent=${REVISION}&page=9999999999&perPage=9999999999`,
+    });
+    expect(embedded.commitsRaw).toHaveBeenCalledWith(RID, REVISION, 1_000_000, 100);
+  });
+
+  test.each([
+    ['/commits', ''],
+    ['/commits', '?parent=main'],
+    ['/commits/main', ''],
+  ])('rejects invalid commit revisions in %s%s', async (apiPath, search) => {
+    const response = await serveRepoApi(RID, apiPath, { search });
+    expect(response.status).toBe(400);
+    expect(embedded.commitsRaw).not.toHaveBeenCalled();
+    expect(embedded.commitRaw).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    '/tree/main/src',
+    '/tree/0123456/src',
+    '/blob/HEAD/README.md',
+    '/readme/main',
+    '/stats/tree/main',
+  ])('rejects non-object-id revisions in %s', async (apiPath) => {
+    const response = await serveRepoApi(RID, apiPath);
+    expect(response.status).toBe(400);
+    expect(embedded.treeAtRaw).not.toHaveBeenCalled();
+    expect(embedded.blobAtRaw).not.toHaveBeenCalled();
+    expect(embedded.readmeAtRaw).not.toHaveBeenCalled();
+    expect(embedded.repoStats).not.toHaveBeenCalled();
+  });
+
+  // docs/security-audit-electron.md, O-12: `radapi:` serves private repos to
+  // the internal viewer only; its responses carry no wildcard ACAO. `rad:`
+  // (public repos, any dweb page) keeps it.
+  test.each([
+    ['repository metadata', `radapi://local/api/v1/repos/${RID}`, 200],
+    ['a repository section', `radapi://local/api/v1/repos/${RID}/issues`, 200],
+    ['an error from the repo core', `radapi://local/api/v1/repos/${RID}/nope`, 404],
+    ['an invalid repo path', `radapi://local/api/v1/repos/${RID}/tree`, 400],
+    ['an undecodable RID', 'radapi://local/api/v1/repos/%E0%A4%A', 400],
+    ['the repository listing', 'radapi://local/api/v1/repos', 200],
+    ['the node root', 'radapi://local/', 200],
+  ])('radapi: %s carries no Access-Control-Allow-Origin', async (_label, url, status) => {
+    embedded.repoInfo.mockResolvedValue({ visibility: { type: 'private' } });
+    embedded.buildRepoMeta.mockResolvedValue({ rid: RID });
+    embedded.issues.mockResolvedValue([]);
+    embedded.listRepos.mockResolvedValue([{ rid: RID }]);
+    const response = await handleRadicleApiRequest(new Request(url));
+    expect(response.status).toBe(status);
+    expect(response.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  test('the public rad: path keeps its wildcard ACAO', async () => {
+    embedded.buildRepoMeta.mockResolvedValue({ rid: RID });
+    const ok = await serveRepoApi(RID, '');
+    expect(ok.headers.get('access-control-allow-origin')).toBe('*');
+    const bad = await serveRepoApi(RID, '/tree');
+    expect(bad.headers.get('access-control-allow-origin')).toBe('*');
+  });
+
+  test('does not expose private repositories through the public repo API', async () => {
+    embedded.repoInfo.mockResolvedValueOnce({ visibility: { type: 'private' } });
+    const response = await serveRepoApi(RID, '/issues');
+    expect(response.status).toBe(403);
+    expect(embedded.issues).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    '/tree/main/..%2F..%2Fsecret',
+    '/blob/main/%2e%2e',
+    '/issues/%5csecret',
+    '/patches/a%00b',
+  ])('rejects encoded traversal and separator tricks in %s', async (apiPath) => {
+    const response = await serveRepoApi(RID, apiPath);
+    expect(response.status).toBe(400);
+    expect(embedded.treeAtRaw).not.toHaveBeenCalled();
+    expect(embedded.blobAtRaw).not.toHaveBeenCalled();
+  });
+
+  // The viewer builds these paths (rad-browser.js encodePathSegments). A
+  // legitimately-named file has to survive the round trip: raw `%` makes the
+  // decode throw (400) and `#`/`?` never even reach here — they truncate the
+  // request URL in the renderer.
+  test.each([
+    ['100%.md', '100%25.md'],
+    ['notes#1.md', 'notes%231.md'],
+    ['a?b.txt', 'a%3Fb.txt'],
+    ['ünïcode.rs', '%C3%BCn%C3%AFcode.rs'],
+  ])('accepts %s when the viewer encodes it as %s', (name, encoded) => {
+    expect(decodeRepoApiPath(`/blob/${REVISION}/${encoded}`)).toEqual([
+      'blob',
+      REVISION,
+      name,
+    ]);
+  });
+
+  test('rejects the unencoded form the viewer used to send', () => {
+    expect(decodeRepoApiPath(`/blob/${REVISION}/100%.md`)).toBeNull();
+  });
+
+  test('registers the request handler on the target session', async () => {
+    const targetSession = { protocol: { handle: jest.fn() } };
+    registerRadicleApiProtocol(targetSession);
+
+    expect(targetSession.protocol.handle).toHaveBeenCalledWith('radapi', expect.any(Function));
+    const handler = targetSession.protocol.handle.mock.calls[0][1];
+    const response = await handler(new Request('radapi://local/'));
+    expect(response.status).toBe(200);
+  });
+
+  // PRIVATE MODE GUARD: a read that errs writes the RID and the repo path
+  // to the persistent main.log. `rad:` already registers per session with
+  // the private-log context; `radapi:` must too, and the shared log site
+  // must redact — otherwise a private window leaves a history-grade trace.
+  test('redacts the RID, path and error text for a private-session registration', async () => {
+    const log = require('./logger');
+    embedded.treeAtRaw.mockRejectedValue(new Error(`tree read failed for ${RID}:/secret/plans.md`));
+    const privateSession = { protocol: { handle: jest.fn() } };
+    registerRadicleApiProtocol(privateSession, { privatePartition: 'private-abc' });
+    const handler = privateSession.protocol.handle.mock.calls[0][1];
+
+    const response = await handler(
+      new Request(`radapi://local/api/v1/repos/${encodeURIComponent(RID)}/tree/${REVISION}/secret`)
+    );
+
+    expect(response.status).toBe(500);
+    const warnings = log.warn.mock.calls.filter((call) => call[0] === '[radapi]');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toEqual(['[radapi]', '<private>', '<private>', '→', '<private>']);
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain('secret');
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain(RID);
+  });
+
+  test('logs the RID and path normally outside a private session', async () => {
+    const log = require('./logger');
+    embedded.treeAtRaw.mockRejectedValue(new Error('tree read failed'));
+    const defaultSession = { protocol: { handle: jest.fn() } };
+    registerRadicleApiProtocol(defaultSession);
+    const handler = defaultSession.protocol.handle.mock.calls[0][1];
+
+    await handler(
+      new Request(`radapi://local/api/v1/repos/${encodeURIComponent(RID)}/tree/${REVISION}/src`)
+    );
+
+    const warnings = log.warn.mock.calls.filter((call) => call[0] === '[radapi]');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toEqual(['[radapi]', RID, `/tree/${REVISION}/src`, '→', 'tree read failed']);
+  });
+
+  // The dispatcher's registry is process-wide and rejects a duplicate
+  // name, so the guard must be installed once however many sessions
+  // (default plus one per private window) register the protocol.
+  test('installs the frame guard once, for every session the dispatcher serves', () => {
+    jest.isolateModules(() => {
+      const dispatcher = require('./webrequest-dispatcher');
+      const fresh = require('./radicle-api-protocol');
+      fresh.registerRadicleApiProtocol({ protocol: { handle: jest.fn() } });
+      fresh.registerRadicleApiProtocol({ protocol: { handle: jest.fn() } });
+
+      expect(dispatcher.registerWebRequestHandler).toHaveBeenCalledTimes(1);
+      expect(dispatcher.registerWebRequestHandler).toHaveBeenCalledWith(
+        'onBeforeRequest',
+        'radapi-guard',
+        fresh.guardRadicleApiRequest,
+        // A throwing guard must cancel, not wave the request through.
+        { failClosed: true }
+      );
+    });
+  });
+});

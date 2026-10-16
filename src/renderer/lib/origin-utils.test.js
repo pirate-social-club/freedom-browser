@@ -1,0 +1,178 @@
+/**
+ * Cross-consistency test: renderer origin-utils vs shared origin-utils.
+ *
+ * The renderer (ESM) maintains its own copy of getPermissionKey and
+ * normalizeOrigin because it cannot require() the CommonJS shared module.
+ * These tests mechanically assert that both copies produce identical output
+ * for a broad battery of inputs, so drift is caught in CI before it causes
+ * permissions to go missing between renderer and main.
+ *
+ * If this test fails, update BOTH files together.
+ */
+
+import * as renderer from './origin-utils.js';
+const shared = require('../../shared/origin-utils');
+
+test.each([
+  ['gregskril.com', true],
+  ['🦇.eth', true],
+  ['bücher.eth', true],
+  ['a.co', true],
+  ['foo..eth', false],
+  ['https://gregskril.com', false],
+  ['name.eth/path', false],
+  ['alice@example.com', false],
+  ['', false],
+  [null, false],
+])('ENS candidate detection agrees across processes: %s', (value, expected) => {
+  expect(renderer.isPotentialEnsName(value)).toBe(expected);
+  expect(shared.isPotentialEnsName(value)).toBe(expected);
+});
+
+// Inputs span every code path + realistic edge cases.
+const INPUTS = [
+  // ENS bare names
+  'vitalik.eth',
+  'vitalik.eth/blog',
+  '1inch.eth/path/to/page',
+  'myapp.box',
+  'myapp.box/docs',
+  'alice.wei',
+  'alice.wei/docs',
+  'apoorv.gwei',
+  'apoorv.gwei/docs',
+  'VITALIK.ETH',
+  'Vitalik.ETH/Blog',
+  'sub.example.eth',
+
+  // ens:// scheme
+  'ens://vitalik.eth',
+  'ens://vitalik.eth/#/swap',
+  'ens://MyApp.ETH/#/PATH',
+  'ens://sub.example.eth',
+
+  // Swarm
+  'bzz://abc123def',
+  'bzz://abc123def/page/index.html',
+  'bzz://ABC123/mixed-case-ref',
+  'bzz://a1b2c3d4e5f6/deep/path?query=1#hash',
+
+  // IPFS / IPNS
+  'ipfs://QmHash',
+  'ipfs://QmHash/docs/page.html',
+  'ipfs://bafybeigdyrzt/page',
+  'ipns://docs.ipfs.tech',
+  'ipns://docs.ipfs.tech/guide',
+
+  // Transport URLs with ENS hosts (issue #16): both copies must collapse to
+  // the bare ENS name so permissions stay consistent across forms.
+  'bzz://meinhard.eth',
+  'bzz://meinhard.eth/page',
+  'ipfs://vitalik.eth/docs',
+  'ipns://app.eth/guide',
+  'bzz://Meinhard.ETH',
+  'ipfs://myapp.box/path',
+  'ipfs://alice.wei/path',
+  'ipfs://apoorv.gwei/path',
+  'docs.example.tez/guide',
+  'ipfs://docs.example.tez/guide',
+
+  // Query / fragment must not fork the permission key per route. Hash-routed
+  // SPAs (#/swap) and share-link queries (?ref=...) collapse to the same
+  // canonical key.
+  'vitalik.eth?ref=share',
+  'vitalik.eth#/swap',
+  'bzz://meinhard.eth?x=1',
+  'bzz://meinhard.eth#/feed',
+  'ipfs://vitalik.eth?utm=1',
+  'ipfs://vitalik.eth#/lp',
+  'ipns://app.eth?ref=foo',
+  'ens://name.eth?x=1',
+  'ens://name.eth#/swap',
+  'rad://z123abc?ref=foo',
+  'rad://z123abc#/tree',
+  'bzz://abc123def?x=1',
+  'ipfs://QmABC#frag',
+
+  // Radicle
+  'rad://z3gqcJUoA1n9HaHKufZs5FCSGazv5',
+  'rad://z3gqcJUoA1n9HaHKufZs5FCSGazv5/tree',
+
+  // ERC-8244 apps: contract and chain jointly define the permission origin.
+  'web3://0x00000095643cffA7d9faE407A84Dfcb6406456C6.eip155-1/',
+  'web3://0x00000095643cffA7d9faE407A84Dfcb6406456C6.eip155-1/swap?x=1#route',
+  'web3://0x00000095643cffA7d9faE407A84Dfcb6406456C6.eip155-100/',
+  'web3://0x00000095643cffA7d9faE407A84Dfcb6406456C6/',
+
+  // HTTP(S)
+  'https://app.uniswap.org',
+  'https://app.uniswap.org/swap',
+  'https://app.uniswap.org:8443/swap',
+  'http://localhost:3000',
+  'http://localhost:3000/path?a=1#fragment',
+  'https://sub.domain.example.com/page',
+
+  // Edge cases
+  null,
+  undefined,
+  '',
+  '   ',
+  '\t\n',
+  'not a url',
+  'ftp://example.com',
+  'data:text/plain,hello',
+  'javascript:alert(1)',
+  'about:blank',
+];
+
+describe('renderer origin-utils vs shared origin-utils', () => {
+  test('onchain permissions include the contract and chain', () => {
+    const address = '0x00000095643cffA7d9faE407A84Dfcb6406456C6';
+    expect(renderer.getPermissionKey(`web3://${address}:1/swap`)).toBe(
+      `web3://${address.toLowerCase()}`
+    );
+    expect(renderer.getPermissionKey(`web3://${address}:100/swap`)).toBe(
+      `web3://${address.toLowerCase()}:100`
+    );
+    expect(renderer.getPermissionKey(`web3://${address}/`)).toBe(`web3://${address.toLowerCase()}`);
+    expect(renderer.getPermissionKey(`web3://${address.toLowerCase()}.eip155-100/swap`)).toBe(
+      `web3://${address.toLowerCase()}:100`
+    );
+  });
+
+  describe('getPermissionKey', () => {
+    test.each(INPUTS.map((i) => [JSON.stringify(i), i]))(
+      'produces identical output for %s',
+      (_label, input) => {
+        expect(renderer.getPermissionKey(input)).toBe(shared.getPermissionKey(input));
+      }
+    );
+  });
+
+  describe('normalizeOrigin', () => {
+    test.each(INPUTS.map((i) => [JSON.stringify(i), i]))(
+      'produces identical output for %s',
+      (_label, input) => {
+        expect(renderer.normalizeOrigin(input)).toBe(shared.normalizeOrigin(input));
+      }
+    );
+  });
+
+  describe('public API surface matches', () => {
+    test('renderer exports getPermissionKey', () => {
+      expect(typeof renderer.getPermissionKey).toBe('function');
+    });
+
+    test('renderer exports normalizeOrigin', () => {
+      expect(typeof renderer.normalizeOrigin).toBe('function');
+    });
+
+    test('shared exports getPermissionKey', () => {
+      expect(typeof shared.getPermissionKey).toBe('function');
+    });
+
+    test('shared exports normalizeOrigin', () => {
+      expect(typeof shared.normalizeOrigin).toBe('function');
+    });
+  });
+});

@@ -2,9 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release/**', 'hotfix/**']
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
+  merge_group:
 
 permissions:
   contents: read
@@ -14,6 +16,74 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  code-changed:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Decide whether anything outside the docs changed
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "not a pull request — running everything"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags origin "$BASE"
+          changed=$(git diff --no-renames --name-only "origin/$BASE...HEAD")
+          echo "$changed"
+          if echo "$changed" | grep -vE '^(CHANGELOG\.md|changelog\.d/|docs/|[A-Z_]+\.md$)' >/dev/null; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
+
+  renderer-changed:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      renderer: ${{ steps.filter.outputs.renderer }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Decide whether the renderer changed
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "not a pull request — running the visual jobs"
+            echo "renderer=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags origin "$BASE"
+          changed=$(git diff --no-renames --name-only "origin/$BASE...HEAD")
+          echo "$changed"
+          if echo "$changed" | grep -E '^(src/renderer/|test-e2e/(theme-parity|renderer-screenshots)\.spec\.js|test-e2e/(fixtures|packaged-launch|screenshot-gate|screenshot-baselines)\.js|test-e2e/theme-contrast-baseline\.json|test-e2e/__screenshots__/|package\.json|\.claude/skills/run-freedom/|playwright\.config\.js|\.github/workflows/ci\.yml)' >/dev/null; then
+            echo "renderer=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "renderer=false" >> "$GITHUB_OUTPUT"
+          fi
+
+
   dependency-audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -21,11 +91,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
+          persist-credentials: false
           path: freedom-browser
 
       - name: Check out sentinel-ai-connect dependency
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
+          persist-credentials: false
           repository: Sentinel-Autonomybuilder/blue-ai-connect
           ref: 924d472cb8be47b11f2432515f23bd5ea20d297c
           path: blue-ai-connect
@@ -36,7 +108,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
-          node-version: 24
+          node-version: 24.14.0
           cache: npm
           cache-dependency-path: freedom-browser/package-lock.json
 
@@ -44,9 +116,25 @@ jobs:
         working-directory: freedom-browser
         run: npm ci --ignore-scripts
 
-      - name: Audit dependencies
+      - name: Verify scoped audit refusal fixtures
         working-directory: freedom-browser
-        run: npm audit --audit-level=high
+        run: python3 ops/dependency-repair/audit-scoped-exception.test.py
+
+      - name: Retain full audit and evaluate approved development exception
+        working-directory: freedom-browser
+        run: python3 ops/dependency-repair/audit-scoped-exception.py --output "$RUNNER_TEMP/freedom-dependency-audit"
+
+      - name: Upload full audit and separate exception verdict
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: dependency-audit
+          path: |
+            ${{ runner.temp }}/freedom-dependency-audit/full-audit.json
+            ${{ runner.temp }}/freedom-dependency-audit/audit-execution.json
+            ${{ runner.temp }}/freedom-dependency-audit/exception-verdict.json
+          if-no-files-found: error
+          retention-days: 7
 
   test:
     runs-on: ubuntu-latest
@@ -56,11 +144,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
+          persist-credentials: false
           path: freedom-browser
 
       - name: Check out sentinel-ai-connect dependency
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
+          persist-credentials: false
           repository: Sentinel-Autonomybuilder/blue-ai-connect
           ref: 924d472cb8be47b11f2432515f23bd5ea20d297c
           path: blue-ai-connect
@@ -78,7 +168,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
-          node-version: 24
+          node-version: 24.14.0
           cache: npm
           cache-dependency-path: freedom-browser/package-lock.json
 
@@ -92,6 +182,8 @@ jobs:
 
       - name: Run test coverage
         working-directory: freedom-browser
+        env:
+          FREEDOM_SKIP_ELECTRON_NET_TEST: '1'
         run: npm run test:coverage
 
       - name: Verify platform capability matrix
@@ -112,6 +204,8 @@ jobs:
         if: always()
 
   release-smoke:
+    needs: code-changed
+    if: ${{ !cancelled() && needs.code-changed.outputs.code != 'false' }}
     name: Release smoke (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
@@ -133,11 +227,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
+          persist-credentials: false
           path: freedom-browser
 
       - name: Check out sentinel-ai-connect dependency
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
+          persist-credentials: false
           repository: Sentinel-Autonomybuilder/blue-ai-connect
           ref: 924d472cb8be47b11f2432515f23bd5ea20d297c
           path: blue-ai-connect
@@ -162,7 +258,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
-          node-version: 24
+          node-version: 24.14.0
           cache: npm
           cache-dependency-path: freedom-browser/package-lock.json
 
@@ -177,3 +273,394 @@ jobs:
       - name: Show iron-proxy egress summary
         if: runner.os == 'Linux' && always()
         uses: ironsh/iron-proxy-action/summary@fa1fd82ec32396d044deba7040a6db576bec927a
+
+  ipfs-gateway-proxy:
+    needs: code-changed
+    if: ${{ !cancelled() && needs.code-changed.outputs.code != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - name: Set up pinned Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24.14.0
+          cache: npm
+      - name: Install Linux native dependencies
+        uses: ./.github/actions/install-linux-native-deps
+      - name: Install dependencies
+        uses: ./.github/actions/install-node-deps
+      - name: Install Electron system dependencies
+        uses: ./.github/actions/install-playwright-deps
+      - name: Prepare bounded runtime and protected cleanup verifier
+        run: |
+          set -euo pipefail
+          node --version
+          test "$(node --version)" = v24.14.0
+          sudo install -m 0755 ops/dependency-repair/bounded-ci-shell.sh /usr/local/bin/freedom-ci-bounded-shell
+          mkdir -m 700 "${{ runner.temp }}/ipfs-gateway-proxy"
+          verifier="/run/freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service.verifier.py"
+          sudo install -m 0644 ops/dependency-repair/verify-refresh-cleanup.py "$verifier"
+          sha256sum "$verifier" > "${{ runner.temp }}/ipfs-gateway-proxy/verifier.sha256"
+      - name: Verify pinned Node inside runtime limits
+        shell: /usr/local/bin/freedom-ci-bounded-shell {0}
+        run: |
+          node --version | tee "${{ runner.temp }}/ipfs-gateway-proxy/runtime-node-version.log"
+          test "$(node --version)" = v24.14.0
+      - name: Warm the Electron binary download
+        run: node -e "require('electron')"
+      - name: Run ipfs-gateway-proxy
+        # The bounded shell sets FREEDOM_ELECTRON_NET_TEST=1 inside its unit.
+        shell: /usr/local/bin/freedom-ci-bounded-shell {0}
+        run: >-
+          npx jest --runInBand src/main/__tests__/integration/ipfs-gateway-proxy.test.js
+          src/main/__tests__/integration/ens-ccip-proxy.test.js
+      - name: Confirm runtime cleanup
+        if: always()
+        run: |
+          set -euo pipefail
+          output="${{ runner.temp }}/ipfs-gateway-proxy"
+          unit="freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service"
+          mkdir -p "$output"
+          timeout --kill-after=2s 10s sudo systemctl show "$unit" -p ActiveState -p SubState -p Result -p MainPID -p ControlPID -p MemoryPeak -p CPUUsageNSec > "$output/unit-before-cleanup.log" 2>&1 || true
+          if timeout --kill-after=2s 10s sudo systemctl stop "$unit"; then stop_code=0; else stop_code=$?; fi
+          active_state=$(timeout --kill-after=2s 10s systemctl show "$unit" -p ActiveState --value) || active_state=unknown
+          if [ "$stop_code" -eq 0 ] && [ "$active_state" = failed ]; then
+            timeout --kill-after=2s 10s sudo systemctl reset-failed "$unit"
+          fi
+          sha256sum --check "$output/verifier.sha256"
+          python3 "/run/freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service.verifier.py" "$unit" "$output" "$stop_code"
+      - name: Retain runtime evidence and renderer comparisons
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ipfs-gateway-proxy-results
+          path: |
+            ${{ runner.temp }}/ipfs-gateway-proxy/
+            test-results/
+            playwright-report/
+          if-no-files-found: error
+          retention-days: 7
+
+  e2e-theme-parity:
+    needs: renderer-changed
+    if: ${{ !cancelled() && needs.renderer-changed.outputs.renderer != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - name: Set up pinned Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24.14.0
+          cache: npm
+      - name: Install Linux native dependencies
+        uses: ./.github/actions/install-linux-native-deps
+      - name: Install dependencies
+        uses: ./.github/actions/install-node-deps
+      - name: Install Electron system dependencies
+        uses: ./.github/actions/install-playwright-deps
+      - name: Prepare bounded runtime and protected cleanup verifier
+        run: |
+          set -euo pipefail
+          node --version
+          test "$(node --version)" = v24.14.0
+          sudo install -m 0755 ops/dependency-repair/bounded-ci-shell.sh /usr/local/bin/freedom-ci-bounded-shell
+          mkdir -m 700 "${{ runner.temp }}/e2e-theme-parity"
+          verifier="/run/freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service.verifier.py"
+          sudo install -m 0644 ops/dependency-repair/verify-refresh-cleanup.py "$verifier"
+          sha256sum "$verifier" > "${{ runner.temp }}/e2e-theme-parity/verifier.sha256"
+      - name: Verify pinned Node inside runtime limits
+        shell: /usr/local/bin/freedom-ci-bounded-shell {0}
+        run: |
+          node --version | tee "${{ runner.temp }}/e2e-theme-parity/runtime-node-version.log"
+          test "$(node --version)" = v24.14.0
+      - name: Run e2e-theme-parity
+        shell: /usr/local/bin/freedom-ci-bounded-shell {0}
+        run: xvfb-run -a npm run test:e2e:theme-parity
+      - name: Confirm runtime cleanup
+        if: always()
+        run: |
+          set -euo pipefail
+          output="${{ runner.temp }}/e2e-theme-parity"
+          unit="freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service"
+          mkdir -p "$output"
+          timeout --kill-after=2s 10s sudo systemctl show "$unit" -p ActiveState -p SubState -p Result -p MainPID -p ControlPID -p MemoryPeak -p CPUUsageNSec > "$output/unit-before-cleanup.log" 2>&1 || true
+          if timeout --kill-after=2s 10s sudo systemctl stop "$unit"; then stop_code=0; else stop_code=$?; fi
+          active_state=$(timeout --kill-after=2s 10s systemctl show "$unit" -p ActiveState --value) || active_state=unknown
+          if [ "$stop_code" -eq 0 ] && [ "$active_state" = failed ]; then
+            timeout --kill-after=2s 10s sudo systemctl reset-failed "$unit"
+          fi
+          sha256sum --check "$output/verifier.sha256"
+          python3 "/run/freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service.verifier.py" "$unit" "$output" "$stop_code"
+      - name: Retain runtime evidence and renderer comparisons
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: e2e-theme-parity-results
+          path: |
+            ${{ runner.temp }}/e2e-theme-parity/
+            test-results/
+            playwright-report/
+          if-no-files-found: error
+          retention-days: 7
+
+  e2e-renderer-screenshots:
+    needs: renderer-changed
+    if: ${{ !cancelled() && needs.renderer-changed.outputs.renderer != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - name: Set up pinned Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24.14.0
+          cache: npm
+      - name: Install Linux native dependencies
+        uses: ./.github/actions/install-linux-native-deps
+      - name: Install dependencies
+        uses: ./.github/actions/install-node-deps
+      - name: Install Electron system dependencies
+        uses: ./.github/actions/install-playwright-deps
+      - name: Prepare bounded runtime and protected cleanup verifier
+        run: |
+          set -euo pipefail
+          node --version
+          test "$(node --version)" = v24.14.0
+          sudo install -m 0755 ops/dependency-repair/bounded-ci-shell.sh /usr/local/bin/freedom-ci-bounded-shell
+          mkdir -m 700 "${{ runner.temp }}/e2e-renderer-screenshots"
+          verifier="/run/freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service.verifier.py"
+          sudo install -m 0644 ops/dependency-repair/verify-refresh-cleanup.py "$verifier"
+          sha256sum "$verifier" > "${{ runner.temp }}/e2e-renderer-screenshots/verifier.sha256"
+      - name: Verify pinned Node inside runtime limits
+        shell: /usr/local/bin/freedom-ci-bounded-shell {0}
+        run: |
+          node --version | tee "${{ runner.temp }}/e2e-renderer-screenshots/runtime-node-version.log"
+          test "$(node --version)" = v24.14.0
+      - name: Run e2e-renderer-screenshots
+        shell: /usr/local/bin/freedom-ci-bounded-shell {0}
+        run: xvfb-run -a npm run test:e2e:screenshots
+      - name: Confirm runtime cleanup
+        if: always()
+        run: |
+          set -euo pipefail
+          output="${{ runner.temp }}/e2e-renderer-screenshots"
+          unit="freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service"
+          mkdir -p "$output"
+          timeout --kill-after=2s 10s sudo systemctl show "$unit" -p ActiveState -p SubState -p Result -p MainPID -p ControlPID -p MemoryPeak -p CPUUsageNSec > "$output/unit-before-cleanup.log" 2>&1 || true
+          if timeout --kill-after=2s 10s sudo systemctl stop "$unit"; then stop_code=0; else stop_code=$?; fi
+          active_state=$(timeout --kill-after=2s 10s systemctl show "$unit" -p ActiveState --value) || active_state=unknown
+          if [ "$stop_code" -eq 0 ] && [ "$active_state" = failed ]; then
+            timeout --kill-after=2s 10s sudo systemctl reset-failed "$unit"
+          fi
+          sha256sum --check "$output/verifier.sha256"
+          python3 "/run/freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service.verifier.py" "$unit" "$output" "$stop_code"
+      - name: Retain runtime evidence and renderer comparisons
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: e2e-renderer-screenshots-results
+          path: |
+            ${{ runner.temp }}/e2e-renderer-screenshots/
+            test-results/
+            playwright-report/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Upstream's harness end-to-end groups, Linux only. Each group runs the same
+  # curated spec list as upstream's job of the same name; a spec left out of
+  # every group is named on an e2e-not-in-ci line with its reason
+  # (scripts/ci/e2e-spec-coverage.test.js keeps both lists honest).
+  #
+  # e2e-not-in-ci: updates.spec.js — the Linux evaluation build never constructs an updater (src/main/updater.js), so there are no update states to drive
+  # e2e-not-in-ci: safe-phone.spec.js — the freedom-bridge page it pairs through still speaks openlv 0.0.3, so the co-signature never arrives, upstream #452
+  # e2e-not-in-ci: remote-signing.spec.js — the freedom-bridge page it pairs through still speaks openlv 0.0.3, so the handshake never completes, upstream #452
+  e2e-harness:
+    needs: code-changed
+    if: ${{ !cancelled() && needs.code-changed.outputs.code != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [settings, shortcuts-zoom, tabs, address-bar-ens, wallet, safe, chrome, clipboard, close-tab, profiles]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - name: Set up pinned Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24.14.0
+          cache: npm
+      - name: Install Linux native dependencies
+        uses: ./.github/actions/install-linux-native-deps
+      - name: Install dependencies
+        uses: ./.github/actions/install-node-deps
+      - name: Install Playwright system dependencies
+        uses: ./.github/actions/install-playwright-deps
+
+      - name: Download adblock filter lists
+        if: matrix.group == 'settings'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npm run adblock:download
+      - name: Run settings + internal-page E2E
+        if: matrix.group == 'settings'
+        run: >-
+          xvfb-run -a npm run test:e2e --
+          test-e2e/settings.spec.js
+          test-e2e/settings-adblock.spec.js
+          test-e2e/adblock-first-engine.spec.js
+          test-e2e/myotis-recovery.spec.js
+          test-e2e/myotis-upgrade-advisory.spec.js
+          test-e2e/internal-pages-csp.spec.js
+          test-e2e/error-page.spec.js
+          test-e2e/internal-page-theme.spec.js
+          test-e2e/swarm-cache.spec.js
+
+      - name: Run zoom + shortcuts E2E
+        if: matrix.group == 'shortcuts-zoom'
+        run: xvfb-run -a npm run test:e2e -- test-e2e/zoom.spec.js test-e2e/shortcuts.spec.js
+
+      - name: Run tabs, menus, popovers and dispositions E2E
+        if: matrix.group == 'tabs'
+        run: |
+          xvfb-run -a npm run test:e2e -- \
+            test-e2e/tabs.spec.js \
+            test-e2e/onchain-apps.spec.js \
+            test-e2e/menus.spec.js \
+            test-e2e/chrome-popovers.spec.js \
+            test-e2e/bookmarks.spec.js \
+            test-e2e/page-context-menu.spec.js \
+            test-e2e/permissions.spec.js \
+            test-e2e/external-protocol.spec.js \
+            test-e2e/dweb-link-gesture.spec.js \
+            test-e2e/popup-blocker.spec.js \
+            test-e2e/popup-close.spec.js \
+            test-e2e/ant-api-guard.spec.js
+
+      - name: Run address-bar + ENSv2 + name-interstitial E2E
+        if: matrix.group == 'address-bar-ens'
+        run: |
+          xvfb-run -a npm run test:e2e -- \
+            test-e2e/address-bar.spec.js \
+            test-e2e/ensv2.spec.js \
+            test-e2e/ens-history-traversal.spec.js \
+            test-e2e/chrome-page-spoof.spec.js \
+            test-e2e/tez-unverified.spec.js \
+            test-e2e/tez-head-conflict.spec.js \
+            test-e2e/ens-trust-popover.spec.js
+
+      - name: Run wallet approval E2E
+        if: matrix.group == 'wallet'
+        run: |
+          xvfb-run -a npm run test:e2e -- \
+            test-e2e/dapp-tx-ledger-confirm.spec.js \
+            test-e2e/send-ledger-confirm.spec.js \
+            test-e2e/x402-payment-in-flight.spec.js \
+            test-e2e/sidebar-in-flight-chrome.spec.js \
+            test-e2e/safe-send-chain.spec.js \
+            test-e2e/publisher-identity-selector.spec.js \
+            test-e2e/browsing-credit.spec.js \
+            test-e2e/publish-setup-rediscovery.spec.js
+
+      - name: Install foundry (anvil)
+        if: matrix.group == 'safe'
+        env:
+          FOUNDRY_VERSION: v1.8.3
+          FOUNDRY_SHA256: 7ca48e6ca3cac1bce1403ca67e5bc1dc3bc1fd818199c9957c7165079c228568
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/foundry"
+          mkdir -p "$dir"
+          cd "$dir"
+          archive="foundry_${FOUNDRY_VERSION}_linux_amd64.tar.gz"
+          curl --proto '=https' --tlsv1.2 -sSfL --retry 3 --retry-all-errors -o "$archive" \
+            "https://github.com/foundry-rs/foundry/releases/download/${FOUNDRY_VERSION}/${archive}"
+          echo "${FOUNDRY_SHA256}  ${archive}" | sha256sum -c -
+          tar -xzf "$archive" anvil
+          rm "$archive"
+          ./anvil --version
+          echo "$dir" >> "$GITHUB_PATH"
+      - name: Colibri WASM trap guard under Electron's main process
+        if: matrix.group == 'safe'
+        env:
+          FREEDOM_COLIBRI_TRAP_PROBE_REQUIRED: '1'
+        run: |
+          node -e "require('electron')"
+          npx jest src/main/ens/colibri-runtime.test.js
+      - name: Run Safe E2E
+        if: matrix.group == 'safe'
+        env:
+          FREEDOM_SAFE_E2E_REQUIRED: '1'
+        run: |
+          xvfb-run -a npm run test:e2e -- \
+            test-e2e/safe-accounts.spec.js \
+            test-e2e/safe-dapp.spec.js
+
+      - name: Run find, mute, private-window, focus, sidebar and downloads E2E
+        if: matrix.group == 'chrome'
+        run: |
+          xvfb-run -a npm run test:e2e -- \
+            test-e2e/find-in-page.spec.js \
+            test-e2e/tab-mute.spec.js \
+            test-e2e/private-windows.spec.js \
+            test-e2e/private-tab-color.spec.js \
+            test-e2e/chrome-input-focus.spec.js \
+            test-e2e/sidebar-subscreen-headers.spec.js \
+            test-e2e/downloads.spec.js
+
+      - name: Run address-bar clipboard E2E
+        if: matrix.group == 'clipboard'
+        run: xvfb-run -a npm run test:e2e -- test-e2e/address-bar-clipboard.spec.js
+
+      - name: Install xdotool
+        if: matrix.group == 'close-tab'
+        run: '"$GITHUB_WORKSPACE/scripts/ci/apt-hardening.sh" install xdotool'
+      - name: Run close-tab and tab-switch shortcut E2E
+        if: matrix.group == 'close-tab'
+        run: xvfb-run -a npm run test:e2e -- test-e2e/close-tab-shortcut.spec.js test-e2e/tab-switch-shortcut.spec.js
+
+      - name: Run profile lifecycle E2E
+        if: matrix.group == 'profiles'
+        run: xvfb-run -a npm run test:e2e -- test-e2e/profiles.spec.js
+
+      - name: Upload Playwright traces and screenshots
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: e2e-harness-${{ matrix.group }}-traces
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  ci-ok:
+    if: always()
+    needs: [code-changed, renderer-changed, dependency-audit, test, release-smoke, ipfs-gateway-proxy, e2e-harness, e2e-theme-parity, e2e-renderer-screenshots]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every executed check to succeed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          for result in $RESULTS; do
+            if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
+              exit 1
+            fi
+          done

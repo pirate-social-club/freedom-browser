@@ -24,8 +24,13 @@
   background: rgba(0, 0, 0, 0.1);
 }
 
+[data-theme='light'] .tab-audio:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
 [data-theme='light'] .icon-btn:hover,
-[data-theme='light'] .menu-button:hover {
+[data-theme='light'] .menu-button:hover,
+[data-theme='light'] .menu-button[aria-expanded='true'] {
   background: rgba(0, 0, 0, 0.1);
 }
 
@@ -36,8 +41,6 @@
 
 [data-theme='light'] .address-input:focus {
   background-color: #ffffff;
-  border-color: transparent;
-  box-shadow: none;
 }
 
 [data-theme='light'] .autocomplete-dropdown {
@@ -75,11 +78,6 @@
   background: rgba(0, 0, 0, 0.1);
 }
 
-[data-theme='light'] .settings-modal {
-  --settings-section-bg: rgba(0, 0, 0, 0.02);
-  --settings-divider: rgba(0, 0, 0, 0.08);
-}
-
 [data-theme='light'] .toggle-slider {
   background-color: #d1d1d6;
 }
@@ -112,7 +110,11 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
 }
 
-[data-theme='light'] .menu-item:hover {
+/* Covers both the main hamburger rows and the flyout rows (shared .menu-item).
+   The default hover is a white overlay, invisible on the light menu bg. The
+   open-flyout row shares the hover treatment, as it does in the dark theme. */
+[data-theme='light'] .menu-item:hover:not(:disabled),
+[data-theme='light'] .menu-item-has-flyout.flyout-open > .menu-item {
   background: rgba(0, 0, 0, 0.1);
 }
 
@@ -124,26 +126,10 @@
   background: rgba(0, 0, 0, 0.08);
 }
 
-[data-theme='light'] .settings-select {
-  background-color: #f1f3f4;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%235f6368' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5'/%3E%3C/svg%3E");
-}
-
-[data-theme='light'] .settings-select:focus {
-  box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.2);
-}
-
-[data-theme='light'] .bee-menu-button .net-line {
-  stroke: #1d1d1f !important;
-}
-
-[data-theme='light'] .bee-menu-button .net-node {
-  stroke: #1d1d1f !important;
-}
-
 [data-theme='light'] .bee-toggle-knob,
 [data-theme='light'] .ipfs-toggle-knob,
-[data-theme='light'] .radicle-toggle-knob {
+[data-theme='light'] .radicle-toggle-knob,
+[data-theme='light'] .tor-toggle-knob {
   background: #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
@@ -168,11 +154,18 @@
 
 [data-theme='light'] .form-input:focus {
   background: #ffffff;
-  border-color: var(--accent);
 }
 
 [data-theme='light'] .input-action-btn:hover {
   background: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='light'] .trust-shield {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme='light'] .trust-shield:hover {
+  background: rgba(0, 0, 0, 0.14);
 }
 
 [data-theme='light'] .modal-content {

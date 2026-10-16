@@ -1,5 +1,14 @@
 const path = require('path');
-const IPC = require('../shared/ipc-channels');
+// Preserve coverage of the inactive pre-Ant manager using its historical
+// channel contract. The current production registry intentionally has no Bee
+// lifecycle channels; importing it here aliases every handler to undefined.
+const IPC = Object.freeze({
+  BEE_START: 'bee:start',
+  BEE_STOP: 'bee:stop',
+  BEE_GET_STATUS: 'bee:getStatus',
+  BEE_STATUS_UPDATE: 'bee:statusUpdate',
+  BEE_CHECK_BINARY: 'bee:checkBinary',
+});
 const {
   createAppMock,
   createIpcMainMock,
@@ -257,6 +266,7 @@ function loadBeeManagerModule(options = {}) {
     ipcMain,
     BrowserWindow,
     extraMocks: {
+      [require.resolve('../shared/ipc-channels')]: () => IPC,
       child_process: () => ({
         spawn,
         execSync,
