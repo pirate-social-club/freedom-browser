@@ -1884,9 +1884,9 @@
   "verdict": {
     "status": "OK_TO_SHIP",
     "scope": "Linux x64 evaluation deb",
-    "inspected_commit": "c51e4fe01953f088fb2ff068b3e3c47bfa026e57",
+    "inspected_commit": "d8aad2be12599235190f64a7ba8fd84f9de27fa9",
     "reinspect_when": "Any change to package.json build configuration or extraResources, the helper bundles under hns-bin or dvpn-bin, src/renderer/vendor, NOTICES or LICENSE, or package-lock.json production dependencies requires inspecting a newly built package before this verdict holds again.",
-    "message": "Cleared for the Linux x64 evaluation deb built from this tree. The fork's own licence (AGPL-3.0-or-later) is compatible with every shipped component, every required third-party notice ships, and a package built from commit c51e4fe0 was inspected against this inventory. This clears licensing for that evaluation build only; it is not a public-release decision, and the fork's use of upstream's product name, app id and icons remains an open fork decision."
+    "message": "Cleared for the Linux x64 evaluation deb built from this tree. The fork's own licence (AGPL-3.0-or-later) is compatible with every shipped component, every required third-party notice ships, and the deb the Linux evaluation deb workflow built from commit d8aad2be (run 38852819019, sha256 c9085a4877cc077d9ff1b3002d540bead8f05a981cf8813de5eafec85531ecf6) was inspected against this inventory on 2026-10-16. The earlier inspection of the c51e4fe0 deb missed that its app.asar carried most of the repository (docs, ops, research, scripts, tests, agent files) because each platform's file list held only an exclusion; d8aad2be fixes that, and its app.asar holds only src, node_modules and package.json. This clears licensing for that evaluation build only; it is not a public-release decision, and the fork's use of upstream's product name, app id and icons remains an open fork decision."
   },
   "required_actions": [
     {
