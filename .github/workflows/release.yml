@@ -105,17 +105,19 @@ jobs:
             ipfs_target: win32-x64
             radicle_flags: --win --x64
             artifact_name: windows-x64
-            publish_on_tag: true
+            publish_on_tag: false
             workdir: freedom-browser
             build_command: node scripts/build.js --dist --win --x64
 
     steps:
       - name: Check out repository
+        if: github.event_name == 'workflow_dispatch' || matrix.publish_on_tag
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           path: freedom-browser
 
       - name: Check out sentinel-ai-connect dependency
+        if: github.event_name == 'workflow_dispatch' || matrix.publish_on_tag
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: Sentinel-Autonomybuilder/blue-ai-connect
@@ -123,16 +125,17 @@ jobs:
           path: blue-ai-connect
 
       - name: Prepare sentinel-ai-connect file dependency
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && (github.event_name == 'workflow_dispatch' || matrix.publish_on_tag)
         shell: bash
         run: cp -R blue-ai-connect ../blue-ai-connect
 
       - name: Prepare sentinel-ai-connect file dependency (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && (github.event_name == 'workflow_dispatch' || matrix.publish_on_tag)
         shell: pwsh
         run: Copy-Item -Path blue-ai-connect -Destination .. -Recurse -Force
 
       - name: Set up Node.js
+        if: github.event_name == 'workflow_dispatch' || matrix.publish_on_tag
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: 24
@@ -140,6 +143,7 @@ jobs:
           cache-dependency-path: freedom-browser/package-lock.json
 
       - name: Cache Electron build downloads
+        if: github.event_name == 'workflow_dispatch' || matrix.publish_on_tag
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: |
@@ -164,13 +168,13 @@ jobs:
         run: npm audit --audit-level=high
 
       - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && (github.event_name == 'workflow_dispatch' || matrix.publish_on_tag)
         working-directory: ${{ matrix.workdir }}
         shell: pwsh
         run: npm ci
 
       - name: Audit dependencies (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && (github.event_name == 'workflow_dispatch' || matrix.publish_on_tag)
         working-directory: ${{ matrix.workdir }}
         shell: pwsh
         run: npm audit --audit-level=high
@@ -191,19 +195,19 @@ jobs:
         run: ${{ matrix.build_command }} --unsigned --no-notarize
 
       - name: Build non-macOS release artifacts
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && (github.event_name == 'workflow_dispatch' || matrix.publish_on_tag)
         working-directory: ${{ matrix.workdir }}
         shell: bash
         run: ${{ matrix.build_command }}
 
       - name: Build Windows release artifacts
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && (github.event_name == 'workflow_dispatch' || matrix.publish_on_tag)
         working-directory: ${{ matrix.workdir }}
         shell: pwsh
         run: ${{ matrix.build_command }}
 
       - name: Smoke packaged HNS HTTPS
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && (github.event_name == 'workflow_dispatch' || matrix.publish_on_tag)
         working-directory: ${{ matrix.workdir }}
         shell: bash
         env:
