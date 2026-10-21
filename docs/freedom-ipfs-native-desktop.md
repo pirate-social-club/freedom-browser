@@ -27,13 +27,13 @@ npm run ipfs:download
 ```
 
 By default this downloads and verifies the pinned addon for the current desktop
-target from the `freedom-ipfs` `v0.4.1` GitHub release:
+target from the `freedom-ipfs` `v0.4.6` GitHub release:
 
 ```text
-https://github.com/solardev-xyz/freedom-ipfs/releases/tag/v0.4.1
+https://github.com/solardev-xyz/freedom-ipfs/releases/tag/v0.4.6
 ```
 
-Pinned release assets currently cover macOS arm64, Linux x64, and Windows x64.
+Pinned release assets currently cover macOS arm64, Linux x64, Linux arm64, and Windows x64.
 
 The asset filenames read `freedom-ipfs-node-electron41-<target>.tar.gz`. The
 `electron41` part is the **build label** of the Electron the upstream release

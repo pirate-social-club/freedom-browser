@@ -92,7 +92,7 @@
     },
     {
       "name": "freedom-ipfs",
-      "version": "v0.4.5",
+      "version": "v0.4.6",
       "type": "native-addon",
       "scope": "runtime",
       "source": {
