@@ -86,17 +86,32 @@ describe('release workflow publishes nothing', () => {
     }
   });
 
+  // Any way a step can see the workflow token: an env entry, a with: input or
+  // an inline expression, under either of its names.
+  const TOKEN = /\bGITHUB_TOKEN\b|\bGH_TOKEN\b|github\.token/;
+  const mentionsToken = (value) => TOKEN.test(JSON.stringify(value || {}));
+
   test('the token reaches only the binary download step, never npm ci', () => {
+    expect(mentionsToken(workflow.env)).toBe(false);
     for (const [name, job] of Object.entries(workflow.jobs)) {
-      expect({ job: name, env: job.env || {} }).not.toEqual(
-        expect.objectContaining({ env: expect.objectContaining({ GITHUB_TOKEN: expect.anything() }) })
-      );
+      expect({ job: name, jobEnv: mentionsToken(job.env) }).toEqual({ job: name, jobEnv: false });
       for (const step of job.steps) {
-        const usesToken = JSON.stringify(step.env || {}).includes('GITHUB_TOKEN');
+        const usesToken = mentionsToken(step.env) || mentionsToken(step.with) || TOKEN.test(String(step.run || ''));
         expect({ job: name, step: step.name, usesToken }).toEqual({
           job: name,
           step: step.name,
           usesToken: name === 'build' && step.name === 'Download platform binaries',
+        });
+      }
+    }
+  });
+
+  test('no checkout leaves the token in .git/config', () => {
+    for (const job of Object.values(workflow.jobs)) {
+      for (const step of job.steps.filter((s) => String(s.uses || '').startsWith('actions/checkout@'))) {
+        expect({ step: step.name, persist: step.with && step.with['persist-credentials'] }).toEqual({
+          step: step.name,
+          persist: false,
         });
       }
     }
@@ -113,7 +128,16 @@ describe('release workflow publishes nothing', () => {
     const text = fs.readFileSync(`${workflowDir}/${name}`, 'utf8');
     expect(text).not.toMatch(/\bgh\s+release\b/);
     expect(text).not.toMatch(/--clobber/);
-    expect(text).not.toMatch(/\/repos\/[^\s]*\/releases\b/);
-    expect(text).not.toMatch(/softprops\/action-gh-release|ncipollo\/release-action/);
+    expect(text).not.toMatch(/\brepos\/[^\s]*\/releases\b/);
+    expect(text).not.toMatch(/action-gh-release|release-action|create-release|upload-release-asset/);
+  });
+
+  test('only bump-version.yml may hold contents: write', () => {
+    const writers = files.filter((name) => {
+      const doc = yaml.load(fs.readFileSync(`${workflowDir}/${name}`, 'utf8')) || {};
+      const grants = [doc.permissions, ...Object.values(doc.jobs || {}).map((job) => job.permissions)];
+      return grants.some((grant) => grant === 'write-all' || (grant && grant.contents === 'write'));
+    });
+    expect(writers).toEqual(['bump-version.yml']);
   });
 });
