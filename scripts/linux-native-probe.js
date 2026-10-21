@@ -25,8 +25,12 @@
 // is run with -h and its version is the Go build information embedded in it.
 //
 // It prints one JSON summary on stdout and exits 0 when every test passes, 1
-// when any test fails, and 3 when a test timed out or could not be run, which
-// says nothing about the package either way.
+// when any test fails, and 3 on a harness error: a test timed out or could not
+// be run, the environment breaks the inventory's loader-selection assumptions,
+// or the probe itself could not run (a missing inventory, a bad argument),
+// none of which says anything about the package. A test child that dies
+// without a result counts against the package only when the loader names the
+// cause on stderr or the child crashed on a fault signal.
 
 const crypto = require('crypto');
 const fs = require('fs');
@@ -65,6 +69,9 @@ const EXPECTED = {
   colibri: { default: [], prebuildsOnly: [] },
 };
 const EXECUTABLES = ['antd', 'hnsd', 'fingertipd', 'v2ray'];
+const LOADER_FAILURE_RE =
+  /error while loading shared libraries: \S+: cannot open shared object file|symbol lookup error: \S+: undefined symbol: \S+/;
+const FAULT_SIGNALS = ['SIGSEGV', 'SIGBUS', 'SIGILL', 'SIGFPE', 'SIGABRT'];
 
 class ProbeTimeout extends Error {}
 
@@ -258,16 +265,27 @@ const tests = {
       result.version = node.version;
       const started = await withTimeout(node.start(), 60000, 'FreedomIpfsNativeNode.start()');
       const healthy = node.isHealthy();
-      await withTimeout(node.stop(), 30000, 'FreedomIpfsNativeNode.stop()');
+      // stop() resolves once the gateway is stopped and the handle freed, and
+      // rejects (caught below as the test's error) if either step fails.
+      const stopped = await withTimeout(node.stop(), 30000, 'FreedomIpfsNativeNode.stop()');
       result.call = 'FreedomIpfsNativeNode start(), isHealthy(), stop()';
       result.value = {
         started,
         healthy,
+        stopResult: stopped === undefined ? 'resolved' : stopped,
         healthyAfterStop: node.isHealthy(),
+        handleAfterStop: node.nodeHandle,
         cacheCreated: fs.existsSync(path.join(dataDir, 'freedom-ipfs.sqlite3')),
         failures,
       };
-      result.ok = result.available && started === true && healthy && result.value.cacheCreated;
+      result.ok =
+        result.available &&
+        started === true &&
+        healthy &&
+        result.value.healthyAfterStop === false &&
+        result.value.handleAfterStop === '0' &&
+        failures.length === 0 &&
+        result.value.cacheCreated;
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -378,6 +396,7 @@ async function runChild(name) {
     emit();
   }, CHILD_TIMEOUT_MS - 5000).unref();
   try {
+    if (!tests[name]) throw new Error(`unknown test ${name}`);
     await tests[name](result);
   } catch (err) {
     result.ok = false;
@@ -475,9 +494,20 @@ function runTest(name, context) {
     .find((l) => l.startsWith('PROBE_RESULT '));
   if (!line) {
     const how = proc.signal ? `killed by ${proc.signal}` : `exited ${proc.status}`;
-    return { ...outcome, status: 'fail', diagnostic: `${how} without a result: ${stderrTail}` };
+    const packageFault =
+      LOADER_FAILURE_RE.test(proc.stderr || '') || FAULT_SIGNALS.includes(proc.signal);
+    return {
+      ...outcome,
+      status: packageFault ? 'fail' : 'harness-error',
+      diagnostic: `${how} without a result: ${stderrTail}`,
+    };
   }
-  const result = JSON.parse(line.slice('PROBE_RESULT '.length));
+  let result;
+  try {
+    result = JSON.parse(line.slice('PROBE_RESULT '.length));
+  } catch (err) {
+    return { ...outcome, status: 'harness-error', diagnostic: `unreadable result: ${err.message}` };
+  }
   Object.assign(outcome, { call: result.call, value: result.value, notes: result.notes });
   if (result.timedOut) {
     return { ...outcome, status: 'harness-error', diagnostic: result.error.message };
@@ -505,20 +535,42 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--child') args.child = argv[++i];
     else if (argv[i] === '--inventory') args.inventory = argv[++i];
-    else if (argv[i] === '--only') args.only = argv[++i].split(',');
+    else if (argv[i] === '--only') args.only = String(argv[++i] || '').split(',');
     else throw new Error(`unknown argument: ${argv[i]}`);
+  }
+  if (args.only) {
+    const unknown = args.only.filter((name) => !tests[name]);
+    if (unknown.length > 0 || args.only.length === 0) {
+      throw new Error(`--only names no known test: ${unknown.join(', ') || '(empty)'}`);
+    }
   }
   return args;
 }
 
 function main() {
-  const args = parseArgs(process.argv.slice(2));
-  if (args.child) return runChild(args.child);
   const prebuildsOnly = Boolean(process.env.PREBUILDS_ONLY);
-  const inventory = JSON.parse(fs.readFileSync(args.inventory, 'utf8'));
-  const names = (
-    args.only || [...Object.keys(EXPECTED), ...(prebuildsOnly ? [] : EXECUTABLES)]
-  ).filter((name) => tests[name]);
+  let args;
+  let inventory;
+  try {
+    args = parseArgs(process.argv.slice(2));
+    if (args.child) return runChild(args.child);
+    inventory = JSON.parse(fs.readFileSync(args.inventory, 'utf8'));
+  } catch (err) {
+    // The probe could not run at all: say so as a harness error, never as
+    // silence the gate would have to interpret.
+    const summary = {
+      probe: 'linux-native-probe',
+      tree: TREE,
+      mode: prebuildsOnly ? 'PREBUILDS_ONLY=1' : 'default',
+      status: 'harness-error',
+      diagnostic: `the probe could not run: ${err.message}`,
+      tests: [],
+    };
+    process.stdout.write(`${JSON.stringify(summary, null, 1)}\n`);
+    process.exitCode = 3;
+    return undefined;
+  }
+  const names = args.only || [...Object.keys(EXPECTED), ...(prebuildsOnly ? [] : EXECUTABLES)];
   const summary = {
     probe: 'linux-native-probe',
     tree: TREE,
@@ -532,7 +584,8 @@ function main() {
     tests: [],
   };
   if (summary.loaderSelectionViolations.length > 0) {
-    summary.status = 'fail';
+    // The environment, not the package, breaks the inventory's assumptions.
+    summary.status = 'harness-error';
     summary.diagnostic = `loader-selection assumptions violated: ${summary.loaderSelectionViolations.join(', ')}`;
   } else {
     for (const name of names)
@@ -553,6 +606,8 @@ if (require.main === module) main();
 
 module.exports = {
   EXPECTED,
+  EXECUTABLES,
+  LOADER_FAILURE_RE,
   mappedNodeFiles,
   goBuildInfo,
   loaderSelectionViolations,

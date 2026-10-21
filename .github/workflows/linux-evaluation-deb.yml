@@ -85,11 +85,13 @@ jobs:
   # job above built: the ELF scan of the unpacked deb against
   # scripts/linux-native-inventory.json and the deb's own libc6 floor; apt
   # install, loader resolution and the packaged-runtime probes on digest-pinned
-  # ubuntu:24.04 and debian:13; and apt's refusal on debian:12.
+  # ubuntu:24.04 and debian:13; and apt's refusal on debian:12. The gate's own
+  # time budget ends five minutes before the job timeout, so its summary is
+  # written and uploaded even when a step hangs.
   packaging-gate:
     needs: deb
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 40
     env:
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
@@ -116,9 +118,9 @@ jobs:
           grep -E '\.deb$' SHA256SUMS.txt | sha256sum -c -
           grep -qx "source $SOURCE_SHA" SHA256SUMS.txt
       - name: Run the packaging gate
-        run: node scripts/linux-packaging-gate.js deb/*.deb packaging-gate
+        run: node scripts/linux-packaging-gate.js --budget-minutes 35 deb/*.deb packaging-gate
       - name: Upload the gate results
-        if: ${{ !cancelled() }}
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: freedom-linux-packaging-gate-${{ env.SOURCE_SHA }}

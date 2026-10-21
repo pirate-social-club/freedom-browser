@@ -23,12 +23,16 @@
 // makes the scan exit 2.
 //
 // It also checks every `.asar` archive in the tree (no member is an ELF file;
-// every entry marked unpacked has a file behind it) and every symlink (none
-// points at an ELF file outside the tree). Then it compares the results with
+// every entry marked unpacked has a file behind it) and every symlink. Links are
+// resolved inside the tree, never against the host: the tree stands for its
+// install location (`/` for an unpacked deb with --prefix, the inventory's
+// installRoot otherwise), an absolute target is read relative to that, and a
+// link that dangles or leaves the tree fails. Then it compares the results with
 // the inventory and fails (exit 1) when an ELF file is missing or extra, a
 // pinned download's digest differs, a file's ELF target contradicts its class,
-// or a supported file (or a dormant prebuild that PREBUILDS_ONLY=1 selects)
-// has a non-weak GLIBC need above the floor. GLIBCXX and CXXABI needs are only
+// a supported file requests an interpreter other than the distribution loader
+// (/lib64/ld-linux-x86-64.so.2), or a supported file (or a dormant prebuild that
+// PREBUILDS_ONLY=1 selects) has a non-weak GLIBC need above the floor. GLIBCXX and CXXABI needs are only
 // recorded here; the packaging gate checks them against the floor image's own
 // libstdc++.
 //
@@ -54,6 +58,8 @@ const TOOL_TIMEOUT_MS = 120000;
 const CLASSES = new Set(['supported', 'foreign', 'dormant']);
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const X86_64_MACHINE = 'Advanced Micro Devices X86-64';
+const X86_64_INTERP = '/lib64/ld-linux-x86-64.so.2';
+const MAX_SYMLINK_HOPS = 40;
 
 class InspectionError extends Error {
   /**
@@ -393,19 +399,15 @@ function checkAsar(archive) {
   return { files, unpacked, elfMembers, missingUnpacked };
 }
 
-function isInside(root, target) {
-  const rel = path.relative(root, target);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
-}
-
 /**
  * Walk a tree without following symlinks. Every regular file is inspected,
- * every `.asar` archive checked, and every symlink resolved.
+ * every `.asar` archive checked, and every symlink resolved inside the tree.
  * @param {string} root
- * @param {{tool?: (argv: string[]) => string}} [options]
+ * @param {{tool?: (argv: string[]) => string, mount?: string}} [options] `mount`
+ *   is the absolute path the tree stands for on the installed system.
  */
 function scanTree(root, options = {}) {
-  const rootReal = fs.realpathSync(root);
+  const mount = options.mount || '/';
   const results = [];
   const errors = [];
   const symlinks = [];
@@ -427,7 +429,11 @@ function scanTree(root, options = {}) {
       const full = path.join(dir, entry.name);
       const rel = path.relative(root, full);
       if (entry.isSymbolicLink()) {
-        symlinks.push(inspectSymlink(full, rel, rootReal));
+        symlinks.push({
+          path: rel,
+          target: fs.readlinkSync(full),
+          ...resolveInTree(root, mount, rel),
+        });
       } else if (entry.isDirectory()) {
         visit(full);
       } else if (entry.isFile()) {
@@ -457,23 +463,58 @@ function scanTree(root, options = {}) {
   return { results, errors, symlinks, asar };
 }
 
-function inspectSymlink(full, rel, rootReal) {
-  const link = { path: rel, target: fs.readlinkSync(full) };
-  let resolved;
-  try {
-    resolved = fs.realpathSync(full);
-  } catch {
-    return { ...link, resolved: null, dangling: true };
+/**
+ * Resolve a symlink lexically inside the tree, one path component at a time,
+ * as the installed system would resolve it with the tree mounted at `mount`.
+ * Nothing on the host is consulted.
+ * @param {string} root
+ * @param {string} mount absolute path the tree stands for
+ * @param {string} rel the link's path in the tree
+ * @returns {{status: 'ok' | 'dangling' | 'escapes' | 'loop', resolved: string}}
+ *   `resolved` is the system path reached.
+ */
+function resolveInTree(root, mount, rel) {
+  const base = path.posix.normalize(`/${mount}`).replace(/(.)\/$/, '$1');
+  // The tree path of a system path, '' for the tree itself, or null outside it.
+  const inTree = (sys) => {
+    if (base === '/') return sys.slice(1);
+    if (sys === base) return '';
+    return sys.startsWith(`${base}/`) ? sys.slice(base.length + 1) : null;
+  };
+  const isAncestor = (sys) => sys === '/' || base.startsWith(`${sys}/`);
+  let pending = path.posix.join(base, rel.split(path.sep).join('/')).split('/').filter(Boolean);
+  let done = [];
+  let hops = 0;
+  while (pending.length > 0) {
+    const part = pending.shift();
+    if (part === '.') continue;
+    if (part === '..') {
+      done.pop();
+      continue;
+    }
+    done.push(part);
+    const sys = `/${done.join('/')}`;
+    if (isAncestor(sys)) continue;
+    const treePath = inTree(sys);
+    const rest = pending.length ? `/${pending.join('/')}` : '';
+    if (treePath === null) return { status: 'escapes', resolved: `${sys}${rest}` };
+    let st;
+    try {
+      st = fs.lstatSync(path.join(root, treePath));
+    } catch {
+      return { status: 'dangling', resolved: `${sys}${rest}` };
+    }
+    if (!st.isSymbolicLink()) continue;
+    hops += 1;
+    if (hops > MAX_SYMLINK_HOPS) return { status: 'loop', resolved: `${sys}${rest}` };
+    const target = fs.readlinkSync(path.join(root, treePath));
+    done.pop();
+    if (target.startsWith('/')) done = [];
+    pending = [...target.split('/').filter(Boolean), ...pending];
   }
-  link.resolved = resolved;
-  link.outside = !isInside(rootReal, resolved);
-  link.targetIsElf = false;
-  try {
-    link.targetIsElf = fs.statSync(resolved).isFile() && readMagic(resolved).equals(ELF_MAGIC);
-  } catch {
-    // An unreadable target is not shown to be an ELF file; it is recorded.
-  }
-  return link;
+  const resolved = `/${done.join('/')}`;
+  if (!isAncestor(resolved) && inTree(resolved) === null) return { status: 'escapes', resolved };
+  return { status: 'ok', resolved };
 }
 
 /**
@@ -626,6 +667,9 @@ function compareWithInventory(scan, inventory, options) {
     ) {
       fail('class', entry.path, `listed as supported but is ${target}`);
     }
+    if (entry.class === 'supported' && record.interp && record.interp !== X86_64_INTERP) {
+      fail('interp', entry.path, `requests the interpreter ${record.interp}, not ${X86_64_INTERP}`);
+    }
     if (
       floorApplies(entry) &&
       record.glibcNewestNonWeak &&
@@ -658,9 +702,14 @@ function compareWithInventory(scan, inventory, options) {
       );
     }
   }
+  const linkProblems = {
+    dangling: 'dangles: nothing in the package is at',
+    escapes: 'leaves the package for',
+    loop: 'loops at',
+  };
   for (const link of scan.symlinks) {
-    if (link.outside && link.targetIsElf) {
-      fail('symlink', link.path, `points at the ELF file ${link.resolved}, outside the tree`);
+    if (link.status !== 'ok') {
+      fail('symlink', link.path, `-> ${link.target} ${linkProblems[link.status]} ${link.resolved}`);
     }
   }
   return failures;
@@ -672,10 +721,16 @@ function compareWithInventory(scan, inventory, options) {
  *   floor?: string, tool?: (argv: string[]) => string}} options
  */
 function scanPackage(options) {
-  const scan = scanTree(options.root, { tool: options.tool });
+  // An unpacked deb is the whole package root; a bare tree is the install root.
+  const mount = options.prefix ? '/' : (options.inventory && options.inventory.installRoot) || '/';
+  const scan = scanTree(options.root, { tool: options.tool, mount });
   const report = {
     root: options.root,
     prefix: options.prefix || '',
+    mount,
+    interpreters: Object.fromEntries(
+      scan.results.filter((r) => r.interp).map((r) => [r.path, r.interp])
+    ),
     results: scan.results,
     errors: scan.errors,
     symlinks: scan.symlinks,
@@ -725,6 +780,13 @@ function printReport(report) {
     lines.push(
       `glibc floor checked: ${report.floor} (${declared}inventory ${report.inventoryFloor})`
     );
+  }
+  const interps = {};
+  for (const interp of Object.values(report.interpreters || {})) {
+    interps[interp] = (interps[interp] || 0) + 1;
+  }
+  for (const [interp, count] of Object.entries(interps)) {
+    lines.push(`interpreter ${interp}: ${count} files`);
   }
   for (const e of report.errors) lines.push(`ERROR ${e.path}: ${e.error}`);
   for (const f of report.failures)
@@ -779,6 +841,7 @@ module.exports = {
   elfLibc,
   isX86_64Glibc,
   inspectElf,
+  resolveInTree,
   readAsarHeader,
   checkAsar,
   scanTree,

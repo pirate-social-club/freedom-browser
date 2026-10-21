@@ -5,8 +5,12 @@
  * through scripts/linux-packaging-gate.js.
  */
 
+const path = require('path');
+const { spawnSync } = require('child_process');
+
 const {
   EXPECTED,
+  LOADER_FAILURE_RE,
   mappedNodeFiles,
   goBuildInfo,
   loaderSelectionViolations,
@@ -151,5 +155,55 @@ describe('parsers', () => {
     ]);
     expect(goBuildInfo(binary)).toEqual({ goVersion: 'go1.26.2', path: 'github.com/example/tool' });
     expect(goBuildInfo(Buffer.from('not a go binary'))).toBeNull();
+  });
+});
+
+describe('coverage of the inventory', () => {
+  const nodeFiles = (pred) =>
+    inventory.files.filter((e) => e.path.endsWith('.node') && pred(e)).map((e) => e.path);
+  const expected = (mode) => new Set(Object.values(EXPECTED).flatMap((byMode) => byMode[mode]));
+
+  test('every supported .node file is driven by some test', () => {
+    const covered = expected('default');
+    expect(nodeFiles((e) => e.class === 'supported').filter((f) => !covered.has(f))).toEqual([]);
+  });
+
+  test('every prebuild PREBUILDS_ONLY selects is driven in that mode', () => {
+    const covered = expected('prebuildsOnly');
+    expect(nodeFiles((e) => e.selectedWhen).filter((f) => !covered.has(f))).toEqual([]);
+  });
+});
+
+describe('the probe cannot run', () => {
+  const probe = (args) =>
+    spawnSync(process.execPath, [path.join(__dirname, 'linux-native-probe.js'), ...args], {
+      encoding: 'utf8',
+      env: { PATH: process.env.PATH },
+    });
+
+  test('a missing inventory is a harness error with a summary', () => {
+    const run = probe(['--inventory', '/nonexistent/inventory.json']);
+    expect(run.status).toBe(3);
+    const summary = JSON.parse(run.stdout);
+    expect(summary.status).toBe('harness-error');
+    expect(summary.diagnostic).toMatch(/^the probe could not run: ENOENT/);
+  });
+
+  test('an unknown --only name is refused', () => {
+    const run = probe(['--only', 'usbb,keccak']);
+    expect(run.status).toBe(3);
+    expect(JSON.parse(run.stdout).diagnostic).toBe(
+      'the probe could not run: --only names no known test: usbb'
+    );
+    expect(probe(['--only', '']).status).toBe(3);
+  });
+
+  test('loader failures are told apart from other deaths', () => {
+    expect(
+      LOADER_FAILURE_RE.test(
+        'node: error while loading shared libraries: libudev.so.1: cannot open shared object file: No such file or directory'
+      )
+    ).toBe(true);
+    expect(LOADER_FAILURE_RE.test('Error: ENOENT: no such file or directory')).toBe(false);
   });
 });

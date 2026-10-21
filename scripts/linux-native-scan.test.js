@@ -24,6 +24,7 @@ const {
   validateInventory,
   loadInventory,
   scanPackage,
+  resolveInTree,
 } = require('./linux-native-scan');
 
 const SCRIPT = path.join(__dirname, 'linux-native-scan.js');
@@ -213,6 +214,13 @@ describe('the checked-in contract', () => {
         .digest('hex');
       expect(digest).toBe(entry.sha256);
     }
+  });
+
+  test('the libradicle digest is the pinned release linux-x64 entry', () => {
+    const fixture = fs.readFileSync(path.join(__dirname, 'fetch-radicle-addon.test.js'), 'utf8');
+    const line = /'([0-9a-f]{64}) {2}libradicle-linux-x64\.node'/.exec(fixture);
+    const entry = inventory.files.find((e) => e.path === 'resources/radicle-bin/libradicle.node');
+    expect(line && line[1]).toBe(entry.sha256);
   });
 
   test('only the usb and keccak glibc prebuilds are held to the floor as dormant', () => {
@@ -428,16 +436,77 @@ describeElf('scanning a tree', () => {
     expect(cli(root, inventoryWith([supported('bin/locked')])).status).toBe(2);
   });
 
-  test('a symlink to an ELF file outside the tree fails; one inside does not', () => {
+  test('symlinks resolve inside the tree, never on the host', () => {
+    // The host has this file, but the package does not.
     const outside = path.join(dir, 'outside-tool');
     copyTrue(outside);
     const root = tree({
       'bin/tool': copyTrue,
-      'bin/out': (full) => fs.symlinkSync(outside, full),
-      'bin/in': (full) => fs.symlinkSync('tool', full),
+      'bin/host': (full) => fs.symlinkSync(outside, full),
+      'bin/libc': (full) => fs.symlinkSync('/lib/x86_64-linux-gnu/libc.so.6', full),
+      'bin/rel': (full) => fs.symlinkSync('tool', full),
+      'bin/abs': (full) => fs.symlinkSync('/bin/tool', full),
+      libdir: (full) => fs.symlinkSync('bin', full),
+      'bin/via-dir': (full) => fs.symlinkSync('../libdir/tool', full),
     });
     const report = scanPackage({ root, inventory: inventoryWith([supported('bin/tool')]) });
-    expect(report.failures.map((f) => [f.kind, f.path])).toEqual([['symlink', 'bin/out']]);
+    expect(report.mount).toBe('/');
+    expect(report.failures.map((f) => [f.kind, f.path])).toEqual([
+      ['symlink', 'bin/host'],
+      ['symlink', 'bin/libc'],
+    ]);
+    expect(report.failures[1].message).toBe(
+      '-> /lib/x86_64-linux-gnu/libc.so.6 dangles: nothing in the package is at /lib/x86_64-linux-gnu/libc.so.6'
+    );
+  });
+
+  test('a symlink that leaves the install root or loops fails', () => {
+    const root = tree({
+      'bin/tool': copyTrue,
+      'bin/up': (full) => fs.symlinkSync('../../../usr/lib/libasound.so.2', full),
+      'bin/sys': (full) => fs.symlinkSync('/usr/lib/libgbm.so.1', full),
+      'bin/self': (full) => fs.symlinkSync('/opt/Freedom/bin/tool', full),
+      'bin/a': (full) => fs.symlinkSync('b', full),
+      'bin/b': (full) => fs.symlinkSync('a', full),
+    });
+    const inventory = { ...inventoryWith([supported('bin/tool')]), installRoot: '/opt/Freedom' };
+    const report = scanPackage({ root, inventory });
+    expect(report.mount).toBe('/opt/Freedom');
+    expect(report.failures.map((f) => [f.path, f.message])).toEqual([
+      ['bin/a', '-> b loops at /opt/Freedom/bin/a'],
+      ['bin/b', '-> a loops at /opt/Freedom/bin/b'],
+      ['bin/sys', '-> /usr/lib/libgbm.so.1 leaves the package for /usr/lib/libgbm.so.1'],
+      [
+        'bin/up',
+        '-> ../../../usr/lib/libasound.so.2 leaves the package for /usr/lib/libasound.so.2',
+      ],
+    ]);
+  });
+
+  test('a supported file that requests another interpreter fails', () => {
+    const relinked = (full) => {
+      const bytes = fs.readFileSync(TRUE_BIN);
+      const at = bytes.indexOf('/lib64/ld-linux-x86-64.so.2');
+      bytes.write('/lib64/ld-linux-x86-64.so.3', at, 'latin1');
+      fs.writeFileSync(full, bytes);
+    };
+    const root = tree({ 'bin/tool': copyTrue, 'bin/nix': relinked });
+    const report = scanPackage({
+      root,
+      inventory: inventoryWith([supported('bin/tool'), supported('bin/nix')]),
+    });
+    expect(report.interpreters).toEqual({
+      'bin/nix': '/lib64/ld-linux-x86-64.so.3',
+      'bin/tool': '/lib64/ld-linux-x86-64.so.2',
+    });
+    expect(report.failures).toEqual([
+      {
+        kind: 'interp',
+        path: 'bin/nix',
+        message:
+          'requests the interpreter /lib64/ld-linux-x86-64.so.3, not /lib64/ld-linux-x86-64.so.2',
+      },
+    ]);
   });
 
   test('scans under a prefix and fails an ELF file outside it', () => {
@@ -505,5 +574,28 @@ describeElf('scanning a tree', () => {
         message: 'header marks it unpacked but no file is behind it',
       },
     ]);
+  });
+});
+
+describe('resolveInTree', () => {
+  test('resolves through directory links and stays within the mount', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'linux-native-scan-links-'));
+    try {
+      fs.mkdirSync(path.join(root, 'resources/lib'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'resources/lib/real.so'), 'x');
+      fs.symlinkSync('resources/lib', path.join(root, 'lib'));
+      fs.symlinkSync('/opt/Freedom/lib/real.so', path.join(root, 'abs'));
+      expect(resolveInTree(root, '/opt/Freedom', 'abs')).toEqual({
+        status: 'ok',
+        resolved: '/opt/Freedom/resources/lib/real.so',
+      });
+      fs.symlinkSync('lib/missing.so', path.join(root, 'gone'));
+      expect(resolveInTree(root, '/opt/Freedom', 'gone')).toEqual({
+        status: 'dangling',
+        resolved: '/opt/Freedom/resources/lib/missing.so',
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
