@@ -56,16 +56,9 @@ const windows = [
 ];
 
 describe('release workflow platform eligibility', () => {
-  test('only the qualified Linux x64 target is eligible for a tag', () => {
+  test('the matrix keeps its four targets, with only Linux x64 marked publish_on_tag', () => {
     expect(targets.filter((target) => target.publish_on_tag).map((target) => target.binary_target)).toEqual(['linux-x64']);
     expect(targets.map((target) => target.binary_target).sort()).toEqual(['linux-x64', 'mac-arm64', 'mac-x64', 'win-x64']);
-  });
-
-  test.each(targets)('$binary_target has a coherent tag path', (target) => {
-    const expected = target.binary_target === 'linux-x64'
-      ? [...shared, ...unix, 'Build non-macOS release artifacts', 'Smoke packaged HNS HTTPS']
-      : [];
-    expect(stepsFor(target, 'push').sort()).toEqual(expected.sort());
   });
 
   test.each(targets)('$binary_target retains complete manual qualification', (target) => {
@@ -76,18 +69,51 @@ describe('release workflow platform eligibility', () => {
     expect(stepsFor(target, 'workflow_dispatch').sort()).toEqual(expected.sort());
   });
 
-  test('manual qualification cannot enter the public tag publisher', () => {
-    const linux = targets.find((target) => target.binary_target === 'linux-x64');
-    expect(enabled(workflow.jobs.publish.if, contextFor(linux, 'workflow_dispatch'))).toBe(false);
-    expect(enabled(workflow.jobs.publish.if, contextFor(linux, 'push'))).toBe(true);
-    expect(workflow.jobs.publish.needs).toBe('build');
-    expect(workflow.on.push.tags).toEqual(['v*']);
+  test('no tag push or schedule starts the workflow; only a manual dispatch does', () => {
+    expect(Object.keys(workflow.on)).toEqual(['workflow_dispatch']);
+  });
+});
+
+describe('release workflow publishes nothing', () => {
+  const workflowDir = '.github/workflows';
+  const files = fs.readdirSync(workflowDir).filter((name) => /\.ya?ml$/.test(name));
+
+  test('it has no publish job and its token can only read', () => {
+    expect(Object.keys(workflow.jobs).sort()).toEqual(['build', 'quality']);
+    expect(workflow.permissions).toEqual({ contents: 'read' });
+    for (const job of Object.values(workflow.jobs)) {
+      expect(job.permissions).toBeUndefined();
+    }
   });
 
-  test('the publisher gathers only artifacts uploaded by eligible build legs', () => {
-    const uploads = targets.filter((target) => stepsFor(target, 'push').includes('Upload build artifacts'));
-    expect(uploads.map((target) => target.artifact_name)).toEqual(['linux-x64']);
-    const download = workflow.jobs.publish.steps.find((step) => String(step.uses || '').startsWith('actions/download-artifact@'));
-    expect(download.with['merge-multiple']).toBe(true);
+  test('the token reaches only the binary download step, never npm ci', () => {
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      expect({ job: name, env: job.env || {} }).not.toEqual(
+        expect.objectContaining({ env: expect.objectContaining({ GITHUB_TOKEN: expect.anything() }) })
+      );
+      for (const step of job.steps) {
+        const usesToken = JSON.stringify(step.env || {}).includes('GITHUB_TOKEN');
+        expect({ job: name, step: step.name, usesToken }).toEqual({
+          job: name,
+          step: step.name,
+          usesToken: name === 'build' && step.name === 'Download platform binaries',
+        });
+      }
+    }
+  });
+
+  test('both jobs pin the Node version the evaluation build uses', () => {
+    for (const job of Object.values(workflow.jobs)) {
+      const setup = job.steps.find((step) => String(step.uses || '').startsWith('actions/setup-node@'));
+      expect(String(setup.with['node-version'])).toBe('24.14.0');
+    }
+  });
+
+  test.each(files)('%s neither creates nor uploads a GitHub release', (name) => {
+    const text = fs.readFileSync(`${workflowDir}/${name}`, 'utf8');
+    expect(text).not.toMatch(/\bgh\s+release\b/);
+    expect(text).not.toMatch(/--clobber/);
+    expect(text).not.toMatch(/\/repos\/[^\s]*\/releases\b/);
+    expect(text).not.toMatch(/softprops\/action-gh-release|ncipollo\/release-action/);
   });
 });
