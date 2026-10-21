@@ -55,19 +55,24 @@ const LOOKUP_SETTLE_MS = 25_000;
 // the verifier fetches through the same bridge.
 const COLIBRI_SDK_HOSTS = ['mainnet.colibri-proof.tech', 'sync-mainnet.beaconcha.in'];
 
-function ensHosts(repoRoot) {
+function endpointHosts(repoRoot, roles) {
   const sources = JSON.parse(
     fs.readFileSync(path.join(repoRoot, 'src/shared/endpoint-sources.json'), 'utf8')
   );
-  const entries = Object.values(sources.sources || sources);
-  return new Set([
-    ...entries
-      .filter((source) => ['prover', 'rpc'].includes(source.role) && !source.keyed)
-      .map((source) => source.coverage?.['1'])
-      .filter(Boolean)
-      .map((url) => new URL(url).hostname),
-    ...COLIBRI_SDK_HOSTS,
-  ]);
+  return Object.values(sources.sources || sources)
+    .filter((source) => roles.includes(source.role) && !source.keyed)
+    .map((source) => source.coverage?.['1'])
+    .filter(Boolean)
+    .map((url) => new URL(url).hostname);
+}
+
+function ensHosts(repoRoot) {
+  return new Set([...endpointHosts(repoRoot, ['prover', 'rpc']), ...COLIBRI_SDK_HOSTS]);
+}
+
+// The hosts only the Colibri verifier reaches, as opposed to the quorum RPCs.
+function colibriHosts(repoRoot) {
+  return new Set([...endpointHosts(repoRoot, ['prover']), ...COLIBRI_SDK_HOSTS]);
 }
 
 // The only remote peer the main process may hold: the HNS encrypted DNS relay
@@ -115,7 +120,8 @@ function storeSnapshot(dir) {
 
 // What a lookup of `name` could leave on disk: the name (UTF-8 and UTF-16),
 // its namehash, and the ENS registry storage slots derived from it, as raw
-// bytes and as lowercase hex.
+// bytes and as lowercase hex. Every ENS lookup reads the registry; a
+// resolver's own slots depend on its storage layout and are not searched.
 function nameTraces(name) {
   const { ethers } = require('ethers');
   const node = ethers.namehash(name);
@@ -217,6 +223,7 @@ test.describe('installed ENS network attribution', () => {
     test.setTimeout(8 * 60_000);
     const repoRoot = path.resolve(__dirname, '..', '..');
     const hosts = ensHosts(repoRoot);
+    const verifierHosts = colibriHosts(repoRoot);
     const evidenceDir = process.env.FREEDOM_E2E_EVIDENCE_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-ens-session-'));
     fs.mkdirSync(evidenceDir, { recursive: true });
     const netlog = path.join(evidenceDir, 'netlog.json');
@@ -226,6 +233,9 @@ test.describe('installed ENS network attribution', () => {
       ant: path.join(root, 'ant-data'),
       ipfs: path.join(root, 'ipfs-data'),
       identity: path.join(root, 'identity'),
+      // The app's working directory, where the SDK's own default storage
+      // would write; inside the profile, so the trace search covers it.
+      cwd: path.join(root, 'cwd'),
     };
     for (const dir of Object.values(dirs)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
@@ -243,7 +253,7 @@ test.describe('installed ENS network attribution', () => {
     const app = await launchApp({
       ...target,
       args: [...target.args, `--log-net-log=${netlog}`],
-      cwd: repoRoot,
+      cwd: dirs.cwd,
       env: {
         ...process.env,
         FREEDOM_TEST_USER_DATA: dirs.userData,
@@ -289,6 +299,11 @@ test.describe('installed ENS network attribution', () => {
     const normalRequests = within(phases.normalStart, phases.normalEnd);
     const privateRequests = within(phases.privateStart, phases.privateOnlyStart);
     const privateOnlyRequests = within(phases.privateOnlyStart, phases.privateEnd);
+    // Answered verifier requests: the store checks below mean nothing if the
+    // private-only lookup never reached Colibri (a quorum-RPC answer alone).
+    const privateOnlyVerified = privateOnlyRequests.filter(
+      (request) => verifierHosts.has(request.host) && request.netError === 0
+    );
     // Read after quit, once everything the app keeps on disk is written.
     const traces = filesContaining(root, nameTraces(PRIVATE_ONLY_NAME));
     // A private request to a host the normal window still held an open
@@ -311,6 +326,7 @@ test.describe('installed ENS network attribution', () => {
       private: privateRequests.length,
       privateOnSeparateSession: separateContext.length,
       privateOnly: privateOnlyRequests.length,
+      privateOnlyVerified: privateOnlyVerified.length,
       storeEntriesBeforePrivate: Object.keys(stores.beforePrivate || {}).length,
       storeUnchangedByPrivate: JSON.stringify(stores.afterPrivate) === JSON.stringify(stores.beforePrivate),
       privateOnlyNameTraces: traces,
@@ -322,7 +338,8 @@ test.describe('installed ENS network attribution', () => {
     expect(normalRequests.length, 'the normal window resolves through Chromium').toBeGreaterThan(0);
     expect(privateRequests.length, 'the private window resolves afresh, through Chromium').toBeGreaterThan(0);
     expect(separateContext.length, 'the private window dials in a network context of its own').toBeGreaterThan(0);
-    expect(privateOnlyRequests.length, 'the private window resolves a name of its own').toBeGreaterThan(0);
+    expect(privateOnlyVerified.length, "the private window's own lookup goes through the Colibri verifier")
+      .toBeGreaterThan(0);
     expect(summary.storeEntriesBeforePrivate, "the normal window's lookup fills the default session's verifier store")
       .toBeGreaterThan(0);
     expect(stores.afterPrivate, "the private window's lookups leave the default session's verifier store as it was")
