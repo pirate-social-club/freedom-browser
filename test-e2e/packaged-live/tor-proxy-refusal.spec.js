@@ -121,6 +121,33 @@ const evalInActiveWebview = (window, snippet) =>
     }
   }, snippet);
 
+// A window's first tab loads its start page (home.html, or private.html in a
+// private window) after the address bar is already visible, and that load
+// clears the bar, so typing too early can submit nothing. For a window's first
+// navigation: wait for the start page to finish loading, navigate, and type
+// again once if the tab is still on it.
+const START_PAGE = /\/pages\/(home|private)\.html(?:$|[?#])/;
+
+async function navigateFromStartPage(window, value) {
+  const href = () => evalInActiveWebview(window, 'location.href').then(String);
+  await expect
+    .poll(
+      async () => START_PAGE.test(await href()) &&
+        (await evalInActiveWebview(window, 'document.readyState')) === 'complete',
+      { message: 'the window must finish loading its start page', timeout: PAGE_TIMEOUT_MS }
+    )
+    .toBe(true);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await navigate(window, value);
+    try {
+      await expect.poll(async () => START_PAGE.test(await href()), { timeout: 10_000 }).toBe(false);
+      return;
+    } catch {
+      // Still on the start page: the keystrokes were lost to its load.
+    }
+  }
+}
+
 // Waits for the active tab to land on Freedom's error page for `url` (naming
 // `error`, when given), and returns the error it names.
 async function errorPageFor(window, url, error = null) {
@@ -265,7 +292,7 @@ test.describe('installed unavailable-proxy refusal', () => {
 
       phases.availableStart = Date.now();
       const firstUrl = `https://${ONION_HOST}/available`;
-      await navigate(normal, firstUrl);
+      await navigateFromStartPage(normal, firstUrl);
       await expect
         .poll(() => socks.connects.some((connect) => connect.host === ONION_HOST), {
           message: 'the .onion name must reach the Tor endpoint',
@@ -293,7 +320,7 @@ test.describe('installed unavailable-proxy refusal', () => {
       const privateWindow = await chromePage(app, (url) => url.includes('privatePartition=private-'));
       phases.privateStart = Date.now();
       const privateUrl = `https://${ONION_HOST}/gone-private`;
-      await navigate(privateWindow, privateUrl);
+      await navigateFromStartPage(privateWindow, privateUrl);
       shown.gonePrivate = await errorPageFor(privateWindow, privateUrl, 'ERR_PROXY_CONNECTION_FAILED');
       phases.goneEnd = Date.now();
     } finally {
