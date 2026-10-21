@@ -683,17 +683,23 @@ function progressItemsFor(collected, cid) {
 
 const FETCH_PHASES = new Set(['fetching_bitswap', 'fetching_http_provider']);
 
-// Where, in event order, the first cache miss and the first network fetch
-// after it fall, and whether a cache hit came before that fetch. The first
-// fetch and every cache hit are reported as well, whether or not a miss was.
+// Where, in event order, the node checked its cache, first fetched from the
+// network and then stored a block, and whether any cache hit occurred. The
+// freedom-ipfs addon (0.4.5 and 0.4.6) never emits `cache_miss`: a cold
+// request runs checking_cache, provider_lookup, a fetch phase and
+// block_store_put. A cache miss and its fetch are still reported if a later
+// addon emits them.
 function phaseOrderEvidence(items) {
   const phases = items.map(({ item }) => progressPhase(item));
   const cacheMissAt = phases.indexOf('cache_miss');
+  const checkingCacheAt = phases.indexOf('checking_cache');
   let fetchAt = -1;
   if (cacheMissAt !== -1) {
     fetchAt = phases.findIndex((phase, index) => index > cacheMissAt && FETCH_PHASES.has(phase));
   }
   const firstFetchAt = phases.findIndex((phase) => FETCH_PHASES.has(phase));
+  const blockStorePutAt =
+    firstFetchAt === -1 ? -1 : phases.findIndex((phase, index) => index > firstFetchAt && phase === 'block_store_put');
   const hitLimit = fetchAt === -1 ? phases.length : fetchAt;
   return {
     phases,
@@ -704,6 +710,8 @@ function phaseOrderEvidence(items) {
     cacheHitBeforeFetch: phases.slice(0, hitLimit).includes('cache_hit'),
     firstFetchAt: firstFetchAt === -1 ? null : firstFetchAt,
     firstFetchPhase: firstFetchAt === -1 ? null : phases[firstFetchAt],
+    checkingCacheAt: checkingCacheAt === -1 ? null : checkingCacheAt,
+    blockStorePutAt: blockStorePutAt === -1 ? null : blockStorePutAt,
     cacheHits: phases.filter((phase) => phase === 'cache_hit').length,
   };
 }

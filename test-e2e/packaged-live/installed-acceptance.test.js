@@ -185,6 +185,22 @@ describe('IPFS progress evidence', () => {
     expect(noMiss).toMatchObject({ cacheMissAt: null, fetchAt: null, firstFetchAt: 1, firstFetchPhase: 'fetching_http_provider' });
     expect(noMiss.rawPhases).toEqual([null, 'http_provider_race']);
   });
+
+  it("records the addon's real cold sequence: checking_cache, a fetch, then block_store_put", () => {
+    const cold = phaseOrderEvidence([
+      event(1, 'checking_cache'),
+      event(2, 'provider_lookup'),
+      event(3, 'fetching_http_provider'),
+      event(4, 'block_store_put'),
+    ]);
+    expect(cold).toMatchObject({ checkingCacheAt: 0, firstFetchAt: 2, blockStorePutAt: 3, cacheHits: 0 });
+
+    const storedBeforeFetch = phaseOrderEvidence([event(1, 'block_store_put'), event(2, 'fetching_bitswap')]);
+    expect(storedBeforeFetch.blockStorePutAt).toBeNull();
+
+    const warm = phaseOrderEvidence([event(1, 'checking_cache'), event(2, 'cache_hit')]);
+    expect(warm).toMatchObject({ firstFetchAt: null, blockStorePutAt: null, cacheHits: 1 });
+  });
 });
 
 describe('classifyRequestUrls', () => {

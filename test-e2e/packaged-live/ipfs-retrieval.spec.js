@@ -19,8 +19,10 @@
 //      so A is absent beforehand by construction. The document's bytes must
 //      equal the pinned bytes. The node's own progress record
 //      (`window.ipfs.getStatus().diagnostics.progress`) for A's request must
-//      show `cache_miss` followed by `fetching_bitswap` or
-//      `fetching_http_provider`, with no `cache_hit` before them. After the
+//      show `checking_cache`, then `fetching_bitswap` or
+//      `fetching_http_provider`, then `block_store_put`, with no `cache_hit`
+//      at all. (The addon never emits `cache_miss`; plan v3's addendum of
+//      2026-10-22 records the correction.) After the
 //      stop, a copy of freedom-ipfs.sqlite3 (with its -wal and -shm) must hold a
 //      `blocks` row keyed by A's binary CID.
 //   3. Cold negative control with pinned CID B, never requested before. The
@@ -248,9 +250,12 @@ test.describe('installed IPFS retrieval', () => {
       // Soft, so that a run which fails here still carries out and records
       // the stop, the negative control, the node store, the NetLog and the
       // quit. The test fails all the same.
-      expect.soft(summary.progressA.order.cacheMissAt, "the node reported a cache miss for A's request").not.toBeNull();
-      expect.soft(summary.progressA.order.fetchAt, 'and a network fetch after it').not.toBeNull();
-      expect.soft(summary.progressA.order.cacheHitBeforeFetch, 'no cache hit before the fetch').toBe(false);
+      const order = summary.progressA.order;
+      expect.soft(order.checkingCacheAt, "the node checked its cache for A's request").not.toBeNull();
+      expect.soft(order.firstFetchAt, 'then fetched A from the network').not.toBeNull();
+      expect.soft(order.firstFetchAt > order.checkingCacheAt, 'the fetch came after the cache check').toBe(true);
+      expect.soft(order.blockStorePutAt, 'and stored the fetched block').not.toBeNull();
+      expect.soft(order.cacheHits, 'with no cache hit at all').toBe(0);
 
       // 3. Stop through the app's own path, and wait for it to finish.
       summary.beforeStop = await readNodeState(window, 'ipfs');
