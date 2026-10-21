@@ -3,17 +3,18 @@
  *
  * Handshake browsing trusts a site's certificate only through the session's
  * `setCertificateVerifyProc` (`src/main/hns-manager.js`), after DANE. Before
- * Electron 44.9.0 that verifier was occasionally not applied to a request
- * issued concurrently with the first request to a host (electron#55046): the
- * request fell back to Chromium's default verification instead. This probe
- * opens several fresh hosts at once, each with a burst of concurrent first
- * requests, on an in-memory session whose verifier is the only thing that can
- * accept the throwaway self-signed certificate. Every request succeeding, on
- * every host, shows the verifier decided each one.
+ * Electron 44.9.0 that verifier was not applied to a request issued while the
+ * first request to a host was still being verified (electron#55046): the
+ * second request fell back to Chromium's default verification instead.
  *
- * The origin is HTTPS on 127.0.0.1 with the fixture in
- * `test/fixtures/cert-verify-concurrency-tls/` (SAN `*.certprobe.test`);
- * `--host-resolver-rules` maps those names to it and nothing else.
+ * The probe makes that overlap certain rather than likely, the way Electron's
+ * own regression test does: when the verifier first sees a host, it issues a
+ * second request to the same host from inside the callback and answers the
+ * first only after a delay. The certificate is a throwaway self-signed one
+ * (`test/fixtures/cert-verify-concurrency-tls/`, SAN `*.certprobe.test`) that
+ * Chromium's default verification refuses, and each response closes its
+ * connection, so a request succeeds only when the verifier accepted it.
+ * `--host-resolver-rules` maps those names to the local origin and nothing else.
  *
  * Results are printed as one JSON line prefixed with `PROBE-RESULT `.
  */
@@ -25,14 +26,24 @@ const os = require('os');
 const path = require('path');
 
 const HOST_SUFFIX = '.certprobe.test';
-const ACCEPTED_HOSTS = Array.from({ length: 6 }, (_, index) => `h${index}${HOST_SUFFIX}`);
+const ACCEPTED_HOSTS = ['h0', 'h1', 'h2'].map((label) => `${label}${HOST_SUFFIX}`);
 const REFUSED_HOST = `refused${HOST_SUFFIX}`;
-const REQUESTS_PER_HOST = 8;
+// Long enough that the second request is certain to be issued while the
+// first is still unverified; Electron's own test uses the same order.
+const VERIFIER_DELAY_MS = 300;
 const REQUEST_TIMEOUT_MS = 15_000;
 
 app.commandLine.appendSwitch('host-resolver-rules', `MAP *${HOST_SUFFIX} 127.0.0.1`);
 const PROBE_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-cert-verify-probe-'));
 app.setPath('userData', PROBE_USER_DATA);
+// Every exit path, a failed run included, removes the probe's profile.
+process.on('exit', () => {
+  try {
+    fs.rmSync(PROBE_USER_DATA, { recursive: true, force: true });
+  } catch {
+    /* cleaned up with the temp dir */
+  }
+});
 
 function startOrigin() {
   const fixtures = path.join(__dirname, '../../../../test/fixtures/cert-verify-concurrency-tls');
@@ -62,58 +73,60 @@ async function fetchOnce(ses, url) {
       signal: controller.signal,
       bypassCustomProtocolHandlers: true,
     });
-    return { ok: response.ok, status: response.status, body: await response.text() };
+    return { url, ok: response.ok && (await response.text()) === 'ok' };
   } catch (err) {
-    return { ok: false, error: String(err && err.message) };
+    return { url, ok: false, error: String(err && err.message) };
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function burst(ses, host, port) {
-  const urls = Array.from(
-    { length: REQUESTS_PER_HOST },
-    (_, index) => `https://${host}:${port}/request-${index}`
-  );
-  return Promise.all(urls.map((url) => fetchOnce(ses, url)));
-}
-
 async function main() {
   const { server, port } = await startOrigin();
   const ses = session.fromPartition('cert-verify-concurrency-probe');
-  const verifiedHosts = new Set();
-  let verifierCalls = 0;
+  const verifierSaw = [];
+  const firstSeen = new Set();
+  const overlapping = [];
   ses.setCertificateVerifyProc((request, callback) => {
-    verifierCalls += 1;
-    verifiedHosts.add(request.hostname);
-    if (request.hostname === REFUSED_HOST) {
-      callback(-2);
+    // Anything but the probe's own names keeps Chromium's verdict. A fresh
+    // session also fetches its spellchecker dictionary, from a Google host.
+    if (!request.hostname.endsWith(HOST_SUFFIX)) {
+      callback(-3);
       return;
     }
-    callback(request.hostname.endsWith(HOST_SUFFIX) ? 0 : -3);
+    verifierSaw.push({ hostname: request.hostname, errorCode: request.errorCode });
+    const verdict = request.hostname === REFUSED_HOST ? -2 : 0;
+    if (!firstSeen.has(request.hostname)) {
+      firstSeen.add(request.hostname);
+      overlapping.push(fetchOnce(ses, `https://${request.hostname}:${port}/overlapping`));
+      setTimeout(() => callback(verdict), VERIFIER_DELAY_MS);
+      return;
+    }
+    callback(verdict);
   });
 
-  // All hosts at once: each burst is a set of first requests to a fresh host.
-  const accepted = await Promise.all(ACCEPTED_HOSTS.map((host) => burst(ses, host, port)));
-  const refused = await burst(ses, REFUSED_HOST, port);
+  const firsts = await Promise.all(
+    ACCEPTED_HOSTS.map((host) => fetchOnce(ses, `https://${host}:${port}/first`))
+  );
+  const refusedFirst = await fetchOnce(ses, `https://${REFUSED_HOST}:${port}/first`);
+  const seconds = await Promise.all(overlapping);
 
+  const accepted = [...firsts, ...seconds.filter((result) => !result.url.includes(REFUSED_HOST))];
+  const refused = [refusedFirst, ...seconds.filter((result) => result.url.includes(REFUSED_HOST))];
   const results = {
     electron: process.versions.electron,
-    hosts: ACCEPTED_HOSTS.length,
-    requestsPerHost: REQUESTS_PER_HOST,
-    acceptedOk: accepted.flat().filter((result) => result.ok && result.body === 'ok').length,
-    acceptedFailures: accepted.flat().filter((result) => !result.ok),
+    hosts: ACCEPTED_HOSTS,
+    acceptedCount: accepted.length,
+    acceptedFailures: accepted.filter((result) => !result.ok),
     refusedOk: refused.filter((result) => result.ok).length,
-    verifierCalls,
-    verifiedHosts: [...verifiedHosts].sort(),
+    verifiedHosts: [...new Set(verifierSaw.map((entry) => entry.hostname))].sort(),
+    // Chromium's own verdict on each request the verifier saw. Nonzero means
+    // default verification refused the certificate, so a success can only be
+    // the verifier's.
+    defaultVerdicts: [...new Set(verifierSaw.map((entry) => entry.errorCode))],
   };
 
   await new Promise((resolve) => server.close(resolve));
-  try {
-    fs.rmSync(PROBE_USER_DATA, { recursive: true, force: true });
-  } catch {
-    /* cleaned up with the temp dir */
-  }
   process.stdout.write(`PROBE-RESULT ${JSON.stringify(results)}\n`);
   app.exit(0);
 }

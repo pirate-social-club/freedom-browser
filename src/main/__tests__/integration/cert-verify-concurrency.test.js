@@ -7,9 +7,10 @@
  * approved.
  *
  * This can only be shown from a real Electron main process: the probe
- * `cert-verify-concurrency-electron-probe.js` opens several fresh hosts at
- * once on an in-memory session, with a throwaway certificate that only the
- * verifier accepts. Skipped when the Electron binary cannot be resolved; the
+ * `cert-verify-concurrency-electron-probe.js` issues a second request to each
+ * fresh host from inside the verifier while the first is still unverified, on
+ * an in-memory session with a throwaway certificate that only the verifier
+ * accepts. Skipped when the Electron binary cannot be resolved; the
  * ipfs-gateway-proxy CI job sets `FREEDOM_ELECTRON_NET_TEST=1`, which turns a
  * missing binary into a failure instead.
  */
@@ -83,14 +84,19 @@ describeWithElectron('certificate verifier under concurrent first requests', () 
     results = await runProbe();
   }, PROBE_TIMEOUT_MS);
 
-  test('every concurrent first request to every fresh host is accepted by the verifier', () => {
-    expect(results.acceptedFailures).toEqual([]);
-    expect(results.acceptedOk).toBe(results.hosts * results.requestsPerHost);
+  test("Chromium's default verification refuses the fixture, so only the verifier can accept it", () => {
+    expect(results.defaultVerdicts.length).toBeGreaterThan(0);
+    expect(results.defaultVerdicts).not.toContain(0);
   });
 
-  test('the verifier saw each host, and a host it refuses stays refused', () => {
+  test('a request issued while the first to its host is unverified is still the verifier\'s', () => {
+    expect(results.acceptedFailures).toEqual([]);
+    expect(results.acceptedCount).toBe(results.hosts.length * 2);
+  });
+
+  test('the verifier saw every host, and a host it refuses stays refused', () => {
     expect(results.verifiedHosts).toEqual(
-      expect.arrayContaining(['h0.certprobe.test', 'h5.certprobe.test', 'refused.certprobe.test'])
+      [...results.hosts, 'refused.certprobe.test'].sort()
     );
     expect(results.refusedOk).toBe(0);
   });
