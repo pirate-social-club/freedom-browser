@@ -818,6 +818,17 @@ describe('a session retired while its request is running', () => {
     expect(request.aborted).toBe(true);
   });
 
+  test('a session already retired wins over a caller signal that also aborted', async () => {
+    const live = {};
+    retireBrowsingSession(live);
+    const controller = new AbortController();
+    controller.abort();
+    const requestImpl = jest.fn();
+    await expect(netGatewayFetch(REMOTE, { signal: controller.signal }, { session: live, requestImpl }))
+      .rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(requestImpl).not.toHaveBeenCalled();
+  });
+
   test('the loopback branch is cancelled too', async () => {
     const live = {};
     let seenSignal;

@@ -327,10 +327,16 @@ function sessionBoundSignal(signal, dialSession) {
   return signal ? AbortSignal.any([signal, retirement]) : retirement;
 }
 
-// What an aborted request rejects with: the session's SESSION_UNAVAILABLE when
-// its retirement caused it, otherwise the usual AbortError.
-function cancellationError(signal) {
-  return signal?.reason?.code === 'SESSION_UNAVAILABLE' ? signal.reason : abortError();
+// What an aborted request rejects with: SESSION_UNAVAILABLE whenever its
+// session has retired (even if the caller's own signal aborted first, which
+// AbortSignal.any would report), otherwise the usual AbortError.
+function cancellationError(signal, dialSession) {
+  if (signal?.reason?.code === 'SESSION_UNAVAILABLE') return signal.reason;
+  if (dialSession) {
+    const { isBrowsingSessionRetired, sessionUnavailableError } = require('../browsing-transport');
+    if (isBrowsingSessionRetired(dialSession)) return sessionUnavailableError();
+  }
+  return abortError();
 }
 
 function defaultNetRequest(options) {
@@ -388,7 +394,7 @@ async function netGatewayFetch(url, init = {}, deps = {}) {
       throw new TypeError('gateway transport accepts a string or Buffer body only');
     }
   }
-  if (signal?.aborted) throw cancellationError(signal);
+  if (signal?.aborted) throw cancellationError(signal, deps.session);
   assertSessionUsable(deps.session);
   // Refused before the request exists, so Chromium is never asked to resolve
   // an onion name the session would send DIRECT (see the file header).
@@ -408,7 +414,7 @@ async function netGatewayFetch(url, init = {}, deps = {}) {
     // cancel it — the returned promise would then hang until the network
     // settled it, stalling whoever awaited it.
     if (signal?.aborted) {
-      reject(cancellationError(signal));
+      reject(cancellationError(signal, deps.session));
       return;
     }
 
@@ -488,7 +494,7 @@ async function netGatewayFetch(url, init = {}, deps = {}) {
     if (signal) {
       onAbort = () => {
         abortRequest();
-        fail(cancellationError(signal));
+        fail(cancellationError(signal, deps.session));
       };
       signal.addEventListener('abort', onAbort, { once: true });
     }

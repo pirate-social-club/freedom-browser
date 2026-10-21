@@ -1251,7 +1251,12 @@ async function requestRpcUrl(url, method, params, timeoutMs, { signal } = {}) {
       redirect: 'error',
       signal: controller.signal,
     }, { session: browsingSession });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      // An unread body would hold the request, and on a private session the
+      // signal joined to its retirement, until that window closed.
+      await response.body?.cancel().catch(() => {});
+      throw new Error(`HTTP ${response.status}`);
+    }
     const data = JSON.parse(new TextDecoder().decode(
       await readBoundedBody(response, MAX_RPC_RESPONSE_BYTES)
     ));

@@ -429,6 +429,7 @@ async function getTransactionStatus(txHash, chainId) {
       status: 'unknown',
       hash: txHash,
       error: err.message,
+      ...(err?.code === 'SESSION_UNAVAILABLE' ? { code: err.code } : {}),
     };
   }
 }
@@ -445,6 +446,12 @@ async function waitForTransaction(txHash, chainId, confirmations = 1) {
     const deadline = Date.now() + 60000;
     while (Date.now() < deadline) {
       const status = await getTransactionStatus(txHash, chainId);
+      // The window that sent it has closed (browsing-transport.js): nothing
+      // more is asked on its session, and the receipt is left to the boot-time
+      // repoll, as after a timeout.
+      if (status.code === 'SESSION_UNAVAILABLE') {
+        throw Object.assign(new Error('Browsing session unavailable'), { code: 'SESSION_UNAVAILABLE' });
+      }
       if (status.status === 'failed') return status;
       if (status.status === 'confirmed') {
         if (confirmations <= 1) return status;
