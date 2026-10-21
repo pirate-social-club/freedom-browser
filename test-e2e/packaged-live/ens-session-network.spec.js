@@ -4,13 +4,18 @@
 // the requesting window's Electron session. This spec checks that in the
 // installed artifact:
 //   1. a lookup from a normal window reaches the ENS endpoints through
-//      Chromium's network stack, while the main process (where Node's fetch
-//      would dial from) opens no connection to them;
-//   2. the same lookup from a private window is answered afresh, not from the
-//      normal window's cache, again only through Chromium;
-//   3. closing a private window while one of its lookups is held at the
-//      prover ends that request (second test: the prover is a local server
-//      that never answers, so the request cannot finish first).
+//      Chromium's network stack, and the main process (where Node's fetch
+//      would dial from) is not seen holding any peer but the HNS relay;
+//   2. the same lookup from a private window is answered afresh, in a network
+//      context of its own: its prover request opens a new HTTP/2 session
+//      while the normal window's session to the same host is still open,
+//      which Chromium would have reused within one session;
+//   3. closing a private window retires its session, which ends a lookup
+//      held at the prover (second test: a local prover that never answers,
+//      reached on the loopback branch, so the request cannot finish first).
+// The main-process check samples sockets every 50 ms (every TCP state and
+// UDP), so a connection that opens and closes between two samples can be
+// missed; it is a guard, not a trace.
 // It does not, and cannot from the installed product's settings, show that
 // two sessions take two different proxies: the shipped routing gives every
 // session the same policy. That is session-transport-proxy.test.js's job,
@@ -24,7 +29,7 @@
 //   FREEDOM_E2E_EVIDENCE_DIR=<dir> \
 //     npx playwright test --project=packaged-live test-e2e/packaged-live/ens-session-network.spec.js
 
-const { execFileSync } = require('child_process');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -67,19 +72,25 @@ async function allowedMainProcessPeers() {
 
 const isLoopbackPeer = (peer) => /^(127\.|\[::1\]|::1)/.test(peer);
 
-// The main process's established TCP peers, as `ip:port` strings.
-function mainProcessPeers(pid) {
-  let out;
-  try {
-    out = execFileSync('ss', ['-tnpH', 'state', 'established'], { encoding: 'utf8' });
-  } catch {
-    return [];
-  }
-  return out
-    .split('\n')
-    .filter((line) => line.includes(`pid=${pid},`))
-    .map((line) => line.trim().split(/\s+/)[3])
-    .filter(Boolean);
+// Samples the main process's TCP (any state, connecting included) and UDP
+// peers every 50 ms from a separate shell loop, so the sampling never blocks
+// this process (and with it Playwright's own connection to the app).
+function sampleMainProcessPeers(pid) {
+  const peers = new Set();
+  const loop = spawn('sh', ['-c', `while :; do ss -tuanpH 2>/dev/null | grep 'pid=${pid},'; sleep 0.05; done`], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  let pending = '';
+  loop.stdout.on('data', (chunk) => {
+    pending += chunk;
+    const lines = pending.split('\n');
+    pending = lines.pop();
+    for (const line of lines) {
+      const peer = line.trim().split(/\s+/)[5];
+      if (peer && !/^(\*|0\.0\.0\.0|\[::\]):\*$/.test(peer)) peers.add(peer);
+    }
+  });
+  return { peers, stop: () => loop.kill('SIGKILL') };
 }
 
 async function chromePage(app, predicate, timeout = 30_000) {
@@ -103,27 +114,46 @@ async function navigate(window, value) {
   await address.press('Enter');
 }
 
-// NetLog events for URL requests to the ENS hosts: start time and outcome.
+// NetLog events for URL requests to the ENS hosts: start time, outcome, and
+// the HTTP/2 session each one rode (request → stream job → session), with
+// each session's open interval.
 function ensRequests(netlogFile, hosts) {
   const log = JSON.parse(fs.readFileSync(netlogFile, 'utf8'));
   const types = Object.fromEntries(Object.entries(log.constants.logEventTypes).map(([k, v]) => [v, k]));
   const tickOffset = Number(log.constants.timeTickOffset);
+  const at = (event) => tickOffset + Number(event.time);
   const bySource = new Map();
+  const jobOfRequest = new Map();
+  const sessionOfJob = new Map();
+  const sessionSpan = new Map();
   for (const event of log.events) {
     const type = types[event.type];
     const id = event.source?.id;
+    const dependency = event.params?.source_dependency?.id;
     if (type === 'URL_REQUEST_START_JOB' && event.phase === 1 && event.params?.url) {
       let host;
       try { host = new URL(event.params.url).hostname; } catch { continue; }
-      if (!hosts.has(host)) continue;
-      if (!bySource.has(id)) bySource.set(id, { host, startedAt: tickOffset + Number(event.time) });
+      if (hosts.has(host) && !bySource.has(id)) bySource.set(id, { host, startedAt: at(event) });
     }
     if (type === 'REQUEST_ALIVE' && event.phase === 2 && bySource.has(id)) {
-      bySource.get(id).endedAt = tickOffset + Number(event.time);
+      bySource.get(id).endedAt = at(event);
       bySource.get(id).netError = event.params?.net_error ?? 0;
     }
+    if (type === 'HTTP_STREAM_REQUEST_BOUND_TO_JOB' && dependency !== undefined) jobOfRequest.set(id, dependency);
+    if (/^HTTP2_SESSION_POOL_(IMPORTED_SESSION_FROM_SOCKET|FOUND_EXISTING_SESSION)/.test(type) && dependency !== undefined) {
+      sessionOfJob.set(id, dependency);
+    }
+    if (type === 'HTTP2_SESSION') {
+      const span = sessionSpan.get(id) || { openedAt: at(event), closedAt: Infinity };
+      if (event.phase === 1) span.openedAt = at(event);
+      if (event.phase === 2) span.closedAt = at(event);
+      sessionSpan.set(id, span);
+    }
   }
-  return [...bySource.values()];
+  return [...bySource.entries()].map(([id, request]) => {
+    const session = sessionOfJob.get(jobOfRequest.get(id));
+    return { ...request, session, sessionSpan: sessionSpan.get(session) };
+  });
 }
 
 test.describe('installed ENS network attribution', () => {
@@ -172,11 +202,8 @@ test.describe('installed ENS network attribution', () => {
       },
       timeout: 90_000,
     });
-    const mainPid = app.process().pid;
-    const peers = new Set();
-    const sampler = setInterval(() => {
-      for (const peer of mainProcessPeers(mainPid)) peers.add(peer);
-    }, 200);
+    const sampler = sampleMainProcessPeers(app.process().pid);
+    const { peers } = sampler;
     const phases = {};
     try {
       const normal = await chromePage(app, (url) => url.includes('index.html') && !url.includes('privatePartition='), 90_000);
@@ -192,14 +219,8 @@ test.describe('installed ENS network attribution', () => {
       await navigate(privateWindow, FIRST_NAME);
       await privateWindow.waitForTimeout(LOOKUP_SETTLE_MS);
       phases.privateEnd = Date.now();
-
-      await navigate(privateWindow, CLOSE_NAME);
-      await privateWindow.waitForTimeout(400);
-      phases.closeAt = Date.now();
-      await privateWindow.evaluate(() => window.close()).catch(() => {});
-      await normal.waitForTimeout(5_000);
     } finally {
-      clearInterval(sampler);
+      sampler.stop();
       await closeApp(app, { timeout: 100_000 }).catch(() => {});
     }
 
@@ -207,30 +228,42 @@ test.describe('installed ENS network attribution', () => {
     const within = (from, to) => requests.filter((r) => r.startedAt >= from && r.startedAt < to);
     const normalRequests = within(phases.normalStart, phases.normalEnd);
     const privateRequests = within(phases.privateStart, phases.privateEnd);
-    const closeRequests = within(phases.privateEnd, phases.closeAt + 1_000);
-    const abortedAtClose = closeRequests.filter((r) => r.netError === -3 && r.endedAt >= phases.closeAt);
-    // Chromium's own peer addresses for the ENS hosts, from the same NetLog,
-    // compared with every peer the main process held during the run.
+    // A private request to a host the normal window still held an open
+    // HTTP/2 session to, carried on a session of its own: one network context
+    // would have reused the open session.
+    const separateContext = privateRequests.filter((privateRequest) =>
+      privateRequest.session !== undefined &&
+      normalRequests.some(
+        (normalRequest) =>
+          normalRequest.host === privateRequest.host &&
+          normalRequest.session !== undefined &&
+          normalRequest.session !== privateRequest.session &&
+          normalRequest.sessionSpan?.closedAt > privateRequest.startedAt
+      )
+    );
     const summary = {
       phases,
       ensHosts: [...hosts],
       normal: normalRequests.length,
       private: privateRequests.length,
-      duringClose: closeRequests.length,
-      abortedAtClose: abortedAtClose.length,
+      privateOnSeparateSession: separateContext.length,
       mainProcessPeers: [...peers],
     };
     fs.writeFileSync(path.join(evidenceDir, 'summary.json'), JSON.stringify({ summary, requests }, null, 2));
     test.info().annotations.push({ type: 'summary', description: JSON.stringify(summary) });
 
     expect(normalRequests.length, 'the normal window resolves through Chromium').toBeGreaterThan(0);
-    expect(privateRequests.length, 'the private window is not served the normal window\'s cache').toBeGreaterThan(0);
+    expect(privateRequests.length, 'the private window resolves afresh, through Chromium').toBeGreaterThan(0);
+    expect(separateContext.length, 'the private window dials in a network context of its own').toBeGreaterThan(0);
     const allowed = await allowedMainProcessPeers();
     const unexpected = [...peers].filter((peer) => !isLoopbackPeer(peer) && !allowed.has(peer));
-    expect(unexpected, 'the main process opens no connection but the HNS relay while resolving').toEqual([]);
+    expect(unexpected, 'no main-process peer but the HNS relay was seen in 50 ms samples').toEqual([]);
   });
 
-  test('closing a private window ends its lookup that is still waiting on the prover', async () => {
+  // The prover here is on loopback, so the held request runs on the gateway
+  // transport's loopback branch (Node fetch in the main process). What this
+  // shows is the window-close retirement reaching a request in flight.
+  test('closing a private window retires its session and ends a lookup held at the prover', async () => {
     test.setTimeout(5 * 60_000);
     const http = require('http');
     const held = [];
