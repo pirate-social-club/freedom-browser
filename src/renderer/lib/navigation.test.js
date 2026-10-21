@@ -606,6 +606,21 @@ describe('navigation', () => {
     expect(guest.loadURL).toHaveBeenLastCalledWith('https://app.pirate/');
   });
 
+  test.each([
+    ['8s28', 'https://8s28/'],
+    ['PIRATE', 'https://app.pirate/'],
+    ['App.Pirate/Case?Q=X#Frag', 'https://app.pirate/Case?Q=X#Frag'],
+  ])('a typed Handshake name (%s) loads over Handshake, never the search provider', async (input, url) => {
+    const ctx = await loadNavigationModule({ enableHnsIntegration: true, registry: { hns: { synced: true } } });
+    await ctx.mod.initNavigation();
+    ctx.mod.loadTarget(input);
+    const guest = ctx.activeRef.tab.webview;
+    expect(guest.loadURL).toHaveBeenLastCalledWith(url);
+    for (const [loaded] of guest.loadURL.mock.calls) {
+      expect(loaded).not.toContain('duckduckgo.com');
+    }
+  });
+
   test('Home cancels a waiting Handshake navigation', async () => {
     const ctx = await loadNavigationModule({ enableHnsIntegration: true, registry: { hns: { synced: false } } });
     await ctx.mod.initNavigation();

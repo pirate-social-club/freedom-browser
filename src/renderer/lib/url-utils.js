@@ -180,7 +180,10 @@ export const normalizeLocalhostInput = (str) => {
   }
 };
 
-const isValidHostLabel = (value) => /^[a-z]([a-z0-9-]*[a-z0-9])?$/.test(value);
+// The label rule shared routing applies (src/shared/hns-hosts.js), compared
+// without case: a root such as `8s28` may start with a digit, and `PIRATE`
+// is the same name as `pirate`. All-digit input is refused before this.
+const isValidHostLabel = (value) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(value);
 
 const getHnsPublicTlds = () => {
   const suffixes = globalThis.FREEDOM_HNS_HOSTS?.getHnsPublicSuffixes?.() || fallbackHnsPublicSuffixes;
@@ -231,7 +234,9 @@ export const normalizeHnsHostInput = (str) => {
   const trimmed = str.trim();
   const parts = trimmed.split(/[/?#]/);
   const rawHost = parts[0];
-  const host = rawHost.toLowerCase() === 'pirate' ? 'app.pirate' : rawHost;
+  // Only the host folds; path, query and fragment keep their case.
+  const lowerHost = rawHost.toLowerCase();
+  const host = lowerHost === 'pirate' ? 'app.pirate' : lowerHost;
   const rest = trimmed.slice(rawHost.length);
   return `https://${host}${rest || '/'}`;
 };

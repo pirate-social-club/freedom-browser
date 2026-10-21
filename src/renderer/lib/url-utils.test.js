@@ -24,6 +24,7 @@ import {
   looksLikeOnchainAppInput,
   parseOnchainAppUrl,
   parseSpacesInput,
+  normalizeHnsHostInput,
 } from './url-utils.js';
 
 const BZZ_ROUTE_PREFIX = 'http://127.0.0.1:1633/bzz/';
@@ -1501,6 +1502,37 @@ describe('parseSpacesInput', () => {
     'leaves %s alone',
     (input) => {
       expect(parseSpacesInput(input)).toBeNull();
+    }
+  );
+});
+
+describe('normalizeHnsHostInput', () => {
+  const hostsApi = globalThis.FREEDOM_HNS_HOSTS;
+
+  beforeEach(() => {
+    globalThis.FREEDOM_HNS_HOSTS = { getHnsPublicSuffixes: () => ['.pirate', '.8s28'] };
+  });
+
+  afterEach(() => {
+    globalThis.FREEDOM_HNS_HOSTS = hostsApi;
+  });
+
+  test.each([
+    ['8s28', 'https://8s28/'],
+    ['PIRATE', 'https://app.pirate/'],
+    ['Pirate/Feed', 'https://app.pirate/Feed'],
+    ['App.8S28', 'https://app.8s28/'],
+    ['9app.pirate', 'https://9app.pirate/'],
+    ['APP.PIRATE/Case?Q=X#Frag', 'https://app.pirate/Case?Q=X#Frag'],
+    ['a18n', 'https://a18n/'],
+  ])('routes %s to %s', (input, url) => {
+    expect(normalizeHnsHostInput(input)).toBe(url);
+  });
+
+  test.each(['123', '1234/path', '-8s28', '8s28-', 'app.unlisted', 'app..pirate'])(
+    'leaves %s alone',
+    (input) => {
+      expect(normalizeHnsHostInput(input)).toBeNull();
     }
   );
 });
