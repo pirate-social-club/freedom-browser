@@ -1,0 +1,1 @@
+- A Swarm feed lookup that finds nothing but that too few peers have confirmed is no longer taken as an empty feed: reading its latest entry or writing its next one fails as "node not available" with a try-again-shortly message, so a first write can't overwrite an existing feed ([#53](https://github.com/pirate-social-club/freedom-browser/pull/53))

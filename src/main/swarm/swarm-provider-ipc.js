@@ -129,6 +129,11 @@ function nodeWriteError(err) {
       },
     };
   }
+  if (err?.reason === 'feed_unconfirmed') {
+    return {
+      error: { ...ERRORS.NODE_UNAVAILABLE, message: err.message, data: { reason: 'feed_unconfirmed' } },
+    };
+  }
   return { error: { ...ERRORS.INTERNAL_ERROR, message: err?.message } };
 }
 
@@ -1453,6 +1458,9 @@ async function handleReadFeedEntry(params, origin) {
     }
     if (err.reason === 'entry_not_found') {
       return { error: { ...ERRORS.INVALID_PARAMS, message: err.message, data: { reason: 'entry_not_found' } } };
+    }
+    if (err.reason === 'feed_unconfirmed') {
+      return { error: { ...ERRORS.NODE_UNAVAILABLE, message: err.message, data: { reason: 'feed_unconfirmed' } } };
     }
     log.error(`[SwarmProvider] readFeedEntry failed for ${origin}:`, err.message);
     return { error: { ...ERRORS.INTERNAL_ERROR, message: err.message } };
