@@ -163,13 +163,44 @@ function isProxiedResolution(resolved) {
   return entries.every((entry) => entry.toUpperCase() !== 'DIRECT');
 }
 
-async function assertOnionRoutable(url, deps) {
+// `promise`, unless `signal` aborts first: then the abort's reason. The
+// underlying work is not cancelled (a proxy lookup cannot be), but nothing
+// waits on it any more, and a late answer is ignored.
+function abortable(promise, signal) {
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      // Nothing will wait on the lookup, so its own failure is not unhandled.
+      Promise.resolve(promise).catch(() => {});
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve(promise).then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      }
+    );
+  });
+}
+
+async function assertOnionRoutable(url, deps, signal) {
   let resolved;
   try {
-    resolved = await (deps.resolveProxy
-      ? deps.resolveProxy(url)
-      : defaultResolveProxy(url, deps.session));
+    // A lookup that stalls must not hold the request open past its caller's
+    // cancellation or its session's retirement.
+    resolved = await abortable(
+      deps.resolveProxy ? deps.resolveProxy(url) : defaultResolveProxy(url, deps.session),
+      signal
+    );
   } catch (err) {
+    if (signal?.aborted) throw cancellationError(signal, deps.session);
     // A session we cannot ask is a session we cannot trust to proxy: refuse
     // rather than dial and hope.
     throw new Error(`.onion gateway proxy route could not be resolved: ${err?.message || err}`, {
@@ -398,7 +429,7 @@ async function netGatewayFetch(url, init = {}, deps = {}) {
   assertSessionUsable(deps.session);
   // Refused before the request exists, so Chromium is never asked to resolve
   // an onion name the session would send DIRECT (see the file header).
-  if (isOnionGatewayUrl(url)) await assertOnionRoutable(url, deps);
+  if (isOnionGatewayUrl(url)) await assertOnionRoutable(url, deps, signal);
   const requestImpl = deps.requestImpl || defaultNetRequest;
 
   return new Promise((resolve, reject) => {
