@@ -16,6 +16,8 @@
  */
 
 const { spawn } = require('child_process');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const REQUIRED = process.env.FREEDOM_ELECTRON_NET_TEST === '1';
@@ -45,10 +47,14 @@ const PROBE_TIMEOUT_MS = 90_000;
 
 function runProbe() {
   return new Promise((resolve, reject) => {
+    // Owned here, not by the probe: Electron's GPU and Crashpad children can
+    // recreate it after the probe exits, and a SIGKILL runs no handler.
+    const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-cert-verify-probe-'));
     const child = spawn(ELECTRON_PATH, ['--no-sandbox', '--headless', PROBE], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '' },
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '', FREEDOM_PROBE_USER_DATA: userData },
     });
+    child.on('close', () => fs.rmSync(userData, { recursive: true, force: true }));
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => {

@@ -3,9 +3,10 @@
  *
  * Handshake browsing trusts a site's certificate only through the session's
  * `setCertificateVerifyProc` (`src/main/hns-manager.js`), after DANE. Before
- * Electron 44.9.0 that verifier was not applied to a request issued while the
- * first request to a host was still being verified (electron#55046): the
- * second request fell back to Chromium's default verification instead.
+ * Electron 44.9.0, a second request issued while the first request to a host
+ * was still being verified could leave the verifier's verdict unapplied
+ * (electron#55046): on 44.7.0 the first request then fails with Chromium's
+ * default verdict even though the verifier accepted it.
  *
  * The probe makes that overlap certain rather than likely, the way Electron's
  * own regression test does: when the verifier first sees a host, it issues a
@@ -34,10 +35,15 @@ const VERIFIER_DELAY_MS = 300;
 const REQUEST_TIMEOUT_MS = 15_000;
 
 app.commandLine.appendSwitch('host-resolver-rules', `MAP *${HOST_SUFFIX} 127.0.0.1`);
-const PROBE_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-cert-verify-probe-'));
+// The Jest wrapper owns the profile directory and removes it when this process
+// and its GPU and Crashpad children are gone; a direct run makes its own.
+const OWN_USER_DATA = !process.env.FREEDOM_PROBE_USER_DATA;
+const PROBE_USER_DATA =
+  process.env.FREEDOM_PROBE_USER_DATA ||
+  fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-cert-verify-probe-'));
 app.setPath('userData', PROBE_USER_DATA);
-// Every exit path, a failed run included, removes the probe's profile.
 process.on('exit', () => {
+  if (!OWN_USER_DATA) return;
   try {
     fs.rmSync(PROBE_USER_DATA, { recursive: true, force: true });
   } catch {
@@ -84,12 +90,13 @@ async function fetchOnce(ses, url) {
 async function main() {
   const { server, port } = await startOrigin();
   const ses = session.fromPartition('cert-verify-concurrency-probe');
+  // A fresh session otherwise fetches its dictionary from a Google host.
+  ses.setSpellCheckerEnabled(false);
   const verifierSaw = [];
   const firstSeen = new Set();
   const overlapping = [];
   ses.setCertificateVerifyProc((request, callback) => {
-    // Anything but the probe's own names keeps Chromium's verdict. A fresh
-    // session also fetches its spellchecker dictionary, from a Google host.
+    // Anything but the probe's own names keeps Chromium's verdict.
     if (!request.hostname.endsWith(HOST_SUFFIX)) {
       callback(-3);
       return;
