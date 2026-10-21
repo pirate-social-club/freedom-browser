@@ -1,0 +1,1 @@
+- Electron 44.7.0 to 44.9.3 (Chromium 152.0.7977.130 to 152.0.7977.167, Node 24.21.0 to 24.22.0), which applies a session's certificate verifier to a request made at the same time as the first request to a host and carries upstream Chromium, V8, ANGLE, PDFium and Skia security fixes ([electron#55046](https://github.com/electron/electron/pull/55046))

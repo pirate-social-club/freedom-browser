@@ -193,7 +193,7 @@ Thirteen production packages are MPL-2.0: `@ghostery/adblocker` and its `@remusa
 
 ## Electron Framework
 
-Electron 44.7.0 (lockfile-resolved) is MIT and embeds Chromium, which contains hundreds of third-party components under their own licences. Risk: yellow, because it needs notice.
+Electron 44.9.3 (lockfile-resolved) is MIT and embeds Chromium, which contains hundreds of third-party components under their own licences. Risk: yellow, because it needs notice.
 
 ### Chromium's third-party notices
 

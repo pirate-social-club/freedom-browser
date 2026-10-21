@@ -318,6 +318,7 @@ jobs:
         run: >-
           npx jest --runInBand src/main/__tests__/integration/ipfs-gateway-proxy.test.js
           src/main/__tests__/integration/ens-ccip-proxy.test.js
+          src/main/__tests__/integration/cert-verify-concurrency.test.js
       - name: Confirm runtime cleanup
         if: always()
         run: |
