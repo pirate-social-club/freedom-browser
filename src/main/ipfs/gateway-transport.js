@@ -170,6 +170,8 @@ function abortable(promise, signal) {
   if (!signal) return promise;
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
+      // Nothing will wait on the lookup, so its own failure is not unhandled.
+      Promise.resolve(promise).catch(() => {});
       reject(signal.reason);
       return;
     }
