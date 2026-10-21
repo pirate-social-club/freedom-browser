@@ -10,9 +10,12 @@
 // Linux packages bundle no Arti):
 //   1. while the endpoint answers, a `.onion` name reaches it as a name (the
 //      SOCKS request carries the hostname, so nothing resolved it locally);
-//   2. once the endpoint is gone, `.onion` loads from a normal window and from a
-//      private one are refused: each request still resolves to that endpoint,
-//      fails, and lands on the error page;
+//   2. once the endpoint is gone and Tor has marked it unhealthy, `.onion` loads
+//      from a normal window and from a private one are refused: each request
+//      still resolves to that endpoint only and fails connecting to it
+//      (ERR_PROXY_CONNECTION_FAILED, which a DIRECT retry could not produce:
+//      Chromium refuses to resolve `.onion` itself), and lands on the error
+//      page naming that failure;
 //   3. no `.onion` name is looked up at any point: Chromium's resolver turns
 //      any request for one away (RFC 7686) without starting a lookup.
 // The dVPN proxy is not covered: its PAC ends in "; DIRECT", so an unreachable
@@ -39,6 +42,9 @@ const ENABLED = process.env.FREEDOM_E2E_TOR_REFUSAL_LIVE === '1';
 // Any syntactically valid v3 onion name will do: nothing here reaches Tor.
 const ONION_HOST = 'duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion';
 const PAGE_TIMEOUT_MS = 60_000;
+// tor-manager's external-endpoint health check runs every 5 s.
+const UNHEALTHY_TIMEOUT_MS = 20_000;
+const ERR_PROXY_CONNECTION_FAILED = -130;
 
 // A SOCKS5 endpoint standing in for external Tor. It accepts the no-auth
 // greeting, records the destination of every CONNECT it is sent, and refuses
@@ -115,21 +121,24 @@ const evalInActiveWebview = (window, snippet) =>
     }
   }, snippet);
 
-// Waits for the active tab to land on Freedom's error page for `url`, and
-// returns the error it names.
-async function errorPageFor(window, url) {
+// Waits for the active tab to land on Freedom's error page for `url` (naming
+// `error`, when given), and returns the error it names.
+async function errorPageFor(window, url, error = null) {
   let shown = null;
+  let last = null;
   await expect
     .poll(
       async () => {
         const href = await evalInActiveWebview(window, 'location.href');
+        last = href;
         if (!href || !/\/pages\/error\.html\?/.test(href)) return false;
         const params = new URL(href).searchParams;
         if (params.get('url') !== url) return false;
+        if (error && params.get('error') !== error) return false;
         shown = { href, error: params.get('error') };
         return true;
       },
-      { message: `${url} must end on the error page`, timeout: PAGE_TIMEOUT_MS }
+      { message: `${url} must end on the error page${error ? ` for ${error}` : ''} (last: ${last})`, timeout: PAGE_TIMEOUT_MS }
     )
     .toBe(true);
   return shown;
@@ -267,10 +276,17 @@ test.describe('installed unavailable-proxy refusal', () => {
       phases.availableEnd = Date.now();
 
       await socks.close();
+      // The route must outlive Tor noticing the endpoint is gone.
+      await expect
+        .poll(async () => (torStatus = await normal.evaluate(() => window.tor.getStatus()))?.status, {
+          message: 'Tor must mark the gone endpoint unhealthy',
+          timeout: UNHEALTHY_TIMEOUT_MS,
+        })
+        .toBe('error');
       phases.goneStart = Date.now();
       const normalUrl = `https://${ONION_HOST}/gone-normal`;
       await navigate(normal, normalUrl);
-      shown.goneNormal = await errorPageFor(normal, normalUrl);
+      shown.goneNormal = await errorPageFor(normal, normalUrl, 'ERR_PROXY_CONNECTION_FAILED');
       phases.goneNormalEnd = Date.now();
 
       await normal.evaluate(() => window.electronAPI.newPrivateWindow());
@@ -278,7 +294,7 @@ test.describe('installed unavailable-proxy refusal', () => {
       phases.privateStart = Date.now();
       const privateUrl = `https://${ONION_HOST}/gone-private`;
       await navigate(privateWindow, privateUrl);
-      shown.gonePrivate = await errorPageFor(privateWindow, privateUrl);
+      shown.gonePrivate = await errorPageFor(privateWindow, privateUrl, 'ERR_PROXY_CONNECTION_FAILED');
       phases.goneEnd = Date.now();
     } finally {
       await socks.close().catch(() => {});
@@ -311,7 +327,8 @@ test.describe('installed unavailable-proxy refusal', () => {
     expect(gonePrivate.length, 'the private window asks for the .onion page after the endpoint is gone').toBeGreaterThan(0);
     for (const request of [...goneNormal, ...gonePrivate]) {
       expect(viaEndpoint(request), `${request.url} still resolves to the Tor endpoint only (${request.proxy})`).toBe(true);
-      expect(request.netError, `${request.url} is refused`).toBeLessThan(0);
+      expect(request.netError, `${request.url} fails connecting to the Tor endpoint, not DIRECT`)
+        .toBe(ERR_PROXY_CONNECTION_FAILED);
     }
     expect(requests.every(viaEndpoint), 'every .onion request resolves to the Tor endpoint, never DIRECT').toBe(true);
     // ERR_NAME_NOT_RESOLVED, with no job, task or DNS query behind it.
