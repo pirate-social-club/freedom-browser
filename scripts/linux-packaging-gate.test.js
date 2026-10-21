@@ -86,6 +86,36 @@ describe('apt outcomes', () => {
     ]);
   });
 
+  test("a dependency's failed script that leaves freedom-browser unconfigured is a harness error", () => {
+    const cascade = [
+      'Setting up dbus (1.14.10-4ubuntu4.1) ...',
+      'invoke-rc.d: policy-rc.d denied execution of start.',
+      'dpkg: error processing package dbus (--configure):',
+      ' installed dbus package post-installation script subprocess returned error exit status 1',
+      'dpkg: dependency problems prevent configuration of freedom-browser:',
+      ' freedom-browser depends on libsecret-1-0; however:',
+      '  Package dbus is not configured yet.',
+      '',
+      'dpkg: error processing package freedom-browser (--configure):',
+      ' dependency problems - leaving unconfigured',
+      'Errors were encountered while processing:',
+      ' dbus',
+      ' freedom-browser',
+      'E: Sub-process /usr/bin/dpkg returned an error code (1)',
+    ].join('\n');
+    expect(classifyAptInstall(apt(100, cascade))).toBe('harness-error');
+  });
+
+  test('freedom-browser failing to unpack its own archive is a defect', () => {
+    const unpack = [
+      'dpkg: error processing archive /in/freedom-browser_0.7.15_amd64.deb (--unpack):',
+      " trying to overwrite '/usr/bin/freedom', which is also in package other 1.0",
+      'Errors were encountered while processing:',
+      ' /in/freedom-browser_0.7.15_amd64.deb',
+    ].join('\n');
+    expect(classifyAptInstall(apt(100, unpack))).toBe('script-failed');
+  });
+
   test('a download that failed is a harness error, not a refusal', () => {
     const fetch =
       "E: Failed to fetch http://deb.debian.org/debian/pool/main/a/alsa-lib/libasound2t64_1.2.14-1_amd64.deb  Temporary failure resolving 'deb.debian.org'\n" +

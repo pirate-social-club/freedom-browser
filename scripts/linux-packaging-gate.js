@@ -113,8 +113,12 @@ const APT_NETWORK_RE =
   /Temporary failure resolving|Could not resolve|Failed to fetch|Unable to fetch some archives|Could not connect to|Connection timed out|Connection failed|Some index files failed to download|Hash Sum mismatch|Network is unreachable/;
 const APT_REFUSAL_RE =
   /unmet dependencies|Unable to correct problems|but it is not installable|but [^\n]+ is to be installed/;
+// Only freedom-browser's own script, or unpacking its own archive, counts.
+// dpkg also prints "error processing package freedom-browser" when a
+// dependency's script failed and left it unconfigured ("dependency problems -
+// leaving unconfigured"); that is the image's failure, not the package's.
 const APT_SCRIPT_RE =
-  /dpkg: error processing (?:package freedom-browser|archive [^\n]*freedom-browser[^\n]*\.deb)|freedom-browser package (?:pre|post)-(?:installation|removal) script subprocess returned error/;
+  /dpkg: error processing archive [^\n]*freedom-browser[^\n]*\.deb|freedom-browser package (?:pre|post)-(?:installation|removal) script subprocess returned error/;
 const RUNTIME_START_RE =
   /error while loading shared libraries: (\S+): cannot open shared object file/;
 const RUNTIME_SYMBOL_RE =

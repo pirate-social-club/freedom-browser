@@ -71,7 +71,8 @@ const EXPECTED = {
 const EXECUTABLES = ['antd', 'hnsd', 'fingertipd', 'v2ray'];
 const LOADER_FAILURE_RE =
   /error while loading shared libraries: \S+: cannot open shared object file|symbol lookup error: \S+: undefined symbol: \S+/;
-const FAULT_SIGNALS = ['SIGSEGV', 'SIGBUS', 'SIGILL', 'SIGFPE', 'SIGABRT'];
+// SIGTRAP is how Chromium's CHECK and IMMEDIATE_CRASH end a process.
+const FAULT_SIGNALS = ['SIGSEGV', 'SIGBUS', 'SIGILL', 'SIGFPE', 'SIGABRT', 'SIGTRAP'];
 
 class ProbeTimeout extends Error {}
 
