@@ -730,6 +730,28 @@ describe('swarm-provider-ipc', () => {
     test('rejects control characters', () => {
       expect(validateVirtualPath('file\x01.txt').valid).toBe(false);
     });
+
+    test('rejects colons (Windows drives and alternate data streams)', () => {
+      expect(validateVirtualPath('C:/Windows/evil.txt').valid).toBe(false);
+      expect(validateVirtualPath('index.html:stream').valid).toBe(false);
+      expect(validateVirtualPath('assets/a:b.css').message).toBe('Colons are not allowed');
+    });
+
+    test.each([
+      'NUL', 'nul', 'con', 'PRN', 'aux', 'COM1', 'com9', 'LPT1', 'lpt0', 'COM\u00b9',
+      'CONIN$', 'conout$', 'nul.txt', 'Con.html', 'aux.tar.gz', 'NUL ', 'nul .txt', 'com1.',
+    ])('rejects the Windows device name %j in any segment', (name) => {
+      expect(validateVirtualPath(name).valid).toBe(false);
+      expect(validateVirtualPath(`assets/${name}`).valid).toBe(false);
+      expect(validateVirtualPath(`${name}/index.html`).valid).toBe(false);
+    });
+
+    test.each(['console.log', 'null', 'nullable.txt', 'com10', 'lpt', 'auxiliary/a.css', 'my-con.txt', 'icon.png'])(
+      'still accepts the ordinary name %j',
+      (name) => {
+        expect(validateVirtualPath(name).valid).toBe(true);
+      }
+    );
   });
 
   describe('normalizeBytes via publishFiles', () => {
