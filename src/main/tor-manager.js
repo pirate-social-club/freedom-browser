@@ -121,8 +121,20 @@ function getTorDataPath() {
   return dir;
 }
 
+// A scratch test profile (FREEDOM_TEST_USER_DATA) has no catalog metadata, so
+// its Tor is always the managed Arti, which Linux packages do not bundle.
+// FREEDOM_TEST_TOR_EXTERNAL_SOCKS gives that profile, and only that profile,
+// an external SOCKS endpoint instead, so installed acceptance can drive Tor
+// routing (test-e2e/packaged-live/tor-proxy-refusal.spec.js).
+const TEST_TOR_EXTERNAL_SOCKS_VAR = 'FREEDOM_TEST_TOR_EXTERNAL_SOCKS';
+
 function getProfileTorConfig() {
-  return getActiveProfile()?.metadata?.nodes?.tor || null;
+  const profile = getActiveProfile();
+  if (profile?.source === 'test-user-data') {
+    const externalSocks = normalizeSocksEndpoint(process.env[TEST_TOR_EXTERNAL_SOCKS_VAR]);
+    if (externalSocks) return { mode: 'external', externalSocks };
+  }
+  return profile?.metadata?.nodes?.tor || null;
 }
 
 function getPromptWindowForEvent(event) {

@@ -496,6 +496,49 @@ describe('tor-manager IPC', () => {
   });
 });
 
+describe('tor-manager external endpoint for a scratch test profile', () => {
+  const VAR = 'FREEDOM_TEST_TOR_EXTERNAL_SOCKS';
+  let previous;
+
+  beforeEach(() => {
+    previous = process.env[VAR];
+    process.env[VAR] = '127.0.0.1:19150';
+  });
+
+  afterEach(() => {
+    if (previous === undefined) delete process.env[VAR];
+    else process.env[VAR] = previous;
+    jest.restoreAllMocks();
+  });
+
+  test('a FREEDOM_TEST_USER_DATA profile starts Tor on the named endpoint, without arti', async () => {
+    const { mod, applyOnionProxy, defaultSession } = loadTorManager({
+      enableTorIntegration: true,
+      socksProbeResult: true,
+      activeProfile: { source: 'test-user-data', metadata: null },
+    });
+
+    await mod.startTor({ targetSession: { setProxy: jest.fn().mockResolvedValue(undefined) } });
+
+    expect(applyOnionProxy).toHaveBeenCalledWith(defaultSession, '127.0.0.1:19150');
+    await mod.stopTor();
+  });
+
+  test.each([
+    ['a catalog profile', { source: 'catalog', metadata: { nodes: { tor: { mode: 'disabled' } } } }, '127.0.0.1:19150'],
+    ['a test profile given an invalid endpoint', { source: 'test-user-data', metadata: null }, '127.0.0.1:19150; DIRECT'],
+  ])('%s ignores the variable', async (_label, activeProfile, value) => {
+    process.env[VAR] = value;
+    const { mod, applyOnionProxy } = loadTorManager({ enableTorIntegration: true, socksProbeResult: true, activeProfile });
+    jest.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+    await mod.startTor({ targetSession: { setProxy: jest.fn().mockResolvedValue(undefined) } });
+
+    expect(applyOnionProxy).not.toHaveBeenCalled();
+    await mod.stopTor();
+  });
+});
+
 describe('tor-manager .onion routing across sessions', () => {
   const createSessionMock = createProxySessionMock;
 
