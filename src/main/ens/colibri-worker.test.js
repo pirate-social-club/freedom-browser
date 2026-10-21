@@ -45,12 +45,12 @@ function fakeRuntime() {
   };
 }
 
-function setup() {
+function setup({ storageDir = STORAGE_DIR } = {}) {
   const fake = fakeRuntime();
   const posted = [];
   const service = createColibriService({
     runtime: fake.runtime,
-    storageDir: STORAGE_DIR,
+    storageDir,
     post: (message) => posted.push(message),
   });
   return { ...fake, posted, service };
@@ -309,6 +309,27 @@ describe('network bridge', () => {
     const { service } = setup();
     await expect(service.handle({ type: 'fetch-result', fid: 999, ok: true, status: 200 }))
       .resolves.toBeUndefined();
+  });
+});
+
+// A private session's worker (colibri-worker-host.js, STORAGE): the verifier's
+// state, which records which names were resolved, never reaches the disk.
+describe('memory storage, for every session but the default', () => {
+  test('keeps state for the worker\'s lifetime and never touches the disk', async () => {
+    const { service, runtime } = setup({ storageDir: null });
+    await service.init();
+    const storage = runtime.Colibri.register_storage.mock.calls[0][0];
+    const KEY = 'call_1_00000000000c2e074ec69a0dfb2997ba6c7d2e1e';
+    const value = new Uint8Array([1, 2, 3]);
+    storage.set(KEY, value);
+    value[0] = 9; // the SDK may reuse its buffer
+    expect(storage.get(KEY)).toEqual(Buffer.from([1, 2, 3]));
+    expect(storage.get('states_1')).toBeNull();
+    storage.del(KEY);
+    expect(storage.get(KEY)).toBeNull();
+    for (const fsCall of [mockMkdirSync, mockReaddirSync, mockReadFileSync, mockWriteFileSync, mockRenameSync, mockUnlinkSync]) {
+      expect(fsCall).not.toHaveBeenCalled();
+    }
   });
 });
 

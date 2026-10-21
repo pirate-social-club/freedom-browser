@@ -167,9 +167,11 @@ async function withColibriClientRetry(chainId, browsingSession, operation) {
 }
 
 async function buildClient({ chainId, slot, key, proverUrl, zkProof, generation, browsingSession }) {
-  // The chain's worker registers the verifier's disk storage before it reports
-  // ready; settings-change rebuilds reuse the same worker and storage.
-  await workerHost.ensureWorker(chainId);
+  // The worker for this chain and session registers the verifier's storage
+  // before it reports ready (on disk for the default session, in memory for
+  // any other; colibri-worker-host.js, STORAGE); settings-change rebuilds
+  // reuse the same worker and storage.
+  await workerHost.ensureWorker(chainId, browsingSession);
 
   const client = workerHost.createClient({ chainId, proverUrl, zkProof, session: browsingSession });
 

@@ -729,10 +729,12 @@ describe('colibri worker host network bridge', () => {
       undefined,
     ]);
 
-    const sessionless = host.createClient(CONFIG);
-    await startRequest(sessionless, { method: 'eth_chainId' });
-    const sessionlessId = sentRequests(worker).at(-1).clientId;
-    expect((await replyTo(worker, askToFetch(worker, sessionlessId)))[0]).toMatchObject({ ok: false });
+    // A client without a session runs on the default session's worker.
+    const sessionless = await startRequest(host.createClient(CONFIG), { method: 'eth_chainId' });
+    expect(sessionless.worker).not.toBe(worker);
+    const sessionlessId = sentRequests(sessionless.worker).at(-1).clientId;
+    expect((await replyTo(sessionless.worker, askToFetch(sessionless.worker, sessionlessId)))[0])
+      .toMatchObject({ ok: false });
 
     client.destroy();
     expect((await replyTo(worker, askToFetch(worker, clientId)))[0]).toMatchObject({ ok: false });
@@ -770,7 +772,7 @@ describe('colibri worker host network bridge', () => {
     const otherSession = { id: 'other' };
     const other = await clientOnWorker({ session: otherSession });
     const inFlight = askToFetch(worker, clientId);
-    const otherFlight = askToFetch(worker, other.clientId);
+    const otherFlight = askToFetch(other.worker, other.clientId);
     await Promise.resolve();
     const signals = transport.mock.calls.map(([, init]) => init.signal);
 
@@ -780,7 +782,7 @@ describe('colibri worker host network bridge', () => {
     expect((await replyTo(worker, inFlight))[0]).toMatchObject({
       ok: false, error: { message: 'Colibri network request failed' },
     });
-    expect(replies(worker, otherFlight)).toEqual([]);
+    expect(replies(other.worker, otherFlight)).toEqual([]);
 
     const [refused] = await replyTo(worker, askToFetch(worker, clientId));
     expect(refused).toMatchObject({ ok: false, error: { message: 'Colibri network request refused' } });
@@ -865,6 +867,55 @@ describe('colibri worker host network bridge', () => {
     const [reply] = await replyTo(worker, askToFetch(worker, clientId));
     expect(reply).toMatchObject({ ok: false, error: { message: 'Colibri network request refused' } });
     expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  // The verifier's state records which names were resolved (STORAGE).
+  test('each session gets a worker of its own per chain; only the default one stores on disk', async () => {
+    const storageOf = (worker) => Worker.mock.calls[spawned.indexOf(worker)][1].workerData.storageDir;
+    const normal = await startRequest(host.createClient(CONFIG), { method: 'eth_chainId' });
+    const mine = await clientOnWorker();
+    const again = await startRequest(host.createClient({ ...CONFIG, session }), { method: 'eth_chainId' });
+    const other = await clientOnWorker({ session: { id: 'other' } });
+    const otherChain = await clientOnWorker({ chainId: 100 });
+
+    expect(storageOf(normal.worker)).toBe(STORAGE_DIR);
+    expect(mine.worker).not.toBe(normal.worker);
+    expect(again.worker).toBe(mine.worker);
+    expect(other.worker).not.toBe(mine.worker);
+    expect(otherChain.worker).not.toBe(mine.worker);
+    for (const { worker } of [mine, other, otherChain]) expect(storageOf(worker)).toBeNull();
+    expect(Worker).toHaveBeenCalledTimes(4);
+  });
+
+  test("a retired session's worker terminates once drained and is never respawned", async () => {
+    const { client, worker, id, promise } = await clientOnWorker();
+    const normal = await startRequest(host.createClient(CONFIG), { method: 'eth_chainId' });
+
+    retireBrowsingSession(session);
+    expect(worker.terminate).not.toHaveBeenCalled();
+    worker.emit('message', { type: 'result', id, ok: false, error: { message: 'fetch failed' } });
+    await expect(promise).rejects.toThrow('fetch failed');
+    expect(worker.terminate).toHaveBeenCalledTimes(1);
+    expect(normal.worker.terminate).not.toHaveBeenCalled();
+
+    await expect(client.request({ method: 'eth_chainId' })).rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    await expect(host.ensureWorker(1, session)).rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(Worker).toHaveBeenCalledTimes(2);
+  });
+
+  test('a request waiting for a retired session’s worker to start is refused', async () => {
+    const client = host.createClient({ ...CONFIG, session });
+    const promise = client.request({ method: 'eth_chainId' });
+    promise.catch(() => {});
+    await flush();
+    const worker = lastWorker();
+
+    retireBrowsingSession(session);
+    await expect(promise).rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(worker.terminate).toHaveBeenCalledTimes(1);
+    worker.emit('message', { type: 'ready' });
+    await flush();
+    expect(sentRequests(worker)).toEqual([]);
   });
 
   test('a bystander resent to a fresh worker keeps its deadline and its session', async () => {

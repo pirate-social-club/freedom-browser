@@ -9,7 +9,12 @@
 //   2. the same lookup from a private window is answered afresh, in a network
 //      context of its own: its prover request opens a new HTTP/2 session
 //      while the normal window's session to the same host is still open,
-//      which Chromium would have reused within one session;
+//      which Chromium would have reused within one session. The private
+//      window's lookups, of that name and of one the normal window never
+//      resolved, leave the default session's verifier store as it was, and
+//      nothing in the profile records the second name (the verifier's call
+//      cache keys entries by slots derived from the name;
+//      colibri-worker-host.js, STORAGE);
 //   3. closing a private window retires its session, which ends a lookup
 //      held at the prover (second test: a local prover that never answers,
 //      reached on the loopback branch, so the request cannot finish first).
@@ -41,6 +46,8 @@ const { closeApp } = require('../close-app');
 const ENABLED = process.env.FREEDOM_E2E_ENS_SESSION_LIVE === '1';
 const FIRST_NAME = 'vitalik.eth';
 const CLOSE_NAME = 'nick.eth';
+// Resolved by the private window only.
+const PRIVATE_ONLY_NAME = 'nick.eth';
 const LOOKUP_SETTLE_MS = 25_000;
 
 // The hosts an ENS lookup reaches: the configured mainnet prover and RPCs,
@@ -48,19 +55,25 @@ const LOOKUP_SETTLE_MS = 25_000;
 // the verifier fetches through the same bridge.
 const COLIBRI_SDK_HOSTS = ['mainnet.colibri-proof.tech', 'sync-mainnet.beaconcha.in'];
 
-function ensHosts(repoRoot) {
+function endpointHosts(repoRoot, roles) {
   const sources = JSON.parse(
     fs.readFileSync(path.join(repoRoot, 'src/shared/endpoint-sources.json'), 'utf8')
   );
-  const entries = Object.values(sources.sources || sources);
-  return new Set([
-    ...entries
-      .filter((source) => ['prover', 'rpc'].includes(source.role) && !source.keyed)
-      .map((source) => source.coverage?.['1'])
-      .filter(Boolean)
-      .map((url) => new URL(url).hostname),
-    ...COLIBRI_SDK_HOSTS,
-  ]);
+  return Object.values(sources.sources || sources)
+    .filter((source) => roles.includes(source.role) && !source.keyed)
+    .map((source) => source.coverage?.['1'])
+    .filter(Boolean)
+    .map((url) => new URL(url).hostname);
+}
+
+function ensHosts(repoRoot) {
+  return new Set([...endpointHosts(repoRoot, ['prover', 'rpc']), ...COLIBRI_SDK_HOSTS]);
+}
+
+// The configured Colibri prover, which only the verifier reaches, and only
+// once it has synced: the call it answers is what the verifier caches.
+function proverHosts(repoRoot) {
+  return new Set(endpointHosts(repoRoot, ['prover']));
 }
 
 // The only remote peer the main process may hold: the HNS encrypted DNS relay
@@ -93,6 +106,53 @@ function sampleMainProcessPeers(pid) {
   return { peers, stop: () => loop.kill('SIGKILL') };
 }
 
+// Names, sizes and modification times of the default session's verifier
+// store (`<userData>/colibri`), or null when there is none.
+function storeSnapshot(dir) {
+  try {
+    return Object.fromEntries(fs.readdirSync(dir).sort().map((name) => {
+      const stat = fs.statSync(path.join(dir, name));
+      return [name, `${stat.size}:${stat.mtimeMs}`];
+    }));
+  } catch {
+    return null;
+  }
+}
+
+// What a lookup of `name` could leave on disk: the name (UTF-8 and UTF-16),
+// its namehash, and the ENS registry storage slots derived from it, as raw
+// bytes and as lowercase hex. Every ENS lookup reads the registry; a
+// resolver's own slots depend on its storage layout and are not searched.
+function nameTraces(name) {
+  const { ethers } = require('ethers');
+  const node = ethers.namehash(name);
+  const records = BigInt(ethers.keccak256(ethers.concat([node, ethers.zeroPadValue('0x00', 32)])));
+  const words = [node, ethers.toBeHex(records, 32), ethers.toBeHex(records + 1n, 32)]
+    .map((hex) => hex.slice(2));
+  return [
+    Buffer.from(name, 'utf8'),
+    Buffer.from(name, 'utf16le'),
+    ...words.map((hex) => Buffer.from(hex, 'hex')),
+    ...words.map((hex) => Buffer.from(hex, 'utf8')),
+  ];
+}
+
+// Every regular file under `dir` whose bytes contain any of `needles`.
+function filesContaining(dir, needles) {
+  const hits = [];
+  const walk = (current) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const file = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(file);
+      else if (entry.isFile() && needles.some((needle) => fs.readFileSync(file).includes(needle))) {
+        hits.push(path.relative(dir, file));
+      }
+    }
+  };
+  walk(dir);
+  return hits;
+}
+
 async function chromePage(app, predicate, timeout = 30_000) {
   let page;
   await expect
@@ -114,9 +174,10 @@ async function navigate(window, value) {
   await address.press('Enter');
 }
 
-// NetLog events for URL requests to the ENS hosts: start time, outcome, and
-// the HTTP/2 session each one rode (request → stream job → session), with
-// each session's open interval.
+// NetLog events for URL requests to the ENS hosts: start time, outcome, HTTP
+// status, and the session each one rode, with each session's open interval:
+// an HTTP/2 session through the stream job that opened or found it, or a QUIC
+// session bound to the request directly.
 function ensRequests(netlogFile, hosts) {
   const log = JSON.parse(fs.readFileSync(netlogFile, 'utf8'));
   const types = Object.fromEntries(Object.entries(log.constants.logEventTypes).map(([k, v]) => [v, k]));
@@ -125,6 +186,7 @@ function ensRequests(netlogFile, hosts) {
   const bySource = new Map();
   const jobOfRequest = new Map();
   const sessionOfJob = new Map();
+  const quicOfRequest = new Map();
   const sessionSpan = new Map();
   for (const event of log.events) {
     const type = types[event.type];
@@ -139,11 +201,16 @@ function ensRequests(netlogFile, hosts) {
       bySource.get(id).endedAt = at(event);
       bySource.get(id).netError = event.params?.net_error ?? 0;
     }
+    if (type === 'HTTP_TRANSACTION_READ_RESPONSE_HEADERS' && bySource.has(id)) {
+      const status = /^HTTP\/\S+ (\d{3})/.exec(event.params?.headers?.[0] || '');
+      if (status) bySource.get(id).status = Number(status[1]);
+    }
     if (type === 'HTTP_STREAM_REQUEST_BOUND_TO_JOB' && dependency !== undefined) jobOfRequest.set(id, dependency);
+    if (type === 'HTTP_STREAM_REQUEST_BOUND_TO_QUIC_SESSION' && dependency !== undefined) quicOfRequest.set(id, dependency);
     if (/^HTTP2_SESSION_POOL_(IMPORTED_SESSION_FROM_SOCKET|FOUND_EXISTING_SESSION)/.test(type) && dependency !== undefined) {
       sessionOfJob.set(id, dependency);
     }
-    if (type === 'HTTP2_SESSION') {
+    if (type === 'HTTP2_SESSION' || type === 'QUIC_SESSION') {
       const span = sessionSpan.get(id) || { openedAt: at(event), closedAt: Infinity };
       if (event.phase === 1) span.openedAt = at(event);
       if (event.phase === 2) span.closedAt = at(event);
@@ -151,7 +218,7 @@ function ensRequests(netlogFile, hosts) {
     }
   }
   return [...bySource.entries()].map(([id, request]) => {
-    const session = sessionOfJob.get(jobOfRequest.get(id));
+    const session = quicOfRequest.get(id) ?? sessionOfJob.get(jobOfRequest.get(id));
     return { ...request, session, sessionSpan: sessionSpan.get(session) };
   });
 }
@@ -164,6 +231,7 @@ test.describe('installed ENS network attribution', () => {
     test.setTimeout(8 * 60_000);
     const repoRoot = path.resolve(__dirname, '..', '..');
     const hosts = ensHosts(repoRoot);
+    const provers = proverHosts(repoRoot);
     const evidenceDir = process.env.FREEDOM_E2E_EVIDENCE_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-ens-session-'));
     fs.mkdirSync(evidenceDir, { recursive: true });
     const netlog = path.join(evidenceDir, 'netlog.json');
@@ -173,6 +241,9 @@ test.describe('installed ENS network attribution', () => {
       ant: path.join(root, 'ant-data'),
       ipfs: path.join(root, 'ipfs-data'),
       identity: path.join(root, 'identity'),
+      // The app's working directory, where the SDK's own default storage
+      // would write; inside the profile, so the trace search covers it.
+      cwd: path.join(root, 'cwd'),
     };
     for (const dir of Object.values(dirs)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
@@ -190,7 +261,7 @@ test.describe('installed ENS network attribution', () => {
     const app = await launchApp({
       ...target,
       args: [...target.args, `--log-net-log=${netlog}`],
-      cwd: repoRoot,
+      cwd: dirs.cwd,
       env: {
         ...process.env,
         FREEDOM_TEST_USER_DATA: dirs.userData,
@@ -205,6 +276,8 @@ test.describe('installed ENS network attribution', () => {
     const sampler = sampleMainProcessPeers(app.process().pid);
     const { peers } = sampler;
     const phases = {};
+    const store = path.join(dirs.userData, 'colibri');
+    const stores = {};
     try {
       const normal = await chromePage(app, (url) => url.includes('index.html') && !url.includes('privatePartition='), 90_000);
 
@@ -215,10 +288,15 @@ test.describe('installed ENS network attribution', () => {
 
       await normal.evaluate(() => window.electronAPI.newPrivateWindow());
       const privateWindow = await chromePage(app, (url) => url.includes('privatePartition=private-'));
+      stores.beforePrivate = storeSnapshot(store);
       phases.privateStart = Date.now();
       await navigate(privateWindow, FIRST_NAME);
       await privateWindow.waitForTimeout(LOOKUP_SETTLE_MS);
+      phases.privateOnlyStart = Date.now();
+      await navigate(privateWindow, PRIVATE_ONLY_NAME);
+      await privateWindow.waitForTimeout(LOOKUP_SETTLE_MS);
       phases.privateEnd = Date.now();
+      stores.afterPrivate = storeSnapshot(store);
     } finally {
       sampler.stop();
       await closeApp(app, { timeout: 100_000 }).catch(() => {});
@@ -227,7 +305,23 @@ test.describe('installed ENS network attribution', () => {
     const requests = ensRequests(netlog, hosts);
     const within = (from, to) => requests.filter((r) => r.startedAt >= from && r.startedAt < to);
     const normalRequests = within(phases.normalStart, phases.normalEnd);
-    const privateRequests = within(phases.privateStart, phases.privateEnd);
+    const privateRequests = within(phases.privateStart, phases.privateOnlyStart);
+    const privateOnlyRequests = within(phases.privateOnlyStart, phases.privateEnd);
+    // Prover calls the private window made and was answered: the store checks
+    // below mean nothing if its own lookup never reached the prover (a cold
+    // sync alone, or a quorum-RPC answer), and a call on a session the normal
+    // window used could be the normal window's.
+    const normalSessions = new Set(normalRequests.map((request) => request.session).filter((id) => id !== undefined));
+    const privateOnlyVerified = privateOnlyRequests.filter(
+      (request) =>
+        provers.has(request.host) &&
+        request.netError === 0 &&
+        request.status >= 200 && request.status < 300 &&
+        request.session !== undefined &&
+        !normalSessions.has(request.session)
+    );
+    // Read after quit, once everything the app keeps on disk is written.
+    const traces = filesContaining(root, nameTraces(PRIVATE_ONLY_NAME));
     // A private request to a host the normal window still held an open
     // HTTP/2 session to, carried on a session of its own: one network context
     // would have reused the open session.
@@ -247,14 +341,26 @@ test.describe('installed ENS network attribution', () => {
       normal: normalRequests.length,
       private: privateRequests.length,
       privateOnSeparateSession: separateContext.length,
+      privateOnly: privateOnlyRequests.length,
+      privateOnlyVerified: privateOnlyVerified.length,
+      storeEntriesBeforePrivate: Object.keys(stores.beforePrivate || {}).length,
+      storeUnchangedByPrivate: JSON.stringify(stores.afterPrivate) === JSON.stringify(stores.beforePrivate),
+      privateOnlyNameTraces: traces,
       mainProcessPeers: [...peers],
     };
-    fs.writeFileSync(path.join(evidenceDir, 'summary.json'), JSON.stringify({ summary, requests }, null, 2));
+    fs.writeFileSync(path.join(evidenceDir, 'summary.json'), JSON.stringify({ summary, stores, requests }, null, 2));
     test.info().annotations.push({ type: 'summary', description: JSON.stringify(summary) });
 
     expect(normalRequests.length, 'the normal window resolves through Chromium').toBeGreaterThan(0);
     expect(privateRequests.length, 'the private window resolves afresh, through Chromium').toBeGreaterThan(0);
     expect(separateContext.length, 'the private window dials in a network context of its own').toBeGreaterThan(0);
+    expect(privateOnlyVerified.length, "the private window's own lookup is answered by the Colibri prover")
+      .toBeGreaterThan(0);
+    expect(summary.storeEntriesBeforePrivate, "the normal window's lookup fills the default session's verifier store")
+      .toBeGreaterThan(0);
+    expect(stores.afterPrivate, "the private window's lookups leave the default session's verifier store as it was")
+      .toEqual(stores.beforePrivate);
+    expect(traces, 'nothing in the profile records the name only the private window resolved').toEqual([]);
     const allowed = await allowedMainProcessPeers();
     const unexpected = [...peers].filter((peer) => !isLoopbackPeer(peer) && !allowed.has(peer));
     expect(unexpected, 'no main-process peer but the HNS relay was seen in 50 ms samples').toEqual([]);
