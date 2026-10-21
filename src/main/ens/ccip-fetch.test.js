@@ -455,3 +455,30 @@ describe('an .onion CCIP gateway', () => {
     expect(net.urls()).toEqual(['https://clearnet.example/0x']);
   });
 });
+
+// Each caller passes the session of the window the name is resolved for; the
+// gateway is dialled on it and an onion gateway is checked against it.
+describe('the session a gateway is dialled on', () => {
+  test('is the one the caller passed', async () => {
+    const { net, deps } = gateways(answer('0xcafe'));
+    const privateSession = { resolveProxy: jest.fn() };
+    await ccipReadFetch(TX, '0xbeef', ['https://gw.example/{data}'], undefined, {
+      ...deps,
+      session: privateSession,
+    });
+    expect(net.requests[0].options.session).toBe(privateSession);
+  });
+
+  test("decides an onion gateway's route by its own proxy policy", async () => {
+    const { net, deps } = gateways(answer('0xcafe'));
+    const privateSession = { resolveProxy: jest.fn(async () => 'SOCKS5 127.0.0.1:9150') };
+    expect(
+      await ccipReadFetch(TX, '0x', ['https://ccipgatewayprobe.onion/{data}'], undefined, {
+        ...deps,
+        session: privateSession,
+      })
+    ).toBe('0xcafe');
+    expect(privateSession.resolveProxy).toHaveBeenCalledWith('https://ccipgatewayprobe.onion/0x');
+    expect(net.requests[0].options.session).toBe(privateSession);
+  });
+});

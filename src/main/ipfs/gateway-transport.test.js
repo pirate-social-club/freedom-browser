@@ -684,3 +684,71 @@ describe('isGatewayTransportRequest', () => {
     expect(isGatewayTransportRequest(ownDial(url))).toBe(false);
   });
 });
+
+// The ENS, Colibri, CCIP-Read and RPC callers name the session of the window
+// a request is for (browsing-transport.js); the dial and its `.onion` check
+// both use that session, never the default one.
+describe('dialling on a named session', () => {
+  const { retireBrowsingSession } = require('../browsing-transport');
+  const ONION = 'http://freedomgatewayprobe.onion:8080/ipfs/bafkqaaa';
+  const answering = () => jest.fn((options) => {
+    const request = new FakeClientRequest(options);
+    setImmediate(() => request.emit('response', new FakeIncomingMessage({ statusCode: 204 })));
+    return request;
+  });
+
+  test('net.request is created on that session, with every other option unchanged', async () => {
+    const privateSession = { resolveProxy: jest.fn() };
+    const requestImpl = answering();
+    await netGatewayFetch(REMOTE, { redirect: 'error' }, { session: privateSession, requestImpl });
+    expect(requestImpl.mock.calls[0][0]).toMatchObject({
+      url: REMOTE,
+      session: privateSession,
+      redirect: 'manual',
+      credentials: 'omit',
+      useSessionCookies: false,
+      cache: 'no-store',
+      bypassCustomProtocolHandlers: true,
+    });
+  });
+
+  test('without one the request carries no session option (Electron uses the default)', () => {
+    const { requestImpl } = startNetFetch(REMOTE);
+    expect(requestImpl.mock.calls[0][0]).not.toHaveProperty('session');
+  });
+
+  test("an .onion URL is checked against that session's proxy policy", async () => {
+    const privateSession = { resolveProxy: jest.fn(async () => ONION_ROUTED) };
+    const requestImpl = answering();
+    const response = await netGatewayFetch(ONION, { redirect: 'manual' }, {
+      session: privateSession,
+      requestImpl,
+    });
+    expect(response.status).toBe(204);
+    expect(privateSession.resolveProxy).toHaveBeenCalledWith(ONION);
+  });
+
+  test("and refused when that session sends it DIRECT, whatever the default's policy", async () => {
+    const privateSession = { resolveProxy: jest.fn(async () => 'DIRECT') };
+    const requestImpl = jest.fn();
+    await expect(
+      netGatewayFetch(ONION, { redirect: 'manual' }, { session: privateSession, requestImpl })
+    ).rejects.toThrow('not routed through a proxy');
+    expect(requestImpl).not.toHaveBeenCalled();
+  });
+
+  test('a session whose private window closed is refused before anything is dialled', async () => {
+    const closed = { resolveProxy: jest.fn() };
+    retireBrowsingSession(closed);
+    const requestImpl = jest.fn();
+    const nodeFetch = jest.fn();
+    await expect(
+      gatewayFetch(REMOTE, {}, { session: closed, requestImpl, nodeFetch })
+    ).rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    await expect(
+      gatewayFetch('http://127.0.0.1:8545/', {}, { session: closed, requestImpl, nodeFetch })
+    ).rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(requestImpl).not.toHaveBeenCalled();
+    expect(nodeFetch).not.toHaveBeenCalled();
+  });
+});

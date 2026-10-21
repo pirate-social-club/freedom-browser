@@ -28,6 +28,7 @@ const {
   runWithPrivateLogContext,
   redactUrlForLog,
 } = require('../private/private-log-context');
+const { runWithBrowsingSession } = require('../browsing-transport');
 
 const HTML_SELECTOR = '0x33c34ac3';
 const PROVENANCE_HEADER = 'X-Freedom-Onchain-App-Provenance';
@@ -630,8 +631,14 @@ function registerOnchainAppProtocol(targetSession, { privatePartition = null } =
   const isPrivate = !!privatePartition;
   const trustState = createOnchainAppTrustState();
   try {
+    // The chain reads behind a `web3:` load are dialled on the session the
+    // page is loaded in (browsing-transport.js).
     targetSession.protocol.handle('web3', (request) =>
-      runWithPrivateLogContext(isPrivate, () => handleOnchainAppRequest(request, { trustState }))
+      runWithPrivateLogContext(isPrivate, () =>
+        runWithBrowsingSession(targetSession, () =>
+          handleOnchainAppRequest(request, { trustState })
+        )
+      )
     );
     log.info('[onchain-app] web3: handler registered');
   } catch (error) {

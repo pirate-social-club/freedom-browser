@@ -4,7 +4,10 @@
  * (`ens-prefetch.js`, for the Ant API too — it is configurable to a remote
  * host in exactly the same way). ENS CCIP-Read gateways (`ens/ccip-fetch.js`)
  * dial through `netGatewayFetch` too (#359): their URLs are named by the
- * contract being resolved and can sit on a `.onion` host just the same.
+ * contract being resolved and can sit on a `.onion` host just the same. So do
+ * the ENS quorum legs' JSON-RPC, the Colibri verifier's prover and RPC traffic
+ * (bridged out of its worker by `ens/colibri-worker-host.js`) and the
+ * chain-data router's remote RPC reads, each on the session it is made for.
  *
  * WHY THIS EXISTS
  *
@@ -72,6 +75,18 @@
  * caller sees a failed request it can retry (`ipfs-manager.js` keeps its
  * health check armed for exactly that, so the node completes its start once
  * the PAC lands).
+ *
+ * WHICH SESSION
+ *
+ * A dial goes out on `deps.session` when the caller names one, and on
+ * `session.defaultSession` otherwise. The ENS, Colibri, CCIP-Read and RPC
+ * callers name the session of the window the request is for
+ * (`browsing-transport.js`), so a private window's lookups follow its own
+ * partition's proxy policy instead of the default session's; the `.onion`
+ * check below asks that same session. Every other hardening here (no cookies
+ * or credentials, no HTTP cache, no custom protocol handlers, no redirect
+ * taken) is the same on either. A session whose private window has closed is
+ * refused before anything is dialled on it: its routing is being torn down.
  */
 
 const LOOPBACK_IPV4 = /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
@@ -119,11 +134,15 @@ function isOnionGatewayUrl(url) {
   }
 }
 
-async function defaultResolveProxy(url) {
-  // `net.request` dials on `session.defaultSession` unless told otherwise, so
-  // that is the session whose proxy policy decides this request's fate.
-  const { session } = require('electron');
-  const targetSession = session?.defaultSession;
+async function defaultResolveProxy(url, dialSession) {
+  // The session the request is dialled on is the one whose proxy policy
+  // decides its fate: the caller's, or `session.defaultSession`, which
+  // `net.request` uses unless told otherwise.
+  let targetSession = dialSession;
+  if (!targetSession) {
+    const { session } = require('electron');
+    targetSession = session?.defaultSession;
+  }
   if (typeof targetSession?.resolveProxy !== 'function') {
     throw new Error('session.resolveProxy is unavailable');
   }
@@ -147,7 +166,9 @@ function isProxiedResolution(resolved) {
 async function assertOnionRoutable(url, deps) {
   let resolved;
   try {
-    resolved = await (deps.resolveProxy || defaultResolveProxy)(url);
+    resolved = await (deps.resolveProxy
+      ? deps.resolveProxy(url)
+      : defaultResolveProxy(url, deps.session));
   } catch (err) {
     // A session we cannot ask is a session we cannot trust to proxy: refuse
     // rather than dial and hope.
@@ -165,8 +186,8 @@ async function assertOnionRoutable(url, deps) {
 // ---------------------------------------------------------------------------
 // Which requests on the session are this transport's own
 //
-// A `net.request` dial goes through the default session's `webRequest`
-// listeners like any page request (`webrequest-dispatcher.js`), so the
+// A `net.request` dial goes through its session's `webRequest` listeners
+// like any page request (`webrequest-dispatcher.js`), so the
 // page-facing handlers there see gateway and CCIP-Read traffic too: adblock
 // would judge it as a third-party `other` request (an ENS name's offchain
 // resolution — or an `ipfs://` load — could then hinge on filter-list content)
@@ -286,6 +307,14 @@ function headersFromNetResponse(rawHeaders) {
   return headers;
 }
 
+// Lazy: only callers that name a session load browsing-transport.js (and the
+// private-window module behind it); the ipfs-manager paths never do.
+function assertSessionUsable(dialSession) {
+  if (!dialSession) return;
+  const { isBrowsingSessionRetired, sessionUnavailableError } = require('../browsing-transport');
+  if (isBrowsingSessionRetired(dialSession)) throw sessionUnavailableError();
+}
+
 function defaultNetRequest(options) {
   const { net } = require('electron');
   const request = typeof net?.request === 'function' ? net.request(options) : null;
@@ -319,8 +348,10 @@ function defaultNetRequest(options) {
  *
  * @param {string} url
  * @param {{method?: string, headers?: Headers, signal?: AbortSignal, redirect?: string, body?: string|Buffer}} init
- * @param {{requestImpl?: Function, resolveProxy?: Function}} deps - test seams for
- *   `net.request` and `session.resolveProxy`
+ * @param {{session?: Electron.Session, requestImpl?: Function, resolveProxy?: Function}} deps -
+ *   `session` is the session to dial on (default: `session.defaultSession`);
+ *   `requestImpl` and `resolveProxy` are test seams for `net.request` and
+ *   `session.resolveProxy`
  * @returns {Promise<Response>}
  */
 async function netGatewayFetch(url, init = {}, deps = {}) {
@@ -339,6 +370,7 @@ async function netGatewayFetch(url, init = {}, deps = {}) {
     }
   }
   if (signal?.aborted) throw abortError();
+  assertSessionUsable(deps.session);
   // Refused before the request exists, so Chromium is never asked to resolve
   // an onion name the session would send DIRECT (see the file header).
   if (isOnionGatewayUrl(url)) await assertOnionRoutable(url, deps);
@@ -392,6 +424,9 @@ async function netGatewayFetch(url, init = {}, deps = {}) {
         // Straight to the network — never back into a registered `http(s)`
         // protocol handler (the test harness registers one).
         bypassCustomProtocolHandlers: true,
+        // The requesting window's session, so its proxy policy routes the
+        // dial (see WHICH SESSION); absent, Electron uses the default one.
+        ...(deps.session ? { session: deps.session } : {}),
       });
     } catch (err) {
       releaseDial();
@@ -570,11 +605,15 @@ async function netGatewayFetch(url, init = {}, deps = {}) {
  *
  * @param {string} url
  * @param {object} init - `fetch` init, restricted to what `netGatewayFetch` supports
- * @param {{nodeFetch?: Function, requestImpl?: Function, resolveProxy?: Function}} deps - test seam
+ * @param {{session?: Electron.Session, nodeFetch?: Function, requestImpl?: Function, resolveProxy?: Function}} deps -
+ *   `session` as for `netGatewayFetch`; the rest are test seams
  * @returns {Promise<Response>}
  */
 async function gatewayFetch(url, init = {}, deps = {}) {
   if (isLoopbackGatewayUrl(url)) {
+    // No proxy applies to loopback, but a closed private window's lookups
+    // still stop here like everywhere else.
+    assertSessionUsable(deps.session);
     return (deps.nodeFetch || fetch)(url, init);
   }
   return netGatewayFetch(url, init, deps);

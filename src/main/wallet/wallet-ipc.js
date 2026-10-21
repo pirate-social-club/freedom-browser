@@ -28,6 +28,7 @@ const { signAndRecord, KINDS: PAYMENT_KINDS } = require('./tx-recorder');
 const { getActiveWalletIndex } = require('../identity-manager');
 const { getEffectiveRpcUrls } = require('./rpc-manager');
 const chainData = require('../networks/chain-data-router');
+const { browsingSessionFor, runWithBrowsingSession } = require('../browsing-transport');
 const { getSigner } = require('./signers');
 const { isVaultLockedError } = require('./vault-errors');
 const {
@@ -606,17 +607,26 @@ function registerWalletIpc() {
   });
 
   // Capability-aware chain request. Myotis and Colibri are attempted before
-  // quorum/direct RPC according to the selected chain's access policy.
+  // quorum/direct RPC according to the selected chain's access policy, all on
+  // the session the sender's window browses in (browsing-transport.js). A
+  // sender without one (its window is closing) gets nothing dialled.
   ipcMain.handle(
     'wallet:chain-request',
-    async (_event, { chainId, method, params, routingContext }) => {
+    async (event, { chainId, method, params, routingContext }) => {
       try {
         if (!chainData.isReadMethod(method)) {
           return { success: false, error: { code: 4200, message: 'Method not supported' } };
         }
-        const response = await chainData.request(chainId, method, params || [], {
-          routingContext,
-        });
+        const browsingSession = browsingSessionFor(event?.sender);
+        if (!browsingSession) {
+          return {
+            success: false,
+            error: { code: -32603, message: 'Browsing session unavailable', reason: 'SESSION_UNAVAILABLE' },
+          };
+        }
+        const response = await runWithBrowsingSession(browsingSession, () =>
+          chainData.request(chainId, method, params || [], { routingContext })
+        );
         return { success: true, ...response };
       } catch (err) {
         return {

@@ -24,6 +24,13 @@ jest.mock('../ens/colibri-resolver', () => ({
   }),
 }));
 jest.mock('../logger', () => ({ verbose: jest.fn(), info: jest.fn(), warn: jest.fn() }));
+// The router dials remote RPC endpoints through gateway-transport (Chromium,
+// on the request's browsing session). This suite stands `global.fetch` in for
+// the network, so the transport hands straight to it.
+jest.mock('../ipfs/gateway-transport', () => ({
+  ...jest.requireActual('../ipfs/gateway-transport'),
+  gatewayFetch: (url, init) => global.fetch(url, init),
+}));
 
 const router = require('../networks/chain-data-router');
 const { startAntChainBridge } = require('./ant-chain-bridge');

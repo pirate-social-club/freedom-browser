@@ -60,6 +60,13 @@
  * HTTP cache, which is what undici did too. Redirects are never followed:
  * `redirect: 'error'` fails the gateway on any 3xx, same as before.
  *
+ * The session is the caller's (`deps.session`): the window the name is being
+ * resolved for, so a private window's gateway traffic follows its own
+ * partition's proxy policy. Each caller passes it explicitly — the Colibri
+ * provider the one its client was built for, the quorum legs and Myotis
+ * `requireBrowsingSession()` (`browsing-transport.js`). Without one the dial
+ * uses the default session.
+ *
  * There is no loopback carve-out here (unlike `gatewayFetch`): the URL checks
  * below already refuse IP literals and loopback-ish names, so every URL that
  * reaches the transport is remote by construction.
@@ -90,9 +97,10 @@ function isHexData(value) {
  * @param {string} data
  * @param {string[]} urls - ERC-3668 URL templates from the `OffchainLookup`
  * @param {AbortSignal} [signal]
- * @param {{requestImpl?: Function, resolveProxy?: Function, onGatewayError?: Function}} [deps]
- *   test seams: `requestImpl`/`resolveProxy` are passed through to `netGatewayFetch`
- *   (`net.request`, `session.resolveProxy`); `onGatewayError(error)` is called
+ * @param {{session?: Electron.Session, requestImpl?: Function, resolveProxy?: Function, onGatewayError?: Function}} [deps]
+ *   `session` is the session to dial on, passed through to `netGatewayFetch`
+ *   with the test seams `requestImpl`/`resolveProxy` (`net.request`,
+ *   `session.resolveProxy`); `onGatewayError(error)` is called
  *   with the reason each skipped gateway was skipped. The error is raw — it can
  *   quote the gateway's body — so it is for tests only and must never be logged.
  */

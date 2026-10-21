@@ -1,6 +1,7 @@
 const { ethers } = require('ethers');
 const myotis = require('../myotis/myotis-manager');
 const { ccipReadFetch, isHexData } = require('./ccip-fetch');
+const { requireBrowsingSession } = require('../browsing-transport');
 
 // Myotis 0.1.7's ENS API walks the legacy registry. Its generic EVM API
 // verifies arbitrary calls against an attested optimistic root, so use that
@@ -9,6 +10,9 @@ class MyotisProvider extends ethers.AbstractProvider {
   constructor() {
     super(1, { cacheTimeout: -1 });
     this.epoch = myotis.getAvailabilityEpoch();
+    // The calls go to the local Myotis node; only CCIP-Read callbacks leave
+    // the machine, on the session of the window this resolution is for.
+    this.browsingSession = requireBrowsingSession();
   }
 
   async _detectNetwork() {
@@ -18,7 +22,7 @@ class MyotisProvider extends ethers.AbstractProvider {
   // Bounds live in the shared helper — see `ccip-fetch.js`. The block-pinned
   // quorum legs' manual CCIP loop calls the same function directly.
   async ccipReadFetch(transaction, data, urls) {
-    return ccipReadFetch(transaction, data, urls);
+    return ccipReadFetch(transaction, data, urls, undefined, { session: this.browsingSession });
   }
 
   async _perform(request) {

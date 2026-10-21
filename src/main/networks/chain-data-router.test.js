@@ -42,6 +42,15 @@ jest.mock('../ens/colibri-resolver', () => ({
 }));
 jest.mock('../logger', () => ({ verbose: jest.fn(), warn: jest.fn() }));
 const mockLog = require('../logger');
+// Remote RPC endpoints are dialled through gateway-transport (Chromium, on the
+// request's browsing session). These tests stand `global.fetch` in for the
+// network, so the transport hands straight to it; the browsing-session tests
+// at the end look at what it was asked, or swap in the real one.
+const mockGatewayFetch = jest.fn((url, init) => global.fetch(url, init));
+jest.mock('../ipfs/gateway-transport', () => ({
+  ...jest.requireActual('../ipfs/gateway-transport'),
+  gatewayFetch: (...args) => mockGatewayFetch(...args),
+}));
 
 const {
   request,
@@ -2507,5 +2516,149 @@ describe('Ant bridge cancellation', () => {
         `b.example ${FULL[0].fromBlock}-${hex(HEAD - 474)}`,
       ]);
     });
+  });
+});
+
+// Reads run on the session of the window they are for (browsing-transport.js):
+// remote RPC is dialled through the gateway transport on it, and no route or
+// in-flight Colibri request is shared with another session.
+describe('chain reads per browsing session', () => {
+  const { runWithBrowsingSession } = require('../browsing-transport');
+  const { runWithPrivateLogContext } = require('../private/private-log-context');
+  const { gatewayFetch: realGatewayFetch } = jest.requireActual('../ipfs/gateway-transport');
+  const electron = require('electron');
+  const { createNetMock, emitResponse } = require('../../../test/helpers/fake-electron-net');
+  const PRIVATE = { id: 'private-window' };
+  let originalNetRequest;
+
+  const rpcAnswer = (result) => jest.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({ result }),
+  });
+
+  beforeEach(() => {
+    // The fake net answers on setImmediate; an earlier block may leave fake timers on.
+    jest.useRealTimers();
+    jest.clearAllMocks();
+    clearAdaptiveRoutingForTest();
+    mockGatewayFetch.mockImplementation((url, init) => global.fetch(url, init));
+    mockRegistry.getNetwork.mockReturnValue({
+      access: { readOrder: ['direct'] },
+      quorum: { timeoutMs: 1000 },
+    });
+    mockRegistry.getEndpoints.mockImplementation((_chainId, role) =>
+      role === 'prover' ? ['https://prover.example'] : ['https://rpc.example']
+    );
+    originalNetRequest = electron.net.request;
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    electron.net.request = originalNetRequest;
+    global.fetch = originalFetch;
+    mockGatewayFetch.mockImplementation((url, init) => global.fetch(url, init));
+  });
+
+  test("a remote endpoint is dialled through the gateway transport on the read's session", async () => {
+    global.fetch = rpcAnswer('0x10');
+    await expect(runWithBrowsingSession(PRIVATE, () => request(1, 'eth_blockNumber')))
+      .resolves.toMatchObject({ result: '0x10', source: 'direct' });
+    expect(mockGatewayFetch).toHaveBeenCalledWith(
+      'https://rpc.example',
+      expect.objectContaining({ method: 'POST', signal: expect.any(AbortSignal) }),
+      { session: PRIVATE }
+    );
+
+    // Internal callers (no browsing context) keep the default session.
+    await request(1, 'eth_blockNumber');
+    expect(mockGatewayFetch.mock.calls[1][2]).toEqual({ session: electron.session.defaultSession });
+  });
+
+  test('through the real transport: Chromium on that session remotely, Node fetch for loopback', async () => {
+    mockGatewayFetch.mockImplementation(realGatewayFetch);
+    const net = createNetMock((req) =>
+      emitResponse(req, { chunks: [JSON.stringify({ jsonrpc: '2.0', id: 1, result: '0x20' })] })
+    );
+    electron.net.request = net.request;
+    global.fetch = jest.fn(async () => {
+      throw new Error('a remote endpoint must not reach Node fetch');
+    });
+    await expect(runWithBrowsingSession(PRIVATE, () => request(1, 'eth_blockNumber')))
+      .resolves.toMatchObject({ result: '0x20' });
+    expect(net.request).toHaveBeenCalledTimes(1);
+    expect(net.request.mock.calls[0][0]).toMatchObject({
+      url: 'https://rpc.example',
+      method: 'POST',
+      session: PRIVATE,
+      credentials: 'omit',
+      cache: 'no-store',
+    });
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    mockRegistry.getEndpoints.mockImplementation(() => ['http://127.0.0.1:8545']);
+    global.fetch = rpcAnswer('0x30');
+    await expect(runWithBrowsingSession(PRIVATE, () => request(1, 'eth_blockNumber')))
+      .resolves.toMatchObject({ result: '0x30' });
+    expect(global.fetch).toHaveBeenCalledWith('http://127.0.0.1:8545', expect.objectContaining({
+      method: 'POST',
+    }));
+    expect(net.request).toHaveBeenCalledTimes(1);
+  });
+
+  test('a private caller that lost its session is refused before anything is asked', async () => {
+    global.fetch = rpcAnswer('0x10');
+    await expect(runWithPrivateLogContext(true, () => request(1, 'eth_blockNumber')))
+      .rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(mockRegistry.getNetwork).not.toHaveBeenCalled();
+    await expect(runWithPrivateLogContext(true, () => getFeeQuote(1)))
+      .rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(mockGatewayFetch).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(mockRequestViaColibri).not.toHaveBeenCalled();
+  });
+
+  test("an app's Colibri demotion in one session leaves the same route in another alone", async () => {
+    mockRegistry.getNetwork.mockReturnValue({
+      access: { readOrder: ['colibri', 'direct'] },
+      quorum: { timeoutMs: 5000 },
+    });
+    mockRequestViaColibri.mockRejectedValue(new Error('prover execution failed: Out of gas'));
+    global.fetch = rpcAnswer('0xrpc');
+    const params = [{ to: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', data: '0x1234' }, 'latest'];
+    const app = { routingContext: { origin: 'https://swap.example' } };
+
+    await runWithBrowsingSession(PRIVATE, () => request(1, 'eth_call', params, app));
+    await runWithBrowsingSession(PRIVATE, () => request(1, 'eth_call', params, app));
+    expect(mockRequestViaColibri).toHaveBeenCalledTimes(1);
+
+    await expect(request(1, 'eth_call', params, app)).resolves.toMatchObject({ source: 'direct' });
+    expect(mockRequestViaColibri).toHaveBeenCalledTimes(2);
+    await runWithBrowsingSession({ id: 'another-window' }, () => request(1, 'eth_call', params, app));
+    expect(mockRequestViaColibri).toHaveBeenCalledTimes(3);
+  });
+
+  test("one session's Colibri work in flight does not use up another's", async () => {
+    jest.useFakeTimers({ now: 1_000_000 });
+    mockRegistry.getNetwork.mockReturnValue({
+      access: { readOrder: ['colibri', 'direct'] },
+      quorum: { timeoutMs: 5000 },
+    });
+    mockRequestViaColibri.mockReturnValue(new Promise(() => {}));
+    global.fetch = rpcAnswer('0xrpc');
+    const params = [{ to: '0xabc', data: '0x1234' }, 'latest'];
+
+    // Wallet-internal reads (no routing context) share the per-call-shape key.
+    const first = runWithBrowsingSession(PRIVATE, () => request(1, 'eth_call', params));
+    const second = runWithBrowsingSession(PRIVATE, () => request(1, 'eth_call', params));
+    await expect(runWithBrowsingSession(PRIVATE, () => request(1, 'eth_call', params)))
+      .resolves.toMatchObject({ source: 'direct' });
+    expect(mockRequestViaColibri).toHaveBeenCalledTimes(2);
+
+    const third = request(1, 'eth_call', params);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(mockRequestViaColibri).toHaveBeenCalledTimes(3);
+
+    await jest.advanceTimersByTimeAsync(5000);
+    await Promise.all([first, second, third].map((pending) => pending.catch(() => {})));
   });
 });

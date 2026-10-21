@@ -8,12 +8,22 @@ const registry = require('./networks/network-registry');
 const { prefetchGatewayUrl, NOOP_HANDLE: NOOP_PREFETCH } = require('./ens-prefetch');
 const myotisManager = require('./myotis/myotis-manager');
 const { ccipReadFetch } = require('./ens/ccip-fetch');
+const { gatewayFetch } = require('./ipfs/gateway-transport');
 const { capCache } = require('./cache-utils');
 const {
   runWithPrivateLogContext,
   redactForLog,
 } = require('./private/private-log-context');
 const { isPrivateWebContents } = require('./private/private-windows');
+const {
+  browsingSessionFor,
+  currentBrowsingSession,
+  isBrowsingSessionRetired,
+  onBrowsingSessionRetired,
+  requireBrowsingSession,
+  runWithBrowsingSession,
+  sessionKey,
+} = require('./browsing-transport');
 
 // PRIVATE MODE GUARD (name logging): the name being resolved IS the
 // browsing history of the tab that asked for it, and log.info/warn land in
@@ -168,7 +178,10 @@ function isQuarantined(url) {
   return true;
 }
 
-function markProviderFailure(url) {
+// A request refused because its private window closed mid-lookup says
+// nothing about the provider, so it never counts against it.
+function markProviderFailure(url, err) {
+  if (err?.code === 'SESSION_UNAVAILABLE') return;
   const entry = quarantine.get(url) || { failures: 0, cooldownUntil: 0 };
   entry.failures += 1;
   const cooldown = Math.min(QUARANTINE_BASE_MS * 2 ** (entry.failures - 1), QUARANTINE_MAX_MS);
@@ -226,11 +239,135 @@ const MIN_QUORUM_PROVIDERS = 3;
 const ETHEREUM_MAINNET_CHAIN_ID = 1;
 const EPHEMERAL_PROVIDER_OPTIONS = { staticNetwork: true };
 
+// ---------------------------------------------------------------------------
+// The quorum legs' JSON-RPC transport
+//
+// ethers' default `getUrlFunc` is Node's `http.request`, which never sees the
+// Electron session: a lookup made for a private window behind a proxy (a dVPN,
+// the Tor PAC) went out DIRECT. Each provider instead carries a `FetchRequest`
+// `getUrlFunc` that dials through `gatewayFetch` (`ipfs/gateway-transport.js`)
+// on the session captured when the provider was created — the window the
+// lookup is for (browsing-transport.js). Loopback RPC (a local node) stays on
+// Node's fetch inside gatewayFetch, as it is unaffected by any proxy anyway.
+//
+// The contract is ethers' own (`createGetUrl` in ethers' utils/geturl.js):
+// `(req, signal) => { statusCode, statusMessage, headers, body }`, with
+// `signal` its FetchCancelSignal and `req.timeout` the deadline. Two
+// differences from the Node one are deliberate:
+//  - A redirect fails the request instead of being returned: ethers follows a
+//    3xx itself with a fresh FetchRequest, which carries no `getUrlFunc`, so
+//    the hop would go out on Node's `http` around the session.
+//  - Every transport failure is an ethers `NETWORK_ERROR` (Chromium reports
+//    `net::ERR_…`, which `isProviderError` does not recognise), so a leg that
+//    could not reach its provider is never classified as an answer.
+// ---------------------------------------------------------------------------
+
+// Headers the transport sets itself (Electron's `ClientRequest.setHeader`
+// refuses `content-length`, `host` and `transfer-encoding` outright); ethers
+// computes them for its own Node request.
+const RPC_TRANSPORT_REQUEST_HEADERS = new Set([
+  'accept-encoding', 'connection', 'content-length', 'host', 'transfer-encoding',
+]);
+// Chromium hands back an already-decoded body while reporting the upstream
+// `content-encoding`; passed on, ethers would gunzip plain bytes.
+const RPC_DECODED_RESPONSE_HEADERS = new Set(['content-encoding', 'content-length']);
+
+function rpcTransportError(message, code, cause) {
+  const err = new Error(message, cause ? { cause } : undefined);
+  err.code = code;
+  return err;
+}
+
+function createSessionGetUrl(browsingSession, transport = gatewayFetch) {
+  return async function getUrl(req, signal) {
+    if (signal?.cancelled) throw rpcTransportError('request cancelled before sending', 'CANCELLED');
+    const controller = new AbortController();
+    let cancelled = false;
+    let timedOut = false;
+    signal?.addListener(() => {
+      cancelled = true;
+      controller.abort();
+    });
+    const timeoutMs = Number(req.timeout);
+    const timer = timeoutMs > 0
+      ? setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs)
+      : null;
+    try {
+      const headers = {};
+      for (const [name, value] of Object.entries(req.headers || {})) {
+        if (!RPC_TRANSPORT_REQUEST_HEADERS.has(name.toLowerCase())) headers[name] = value;
+      }
+      const body = req.body ? Buffer.from(req.body) : undefined;
+      const response = await transport(req.url, {
+        method: req.method,
+        headers,
+        body,
+        redirect: 'error',
+        signal: controller.signal,
+      }, { session: browsingSession });
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      const responseHeaders = {};
+      for (const [name, value] of response.headers) {
+        if (!RPC_DECODED_RESPONSE_HEADERS.has(name)) responseHeaders[name] = value;
+      }
+      return {
+        statusCode: response.status,
+        statusMessage: response.statusText || '',
+        headers: responseHeaders,
+        body: bytes.length ? bytes : null,
+      };
+    } catch (err) {
+      if (err?.code === 'SESSION_UNAVAILABLE') throw err;
+      if (cancelled) throw rpcTransportError('request cancelled', 'CANCELLED', err);
+      if (timedOut) throw rpcTransportError('request timeout', 'TIMEOUT', err);
+      throw rpcTransportError(`RPC transport failed: ${err?.message || err}`, 'NETWORK_ERROR', err);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+}
+
+// Never Node's own `getUrl`, even for a connection this class did not set up.
+async function refuseUnboundGetUrl() {
+  throw rpcTransportError('RPC request has no browsing session', 'SESSION_UNAVAILABLE');
+}
+
+// Defined on first use: the class extends whatever `ethers.JsonRpcProvider` is
+// at that point, and a module that never resolves anything never needs it.
+let SessionBoundJsonRpcProvider = null;
+
+function sessionBoundProviderClass() {
+  if (!SessionBoundJsonRpcProvider) {
+    SessionBoundJsonRpcProvider = class extends ethers.JsonRpcProvider {
+      #getUrl = null;
+
+      constructor(url, network, options, browsingSession) {
+        super(url, network, options);
+        this.#getUrl = createSessionGetUrl(browsingSession);
+      }
+
+      // Every request ethers sends is a clone of the provider's connection
+      // (JsonRpcProvider#_send), so binding it here covers them all.
+      _getConnection() {
+        const request = super._getConnection();
+        request.getUrlFunc = this.#getUrl || refuseUnboundGetUrl;
+        return request;
+      }
+    };
+  }
+  return SessionBoundJsonRpcProvider;
+}
+
 function createEthereumProvider(url) {
-  return new ethers.JsonRpcProvider(
+  const Provider = sessionBoundProviderClass();
+  return new Provider(
     url,
     ETHEREUM_MAINNET_CHAIN_ID,
     EPHEMERAL_PROVIDER_OPTIONS,
+    requireBrowsingSession(),
   );
 }
 
@@ -341,7 +478,7 @@ async function getPinnedBlock() {
     available.map((url) =>
       fetchProviderHead(url, anchor, timeoutMs)
         .then((number) => ({ url, number }))
-        .catch((err) => { markProviderFailure(url); throw err; })
+        .catch((err) => { markProviderFailure(url, err); throw err; })
     )
   );
   const heads = headResults
@@ -375,7 +512,7 @@ async function getPinnedBlock() {
     heads.map(({ url }) =>
       fetchProviderBlockHashAt(url, targetNumber, timeoutMs)
         .then((hash) => ({ url, hash }))
-        .catch((err) => { markProviderFailure(url); throw err; })
+        .catch((err) => { markProviderFailure(url, err); throw err; })
     )
   );
   const hashes = hashResults
@@ -477,6 +614,35 @@ const ensAddressCache = new Map();
 // Address (lowercased 0x) → { result, expiresAt } for reverse lookups.
 const ensReverseCache = new Map();
 let resolutionLifecycleEpoch = 0;
+
+// The three caches above and the in-flight dedupe below are per browsing
+// session: a lookup made for a private window is answered from, and written
+// to, that session's entries only, so it neither reuses another window's
+// result nor lets another window learn (from a cache hit, an eviction, or a
+// joined lookup) what it resolved. Default-session keys are the bare keys
+// they always were; another session's carry its opaque `sessionKey` prefix
+// (never a partition name). `forgetEnsSession` drops a closed window's share.
+function browsingCacheScope() {
+  const key = sessionKey(currentBrowsingSession());
+  return key === 'default' ? '' : `${key}|`;
+}
+
+function forgetEnsSession(retired) {
+  const key = sessionKey(retired);
+  if (key === 'default') return 0;
+  const scope = `${key}|`;
+  let dropped = 0;
+  for (const map of [ensResultCache, ensAddressCache, ensReverseCache, inFlightResolves]) {
+    for (const entryKey of [...map.keys()]) {
+      if (!entryKey.startsWith(scope)) continue;
+      map.delete(entryKey);
+      dropped += 1;
+    }
+  }
+  return dropped;
+}
+
+onBrowsingSessionRetired(forgetEnsSession);
 
 // Any Ethereum Myotis lifecycle boundary invalidates both cached and in-flight
 // policy decisions. Ready transitions let the preferred local tier overtake a
@@ -674,7 +840,9 @@ async function callUniversalResolver(provider, method, args, overrides) {
       let response;
       onCcipRead?.(true);
       try {
-        response = await ccipReadFetch({ to: sender }, callData, urls, ccipSignal);
+        response = await ccipReadFetch({ to: sender }, callData, urls, ccipSignal, {
+          session: requireBrowsingSession(),
+        });
       } finally {
         onCcipRead?.(false);
       }
@@ -806,7 +974,9 @@ async function universalResolverReverseCall(provider, normalizedAddress, _callDa
       resolverAddress: UNIVERSAL_RESOLVER_ADDRESS,
     };
   } catch (err) {
-    if (isProviderError(err) || err.code === 'CCIP_GATEWAY_FAILED') throw err;
+    if (isProviderError(err) || ['CCIP_GATEWAY_FAILED', 'SESSION_UNAVAILABLE'].includes(err.code)) {
+      throw err;
+    }
     if (isResolverNotFoundError(err)) {
       return {
         resolvedData: encodeReverseOutcome(REVERSE_OUTCOME.noRecord),
@@ -913,6 +1083,9 @@ async function runQuorumLeg(
     markProviderSuccess(url);
     return { url, status: 'data', resolvedData: result.resolvedData, resolverAddress: result.resolverAddress };
   } catch (err) {
+    // The lookup's private window closed: nothing more is dialled for it, and
+    // the refusal is no answer about the name and no fault of the provider.
+    if (err?.code === 'SESSION_UNAVAILABLE') return { url, status: 'error', error: err };
     if (deadlineAfterGateway || err.code === 'CCIP_GATEWAY_FAILED') {
       // A gateway outage is retryable, not an agreed absent record. Keep
       // the RPC healthy and keep the failure out of negative-record caches.
@@ -924,7 +1097,7 @@ async function runQuorumLeg(
       return { url, status: 'not_found', reason: 'NO_RESOLVER' };
     }
     if (isProviderError(err) || err.code === 'TIMEOUT') {
-      markProviderFailure(url);
+      markProviderFailure(url, err);
       return { url, status: 'error', error: err };
     }
     // Unknown UR revert — provider responded, response wasn't usable.
@@ -2051,7 +2224,9 @@ async function resolveEnsAddress(name, chainId = 1) {
 // in-flight promise so address-bar + wallet lookups (or two rapid clicks)
 // don't fire two full quorum waves. Per-label key prevents content and
 // addr lookups for the same name from colliding — they query different
-// selectors and need independent caches.
+// selectors and need independent caches. Only lookups for the same browsing
+// session share one (see `browsingCacheScope`): a joined lookup runs on the
+// session of whoever started it.
 const inFlightResolves = new Map();
 
 // Shared validation + cache wrapper for content-hash, addr, and reverse
@@ -2080,20 +2255,24 @@ function fastNormalize(trimmed) {
 }
 
 async function resolveWithCache(name, cache, doResolve, label, chainId = 1) {
+  // A private caller that lost its session fails here, before any lookup
+  // (browsing-transport.js); everything below runs on the session it names.
+  requireBrowsingSession();
   const trimmed = (name || '').trim();
   if (!trimmed) {
     throw new Error('ENS name is empty');
   }
   const normalized = fastNormalize(trimmed);
 
-  const key = chainCacheKey(normalized, chainId);
+  const scope = browsingCacheScope();
+  const key = scope + chainCacheKey(normalized, chainId);
   const cached = cache.get(key);
   if (cached && Date.now() < cached.expiresAt) {
     log.debug(`[ens] ${label} cache hit for ${nameForLog(normalized)}`);
     return cached.result;
   }
 
-  const dedupKey = `${label}:${key}`;
+  const dedupKey = `${scope}${label}:${chainCacheKey(normalized, chainId)}`;
   const existing = inFlightResolves.get(dedupKey);
   if (existing) {
     log.info(`[ens] ${label} joining in-flight resolution for ${nameForLog(normalized)}`);
@@ -2279,8 +2458,12 @@ function noAddressResult(normalized) {
 // TTL is derived from the result's trust.level — see TTL_BY_LEVEL.
 function cacheAndLog(cache, normalized, result, okValue) {
   const ttl = ttlForResult(result);
-  cache.set(normalized, { result, expiresAt: Date.now() + ttl });
-  capCache(cache);
+  // Into the requesting session's share of the cache, unless its window has
+  // closed meanwhile: that share is gone and must not be refilled.
+  if (!isBrowsingSessionRetired(currentBrowsingSession())) {
+    cache.set(browsingCacheScope() + normalized, { result, expiresAt: Date.now() + ttl });
+    capCache(cache);
+  }
   if (okValue) {
     log.info(
       `[ens] Resolved: ${nameForLog(normalized)} → ${redactForLog(okValue)} (ttl=${ttl}ms)`
@@ -2746,67 +2929,97 @@ function privateResolveContext(event) {
   return isPrivateWebContents(event?.sender);
 }
 
+const SESSION_UNAVAILABLE_MESSAGE = 'Browsing session unavailable';
+
+// Same idea for the network: the lookup runs on the session the sender's
+// window browses in (browsing-transport.js). A sender without one (its window
+// is closing, or is private and its partition already gone) gets
+// `unavailable()` and nothing is looked up — never the default session.
+function withSenderSession(event, unavailable, resolve) {
+  const browsingSession = browsingSessionFor(event?.sender);
+  if (!browsingSession) return unavailable();
+  return runWithBrowsingSession(browsingSession, resolve);
+}
+
+function failureReason(err) {
+  return err?.code === 'SESSION_UNAVAILABLE' ? 'SESSION_UNAVAILABLE' : 'RESOLUTION_ERROR';
+}
+
 function registerEnsIpc() {
   ipcMain.handle(IPC.ENS_RESOLVE, async (event, payload = {}) => {
     const { name } = payload;
-
-    return runWithPrivateLogContext(privateResolveContext(event), async () => {
-      try {
-        const result = await resolveEnsContent(name);
-        return result;
-      } catch (err) {
-        log.error('[ens] resolution error', redactForLog(err));
-        return {
-          type: 'error',
-          name: (name || '').trim().toLowerCase(),
-          reason: 'RESOLUTION_ERROR',
-          error: err.message,
-        };
-      }
+    const failure = (reason, error) => ({
+      type: 'error',
+      name: (name || '').trim().toLowerCase(),
+      reason,
+      error,
     });
+
+    return runWithPrivateLogContext(privateResolveContext(event), () =>
+      withSenderSession(event, () => failure('SESSION_UNAVAILABLE', SESSION_UNAVAILABLE_MESSAGE),
+        async () => {
+          try {
+            const result = await resolveEnsContent(name);
+            return result;
+          } catch (err) {
+            log.error('[ens] resolution error', redactForLog(err));
+            return failure(failureReason(err), err.message);
+          }
+        })
+    );
   });
 
   ipcMain.handle(IPC.ENS_RESOLVE_ADDRESS, async (event, payload = {}) => {
     const { name, chainId = 1 } = payload;
-    return runWithPrivateLogContext(privateResolveContext(event), async () => {
-      try {
-        return await resolveEnsAddress(name, chainId);
-      } catch (err) {
-        log.error('[ens] address resolution error', redactForLog(err));
-        return {
-          success: false,
-          name: (name || '').trim().toLowerCase(),
-          reason: 'RESOLUTION_ERROR',
-          error: err.message,
-        };
-      }
+    const failure = (reason, error) => ({
+      success: false,
+      name: (name || '').trim().toLowerCase(),
+      reason,
+      error,
     });
+    return runWithPrivateLogContext(privateResolveContext(event), () =>
+      withSenderSession(event, () => failure('SESSION_UNAVAILABLE', SESSION_UNAVAILABLE_MESSAGE),
+        async () => {
+          try {
+            return await resolveEnsAddress(name, chainId);
+          } catch (err) {
+            log.error('[ens] address resolution error', redactForLog(err));
+            return failure(failureReason(err), err.message);
+          }
+        })
+    );
   });
 
   ipcMain.handle(IPC.ENS_RESOLVE_REVERSE, async (event, payload = {}) => {
     const { address, chainId = 1 } = payload;
-    return runWithPrivateLogContext(privateResolveContext(event), async () => {
-      try {
-        return await resolveEnsReverse(address, chainId);
-      } catch (err) {
-        log.error('[ens] reverse resolution error', redactForLog(err));
-        return {
-          success: false,
-          address: typeof address === 'string' ? address.toLowerCase() : null,
-          reason: 'RESOLUTION_ERROR',
-          error: err.message,
-        };
-      }
+    const failure = (reason, error) => ({
+      success: false,
+      address: typeof address === 'string' ? address.toLowerCase() : null,
+      reason,
+      error,
     });
+    return runWithPrivateLogContext(privateResolveContext(event), () =>
+      withSenderSession(event, () => failure('SESSION_UNAVAILABLE', SESSION_UNAVAILABLE_MESSAGE),
+        async () => {
+          try {
+            return await resolveEnsReverse(address, chainId);
+          } catch (err) {
+            log.error('[ens] reverse resolution error', redactForLog(err));
+            return failure(failureReason(err), err.message);
+          }
+        })
+    );
   });
 
   // Drop the cached contenthash for `name`. Used by the renderer's
   // swarm-probe failure handler so a "Try Again" click does a fresh
-  // resolution rather than re-probing a stale contenthash.
+  // resolution rather than re-probing a stale contenthash. Only the sender's
+  // own session's entry: whether another window had the name cached is not
+  // the sender's to learn.
   ipcMain.handle(IPC.ENS_INVALIDATE_CONTENT, async (event, payload = {}) => {
     const { name } = payload;
     return runWithPrivateLogContext(privateResolveContext(event), () =>
-      invalidateEnsContent(name)
+      withSenderSession(event, () => false, () => invalidateEnsContent(name))
     );
   });
 }
@@ -2822,8 +3035,9 @@ function invalidateEnsContent(name) {
   } catch {
     return false;
   }
-  const had = ensResultCache.has(key);
-  ensResultCache.delete(key);
+  const scopedKey = browsingCacheScope() + key;
+  const had = ensResultCache.has(scopedKey);
+  ensResultCache.delete(scopedKey);
   if (had) {
     log.info(`[ens] content cache invalidated for ${nameForLog(key)}`);
   }
@@ -2848,6 +3062,9 @@ module.exports = {
   resolveEnsReverse,
   invalidateCachedProvider,
   invalidateEnsContent,
+  forgetEnsSession,
+  createEthereumProvider,
+  createSessionGetUrl,
   universalResolverCall,
   universalResolverReverse,
   isResolverNotFoundError,

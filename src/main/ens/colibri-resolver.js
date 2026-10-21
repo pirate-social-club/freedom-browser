@@ -7,12 +7,27 @@ const workerHost = require('./colibri-worker-host');
 const log = require('../logger');
 const registry = require('../networks/network-registry');
 const { universalResolverCall, universalResolverReverse, hostOf } = require('../ens-resolver');
+const {
+  isBrowsingSessionRetired,
+  onBrowsingSessionRetired,
+  requireBrowsingSession,
+  sessionKey,
+  sessionUnavailableError,
+} = require('../browsing-transport');
 
+// One client per chain AND per browsing session (`${chainId}|${sessionKey}`):
+// a client's network traffic is dialled on the session it was built for (see
+// colibri-worker-host.js), so a private window never verifies through a
+// client built for another window, nor joins another window's build.
 const clients = new Map();
 const inFlightBuilds = new Map();
 const clientReferences = new Map();
 const retiredClients = new Set();
 const buildGenerations = new Map();
+
+function slotFor(chainId, browsingSession) {
+  return `${Number(chainId)}|${sessionKey(browsingSession)}`;
+}
 
 function destroyClient(client) {
   if (!client || typeof client.destroy !== 'function') return;
@@ -54,12 +69,13 @@ function retireClient(client) {
 // then re-validate that the retained client is still the cached one (and not
 // retired); if it was swapped/evicted during the gap, release and re-acquire.
 // The caller releases in a finally.
-async function acquireClient(chainId) {
+async function acquireClient(chainId, browsingSession) {
   const id = Number(chainId);
+  const slot = slotFor(id, browsingSession);
   for (;;) {
-    const client = await getClient(id);
+    const client = await getClient(id, browsingSession);
     retainClient(client);
-    const cached = clients.get(id);
+    const cached = clients.get(slot);
     if (cached?.client === client && !retiredClients.has(client)) {
       return { client, provider: cached.provider };
     }
@@ -113,10 +129,10 @@ function colibriErrorForLog(err) {
 
 // Evict only the client that actually failed. If another concurrent request
 // or a settings change has already installed a replacement, leave it intact.
-function evictFailedClient(chainId, failedClient) {
-  const cached = clients.get(chainId);
+function evictFailedClient(slot, failedClient) {
+  const cached = clients.get(slot);
   if (cached?.client !== failedClient) return;
-  clients.delete(chainId);
+  clients.delete(slot);
   retireClient(failedClient);
 }
 
@@ -124,9 +140,9 @@ function evictFailedClient(chainId, failedClient) {
 // from a stale runtime after sleep or a transient prover/network failure while
 // preserving fail-closed behavior: proof failures and reverts carrying actual
 // EVM revert data are never retried or reclassified.
-async function withColibriClientRetry(chainId, operation) {
+async function withColibriClientRetry(chainId, browsingSession, operation) {
   const id = Number(chainId);
-  const first = await acquireClient(id);
+  const first = await acquireClient(id, browsingSession);
   try {
     return await operation(first);
   } catch (err) {
@@ -135,8 +151,8 @@ async function withColibriClientRetry(chainId, operation) {
       `[colibri] chain ${id} request failed; rebuilding client and retrying once ` +
       colibriErrorForLog(err)
     );
-    evictFailedClient(id, first.client);
-    const retry = await acquireClient(id);
+    evictFailedClient(slotFor(id, browsingSession), first.client);
+    const retry = await acquireClient(id, browsingSession);
     try {
       return await operation(retry);
     } finally {
@@ -150,19 +166,21 @@ async function withColibriClientRetry(chainId, operation) {
   }
 }
 
-async function buildClient({ chainId, key, proverUrl, zkProof, generation }) {
+async function buildClient({ chainId, slot, key, proverUrl, zkProof, generation, browsingSession }) {
   // The chain's worker registers the verifier's disk storage before it reports
   // ready; settings-change rebuilds reuse the same worker and storage.
   await workerHost.ensureWorker(chainId);
 
-  const client = workerHost.createClient({ chainId, proverUrl, zkProof });
+  const client = workerHost.createClient({ chainId, proverUrl, zkProof, session: browsingSession });
 
-  if (generation !== buildGenerations.get(chainId)) {
+  // A newer build for this slot, or this session's window closed meanwhile
+  // (its generations were dropped): this one is obsolete.
+  if (generation !== buildGenerations.get(slot)) {
     destroyClient(client);
-    return getClient(chainId);
+    return getClient(chainId, browsingSession);
   }
 
-  const previousClient = clients.get(chainId)?.client;
+  const previousClient = clients.get(slot)?.client;
   // Co-locate the provider with its client in one entry so acquireClient
   // captures the {client, provider} pair atomically — a separate providers
   // map can return undefined mid-rebuild or a provider from another
@@ -170,55 +188,84 @@ async function buildClient({ chainId, key, proverUrl, zkProof, generation }) {
   const provider = new ethers.BrowserProvider(client);
   // Colibri pins EVM reads internally, so ethers sees "latest" and follows
   // OffchainLookup automatically. Its inherited gateway fetch has no body
-  // cap and a 300s timeout; use the same bounds as Myotis and pinned RPCs.
-  provider.ccipReadFetch = ccipReadFetch;
-  clients.set(chainId, { client, key, provider });
+  // cap and a 300s timeout; use the same bounds as Myotis and pinned RPCs,
+  // on the session this client was built for.
+  provider.ccipReadFetch = (transaction, data, urls) =>
+    ccipReadFetch(transaction, data, urls, undefined, { session: browsingSession });
+  clients.set(slot, { client, key, provider });
   retireClient(previousClient);
   log.info(`[colibri] chain ${chainId} client ready (prover=${hostOf(proverUrl)}, zk=${zkProof})`);
   return client;
 }
 
-// Lazy singleton. Cache key is the tuple of settings that materially
-// affect proof state (prover URL + zk_proof flag); a runtime change to
-// either tears down the cached instance and rebuilds. WASM init is paid
-// on first use, not module load. `inFlightBuild` collapses concurrent
-// first-call lookups onto a single construction. The generation counter
-// prevents a slower old-settings build from replacing a newer client.
-async function getClient(chainId = 1) {
+// Lazy singleton per (chain, session) slot. Cache key is the tuple of
+// settings that materially affect proof state (prover URL + zk_proof flag); a
+// runtime change to either tears down the cached instance and rebuilds. WASM
+// init is paid on first use, not module load. `inFlightBuild` collapses
+// concurrent first-call lookups of one slot onto a single construction. The
+// generation counter prevents a slower old-settings build from replacing a
+// newer client.
+async function getClient(chainId, browsingSession) {
   const id = Number(chainId);
+  if (isBrowsingSessionRetired(browsingSession)) throw sessionUnavailableError();
+  const slot = slotFor(id, browsingSession);
   const [proverUrl] = registry.getEndpoints(id, 'prover');
   if (!proverUrl) {
     throw new Error(`No Colibri prover configured for chain ${id}`);
   }
   const zkProof = registry.getNetwork(id)?.zkProof !== false;
   const key = `${proverUrl}|${zkProof}`;
-  const cached = clients.get(id);
-  const inFlight = inFlightBuilds.get(id);
+  const cached = clients.get(slot);
+  const inFlight = inFlightBuilds.get(slot);
   if (cached?.client && cached.key === key) {
     if (inFlight && inFlight.key !== key) {
-      buildGenerations.set(id, (buildGenerations.get(id) || 0) + 1);
+      buildGenerations.set(slot, (buildGenerations.get(slot) || 0) + 1);
     }
     return cached.client;
   }
   if (inFlight && inFlight.key === key) return inFlight.promise;
 
-  const generation = (buildGenerations.get(id) || 0) + 1;
-  buildGenerations.set(id, generation);
-  const promise = buildClient({ chainId: id, key, proverUrl, zkProof, generation });
-  inFlightBuilds.set(id, { key, promise, generation });
+  const generation = (buildGenerations.get(slot) || 0) + 1;
+  buildGenerations.set(slot, generation);
+  const promise = buildClient({
+    chainId: id, slot, key, proverUrl, zkProof, generation, browsingSession,
+  });
+  inFlightBuilds.set(slot, { key, promise, generation });
   try { return await promise; }
   finally {
-    if (inFlightBuilds.get(id)?.promise === promise) inFlightBuilds.delete(id);
+    if (inFlightBuilds.get(slot)?.promise === promise) inFlightBuilds.delete(slot);
   }
 }
+
+// A private window closed: drop its clients (destroyed once no request holds
+// them; their network traffic is cut off by the worker host right away) and
+// its generations, so a build still in flight for it is discarded.
+function forgetColibriSession(retired) {
+  const suffix = `|${sessionKey(retired)}`;
+  if (suffix === '|default') return;
+  for (const [slot, { client }] of [...clients]) {
+    if (!slot.endsWith(suffix)) continue;
+    clients.delete(slot);
+    retireClient(client);
+  }
+  for (const slot of [...buildGenerations.keys()]) {
+    if (slot.endsWith(suffix)) buildGenerations.delete(slot);
+  }
+}
+
+onBrowsingSessionRetired(forgetColibriSession);
 
 // Drop-in for what a single `consensusResolve` leg does today, but the
 // answer is cryptographically verified by Colibri rather than corroborated
 // across multiple public RPCs. No blockTag override — Colibri's verifier
 // pins to head − 1 by construction (sync committee signatures for block N
 // live in block N+1).
+// Each entry point takes the session from the request's context
+// (browsing-transport.js) before anything is built or dialled: a private
+// caller that lost its session fails here.
 async function resolveCallViaColibri(name, callData, callResolver = universalResolverCall) {
-  return withColibriClientRetry(1, ({ provider }) =>
+  const browsingSession = requireBrowsingSession();
+  return withColibriClientRetry(1, browsingSession, ({ provider }) =>
     callResolver(provider, name, callData)
   );
 }
@@ -232,7 +279,8 @@ async function resolveViaColibri(name, callData) {
 // Throws on revert (UR's ResolverNotFound / ReverseAddressMismatch) or
 // network/verification failure — the orchestrator classifies.
 async function resolveReverseViaColibri(addressBytes, coinType = 60n) {
-  return withColibriClientRetry(1, ({ provider }) =>
+  const browsingSession = requireBrowsingSession();
+  return withColibriClientRetry(1, browsingSession, ({ provider }) =>
     universalResolverReverse(provider, addressBytes, {}, coinType)
   );
 }
@@ -240,19 +288,20 @@ async function resolveReverseViaColibri(addressBytes, coinType = 60n) {
 // `deadlineMs` is how long the caller will wait: past it, a worker still
 // verifying this request is terminated rather than left running.
 async function requestViaColibri(chainId, method, params = [], { deadlineMs } = {}) {
-  return withColibriClientRetry(chainId, ({ client }) =>
+  const browsingSession = requireBrowsingSession();
+  return withColibriClientRetry(chainId, browsingSession, ({ client }) =>
     client.request({ method, params }, { deadlineMs })
   );
 }
 
 function clearColibriClientForTest() {
   for (const { client } of clients.values()) retireClient(client);
-  for (const chainId of new Set([
+  for (const slot of new Set([
     ...clients.keys(),
     ...inFlightBuilds.keys(),
     ...buildGenerations.keys(),
   ])) {
-    buildGenerations.set(chainId, (buildGenerations.get(chainId) || 0) + 1);
+    buildGenerations.set(slot, (buildGenerations.get(slot) || 0) + 1);
   }
   clients.clear();
   inFlightBuilds.clear();
