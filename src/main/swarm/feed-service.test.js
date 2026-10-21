@@ -129,7 +129,7 @@ jest.mock('electron-log', () => ({
   error: jest.fn(),
 }));
 
-const { buildTopicString, createFeed, updateFeed, writeFeedPayload, readFeedPayload, withWriteLock, feedIndexToNumber, isNotFoundError } = require('./feed-service');
+const { buildTopicString, createFeed, updateFeed, writeFeedPayload, readFeedPayload, withWriteLock, feedIndexToNumber, isNotFoundError, isFeedUnconfirmedError } = require('./feed-service');
 
 const TEST_PRIVATE_KEY = '0x' + 'ab'.repeat(32);
 const MOCK_MANIFEST_REF = 'ff'.repeat(32);
@@ -229,6 +229,18 @@ describe('feed-service', () => {
 
     test('returns false for TypeError', () => {
       expect(isNotFoundError(new TypeError('cannot read'))).toBe(false);
+    });
+  });
+
+  describe('isFeedUnconfirmedError', () => {
+    test("returns true for Ant's 503 on a lookup too few peers corroborated", () => {
+      expect(isFeedUnconfirmedError(new MockBeeResponseError(503))).toBe(true);
+    });
+
+    test('returns false for the not-found statuses and for plain errors', () => {
+      expect(isFeedUnconfirmedError(new MockBeeResponseError(404))).toBe(false);
+      expect(isFeedUnconfirmedError(new MockBeeResponseError(500))).toBe(false);
+      expect(isFeedUnconfirmedError(new Error('Service Unavailable'))).toBe(false);
     });
   });
 
@@ -423,6 +435,32 @@ describe('feed-service', () => {
       await expect(updateFeed(TEST_PRIVATE_KEY, 'myapp.eth/blog', CONTENT_REF))
         .rejects.toThrow('network timeout');
     });
+
+    test('defaults to index 0 when the latest lookup answers 500', async () => {
+      const writer = createMockWriter();
+      writer.downloadPayload.mockRejectedValue(new MockBeeResponseError(500));
+      mockMakeFeedWriter.mockReturnValue(writer);
+      mockBatchForAutoSelect();
+
+      const result = await updateFeed(TEST_PRIVATE_KEY, 'myapp.eth/blog', CONTENT_REF);
+
+      expect(result.index).toBe(0);
+    });
+
+    test('an uncorroborated miss (503) fails as feed_unconfirmed and never writes index 0', async () => {
+      const writer = createMockWriter();
+      writer.downloadPayload.mockRejectedValue(new MockBeeResponseError(503, 'Service Unavailable'));
+      mockMakeFeedWriter.mockReturnValue(writer);
+      mockBatchForAutoSelect();
+
+      const failure = updateFeed(TEST_PRIVATE_KEY, 'myapp.eth/blog', CONTENT_REF);
+
+      await expect(failure).rejects.toMatchObject({
+        reason: 'feed_unconfirmed',
+        message: "Not enough Swarm peers have confirmed this feed's latest entry yet. Try again shortly.",
+      });
+      expect(writer.uploadReference).not.toHaveBeenCalled();
+    });
   });
 
   describe('writeFeedPayload', () => {
@@ -570,6 +608,17 @@ describe('feed-service', () => {
         .rejects.toThrow('Bee internal error');
     });
 
+    test('an uncorroborated miss (503) during auto-increment fails as feed_unconfirmed', async () => {
+      const writer = createMockWriter();
+      writer.downloadPayload.mockRejectedValue(new MockBeeResponseError(503));
+      mockMakeFeedWriter.mockReturnValue(writer);
+      mockBatchForAutoSelect();
+
+      await expect(writeFeedPayload(TEST_PRIVATE_KEY, 'myapp.eth/blog', 'data'))
+        .rejects.toMatchObject({ reason: 'feed_unconfirmed' });
+      expect(writer.uploadPayload).not.toHaveBeenCalled();
+    });
+
     test('estimates batch size from actual payload size', async () => {
       const writer = createMockWriter();
       mockMakeFeedWriter.mockReturnValue(writer);
@@ -612,6 +661,24 @@ describe('feed-service', () => {
       expect(result.payload).toEqual(Buffer.from('latest data'));
       expect(result.index).toBe(3);
       expect(result.nextIndex).toBe(4);
+    });
+
+    test('an uncorroborated latest-entry miss (503) is feed_unconfirmed, not feed_empty', async () => {
+      const reader = createMockReader();
+      reader.downloadPayload.mockRejectedValue(new MockBeeResponseError(503));
+      mockMakeFeedReader.mockReturnValue(reader);
+
+      await expect(readFeedPayload(MOCK_OWNER, new MockTopic('ab'.repeat(32))))
+        .rejects.toMatchObject({ reason: 'feed_unconfirmed' });
+    });
+
+    test('a 503 for an exact index is not feed_unconfirmed and propagates as is', async () => {
+      const reader = createMockReader();
+      mockMakeFeedReader.mockReturnValue(reader);
+      const unavailable = new MockBeeResponseError(503, 'Service Unavailable');
+      mockDownloadChunk.mockRejectedValue(unavailable);
+
+      await expect(readFeedPayload(MOCK_OWNER, new MockTopic('ab'.repeat(32)), 2)).rejects.toBe(unavailable);
     });
 
     test('reads specific index when provided', async () => {

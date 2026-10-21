@@ -78,11 +78,11 @@ Risk levels follow upstream's scheme. Green is permissive with no action beyond 
 
 ## Downloaded Runtime Artifacts
 
-Versions here are the pinned values in the repository, not observed downloads; each names its pin so a drift is checkable. `licenses-audit.test.js` asserts that they match. Four of the five pins are unchanged from upstream 0.8.7; the freedom-ipfs pin moved forward to its security release.
+Versions here are the pinned values in the repository, not observed downloads; each names its pin so a drift is checkable. `licenses-audit.test.js` asserts that they match. Three of the five pins are unchanged from upstream 0.8.7; the freedom-ipfs and Ant pins moved forward to their security releases.
 
 ### Ant (antd, Swarm Node)
 
-Ant comes from https://github.com/freedom-hq/ant at version `v0.5.61` (pin: `scripts/fetch-ant.js` `PINNED_RELEASE_TAG`). It is MIT OR Apache-2.0, with upstream shipping `LICENSE-MIT` and `LICENSE-APACHE`. It runs as a separate process reached over IPC, ships in every package, and is attributed in `NOTICES`. Risk: green.
+Ant comes from https://github.com/freedom-hq/ant at version `v0.5.71` (pin: `scripts/fetch-ant.js` `PINNED_RELEASE_TAG`). It is MIT OR Apache-2.0, with upstream shipping `LICENSE-MIT` and `LICENSE-APACHE`. It runs as a separate process reached over IPC, ships in every package, and is attributed in `NOTICES`. Risk: green.
 
 ### freedom-ipfs (Native IPFS Addon)
 

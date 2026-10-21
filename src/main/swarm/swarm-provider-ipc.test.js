@@ -1602,6 +1602,24 @@ describe('swarm-provider-ipc', () => {
       expect(result.error.data.reason).toBe('index_already_exists');
     });
 
+    test('translates feed_unconfirmed to node unavailable, with its message', async () => {
+      mockFeedCapability('myapp.eth');
+      mockGetFeed.mockReturnValue({ topic: 't', owner: '0xOwner', manifestReference: 'm' });
+      mockPreFlightOk();
+      mockGetPublisherKey.mockResolvedValue({ privateKey: '0xkey' });
+      const err = new Error("Not enough Swarm peers have confirmed this feed's latest entry yet. Try again shortly.");
+      err.reason = 'feed_unconfirmed';
+      mockWriteFeedPayload.mockRejectedValue(err);
+
+      const result = await invokeProvider('swarm_writeFeedEntry', { name: 'feed', data: 'hello' }, 'myapp.eth');
+
+      expect(result.error).toEqual({
+        code: 4900,
+        message: err.message,
+        data: { reason: 'feed_unconfirmed' },
+      });
+    });
+
     test('translates payload too large error', async () => {
       mockFeedCapability('myapp.eth');
       mockGetFeed.mockReturnValue({ topic: 't', owner: '0xOwner', manifestReference: 'm' });
@@ -1814,6 +1832,20 @@ describe('swarm-provider-ipc', () => {
 
       expect(result.error.code).toBe(-32602);
       expect(result.error.data.reason).toBe('feed_empty');
+    });
+
+    test('translates feed_unconfirmed to node unavailable, not feed_empty', async () => {
+      mockGetPermission.mockReturnValue({ origin: 'myapp.eth' });
+      mockGetBeeApiUrl.mockReturnValue('http://127.0.0.1:1633');
+      global.fetch.mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+      const err = new Error("Not enough Swarm peers have confirmed this feed's latest entry yet. Try again shortly.");
+      err.reason = 'feed_unconfirmed';
+      mockReadFeedPayload.mockRejectedValue(err);
+
+      const result = await invokeProvider('swarm_readFeedEntry', { topic: VALID_TOPIC, owner: VALID_OWNER }, 'myapp.eth');
+
+      expect(result.error.code).toBe(4900);
+      expect(result.error.data.reason).toBe('feed_unconfirmed');
     });
 
     test('translates entry_not_found error', async () => {

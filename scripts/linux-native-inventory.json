@@ -49,8 +49,8 @@
       "path": "resources/ant-bin/antd",
       "class": "supported",
       "reason": "Ant Swarm node, spawned by src/main/ant-manager.js.",
-      "sha256": "ad135e666283edd043800207e23294c3df7cfc02eb377d14bcc72021d4f106dd",
-      "pin": "scripts/fetch-ant.js v0.5.61: PINNED_SHA256SUMS_DIGEST 6ca399a0… covers antd-v0.5.61-linux-amd64.tar.gz (ddea79ee…), whose antd member has this digest."
+      "sha256": "d7d24bed5a320a8f88d1593609860ac016a976f9245f6a3c3391747267d9b37e",
+      "pin": "scripts/fetch-ant.js v0.5.71: PINNED_SHA256SUMS_DIGEST 44e240f5… covers antd-v0.5.71-linux-amd64.tar.gz (a7b5946c…), whose antd member has this digest."
     },
     {
       "path": "resources/freedom-ipfs-node/freedom_ipfs_native.node",

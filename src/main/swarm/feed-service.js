@@ -60,6 +60,26 @@ function isNotFoundError(err) {
   return err instanceof BeeResponseError && (err.status === 404 || err.status === 500);
 }
 
+/**
+ * Ant v0.5.69+ answers a feed lookup that found nothing, but that too few
+ * peers corroborated, with 503 rather than 404: the feed may well have
+ * entries this node cannot yet see. That is never "empty" (writing index 0
+ * could fork an existing feed), so it stays an error, with a reason callers
+ * can show as "try again shortly".
+ */
+function isFeedUnconfirmedError(err) {
+  return err instanceof BeeResponseError && err.status === 503;
+}
+
+function feedUnconfirmedError(err) {
+  const error = new Error(
+    "Not enough Swarm peers have confirmed this feed's latest entry yet. Try again shortly."
+  );
+  error.reason = 'feed_unconfirmed';
+  error.cause = err;
+  return error;
+}
+
 // ---------------------------------------------------------------------------
 // Topic and index helpers
 // ---------------------------------------------------------------------------
@@ -147,6 +167,7 @@ async function resolveNextIndex(reader) {
     if (isNotFoundError(err)) {
       return 0;
     }
+    if (isFeedUnconfirmedError(err)) throw feedUnconfirmedError(err);
     throw err;
   }
 }
@@ -312,7 +333,11 @@ async function readFeedPayload(ownerAddress, topic, index) {
     return { payload, index: readIndex, nextIndex };
   } catch (err) {
     // Only map "not found" errors to semantic reasons.
-    // All other errors (network, timeout, parse) propagate as-is.
+    // All other errors (network, timeout, parse) propagate as-is. Ant's
+    // uncorroborated-miss 503 answers the latest-entry lookup only; a 503
+    // for an exact index is the node's own and stays as it is.
+    const latest = index === undefined || index === null;
+    if (latest && isFeedUnconfirmedError(err)) throw feedUnconfirmedError(err);
     if (!isNotFoundError(err)) throw err;
 
     if (index !== undefined && index !== null) {
@@ -335,4 +360,5 @@ module.exports = {
   withWriteLock,
   feedIndexToNumber,
   isNotFoundError,
+  isFeedUnconfirmedError,
 };
