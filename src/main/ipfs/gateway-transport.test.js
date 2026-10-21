@@ -779,6 +779,33 @@ describe('a session retired while its request is running', () => {
     expect(requestImpl).not.toHaveBeenCalled();
   });
 
+  test('a proxy lookup that never answers: retirement rejects at once and nothing is dialled', async () => {
+    const live = {};
+    const requestImpl = jest.fn();
+    const pending = netGatewayFetch(ONION, { redirect: 'manual' }, {
+      session: live,
+      resolveProxy: () => new Promise(() => {}),
+      requestImpl,
+    });
+    await flush();
+    retireBrowsingSession(live);
+    await expect(pending).rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(requestImpl).not.toHaveBeenCalled();
+  });
+
+  test("and so does the caller's own cancellation", async () => {
+    const controller = new AbortController();
+    const requestImpl = jest.fn();
+    const pending = netGatewayFetch(ONION, { redirect: 'manual', signal: controller.signal }, {
+      resolveProxy: () => new Promise(() => {}),
+      requestImpl,
+    });
+    await flush();
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(requestImpl).not.toHaveBeenCalled();
+  });
+
   test('while waiting for headers: the dial is aborted, with no caller signal', async () => {
     const live = {};
     let request;
