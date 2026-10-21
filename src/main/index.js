@@ -572,10 +572,11 @@ async function bootstrap() {
     registerOnionRoutingSession(partition, privateSession);
   }, { canOpen: () => !isQuitting });
   // On private-window close: retire the window's session before anything
-  // else, while its HNS and `.onion` routing are still on it — the ENS,
-  // Colibri and RPC requests still in flight for the window are aborted and
-  // nothing new is dialled on it (browsing-transport.js), so none of them can
-  // outlive that routing and go out DIRECT once the hooks below remove it.
+  // else, while its HNS and `.onion` routing are still on it. Every request
+  // the shared gateway transport is still running on that session (ENS quorum
+  // legs, CCIP-Read, chain-data RPC, prefetch and the Colibri bridge) is
+  // aborted at whatever stage it has reached, and nothing new is dialled on
+  // it (browsing-transport.js), so none of them outlives that routing.
   // Then cancel the window's still-running downloads (once its rows are gone
   // nothing can see or stop them, and a finished file would leave no record
   // anywhere), then drop the window's in-memory download rows (they never

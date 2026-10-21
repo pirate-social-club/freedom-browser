@@ -469,6 +469,25 @@ describe('the session a gateway is dialled on', () => {
     expect(net.requests[0].options.session).toBe(privateSession);
   });
 
+  test('retiring it ends a gateway in flight and tries no other', async () => {
+    const { retireBrowsingSession } = require('../browsing-transport');
+    const hanging = () => {};
+    const { net, deps } = gateways(hanging);
+    const closing = { resolveProxy: jest.fn() };
+    const pending = ccipReadFetch(
+      TX,
+      '0xbeef',
+      ['https://gw-one.example/{data}', 'https://gw-two.example/{data}'],
+      undefined,
+      { ...deps, session: closing }
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    retireBrowsingSession(closing);
+    await expect(pending).rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(net.urls()).toEqual(['https://gw-one.example/0xbeef']);
+    expect(net.requests[0].aborted).toBe(true);
+  });
+
   test("decides an onion gateway's route by its own proxy policy", async () => {
     const { net, deps } = gateways(answer('0xcafe'));
     const privateSession = { resolveProxy: jest.fn(async () => 'SOCKS5 127.0.0.1:9150') };

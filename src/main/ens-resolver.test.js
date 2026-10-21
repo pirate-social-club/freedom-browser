@@ -3644,6 +3644,22 @@ describe('ens-resolver browsing-session isolation', () => {
     await resolveEnsContent('refused.eth');
     expect(mockUrResolve).toHaveBeenCalledTimes(TEST_PROVIDERS.length);
   });
+
+  test("a leg failed by the session's own proxy is no fault of the shared providers", async () => {
+    mockUrResolve.mockRejectedValue(
+      Object.assign(new Error('session proxy unavailable'), { code: 'PROXY_UNAVAILABLE' })
+    );
+    await expect(resolveEnsContent('proxied.eth')).rejects.toThrow(
+      'All 3 RPC providers failed for proxied.eth'
+    );
+
+    // One window's dVPN reconnecting must not take ENS down for every window.
+    clearEnsResolutionCaches();
+    mockUrResolve.mockClear();
+    mockUrResolve.mockResolvedValue(urReturnsBytes(ipfsContenthashFor(IPFS_V0)));
+    await resolveEnsContent('proxied.eth');
+    expect(mockUrResolve).toHaveBeenCalledTimes(TEST_PROVIDERS.length);
+  });
 });
 
 // ethers' `getUrlFunc` for the quorum legs' providers: through the gateway
@@ -3701,6 +3717,42 @@ describe('ens-resolver RPC transport', () => {
     });
   });
 
+  test.each([
+    'net::ERR_PROXY_CONNECTION_FAILED',
+    'net::ERR_SOCKS_CONNECTION_FAILED',
+    'net::ERR_TUNNEL_CONNECTION_FAILED',
+  ])('%s is the session proxy failing, not the provider', async (message) => {
+    const transport = jest.fn(async () => { throw new TypeError(message); });
+    await expect(createSessionGetUrl(SESSION, transport)(rpcRequest()))
+      .rejects.toMatchObject({ code: 'PROXY_UNAVAILABLE' });
+  });
+
+  test('an answer over the bound is refused, not held', async () => {
+    const big = 4 * 1024 * 1024 + 1;
+    const transport = jest.fn(async () => new Response(new Uint8Array(big), { status: 200 }));
+    await expect(createSessionGetUrl(SESSION, transport)(rpcRequest())).rejects.toMatchObject({
+      code: 'NETWORK_ERROR',
+      message: expect.stringContaining('larger than 4194304 bytes'),
+    });
+  });
+
+  test('through the real transport, retiring the session ends a leg in flight', async () => {
+    const { netGatewayFetch } = jest.requireActual('./ipfs/gateway-transport');
+    const { FakeClientRequest } = require('../../test/helpers/fake-electron-net');
+    const { retireBrowsingSession } = jest.requireActual('./browsing-transport');
+    const live = { id: 'closing-window' };
+    let request;
+    const transport = (url, init, deps) => netGatewayFetch(url, init, {
+      ...deps,
+      requestImpl: (options) => (request = new FakeClientRequest(options)),
+    });
+    const pending = createSessionGetUrl(live, transport)(rpcRequest());
+    await new Promise((resolve) => setImmediate(resolve));
+    retireBrowsingSession(live);
+    await expect(pending).rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(request.aborted).toBe(true);
+  });
+
   test('a closed session stays a SESSION_UNAVAILABLE refusal', async () => {
     const transport = jest.fn(async () => {
       throw Object.assign(new Error('Browsing session unavailable'), { code: 'SESSION_UNAVAILABLE' });
@@ -3746,7 +3798,10 @@ describe('ens-resolver RPC transport', () => {
     let isolated;
     jest.isolateModules(() => {
       jest.dontMock('ethers');
-      jest.doMock('./ipfs/gateway-transport', () => ({ gatewayFetch: mockRpcTransport }));
+      jest.doMock('./ipfs/gateway-transport', () => ({
+        ...jest.requireActual('./ipfs/gateway-transport'),
+        gatewayFetch: mockRpcTransport,
+      }));
       isolated = {
         resolver: require('./ens-resolver'),
         transport: require('./browsing-transport'),

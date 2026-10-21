@@ -8,7 +8,7 @@ const registry = require('./networks/network-registry');
 const { prefetchGatewayUrl, NOOP_HANDLE: NOOP_PREFETCH } = require('./ens-prefetch');
 const myotisManager = require('./myotis/myotis-manager');
 const { ccipReadFetch } = require('./ens/ccip-fetch');
-const { gatewayFetch } = require('./ipfs/gateway-transport');
+const { gatewayFetch, readBoundedBody } = require('./ipfs/gateway-transport');
 const { capCache } = require('./cache-utils');
 const {
   runWithPrivateLogContext,
@@ -178,10 +178,15 @@ function isQuarantined(url) {
   return true;
 }
 
-// A request refused because its private window closed mid-lookup says
-// nothing about the provider, so it never counts against it.
+// A request that never reached the provider says nothing about it: refused
+// because its private window closed mid-lookup, or failed because the
+// requesting session's own proxy was unreachable (a dVPN reconnecting, say).
+// Neither counts against a provider every window shares, or one window's
+// outage would take ENS down for all of them until the quarantine expired.
+const NOT_A_PROVIDER_FAULT = new Set(['SESSION_UNAVAILABLE', 'PROXY_UNAVAILABLE']);
+
 function markProviderFailure(url, err) {
-  if (err?.code === 'SESSION_UNAVAILABLE') return;
+  if (NOT_A_PROVIDER_FAULT.has(err?.code) || NOT_A_PROVIDER_FAULT.has(err?.cause?.code)) return;
   const entry = quarantine.get(url) || { failures: 0, cooldownUntil: 0 };
   entry.failures += 1;
   const cooldown = Math.min(QUARANTINE_BASE_MS * 2 ** (entry.failures - 1), QUARANTINE_MAX_MS);
@@ -272,6 +277,13 @@ const RPC_TRANSPORT_REQUEST_HEADERS = new Set([
 // `content-encoding`; passed on, ethers would gunzip plain bytes.
 const RPC_DECODED_RESPONSE_HEADERS = new Set(['content-encoding', 'content-length']);
 
+// The most a quorum leg's JSON-RPC answer may be: an ENS lookup's results are
+// a few kilobytes, so this only stops a misbehaving provider.
+const MAX_RPC_RESPONSE_BYTES = 4 * 1024 * 1024;
+// Chromium's errors for a proxy it could not use: the requesting session's own
+// route failed, not the provider.
+const PROXY_FAILURE = /ERR_(PROXY|SOCKS|TUNNEL)_/;
+
 function rpcTransportError(message, code, cause) {
   const err = new Error(message, cause ? { cause } : undefined);
   err.code = code;
@@ -308,7 +320,7 @@ function createSessionGetUrl(browsingSession, transport = gatewayFetch) {
         redirect: 'error',
         signal: controller.signal,
       }, { session: browsingSession });
-      const bytes = new Uint8Array(await response.arrayBuffer());
+      const bytes = await readBoundedBody(response, MAX_RPC_RESPONSE_BYTES);
       const responseHeaders = {};
       for (const [name, value] of response.headers) {
         if (!RPC_DECODED_RESPONSE_HEADERS.has(name)) responseHeaders[name] = value;
@@ -322,6 +334,9 @@ function createSessionGetUrl(browsingSession, transport = gatewayFetch) {
     } catch (err) {
       if (err?.code === 'SESSION_UNAVAILABLE') throw err;
       if (cancelled) throw rpcTransportError('request cancelled', 'CANCELLED', err);
+      if (PROXY_FAILURE.test(String(err?.message))) {
+        throw rpcTransportError('session proxy unavailable', 'PROXY_UNAVAILABLE', err);
+      }
       if (timedOut) throw rpcTransportError('request timeout', 'TIMEOUT', err);
       throw rpcTransportError(`RPC transport failed: ${err?.message || err}`, 'NETWORK_ERROR', err);
     } finally {
@@ -343,10 +358,19 @@ function sessionBoundProviderClass() {
   if (!SessionBoundJsonRpcProvider) {
     SessionBoundJsonRpcProvider = class extends ethers.JsonRpcProvider {
       #getUrl = null;
+      #browsingSession = null;
 
       constructor(url, network, options, browsingSession) {
         super(url, network, options);
         this.#getUrl = createSessionGetUrl(browsingSession);
+        this.#browsingSession = browsingSession;
+      }
+
+      // The quorum legs pin a block hash, so ethers never follows an
+      // OffchainLookup on them; if it ever did, its inherited gateway fetch
+      // would go out on Node. This one stays on the leg's session.
+      ccipReadFetch(tx, calldata, urls) {
+        return ccipReadFetch(tx, calldata, urls, undefined, { session: this.#browsingSession });
       }
 
       // Every request ethers sends is a clone of the provider's connection
@@ -618,8 +642,9 @@ let resolutionLifecycleEpoch = 0;
 // The three caches above and the in-flight dedupe below are per browsing
 // session: a lookup made for a private window is answered from, and written
 // to, that session's entries only, so it neither reuses another window's
-// result nor lets another window learn (from a cache hit, an eviction, or a
-// joined lookup) what it resolved. Default-session keys are the bare keys
+// result nor lets another window learn from a cache hit or a joined lookup
+// what it resolved. The 500-entry cap is shared, so which entries are evicted
+// first can still depend on every window's lookups. Default-session keys are the bare keys
 // they always were; another session's carry its opaque `sessionKey` prefix
 // (never a partition name). `forgetEnsSession` drops a closed window's share.
 function browsingCacheScope() {
@@ -679,8 +704,9 @@ function isProviderError(err) {
   const message = err.message || '';
   const code = err.code || '';
 
-  // ethers.js error codes for network/server issues
-  if (code === 'SERVER_ERROR' || code === 'NETWORK_ERROR' || code === 'TIMEOUT') {
+  // ethers.js error codes for network/server issues, and the session
+  // transport's own: a proxy that could not be used never reached the provider.
+  if (code === 'SERVER_ERROR' || code === 'NETWORK_ERROR' || code === 'TIMEOUT' || code === 'PROXY_UNAVAILABLE') {
     return true;
   }
 
@@ -974,7 +1000,7 @@ async function universalResolverReverseCall(provider, normalizedAddress, _callDa
       resolverAddress: UNIVERSAL_RESOLVER_ADDRESS,
     };
   } catch (err) {
-    if (isProviderError(err) || ['CCIP_GATEWAY_FAILED', 'SESSION_UNAVAILABLE'].includes(err.code)) {
+    if (isProviderError(err) || ['CCIP_GATEWAY_FAILED', 'SESSION_UNAVAILABLE', 'PROXY_UNAVAILABLE'].includes(err.code)) {
       throw err;
     }
     if (isResolverNotFoundError(err)) {
@@ -1083,9 +1109,10 @@ async function runQuorumLeg(
     markProviderSuccess(url);
     return { url, status: 'data', resolvedData: result.resolvedData, resolverAddress: result.resolverAddress };
   } catch (err) {
-    // The lookup's private window closed: nothing more is dialled for it, and
-    // the refusal is no answer about the name and no fault of the provider.
-    if (err?.code === 'SESSION_UNAVAILABLE') return { url, status: 'error', error: err };
+    // The lookup's private window closed, or its session's own proxy could
+    // not be used: neither is an answer about the name or a fault of the
+    // provider (see NOT_A_PROVIDER_FAULT).
+    if (NOT_A_PROVIDER_FAULT.has(err?.code)) return { url, status: 'error', error: err };
     if (deadlineAfterGateway || err.code === 'CCIP_GATEWAY_FAILED') {
       // A gateway outage is retryable, not an agreed absent record. Keep
       // the RPC healthy and keep the failure out of negative-record caches.

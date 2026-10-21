@@ -295,6 +295,12 @@ function createColibriService({ runtime, storageDir, post }) {
 }
 
 if (!isMainThread && parentPort) {
+  // The verifier has no network of its own: every request it makes goes
+  // through `config.fetch`, the host's session-bound bridge. A path that
+  // reached for Node's global instead (a future SDK change) fails here
+  // rather than dialling outside the requesting window's session.
+  globalThis.fetch = () =>
+    Promise.reject(new TypeError('Colibri worker has no network of its own; requests go through the host bridge'));
   const post = (message) => parentPort.postMessage(message);
   try {
     // Never require the package directly — colibri-runtime pins the WASM

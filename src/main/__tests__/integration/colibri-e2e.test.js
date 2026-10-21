@@ -35,6 +35,16 @@ const mockTempUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'colibri-e2e-'));
 jest.mock('electron', () => ({
   app: { getPath: () => mockTempUserData },
   ipcMain: { handle: jest.fn() },
+  session: { defaultSession: {} },
+}));
+// Plain Node has no Electron network stack, so this live check dials with
+// Node's fetch on a stand-in default session, as it did before session-bound
+// transport. Routing by session is proven in real Electron by
+// session-transport-proxy.test.js.
+jest.mock('../../ipfs/gateway-transport', () => ({
+  ...jest.requireActual('../../ipfs/gateway-transport'),
+  gatewayFetch: (url, init) => fetch(url, init),
+  netGatewayFetch: (url, init) => fetch(url, init),
 }));
 
 const TIMEOUT_MS = 60_000;

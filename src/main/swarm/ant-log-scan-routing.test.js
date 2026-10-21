@@ -51,9 +51,17 @@ jest.mock('../logger', () => ({ verbose: jest.fn(), info: jest.fn(), warn: jest.
 // The router dials remote RPC endpoints through gateway-transport (Chromium,
 // on the request's browsing session). This suite stands `global.fetch` in for
 // the network, so the transport hands straight to it.
+// The suite's fetch stubs answer with plain { ok, status, json } objects; the
+// RPC path now reads a real bounded body, so hand it a real Response.
+const mockAsResponse = async (pending) => {
+  const value = await pending;
+  if (value instanceof Response) return value;
+  const body = typeof value?.json === 'function' ? JSON.stringify(await value.json()) : '';
+  return new Response(body, { status: value?.status ?? (value?.ok === false ? 500 : 200) });
+};
 jest.mock('../ipfs/gateway-transport', () => ({
   ...jest.requireActual('../ipfs/gateway-transport'),
-  gatewayFetch: (url, init) => global.fetch(url, init),
+  gatewayFetch: (url, init) => mockAsResponse(global.fetch(url, init)),
 }));
 
 const router = require('../networks/chain-data-router');

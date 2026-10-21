@@ -1,6 +1,7 @@
 const {
   FakeClientRequest,
   FakeIncomingMessage,
+  emitResponse,
 } = require('../../../test/helpers/fake-electron-net');
 
 const {
@@ -11,6 +12,7 @@ const {
   isOnionHostname,
   isOnionGatewayUrl,
   isGatewayTransportRequest,
+  readBoundedBody,
 } = require('./gateway-transport');
 
 // What the Tor PAC resolves an onion URL to once Arti is up. Dials in these
@@ -750,5 +752,119 @@ describe('dialling on a named session', () => {
     ).rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
     expect(requestImpl).not.toHaveBeenCalled();
     expect(nodeFetch).not.toHaveBeenCalled();
+  });
+});
+
+// A private window that closes retires its session (browsing-transport.js).
+// The transport itself then ends every request still running on it, at
+// whatever stage it has reached, whether or not its caller passed a signal.
+describe('a session retired while its request is running', () => {
+  const { retireBrowsingSession } = require('../browsing-transport');
+  const ONION = 'http://freedomgatewayprobe.onion:8080/ipfs/bafkqaaa';
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+  test('during the onion proxy check: nothing is dialled afterwards', async () => {
+    const live = {};
+    let answerProxy;
+    const requestImpl = jest.fn();
+    const pending = netGatewayFetch(ONION, { redirect: 'manual' }, {
+      session: live,
+      resolveProxy: () => new Promise((resolve) => { answerProxy = resolve; }),
+      requestImpl,
+    });
+    await flush();
+    retireBrowsingSession(live);
+    answerProxy(ONION_ROUTED);
+    await expect(pending).rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(requestImpl).not.toHaveBeenCalled();
+  });
+
+  test('while waiting for headers: the dial is aborted, with no caller signal', async () => {
+    const live = {};
+    let request;
+    const pending = netGatewayFetch(REMOTE, {}, {
+      session: live,
+      requestImpl: (options) => (request = new FakeClientRequest(options)),
+    });
+    retireBrowsingSession(live);
+    await expect(pending).rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(request.aborted).toBe(true);
+  });
+
+  test('while the body streams: the body errors and the dial is aborted', async () => {
+    const live = {};
+    let request;
+    const pending = netGatewayFetch(REMOTE, {}, {
+      session: live,
+      requestImpl: (options) => (request = new FakeClientRequest(options)),
+    });
+    emitResponse(request, { chunks: ['part'], end: false });
+    const response = await pending;
+    retireBrowsingSession(live);
+    await expect(readAll(response)).rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(request.aborted).toBe(true);
+  });
+
+  test("a caller's own signal still works alongside the session's", async () => {
+    const live = {};
+    let request;
+    const controller = new AbortController();
+    const pending = netGatewayFetch(REMOTE, { signal: controller.signal }, {
+      session: live,
+      requestImpl: (options) => (request = new FakeClientRequest(options)),
+    });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(request.aborted).toBe(true);
+  });
+
+  test('the loopback branch is cancelled too', async () => {
+    const live = {};
+    let seenSignal;
+    const nodeFetch = jest.fn((_url, init) => new Promise((_resolve, reject) => {
+      seenSignal = init.signal;
+      init.signal.addEventListener('abort', () => reject(init.signal.reason));
+    }));
+    const pending = gatewayFetch('http://127.0.0.1:8545/', { method: 'POST' }, { session: live, nodeFetch });
+    retireBrowsingSession(live);
+    await expect(pending).rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(seenSignal.aborted).toBe(true);
+  });
+
+  test('the default session is never retired, so its requests run on', async () => {
+    const requestImpl = jest.fn((options) => {
+      const request = new FakeClientRequest(options);
+      setImmediate(() => emitResponse(request, { chunks: ['ok'] }));
+      return request;
+    });
+    const response = await netGatewayFetch(REMOTE, {}, { requestImpl });
+    expect((await readAll(response)).toString()).toBe('ok');
+  });
+});
+
+describe('readBoundedBody', () => {
+  test('reads a body within the bound', async () => {
+    const bytes = await readBoundedBody(new Response('abc'), 3);
+    expect(Buffer.from(bytes).toString()).toBe('abc');
+  });
+
+  test('refuses a declared length over the bound before reading', async () => {
+    const response = new Response('abcd', { headers: { 'content-length': '4' } });
+    await expect(readBoundedBody(response, 3)).rejects.toMatchObject({ code: 'RESPONSE_TOO_LARGE' });
+  });
+
+  test('refuses a body that grows past the bound while streaming', async () => {
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(2));
+        controller.enqueue(new Uint8Array(2));
+        controller.close();
+      },
+    });
+    await expect(readBoundedBody(new Response(body), 3)).rejects.toMatchObject({ code: 'RESPONSE_TOO_LARGE' });
+  });
+
+  test('an empty body is empty', async () => {
+    expect((await readBoundedBody(new Response(null, { status: 204 }), 3)).byteLength).toBe(0);
   });
 });

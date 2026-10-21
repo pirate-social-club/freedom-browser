@@ -53,6 +53,8 @@ const sessionKeys = new WeakMap();
 let nextSessionKey = 1;
 const retiredSessions = new WeakSet();
 const retirementListeners = new Set();
+// One AbortController per non-default session, aborted when it retires.
+const retirementControllers = new WeakMap();
 
 // The session a window's tabs browse in. A sender that no longer has a window
 // (closing mid-lookup), or a private window whose partition is already gone,
@@ -153,6 +155,7 @@ function retireBrowsingSession(targetSession) {
   if (!targetSession || typeof targetSession !== 'object') return;
   if (targetSession === defaultBrowsingSession() || retiredSessions.has(targetSession)) return;
   retiredSessions.add(targetSession);
+  retirementControllers.get(targetSession)?.abort(sessionUnavailableError());
   for (const listener of [...retirementListeners]) {
     try {
       listener(targetSession);
@@ -160,6 +163,26 @@ function retireBrowsingSession(targetSession) {
       log.error('[browsing-transport] session retirement listener failed:', err?.message || err);
     }
   }
+}
+
+/**
+ * An AbortSignal that aborts, with a SESSION_UNAVAILABLE reason, when
+ * `targetSession` retires (already aborted if it has). The shared gateway
+ * transport combines it with each request's own signal, so every request
+ * dialled on a private window's session is cancelled at whatever stage it has
+ * reached when the window closes, whether or not its caller passed a signal.
+ * Null for the default session and for no session object: those never retire.
+ */
+function browsingSessionRetirementSignal(targetSession) {
+  if (!targetSession || typeof targetSession !== 'object') return null;
+  if (targetSession === defaultBrowsingSession()) return null;
+  let controller = retirementControllers.get(targetSession);
+  if (!controller) {
+    controller = new AbortController();
+    if (retiredSessions.has(targetSession)) controller.abort(sessionUnavailableError());
+    retirementControllers.set(targetSession, controller);
+  }
+  return controller.signal;
 }
 
 /** Calls `listener(session)` once per retired session. Returns an unsubscribe. */
@@ -179,4 +202,5 @@ module.exports = {
   isBrowsingSessionRetired,
   retireBrowsingSession,
   onBrowsingSessionRetired,
+  browsingSessionRetirementSignal,
 };

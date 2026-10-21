@@ -2,7 +2,7 @@ const log = require('../logger');
 const registry = require('./network-registry');
 const myotis = require('../myotis/myotis-manager');
 const blockscoutLogs = require('./blockscout-logs');
-const { gatewayFetch } = require('../ipfs/gateway-transport');
+const { gatewayFetch, readBoundedBody } = require('../ipfs/gateway-transport');
 const { requireBrowsingSession, sessionKey } = require('../browsing-transport');
 
 const READ_METHODS = new Set([
@@ -1224,6 +1224,11 @@ async function requestColibri(chainId, method, params, routeKey = null, deadline
 // fetch inside gatewayFetch, which no proxy policy covers anyway. A redirect
 // is not followed on the remote path: it comes back as the 3xx it is, which
 // fails the endpoint below.
+// The most one RPC answer may be, the same bound the Colibri bridge puts on a
+// proof: large log scans fit, and a misbehaving endpoint cannot make this
+// process hold more.
+const MAX_RPC_RESPONSE_BYTES = 16 * 1024 * 1024;
+
 async function requestRpcUrl(url, method, params, timeoutMs, { signal } = {}) {
   const browsingSession = requireBrowsingSession();
   const controller = new AbortController();
@@ -1236,14 +1241,20 @@ async function requestRpcUrl(url, method, params, timeoutMs, { signal } = {}) {
     controller.abort();
   }, timeoutMs);
   try {
+    // A redirect is refused on every branch, the loopback one included: an
+    // RPC answer comes from the URL that was asked, never from wherever a
+    // local node or a remote one points next.
     const response = await gatewayFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
+      redirect: 'error',
       signal: controller.signal,
     }, { session: browsingSession });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
+    const data = JSON.parse(new TextDecoder().decode(
+      await readBoundedBody(response, MAX_RPC_RESPONSE_BYTES)
+    ));
     if (data.error) {
       const error = new Error(data.error.message || 'RPC request failed');
       error.code = data.error.code;

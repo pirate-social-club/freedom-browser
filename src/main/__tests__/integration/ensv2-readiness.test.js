@@ -7,6 +7,16 @@ const mockDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-ensv2-'));
 jest.mock('electron', () => ({
   app: { getPath: () => mockDataDir },
   ipcMain: { handle: jest.fn() },
+  session: { defaultSession: {} },
+}));
+// Plain Node has no Electron network stack, so this live check dials with
+// Node's fetch on a stand-in default session, as it did before session-bound
+// transport. Routing by session is proven in real Electron by
+// session-transport-proxy.test.js.
+jest.mock('../../ipfs/gateway-transport', () => ({
+  ...jest.requireActual('../../ipfs/gateway-transport'),
+  gatewayFetch: (url, init) => fetch(url, init),
+  netGatewayFetch: (url, init) => fetch(url, init),
 }));
 jest.mock('../../logger', () => ({ info() {}, warn() {}, error() {}, debug() {} }));
 jest.mock('../../private/private-windows', () => ({ isPrivateWebContents: () => false }));

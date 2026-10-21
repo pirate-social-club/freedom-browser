@@ -315,6 +315,24 @@ function assertSessionUsable(dialSession) {
   if (isBrowsingSessionRetired(dialSession)) throw sessionUnavailableError();
 }
 
+// The caller's signal, joined with the dial session's retirement: a private
+// window that closes cancels every request still running on its session, at
+// whatever stage it has reached (the onion check, waiting for headers, reading
+// the body), including requests whose caller passed no signal of its own.
+function sessionBoundSignal(signal, dialSession) {
+  if (!dialSession) return signal;
+  const { browsingSessionRetirementSignal } = require('../browsing-transport');
+  const retirement = browsingSessionRetirementSignal(dialSession);
+  if (!retirement) return signal;
+  return signal ? AbortSignal.any([signal, retirement]) : retirement;
+}
+
+// What an aborted request rejects with: the session's SESSION_UNAVAILABLE when
+// its retirement caused it, otherwise the usual AbortError.
+function cancellationError(signal) {
+  return signal?.reason?.code === 'SESSION_UNAVAILABLE' ? signal.reason : abortError();
+}
+
 function defaultNetRequest(options) {
   const { net } = require('electron');
   const request = typeof net?.request === 'function' ? net.request(options) : null;
@@ -355,7 +373,8 @@ function defaultNetRequest(options) {
  * @returns {Promise<Response>}
  */
 async function netGatewayFetch(url, init = {}, deps = {}) {
-  const { method = 'GET', headers, signal, redirect = 'manual', body: requestBody } = init;
+  const { method = 'GET', headers, signal: callerSignal, redirect = 'manual', body: requestBody } = init;
+  const signal = sessionBoundSignal(callerSignal, deps.session);
   if (redirect !== 'manual' && redirect !== 'error') {
     throw new Error(
       `gateway transport supports redirect: 'manual' or 'error' only (got '${redirect}')`
@@ -369,7 +388,7 @@ async function netGatewayFetch(url, init = {}, deps = {}) {
       throw new TypeError('gateway transport accepts a string or Buffer body only');
     }
   }
-  if (signal?.aborted) throw abortError();
+  if (signal?.aborted) throw cancellationError(signal);
   assertSessionUsable(deps.session);
   // Refused before the request exists, so Chromium is never asked to resolve
   // an onion name the session would send DIRECT (see the file header).
@@ -389,7 +408,7 @@ async function netGatewayFetch(url, init = {}, deps = {}) {
     // cancel it — the returned promise would then hang until the network
     // settled it, stalling whoever awaited it.
     if (signal?.aborted) {
-      reject(abortError());
+      reject(cancellationError(signal));
       return;
     }
 
@@ -469,7 +488,7 @@ async function netGatewayFetch(url, init = {}, deps = {}) {
     if (signal) {
       onAbort = () => {
         abortRequest();
-        fail(abortError());
+        fail(cancellationError(signal));
       };
       signal.addEventListener('abort', onAbort, { once: true });
     }
@@ -614,14 +633,56 @@ async function gatewayFetch(url, init = {}, deps = {}) {
     // No proxy applies to loopback, but a closed private window's lookups
     // still stop here like everywhere else.
     assertSessionUsable(deps.session);
-    return (deps.nodeFetch || fetch)(url, init);
+    const signal = sessionBoundSignal(init.signal, deps.session);
+    return (deps.nodeFetch || fetch)(url, signal === init.signal ? init : { ...init, signal });
   }
   return netGatewayFetch(url, init, deps);
+}
+
+/**
+ * The whole body of `response` as a Uint8Array, refusing more than `maxBytes`:
+ * on a declared `content-length` before reading, and again while reading,
+ * since that header may be absent or (once Chromium has decoded the body)
+ * describe compressed bytes. On overflow the body is cancelled and the read
+ * throws with code RESPONSE_TOO_LARGE, so no caller holds an unbounded answer.
+ */
+async function readBoundedBody(response, maxBytes) {
+  const tooLarge = () => {
+    const err = new Error(`response larger than ${maxBytes} bytes`);
+    err.code = 'RESPONSE_TOO_LARGE';
+    return err;
+  };
+  if (Number(response.headers?.get?.('content-length')) > maxBytes) {
+    try { await response.body?.cancel(); } catch { /* nothing left to stop */ }
+    throw tooLarge();
+  }
+  if (!response.body) return new Uint8Array(0);
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const next = await reader.read();
+    if (next.done) break;
+    size += next.value.byteLength;
+    if (size > maxBytes) {
+      try { await reader.cancel(); } catch { /* already errored */ }
+      throw tooLarge();
+    }
+    chunks.push(next.value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 module.exports = {
   gatewayFetch,
   netGatewayFetch,
+  readBoundedBody,
   isLoopbackHostname,
   isLoopbackGatewayUrl,
   isOnionHostname,

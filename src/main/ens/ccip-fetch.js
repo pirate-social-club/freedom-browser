@@ -171,6 +171,9 @@ async function ccipReadFetch(transaction, data, urls, signal, deps = {}) {
       if (isHexData(result)) return result;
       throw new Error('CCIP response data is not hex');
     } catch (err) {
+      // The requesting window closed: no further gateway is tried for it, and
+      // the caller sees the refusal rather than a gateway outage.
+      if (err?.code === 'SESSION_UNAVAILABLE') throw err;
       // Try the next gateway without logging names, URLs or payloads.
       deps.onGatewayError?.(err);
     } finally {

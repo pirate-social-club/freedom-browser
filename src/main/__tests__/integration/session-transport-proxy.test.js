@@ -162,9 +162,15 @@ describeWithElectron('session-bound name-resolution transport in a real Electron
     viaOnly(results.colibriB, 'B');
   });
 
-  test("retiring the private session tears down its in-flight bridge fetch", () => {
+  test("retiring the private session tears down every request in flight on it", () => {
     expect(results.retireB.reachedHang).toBe(true);
-    expect(results.retireB.openBeforeRetire).toBeGreaterThan(0);
+    // The bridge fetch, a plain gateway dial and an ENS quorum leg, the last
+    // two with no caller signal: only the session's retirement ended them.
+    expect(results.retireB.hangRequests).toBeGreaterThanOrEqual(3);
+    expect(results.retireB.openBeforeRetire).toBe(results.retireB.hangRequests);
+    expect(results.retireB.plainFetch.code).toBe('SESSION_UNAVAILABLE');
+    expect(results.retireB.ensLeg.timedOut).toBeUndefined();
+    expect(results.retireB.ensLeg.error).toMatch(/Browsing session unavailable/);
     expect(results.retireB.allClosed).toBe(true);
     expect(results.retireB.closeMs).toBeLessThan(2_000);
   });

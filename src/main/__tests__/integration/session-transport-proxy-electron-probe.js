@@ -316,7 +316,12 @@ async function main() {
   });
   const hangingRequest = hanging.request({ method: 'eth_blockNumber' }, { deadlineMs: 30_000 });
   hangingRequest.catch(() => {});
-  const reachedHang = await waitFor(() => hangRequests.length > 0, 15_000);
+  // Neither of these passes a signal of its own: only B's retirement, through
+  // the shared transport, can end them.
+  const plainFetch = within(gatewayFetch(`${origin}/hang`, {}, { session: B }), 15_000);
+  const ensProvider = runWithBrowsingSession(B, () => createEthereumProvider(`${origin}/hang`));
+  const ensLeg = within(ensProvider.send('eth_chainId', []), 15_000);
+  const reachedHang = await waitFor(() => hangRequests.length >= 3, 15_000);
   await settle(200);
   const openBeforeRetire = hangRequests.length - hangClosed;
   const retiredAt = Date.now();
@@ -329,7 +334,10 @@ async function main() {
     hangClosed,
     allClosed,
     closeMs: Date.now() - retiredAt,
+    plainFetch: await plainFetch,
+    ensLeg: await ensLeg,
   };
+  ensProvider.destroy();
 
   await reset(A);
   const refusedFetch = await within(gatewayFetch(`${origin}/x`, {}, { session: B }), 5_000);

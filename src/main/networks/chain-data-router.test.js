@@ -46,7 +46,15 @@ const mockLog = require('../logger');
 // request's browsing session). These tests stand `global.fetch` in for the
 // network, so the transport hands straight to it; the browsing-session tests
 // at the end look at what it was asked, or swap in the real one.
-const mockGatewayFetch = jest.fn((url, init) => global.fetch(url, init));
+// The suite's fetch stubs answer with plain { ok, status, json } objects; the
+// RPC path now reads a real bounded body, so hand it a real Response.
+const mockAsResponse = async (pending) => {
+  const value = await pending;
+  if (value instanceof Response) return value;
+  const body = typeof value?.json === 'function' ? JSON.stringify(await value.json()) : '';
+  return new Response(body, { status: value?.status ?? (value?.ok === false ? 500 : 200) });
+};
+const mockGatewayFetch = jest.fn((url, init) => mockAsResponse(global.fetch(url, init)));
 jest.mock('../ipfs/gateway-transport', () => ({
   ...jest.requireActual('../ipfs/gateway-transport'),
   gatewayFetch: (...args) => mockGatewayFetch(...args),
@@ -2531,17 +2539,16 @@ describe('chain reads per browsing session', () => {
   const PRIVATE = { id: 'private-window' };
   let originalNetRequest;
 
-  const rpcAnswer = (result) => jest.fn().mockResolvedValue({
-    ok: true,
-    json: async () => ({ result }),
-  });
+  // A fresh real Response per call: the loopback branch reads it through the
+  // real transport's bounded reader.
+  const rpcAnswer = (result) => jest.fn(async () => new Response(JSON.stringify({ result }), { status: 200 }));
 
   beforeEach(() => {
     // The fake net answers on setImmediate; an earlier block may leave fake timers on.
     jest.useRealTimers();
     jest.clearAllMocks();
     clearAdaptiveRoutingForTest();
-    mockGatewayFetch.mockImplementation((url, init) => global.fetch(url, init));
+    mockGatewayFetch.mockImplementation((url, init) => mockAsResponse(global.fetch(url, init)));
     mockRegistry.getNetwork.mockReturnValue({
       access: { readOrder: ['direct'] },
       quorum: { timeoutMs: 1000 },
@@ -2556,7 +2563,7 @@ describe('chain reads per browsing session', () => {
     jest.useRealTimers();
     electron.net.request = originalNetRequest;
     global.fetch = originalFetch;
-    mockGatewayFetch.mockImplementation((url, init) => global.fetch(url, init));
+    mockGatewayFetch.mockImplementation((url, init) => mockAsResponse(global.fetch(url, init)));
   });
 
   test("a remote endpoint is dialled through the gateway transport on the read's session", async () => {
@@ -2572,6 +2579,38 @@ describe('chain reads per browsing session', () => {
     // Internal callers (no browsing context) keep the default session.
     await request(1, 'eth_blockNumber');
     expect(mockGatewayFetch.mock.calls[1][2]).toEqual({ session: electron.session.defaultSession });
+  });
+
+  test('an RPC answer over the bound is refused, not held', async () => {
+    mockGatewayFetch.mockImplementation(realGatewayFetch);
+    const big = 'x'.repeat(16 * 1024 * 1024 + 1);
+    const net = createNetMock((req) => emitResponse(req, { chunks: [big] }));
+    electron.net.request = net.request;
+    await expect(runWithBrowsingSession(PRIVATE, () => request(1, 'eth_blockNumber')))
+      .rejects.toThrow(/larger than 16777216 bytes/);
+    electron.net.request = originalNetRequest;
+  });
+
+  test('retiring the session ends an RPC read in flight, with no fault recorded', async () => {
+    const { retireBrowsingSession } = require('../browsing-transport');
+    mockGatewayFetch.mockImplementation(realGatewayFetch);
+    const net = createNetMock(() => {});
+    electron.net.request = net.request;
+    const closing = { id: 'closing-window' };
+    const pending = runWithBrowsingSession(closing, () => request(1, 'eth_blockNumber'));
+    await new Promise((resolve) => setImmediate(resolve));
+    retireBrowsingSession(closing);
+    await expect(pending).rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(net.requests[0].aborted).toBe(true);
+
+    // The same route still answers for a live session: nothing was recorded against it.
+    const answering = createNetMock((req) =>
+      emitResponse(req, { chunks: [JSON.stringify({ jsonrpc: '2.0', id: 1, result: '0x40' })] })
+    );
+    electron.net.request = answering.request;
+    await expect(runWithBrowsingSession(PRIVATE, () => request(1, 'eth_blockNumber')))
+      .resolves.toMatchObject({ result: '0x40' });
+    electron.net.request = originalNetRequest;
   });
 
   test('through the real transport: Chromium on that session remotely, Node fetch for loopback', async () => {
