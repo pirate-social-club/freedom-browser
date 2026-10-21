@@ -1346,6 +1346,58 @@ describe('navigation', () => {
   });
 
   describe('address bar search fallback', () => {
+    test.each(['ipfs://', 'bzz:', 'bzz://', 'ens://', 'freedom://', 'ethereum:', 'rad:'])(
+      'an explicit dweb address (%s) is never sent to the search provider',
+      async (input) => {
+        const ctx = await loadNavigationModule();
+        await ctx.mod.initNavigation();
+        await flushMicrotasks();
+
+        ctx.mod.loadTarget(input);
+
+        for (const [url] of ctx.activeRef.tab.webview.loadURL.mock.calls) {
+          expect(url).not.toContain('duckduckgo.com');
+        }
+      }
+    );
+
+    test('a malformed dweb address lands on the invalid-address page', async () => {
+      const ctx = await loadNavigationModule();
+      await ctx.mod.initNavigation();
+      await flushMicrotasks();
+
+      ctx.mod.loadTarget('bzz:');
+
+      const [url] = ctx.activeRef.tab.webview.loadURL.mock.calls.at(-1);
+      expect(url).toContain('pages/error.html?error=invalid_address');
+      expect(new URL(url).searchParams.get('url')).toBe('bzz:');
+    });
+
+    test('a scheme-like query with spaces still searches', async () => {
+      const ctx = await loadNavigationModule();
+      await ctx.mod.initNavigation();
+      await flushMicrotasks();
+
+      ctx.mod.loadTarget('freedom: what is it');
+
+      expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
+        'https://duckduckgo.com/?q=freedom%3A%20what%20is%20it'
+      );
+    });
+
+    test('an all-digit Swarm reference gets its own error page, not a probe', async () => {
+      const ctx = await loadNavigationModule();
+      await ctx.mod.initNavigation();
+      await flushMicrotasks();
+
+      ctx.mod.loadTarget(`bzz://${'3'.repeat(64)}`);
+      await flushMicrotasks();
+
+      expect(ctx.electronAPI.startSwarmProbe).not.toHaveBeenCalled();
+      const [url] = ctx.activeRef.tab.webview.loadURL.mock.calls.at(-1);
+      expect(url).toContain('pages/error.html?error=unloadable_swarm_hash');
+    });
+
     test('loads the default provider results page for non-URL input', async () => {
       const ctx = await loadNavigationModule();
       await ctx.mod.initNavigation();
