@@ -1,0 +1,3 @@
+- Transaction lookups use available RPC answers before requesting proof of mined transactions ([#750](https://github.com/solardev-xyz/freedom-browser/issues/750))
+  - Single-server answers remain unverified and can lag a newly mined transaction
+  - Worker recovery keeps the original retry deadline, ordinary contract reverts do not trigger verifier cooldown, and transport failures hide endpoint URLs
