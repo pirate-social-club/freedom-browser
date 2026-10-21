@@ -174,7 +174,7 @@ describe('resolveViaColibri', () => {
 
   test('waits for the chain worker before creating the first client', async () => {
     await resolveViaColibri('a.eth', '0x');
-    expect(mockEnsureWorker).toHaveBeenCalledWith(1);
+    expect(mockEnsureWorker).toHaveBeenCalledWith(1, undefined);
     expect(mockEnsureWorker.mock.invocationCallOrder[0])
       .toBeLessThan(mockCreateClient.mock.invocationCallOrder[0]);
   });
@@ -455,6 +455,9 @@ describe('per browsing session', () => {
     expect(mockCreateClient.mock.calls.map(([config]) => config.session)).toEqual([
       undefined, first, second,
     ]);
+    // ... each on its session's own worker, whose storage it shares with no
+    // other session (colibri-worker-host.js, STORAGE).
+    expect(mockEnsureWorker.mock.calls).toEqual([[1, undefined], [1, first], [1, second]]);
     // Each session's lookups ran on its own client.
     const providerClients = mockUniversalResolverCall.mock.calls.map(([provider]) => provider.client);
     expect(providerClients[1]).toBe(mockClientInstances[1]);

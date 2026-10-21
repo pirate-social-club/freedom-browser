@@ -1,8 +1,9 @@
 // Worker-thread side of Colibri (#495). Proof verification is synchronous WASM:
 // on Electron's main thread a large proof froze the whole browser until it
 // returned (21-26 s for an eth_getLogs scan, #494). Each chain gets one
-// long-lived worker running this file; it owns that chain's Colibri clients
-// and the verifier's disk storage, and the main process talks to it over
+// long-lived worker running this file per browsing session (the default one,
+// and each private window's); it owns that chain's Colibri clients for the
+// session and the verifier's storage, and the main process talks to it over
 // messages (`colibri-worker-host.js`). A verification that outlives its caller
 // can then be stopped with `worker.terminate()` instead of running to the end.
 // The worker has no network access of its own: every request the verifier
@@ -36,7 +37,11 @@ const NULL_BODY_STATUSES = new Set([204, 205, 304]);
 // The bundled default writes these to process.cwd(), which means launching
 // the browser from a different directory loses the warm-cache state and
 // scatters files across the filesystem. The host passes a stable per-app dir
-// (`<userData>/colibri`); keys are chain-scoped, so workers for *different*
+// (`<userData>/colibri`), for the default session's workers only: in privacy
+// mode 'basic' the state includes the storage values of contracts the
+// verifier called (`call_<chain>_<address>`), for an ENS lookup slots derived
+// from the name, so every other session's workers keep it in memory
+// (`createMemoryStorage`). Keys are chain-scoped, so workers for *different*
 // chains never write the same file. Two workers for the *same* chain can,
 // though: when a WASM trap retires a worker that still has requests in
 // flight, it keeps draining (with a fresh instance on the same storage) while
@@ -118,6 +123,18 @@ function createDiskStorage(dir) {
       try { fs.unlinkSync(path.join(dir, key)); }
       catch (err) { if (err.code !== 'ENOENT') throw err; }
     },
+  };
+}
+
+// A worker for any session but the default one gets no storageDir: its
+// verifier state is held in memory, for as long as the worker lives
+// (colibri-worker-host.js, STORAGE).
+function createMemoryStorage() {
+  const entries = new Map();
+  return {
+    get: (key) => entries.get(key) || null,
+    set: (key, value) => { entries.set(key, Buffer.from(value)); },
+    del: (key) => { entries.delete(key); },
   };
 }
 
@@ -261,7 +278,7 @@ function createColibriService({ runtime, storageDir, post }) {
     runtime.setRuntimeResetListener?.((err) => {
       post({ type: 'trap', message: serializeError(err).message });
     });
-    await Colibri.register_storage(createDiskStorage(storageDir));
+    await Colibri.register_storage(storageDir ? createDiskStorage(storageDir) : createMemoryStorage());
   }
 
   async function handle(message) {

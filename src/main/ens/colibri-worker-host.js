@@ -1,8 +1,9 @@
 // Main-process side of the Colibri worker (#495): one long-lived worker per
-// chain (`colibri-worker.js`) owns that chain's Colibri clients and verifier
-// storage. This module hands out EIP-1193-shaped client proxies whose
-// `request()` is a message round trip, so neither the router nor ethers'
-// BrowserProvider (ENS) ever runs WASM verification on the main thread.
+// chain and browsing session (`colibri-worker.js`) owns that chain's Colibri
+// clients for the session, and verifier storage (see STORAGE). This module
+// hands out EIP-1193-shaped client proxies whose `request()` is a message
+// round trip, so neither the router nor ethers' BrowserProvider (ENS) ever
+// runs WASM verification on the main thread.
 //
 // A worker is replaced, never repaired:
 // - a WASM trap (#453) marks it retiring: new requests go to a fresh worker and
@@ -66,11 +67,29 @@
 // retired, stuck), its session is retired, or the app quits (`shutdown`).
 // Neither URLs nor the SDK's error strings are logged: both name what is being
 // looked up.
+//
+// STORAGE
+//
+// The verifier keeps state between requests: the sync committee it checks
+// proofs against, contract code, and, in privacy mode 'basic', the storage
+// values of the contracts it has called (`call_<chain>_<address>`). For an ENS
+// lookup those are slots derived from the name's namehash, so the store
+// records which names were resolved. The default session's workers keep it on
+// disk (`<userData>/colibri`), so a restart starts warm. Every other session (a
+// private window's partition) gets workers of its own, one per chain, whose
+// storage is memory only: its lookups neither read what the default session
+// stored nor leave anything on disk. Its workers retire with the session, and
+// the state goes with them; nothing more is dispatched or spawned for it.
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const log = require('../logger');
 const { gatewayFetch, isLoopbackHostname } = require('../ipfs/gateway-transport');
-const { isBrowsingSessionRetired, onBrowsingSessionRetired } = require('../browsing-transport');
+const {
+  isBrowsingSessionRetired,
+  onBrowsingSessionRetired,
+  sessionKey,
+  sessionUnavailableError,
+} = require('../browsing-transport');
 
 const WORKER_PATH = path.join(__dirname, 'colibri-worker.js');
 // Requests without a caller deadline (ENS resolution through ethers) still get
@@ -103,6 +122,7 @@ class ColibriWorkerError extends Error {
   }
 }
 
+// Workers by `${chainId}|${sessionKey}` (see STORAGE).
 const workers = new Map();
 // Live (not destroyed) clients by id, for the bridge to find a request's owner.
 const liveClients = new Map();
@@ -118,6 +138,10 @@ function storageDir() {
   if (storageDirOverride) return storageDirOverride;
   const { app } = require('electron');
   return path.join(app.getPath('userData'), 'colibri');
+}
+
+function workerKey(chainId, session) {
+  return `${chainId}|${sessionKey(session)}`;
 }
 
 function reviveError(serialized) {
@@ -146,7 +170,7 @@ function abortBridgeFetches(matches) {
 function terminate(entry) {
   if (entry.terminated) return;
   entry.terminated = true;
-  if (workers.get(entry.chainId) === entry) workers.delete(entry.chainId);
+  if (workers.get(entry.key) === entry) workers.delete(entry.key);
   for (const timer of entry.probes.values()) clearTimeout(timer);
   entry.probes.clear();
   abortBridgeFetches((record) => record.entry === entry);
@@ -238,9 +262,14 @@ function replace(entry, reason, {
   }
 }
 
-function spawn(chainId) {
+function spawn(chainId, session) {
+  const key = workerKey(chainId, session);
+  const persistent = sessionKey(session) === 'default';
   const entry = {
+    key,
     chainId,
+    // The session this worker serves, or null for the default session's.
+    session: persistent ? null : session,
     worker: null,
     pending: new Map(),
     probes: new Map(),
@@ -256,10 +285,10 @@ function spawn(chainId) {
   // Callers that never await `ready` (a replaced worker) must not leave an
   // unhandled rejection behind.
   entry.ready.catch(() => {});
-  workers.set(chainId, entry);
+  workers.set(key, entry);
   try {
     entry.worker = new Worker(WORKER_PATH, {
-      workerData: { storageDir: storageDir() },
+      workerData: { storageDir: persistent ? storageDir() : null },
       execArgv: [],
       env: { C4_DISABLE_NATIVE: '1' },
       resourceLimits: RESOURCE_LIMITS,
@@ -269,7 +298,7 @@ function spawn(chainId) {
     });
   } catch (err) {
     entry.terminated = true;
-    workers.delete(chainId);
+    workers.delete(key);
     entry.readyReject(new ColibriWorkerError(`Colibri worker failed to start: ${err.message}`));
     return entry;
   }
@@ -461,20 +490,22 @@ async function performBridgeFetch(entry, client, fid, request) {
 
 function retire(entry) {
   entry.retiring = true;
-  if (workers.get(entry.chainId) === entry) workers.delete(entry.chainId);
+  if (workers.get(entry.key) === entry) workers.delete(entry.key);
   if (entry.pending.size === 0) terminate(entry);
 }
 
-function liveEntry(chainId) {
+function liveEntry(chainId, session) {
   const id = Number(chainId);
-  const entry = workers.get(id);
+  const entry = workers.get(workerKey(id, session));
   if (entry && !entry.retiring && !entry.terminated) return entry;
-  return spawn(id);
+  return spawn(id, session);
 }
 
-// Resolves once the chain's worker has its storage registered.
-function ensureWorker(chainId) {
-  return liveEntry(chainId).ready.then(() => undefined);
+// Resolves once the worker for this chain and session has its storage
+// registered.
+function ensureWorker(chainId, session = null) {
+  if (isBrowsingSessionRetired(session)) return Promise.reject(sessionUnavailableError());
+  return liveEntry(chainId, session).ready.then(() => undefined);
 }
 
 // The request to blame for a stuck worker, or null when it cannot be told.
@@ -524,13 +555,16 @@ function onDeadline(entry, id) {
   }, ABANDONED_MS);
 }
 
-// Posts `request` to the chain's live worker (spawning one if needed). The
+// Posts `request` to the live worker for its client's chain and session
+// (spawning one if needed), never to a retired session's (see STORAGE). The
 // request object outlives a worker: a resend dispatches it again, and its
 // promise settles once, through request.resolve/reject.
 async function dispatch(request) {
   const { client } = request;
-  const entry = await readyForRequest(liveEntry(client.chainId), request);
+  if (isBrowsingSessionRetired(client.session)) throw sessionUnavailableError();
+  const entry = await readyForRequest(liveEntry(client.chainId, client.session), request);
   if (client.destroyed) throw new ColibriWorkerError('Colibri client was destroyed');
+  if (isBrowsingSessionRetired(client.session)) throw sessionUnavailableError();
   // Readiness can settle after the deadline before its timer callback runs.
   if (request.resent && Date.now() >= request.deadlineAt) throw resendDeadlineError();
   // The deadline runs from the first time a worker is ready for the request,
@@ -614,9 +648,18 @@ function createClient({ chainId, proverUrl, zkProof, session = null }) {
 
 // A private window closed: nothing more is dialled on its session. Its
 // clients are destroyed by colibri-resolver.js, which may have to wait for
-// requests still holding them; their network traffic stops now.
+// requests still holding them; their network traffic stops now. Its workers
+// retire, taking their in-memory verifier state with them (STORAGE): a
+// request already on one fails once its network is cut off, and the worker
+// terminates when none is left; one still waiting for a worker to start is
+// refused.
 onBrowsingSessionRetired((retired) => {
   abortBridgeFetches((record) => record.client.session === retired);
+  for (const entry of [...workers.values()]) {
+    if (entry.session !== retired) continue;
+    entry.readyReject?.(sessionUnavailableError());
+    retire(entry);
+  }
 });
 
 // App quit: stop every bridge fetch still in flight and take no new ones.

@@ -177,7 +177,9 @@ describeWithElectron('session-bound name-resolution transport in a real Electron
 
   test('and nothing new is dialled on it afterwards', () => {
     expect(results.afterRetireB.fetch.code).toBe('SESSION_UNAVAILABLE');
-    expect(results.afterRetireB.bridge.error).toMatch(/Colibri network request refused/);
+    // Refused before it reaches a worker: a retired session's workers are gone
+    // with its verifier state, and none is spawned for it again.
+    expect(results.afterRetireB.bridge.code).toBe('SESSION_UNAVAILABLE');
     expect(results.afterRetireB.recorderB).toEqual([]);
     expect(results.afterRetireB.recorderA).toEqual([]);
     expect(results.afterRetireB.originRoutes).toEqual([]);
