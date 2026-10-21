@@ -136,7 +136,7 @@ hnsd (Handshake SPV resolver)
   Linked dynamically and not shipped: the system's libunbound
   (BSD-3-Clause), which loads OpenSSL (Apache-2.0) and libevent
   (BSD-3-Clause), and the GNU C Library (LGPL-2.1-or-later). The .deb
-  declares `libunbound8` and `libc6 (>= 2.36)`; your distribution supplies
+  declares `libunbound8` and `libc6 (>= 2.39)`; your distribution supplies
   those libraries and you can replace them. Like any program built with
   GCC against glibc, the binary also contains small start-up objects from
   glibc and libgcc; those carry licence exceptions written for exactly

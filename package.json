@@ -205,7 +205,10 @@
         "libuuid1",
         "libsecret-1-0",
         "libunbound8",
-        "libc6 (>= 2.36)"
+        "libudev1",
+        "libasound2t64 | libasound2 (>= 1.0.17)",
+        "libgbm1",
+        "libc6 (>= 2.39)"
       ]
     },
     "toolsets": {
