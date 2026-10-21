@@ -300,6 +300,20 @@ describe('publish-service', () => {
       expect(result).toEqual({ success: false, error: 'Directory not found: blog' });
     });
 
+    test('swarm:publish-directory resolves by name only when the folder vanishes between the checks', async () => {
+      fs.existsSync.mockReturnValue(true);
+      fs.statSync.mockImplementationOnce(() => {
+        throw Object.assign(
+          new Error("ENOENT: no such file or directory, stat '/home/u/sites/blog'"),
+          { code: 'ENOENT', syscall: 'stat', path: '/home/u/sites/blog' }
+        );
+      });
+
+      const token = await pick('directory', '/home/u/sites/blog');
+      const result = await invokeIpc('swarm:publish-directory', token);
+      expect(result).toEqual({ success: false, error: 'Directory not found: blog' });
+    });
+
     test('an fs error during publish (file vanished after the check) never returns the absolute path', async () => {
       fs.existsSync.mockReturnValue(true);
       const enoent = Object.assign(

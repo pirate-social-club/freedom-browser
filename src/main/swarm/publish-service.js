@@ -352,7 +352,15 @@ function registerPublishIpc() {
     const redeemed = redeemPick(event, token, 'directory');
     if (redeemed.error) return { success: false, error: redeemed.error };
     const dirPath = redeemed.path;
-    if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) {
+    // statSync can still throw if the folder vanishes after existsSync; a
+    // thrown error would reject the invoke with the absolute path in it.
+    let isDir;
+    try {
+      isDir = fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory();
+    } catch {
+      isDir = false;
+    }
+    if (!isDir) {
       return { success: false, error: `Directory not found: ${path.basename(dirPath)}` };
     }
     const name = path.basename(dirPath);
