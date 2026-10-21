@@ -1,6 +1,8 @@
-// Mock electron ipcMain before requiring ens-resolver
+// Mock electron ipcMain before requiring ens-resolver. The default session
+// is what an IPC lookup from a normal window runs on (browsing-transport.js).
 jest.mock('electron', () => ({
   ipcMain: { handle: jest.fn() },
+  session: { defaultSession: { id: 'default-session' } },
 }));
 
 // The persistent-log guard asserts on what reaches the logger, so the
@@ -12,6 +14,22 @@ jest.mock('./logger', () => mockLog);
 // real BrowserWindow, so stub the one predicate ens-resolver uses.
 jest.mock('./private/private-windows', () => ({
   isPrivateWebContents: (webContents) => webContents?.isPrivate === true,
+}));
+
+// IPC lookups run on the session the sender's window browses in. These fake
+// senders are not windows, so only that one step is stubbed: a private sender
+// browses in its partition's session, a normal one in the default session,
+// and a test can swap in another answer (`override`). The rest of the module
+// (context, keys, retirement) is the real one.
+const mockSenderSessions = { private: { id: 'private-session' }, override: null };
+jest.mock('./browsing-transport', () => ({
+  ...jest.requireActual('./browsing-transport'),
+  browsingSessionFor: (sender) => {
+    if (mockSenderSessions.override) return mockSenderSessions.override(sender);
+    return sender?.isPrivate
+      ? mockSenderSessions.private
+      : require('electron').session.defaultSession;
+  },
 }));
 
 // Mock ens-prefetch so tests can assert when it fires and when it aborts,
@@ -3390,10 +3408,12 @@ describe('ens-resolver private-window logging', () => {
     await handlerFor(IPC.ENS_RESOLVE_ADDRESS)(privateEvent, { name: SECRET });
     expect(loggedText()).not.toContain(SECRET);
 
-    // Populate the content cache from a normal window, then invalidate it
-    // from the private one: the eviction line must not name it either.
+    // Populate the private window's content cache, then invalidate it from
+    // that window: the eviction line must not name it either. (A normal
+    // window's entry is not the private window's to evict, see 'ens-resolver
+    // browsing-session isolation'.)
     mockUrResolve.mockResolvedValue(urReturnsBytes(ipfsContenthashFor(IPFS_V0)));
-    await handlerFor(IPC.ENS_RESOLVE)(normalEvent, { name: SECRET });
+    await handlerFor(IPC.ENS_RESOLVE)(privateEvent, { name: SECRET });
     mockLog.info.mockClear();
     await handlerFor(IPC.ENS_INVALIDATE_CONTENT)(privateEvent, { name: SECRET });
     const text = loggedText();
@@ -3475,5 +3495,334 @@ describe('ens-resolver private-window logging', () => {
 
     await handlerFor(IPC.ENS_RESOLVE)(normalEvent, { name: 'public-site.eth' });
     expect(loggedText()).toContain('[ens] Resolved: public-site.eth');
+  });
+});
+
+// Lookups run on the session of the window they are for (browsing-transport.js),
+// and the caches and in-flight dedupe are per session: a private window
+// neither reuses another window's result nor lets it learn what it resolved.
+describe('ens-resolver browsing-session isolation', () => {
+  const {
+    retireBrowsingSession,
+    runWithBrowsingSession,
+  } = require('./browsing-transport');
+  const { runWithPrivateLogContext } = require('./private/private-log-context');
+  const { forgetEnsSession, invalidateEnsContent } = require('./ens-resolver');
+  const IPFS_V0 = 'QmW81r84Aihiqqi2Jw6nM1LnpeMfRCenRxtjwHNkXVkZYa';
+  const privateEvent = { sender: { isPrivate: true } };
+  const normalEvent = { sender: { isPrivate: false } };
+
+  function handlerFor(channel) {
+    const entry = ipcMain.handle.mock.calls.find(([name]) => name === channel);
+    if (!entry) throw new Error(`no handler registered for ${channel}`);
+    return entry[1];
+  }
+
+  beforeEach(() => {
+    clearEnsResolutionCaches();
+    ipcMain.handle.mockClear();
+    registerEnsIpc();
+    mockSenderSessions.override = null;
+    mockUrResolve.mockResolvedValue(urReturnsBytes(ipfsContenthashFor(IPFS_V0)));
+  });
+
+  afterEach(() => {
+    mockSenderSessions.override = null;
+  });
+
+  test('a sender with no session gets SESSION_UNAVAILABLE and nothing is looked up', async () => {
+    mockSenderSessions.override = () => null;
+
+    await expect(handlerFor(IPC.ENS_RESOLVE)(privateEvent, { name: 'Gone.eth' })).resolves.toEqual({
+      type: 'error', name: 'gone.eth', reason: 'SESSION_UNAVAILABLE', error: 'Browsing session unavailable',
+    });
+    await expect(handlerFor(IPC.ENS_RESOLVE_ADDRESS)(privateEvent, { name: 'gone.eth' }))
+      .resolves.toMatchObject({ success: false, name: 'gone.eth', reason: 'SESSION_UNAVAILABLE' });
+    await expect(handlerFor(IPC.ENS_RESOLVE_REVERSE)(privateEvent, {
+      address: '0x00000000000000000000000000000000000000AA',
+    })).resolves.toMatchObject({
+      success: false,
+      address: '0x00000000000000000000000000000000000000aa',
+      reason: 'SESSION_UNAVAILABLE',
+    });
+    await expect(handlerFor(IPC.ENS_INVALIDATE_CONTENT)(privateEvent, { name: 'gone.eth' }))
+      .resolves.toBe(false);
+    expect(ethers.JsonRpcProvider).not.toHaveBeenCalled();
+    expect(mockUrResolve).not.toHaveBeenCalled();
+  });
+
+  test('a private caller that lost its session is refused before any provider exists', async () => {
+    await expect(runWithPrivateLogContext(true, () => resolveEnsContent('lost.eth')))
+      .rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(ethers.JsonRpcProvider).not.toHaveBeenCalled();
+  });
+
+  test("a private window's cached result is not served to a normal one, nor the reverse", async () => {
+    await handlerFor(IPC.ENS_RESOLVE)(privateEvent, { name: 'shared.eth' });
+    const afterPrivate = mockUrResolve.mock.calls.length;
+    expect(afterPrivate).toBeGreaterThan(0);
+
+    // Its own window: a cache hit.
+    await handlerFor(IPC.ENS_RESOLVE)(privateEvent, { name: 'shared.eth' });
+    expect(mockUrResolve.mock.calls.length).toBe(afterPrivate);
+
+    // Another window: a lookup of its own.
+    await handlerFor(IPC.ENS_RESOLVE)(normalEvent, { name: 'shared.eth' });
+    const afterNormal = mockUrResolve.mock.calls.length;
+    expect(afterNormal).toBeGreaterThan(afterPrivate);
+    await handlerFor(IPC.ENS_RESOLVE)(normalEvent, { name: 'shared.eth' });
+    expect(mockUrResolve.mock.calls.length).toBe(afterNormal);
+  });
+
+  test('concurrent lookups join only within one session', async () => {
+    const legs = (await (async () => {
+      await handlerFor(IPC.ENS_RESOLVE)(normalEvent, { name: 'one-wave.eth' });
+      return mockUrResolve.mock.calls.length;
+    })());
+    clearEnsResolutionCaches();
+    mockUrResolve.mockClear();
+
+    await Promise.all([
+      handlerFor(IPC.ENS_RESOLVE)(privateEvent, { name: 'busy.eth' }),
+      handlerFor(IPC.ENS_RESOLVE)(privateEvent, { name: 'busy.eth' }),
+      handlerFor(IPC.ENS_RESOLVE)(normalEvent, { name: 'busy.eth' }),
+    ]);
+    // Two waves: the private pair shares one, the normal window runs its own.
+    expect(mockUrResolve.mock.calls.length).toBe(2 * legs);
+  });
+
+  test("invalidating from one window leaves another window's entry alone", async () => {
+    await handlerFor(IPC.ENS_RESOLVE)(normalEvent, { name: 'kept.eth' });
+    const calls = mockUrResolve.mock.calls.length;
+    await expect(handlerFor(IPC.ENS_INVALIDATE_CONTENT)(privateEvent, { name: 'kept.eth' }))
+      .resolves.toBe(false);
+    await handlerFor(IPC.ENS_RESOLVE)(normalEvent, { name: 'kept.eth' });
+    expect(mockUrResolve.mock.calls.length).toBe(calls);
+    expect(invalidateEnsContent('kept.eth')).toBe(true);
+  });
+
+  test("a closed window's entries are dropped, and its session is refused afterwards", async () => {
+    const closing = { id: 'private-closing' };
+    mockSenderSessions.override = (sender) =>
+      sender?.isPrivate ? closing : require('electron').session.defaultSession;
+    mockUrResolve.mockResolvedValue(
+      urReturnsAddress('0x1111111111111111111111111111111111111111')
+    );
+    await handlerFor(IPC.ENS_RESOLVE_ADDRESS)(privateEvent, { name: 'closing.eth' });
+    await handlerFor(IPC.ENS_RESOLVE_ADDRESS)(normalEvent, { name: 'closing.eth' });
+    const calls = mockUrResolve.mock.calls.length;
+
+    // Nothing of the closing window's is left once it retires…
+    expect(runWithBrowsingSession(closing, () => forgetEnsSession(closing))).toBe(1);
+    await handlerFor(IPC.ENS_RESOLVE_ADDRESS)(privateEvent, { name: 'closing.eth' });
+    expect(mockUrResolve.mock.calls.length).toBeGreaterThan(calls);
+    retireBrowsingSession(closing);
+    expect(forgetEnsSession(closing)).toBe(0);
+
+    // …and nothing more is looked up on it, while the normal window keeps its own.
+    const afterRetire = mockUrResolve.mock.calls.length;
+    await expect(handlerFor(IPC.ENS_RESOLVE_ADDRESS)(privateEvent, { name: 'closing.eth' }))
+      .resolves.toMatchObject({ success: false, reason: 'SESSION_UNAVAILABLE' });
+    await handlerFor(IPC.ENS_RESOLVE_ADDRESS)(normalEvent, { name: 'closing.eth' });
+    expect(mockUrResolve.mock.calls.length).toBe(afterRetire);
+  });
+
+  test('a leg refused for a closed session is no answer and no fault of the provider', async () => {
+    mockUrResolve.mockRejectedValue(
+      Object.assign(new Error('Browsing session unavailable'), { code: 'SESSION_UNAVAILABLE' })
+    );
+    // Not a negative agreement (which a reason-less revert would be, two legs
+    // agreeing on NO_CONTENTHASH): a refusal says nothing about the name.
+    await expect(resolveEnsContent('refused.eth')).rejects.toThrow(
+      'All 3 RPC providers failed for refused.eth'
+    );
+
+    // Nor a quarantine: every provider is asked again.
+    clearEnsResolutionCaches();
+    mockUrResolve.mockClear();
+    mockUrResolve.mockResolvedValue(urReturnsBytes(ipfsContenthashFor(IPFS_V0)));
+    await resolveEnsContent('refused.eth');
+    expect(mockUrResolve).toHaveBeenCalledTimes(TEST_PROVIDERS.length);
+  });
+
+  test("a leg failed by the session's own proxy is no fault of the shared providers", async () => {
+    mockUrResolve.mockRejectedValue(
+      Object.assign(new Error('session proxy unavailable'), { code: 'PROXY_UNAVAILABLE' })
+    );
+    await expect(resolveEnsContent('proxied.eth')).rejects.toThrow(
+      'All 3 RPC providers failed for proxied.eth'
+    );
+
+    // One window's dVPN reconnecting must not take ENS down for every window.
+    clearEnsResolutionCaches();
+    mockUrResolve.mockClear();
+    mockUrResolve.mockResolvedValue(urReturnsBytes(ipfsContenthashFor(IPFS_V0)));
+    await resolveEnsContent('proxied.eth');
+    expect(mockUrResolve).toHaveBeenCalledTimes(TEST_PROVIDERS.length);
+  });
+});
+
+// ethers' `getUrlFunc` for the quorum legs' providers: through the gateway
+// transport, on the session captured when the provider was created.
+describe('ens-resolver RPC transport', () => {
+  const { createSessionGetUrl } = require('./ens-resolver');
+  const SESSION = { id: 'private-rpc' };
+
+  function rpcRequest(url = 'https://rpc.example/key') {
+    const req = new actualEthers.FetchRequest(url);
+    req.body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] });
+    req.setHeader('content-type', 'application/json');
+    req.allowGzip = true;
+    return req;
+  }
+
+  test('dials through the transport on the captured session and answers in ethers shape', async () => {
+    const transport = jest.fn(async () => new Response('{"jsonrpc":"2.0","id":1,"result":"0x10"}', {
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'gzip', 'content-length': '9' },
+    }));
+    const req = rpcRequest();
+    const response = await createSessionGetUrl(SESSION, transport)(req);
+
+    expect(transport).toHaveBeenCalledTimes(1);
+    const [url, init, deps] = transport.mock.calls[0];
+    expect(url).toBe('https://rpc.example/key');
+    expect(init).toEqual({
+      method: 'POST',
+      // ethers' computed accept-encoding and content-length are the transport's to set.
+      headers: { 'content-type': 'application/json' },
+      body: Buffer.from(req.body),
+      redirect: 'error',
+      signal: expect.any(AbortSignal),
+    });
+    expect(deps).toEqual({ session: SESSION });
+    expect(response).toEqual({
+      statusCode: 200,
+      statusMessage: 'OK',
+      // Chromium decoded the body already; ethers must not gunzip it again.
+      headers: { 'content-type': 'application/json' },
+      body: expect.any(Uint8Array),
+    });
+    expect(new TextDecoder().decode(response.body)).toBe('{"jsonrpc":"2.0","id":1,"result":"0x10"}');
+  });
+
+  test('a transport failure is an ethers NETWORK_ERROR, so a leg never reads it as an answer', async () => {
+    const transport = jest.fn(async () => {
+      throw new TypeError('net::ERR_CONNECTION_REFUSED');
+    });
+    await expect(createSessionGetUrl(SESSION, transport)(rpcRequest())).rejects.toMatchObject({
+      code: 'NETWORK_ERROR',
+      message: 'RPC transport failed: net::ERR_CONNECTION_REFUSED',
+    });
+  });
+
+  test.each([
+    'net::ERR_PROXY_CONNECTION_FAILED',
+    'net::ERR_SOCKS_CONNECTION_FAILED',
+    'net::ERR_TUNNEL_CONNECTION_FAILED',
+  ])('%s is the session proxy failing, not the provider', async (message) => {
+    const transport = jest.fn(async () => { throw new TypeError(message); });
+    await expect(createSessionGetUrl(SESSION, transport)(rpcRequest()))
+      .rejects.toMatchObject({ code: 'PROXY_UNAVAILABLE' });
+  });
+
+  test('an answer over the bound is refused, not held', async () => {
+    const big = 4 * 1024 * 1024 + 1;
+    const transport = jest.fn(async () => new Response(new Uint8Array(big), { status: 200 }));
+    await expect(createSessionGetUrl(SESSION, transport)(rpcRequest())).rejects.toMatchObject({
+      code: 'NETWORK_ERROR',
+      message: expect.stringContaining('larger than 4194304 bytes'),
+    });
+  });
+
+  test('through the real transport, retiring the session ends a leg in flight', async () => {
+    const { netGatewayFetch } = jest.requireActual('./ipfs/gateway-transport');
+    const { FakeClientRequest } = require('../../test/helpers/fake-electron-net');
+    const { retireBrowsingSession } = jest.requireActual('./browsing-transport');
+    const live = { id: 'closing-window' };
+    let request;
+    const transport = (url, init, deps) => netGatewayFetch(url, init, {
+      ...deps,
+      requestImpl: (options) => (request = new FakeClientRequest(options)),
+    });
+    const pending = createSessionGetUrl(live, transport)(rpcRequest());
+    await new Promise((resolve) => setImmediate(resolve));
+    retireBrowsingSession(live);
+    await expect(pending).rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(request.aborted).toBe(true);
+  });
+
+  test('a closed session stays a SESSION_UNAVAILABLE refusal', async () => {
+    const transport = jest.fn(async () => {
+      throw Object.assign(new Error('Browsing session unavailable'), { code: 'SESSION_UNAVAILABLE' });
+    });
+    await expect(createSessionGetUrl(SESSION, transport)(rpcRequest()))
+      .rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+  });
+
+  test('honours a cancelled request and its timeout', async () => {
+    const transport = jest.fn((_url, init) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(new Error('aborted')));
+    }));
+    await expect(createSessionGetUrl(SESSION, transport)(rpcRequest(), { cancelled: true }))
+      .rejects.toMatchObject({ code: 'CANCELLED' });
+    expect(transport).not.toHaveBeenCalled();
+
+    const req = rpcRequest();
+    req.timeout = 5;
+    await expect(createSessionGetUrl(SESSION, transport)(req)).rejects.toMatchObject({ code: 'TIMEOUT' });
+
+    let cancel;
+    const signal = { cancelled: false, addListener: (fn) => { cancel = fn; } };
+    const pending = createSessionGetUrl(SESSION, transport)(rpcRequest(), signal);
+    await Promise.resolve();
+    cancel();
+    await expect(pending).rejects.toMatchObject({ code: 'CANCELLED' });
+  });
+
+  // The suite's ethers is a mock; this one case runs the real JsonRpcProvider
+  // to prove every request of a quorum-leg provider takes that transport.
+  test('a real ethers provider sends its JSON-RPC through it, on the session it was made in', async () => {
+    const mockRpcTransport = jest.fn(async (_url, init) => {
+      const payload = JSON.parse(init.body.toString('utf8'));
+      const answer = (one) => ({ jsonrpc: '2.0', id: one.id, result: '0x10' });
+      return new Response(JSON.stringify(Array.isArray(payload) ? payload.map(answer) : answer(payload)), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    // `dontMock`, not `doMock`: Jest serves a module it has already mocked
+    // from its cache even inside isolateModules. Both are put back afterwards.
+    const mockedEthers = require('ethers');
+    let isolated;
+    jest.isolateModules(() => {
+      jest.dontMock('ethers');
+      jest.doMock('./ipfs/gateway-transport', () => ({
+        ...jest.requireActual('./ipfs/gateway-transport'),
+        gatewayFetch: mockRpcTransport,
+      }));
+      isolated = {
+        resolver: require('./ens-resolver'),
+        transport: require('./browsing-transport'),
+      };
+    });
+    jest.doMock('ethers', () => mockedEthers);
+    jest.dontMock('./ipfs/gateway-transport');
+    expect(isolated.resolver).not.toBe(require('./ens-resolver'));
+    const target = { id: 'private-real-ethers' };
+    const provider = isolated.transport.runWithBrowsingSession(target, () =>
+      isolated.resolver.createEthereumProvider('https://rpc.example/key')
+    );
+    try {
+      await expect(provider.getBlockNumber()).resolves.toBe(16);
+      expect(mockRpcTransport).toHaveBeenCalledWith(
+        'https://rpc.example/key',
+        expect.objectContaining({ method: 'POST', redirect: 'error' }),
+        { session: target }
+      );
+    } finally {
+      provider.destroy();
+    }
   });
 });

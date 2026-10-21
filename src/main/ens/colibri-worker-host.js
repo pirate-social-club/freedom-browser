@@ -47,9 +47,30 @@
 // by the retired instance with no deadline left) carries `colibriBystander`
 // on its error: the router's per-method verifier-fault backoff must not count
 // a fault another request caused against the bystander's own method.
+//
+// NETWORK BRIDGE
+//
+// The worker has no network of its own (`colibri-worker.js`): the verifier's
+// `fetch` posts each request here and this module performs it through
+// `gatewayFetch` (Chromium) on the Electron session the client was created
+// for — the requesting window's, so a private window's prover and RPC traffic
+// follows its partition's proxy policy rather than going out DIRECT through
+// undici. A request is refused (with a generic error, never the URL) when its
+// worker is gone, its client is unknown, destroyed or not on that
+// worker, its session's window has closed, or it is not https (http only to a
+// loopback host, the same test gatewayFetch uses to pick Node's fetch), carries
+// user-info, or has a body over MAX_BRIDGE_REQUEST_BYTES. A redirect fails the
+// request rather than being followed, and an answer over
+// MAX_BRIDGE_RESPONSE_BYTES is cut off and failed. Every bridge fetch in flight
+// is aborted when its client is destroyed, its worker is terminated (replaced,
+// retired, stuck), its session is retired, or the app quits (`shutdown`).
+// Neither URLs nor the SDK's error strings are logged: both name what is being
+// looked up.
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const log = require('../logger');
+const { gatewayFetch, isLoopbackHostname } = require('../ipfs/gateway-transport');
+const { isBrowsingSessionRetired, onBrowsingSessionRetired } = require('../browsing-transport');
 
 const WORKER_PATH = path.join(__dirname, 'colibri-worker.js');
 // Requests without a caller deadline (ENS resolution through ethers) still get
@@ -62,6 +83,18 @@ const RESOURCE_LIMITS = Object.freeze({
   maxYoungGenerationSizeMb: 32,
   stackSizeMb: 4,
 });
+// The verifier's own requests are small JSON-RPC bodies. The answer cap
+// bounds what one proof or RPC response can make this process hold.
+const MAX_BRIDGE_REQUEST_BYTES = 1024 * 1024;
+const MAX_BRIDGE_RESPONSE_BYTES = 16 * 1024 * 1024;
+const BRIDGE_METHODS = new Set(['GET', 'POST']);
+const BRIDGE_REQUEST_HEADERS = new Set(['accept', 'content-type', 'cache-control']);
+// Chromium hands back an already-decoded body while still reporting the
+// upstream `content-encoding` and compressed `content-length`; passed on, they
+// would describe bytes the worker never gets.
+const BRIDGE_DROPPED_RESPONSE_HEADERS = new Set(['content-encoding', 'content-length']);
+const BRIDGE_REFUSED = 'Colibri network request refused';
+const BRIDGE_FAILED = 'Colibri network request failed';
 
 class ColibriWorkerError extends Error {
   constructor(message) {
@@ -71,6 +104,12 @@ class ColibriWorkerError extends Error {
 }
 
 const workers = new Map();
+// Live (not destroyed) clients by id, for the bridge to find a request's owner.
+const liveClients = new Map();
+// Bridge fetches in flight: { entry, client, controller }.
+const bridgeFetches = new Set();
+let bridgeTransport = gatewayFetch;
+let shuttingDown = false;
 let nextRequestId = 1;
 let nextClientId = 1;
 let storageDirOverride = null;
@@ -98,12 +137,19 @@ function settle(entry, id, fn) {
   if (entry.retiring && entry.pending.size === 0) terminate(entry);
 }
 
+function abortBridgeFetches(matches) {
+  for (const record of [...bridgeFetches]) {
+    if (matches(record)) record.controller.abort();
+  }
+}
+
 function terminate(entry) {
   if (entry.terminated) return;
   entry.terminated = true;
   if (workers.get(entry.chainId) === entry) workers.delete(entry.chainId);
   for (const timer of entry.probes.values()) clearTimeout(timer);
   entry.probes.clear();
+  abortBridgeFetches((record) => record.entry === entry);
   try {
     Promise.resolve(entry.worker.terminate()).catch(() => {});
   } catch {
@@ -258,6 +304,9 @@ function spawn(chainId) {
           'replacing the worker');
         retire(entry);
         return;
+      case 'fetch':
+        handleBridgeFetch(entry, message);
+        return;
       default:
     }
   });
@@ -269,6 +318,145 @@ function spawn(chainId) {
   // listeners: attaching a 'message' listener re-refs the worker's port.
   worker.unref?.();
   return entry;
+}
+
+function replyBridgeFetch(entry, reply, transfer) {
+  if (entry.terminated) return;
+  try {
+    entry.worker.postMessage(reply, transfer);
+  } catch {
+    // The worker is going away; its 'exit' handler settles its requests.
+  }
+}
+
+function refuseBridgeFetch(entry, fid, message = BRIDGE_REFUSED) {
+  replyBridgeFetch(entry, {
+    type: 'fetch-result', fid, ok: false, error: { name: 'TypeError', message },
+  });
+}
+
+// https anywhere; plain http only to this machine, by the test gatewayFetch
+// itself uses to keep a loopback dial on Node's fetch. No user-info: the
+// verifier never sends any, and Chromium would not send it either.
+function bridgeUrlAllowed(rawUrl) {
+  let parsed;
+  try { parsed = new URL(rawUrl); }
+  catch { return false; }
+  if (parsed.username || parsed.password) return false;
+  if (parsed.protocol === 'https:') return true;
+  return parsed.protocol === 'http:' && isLoopbackHostname(parsed.hostname);
+}
+
+// The request the worker posted, or null when any part of it is outside what
+// the verifier sends (see colibri-worker.js).
+function bridgeRequest(message) {
+  const { url, method, headers, body } = message;
+  if (typeof url !== 'string' || !bridgeUrlAllowed(url)) return null;
+  if (!BRIDGE_METHODS.has(method)) return null;
+  if (body !== null && body !== undefined) {
+    if (typeof body !== 'string' || method !== 'POST') return null;
+    if (Buffer.byteLength(body, 'utf8') > MAX_BRIDGE_REQUEST_BYTES) return null;
+  }
+  if (!Array.isArray(headers)) return null;
+  const forwarded = {};
+  for (const pair of headers) {
+    if (!Array.isArray(pair) || typeof pair[0] !== 'string' || typeof pair[1] !== 'string') {
+      return null;
+    }
+    const name = pair[0].toLowerCase();
+    if (BRIDGE_REQUEST_HEADERS.has(name)) forwarded[name] = pair[1];
+  }
+  return { url, method, headers: forwarded, body: body ?? undefined };
+}
+
+// The whole body as one ArrayBuffer, or a throw past the cap: on a declared
+// `content-length` before reading, and while reading, since that header may be
+// absent or describe compressed bytes.
+async function readBridgeBody(response, controller) {
+  const tooLarge = () => new Error('Colibri bridge response too large');
+  if (Number(response.headers.get('content-length')) > MAX_BRIDGE_RESPONSE_BYTES) {
+    try { await response.body?.cancel(); } catch { /* nothing left to stop */ }
+    controller.abort();
+    throw tooLarge();
+  }
+  if (!response.body) return new ArrayBuffer(0);
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const next = await reader.read();
+    if (next.done) break;
+    size += next.value.byteLength;
+    if (size > MAX_BRIDGE_RESPONSE_BYTES) {
+      try { await reader.cancel(); } catch { /* already errored */ }
+      controller.abort();
+      throw tooLarge();
+    }
+    chunks.push(next.value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes.buffer;
+}
+
+function handleBridgeFetch(entry, message) {
+  const fid = message?.fid;
+  const client = liveClients.get(message?.clientId);
+  // A worker retiring after a trap still drains the requests already on it
+  // (with a fresh WASM instance); their network goes out as before, on their
+  // own client's session, until the worker terminates.
+  if (
+    shuttingDown || entry.terminated ||
+    !client || client.destroyed || !client.workers.has(entry) ||
+    !client.session || isBrowsingSessionRetired(client.session)
+  ) {
+    refuseBridgeFetch(entry, fid);
+    return;
+  }
+  const request = bridgeRequest(message);
+  if (!request) {
+    refuseBridgeFetch(entry, fid);
+    return;
+  }
+  performBridgeFetch(entry, client, fid, request);
+}
+
+async function performBridgeFetch(entry, client, fid, request) {
+  const controller = new AbortController();
+  const record = { entry, client, controller };
+  bridgeFetches.add(record);
+  try {
+    const response = await bridgeTransport(request.url, {
+      method: request.method,
+      headers: request.headers,
+      body: request.body,
+      redirect: 'error',
+      signal: controller.signal,
+    }, { session: client.session });
+    const body = await readBridgeBody(response, controller);
+    if (controller.signal.aborted) throw new Error('aborted');
+    const headers = [...response.headers]
+      .filter(([name]) => !BRIDGE_DROPPED_RESPONSE_HEADERS.has(name));
+    replyBridgeFetch(entry, {
+      type: 'fetch-result',
+      fid,
+      ok: true,
+      status: response.status,
+      statusText: response.statusText || '',
+      headers,
+      body,
+    }, [body]);
+  } catch {
+    // Nothing of the failure is logged or passed on: the transport's message
+    // can quote the URL, i.e. the name being verified.
+    refuseBridgeFetch(entry, fid, BRIDGE_FAILED);
+  } finally {
+    bridgeFetches.delete(record);
+  }
 }
 
 function retire(entry) {
@@ -391,14 +579,20 @@ function sendRequest(client, method, params, deadlineMs) {
 
 // A Colibri client living in the chain's worker. `request` is EIP-1193, plus an
 // optional `{ deadlineMs }` the caller will wait at most (see `onDeadline`).
-function createClient({ chainId, proverUrl, zkProof }) {
+// `session` is the Electron session its network traffic is dialled on (see
+// NETWORK BRIDGE); it stays with the client, so a bystander resent to a fresh
+// worker keeps it along with its deadline. A client without one gets no
+// network at all.
+function createClient({ chainId, proverUrl, zkProof, session = null }) {
   const client = {
     id: nextClientId++,
     chainId: Number(chainId),
     config: { chainId: Number(chainId), proverUrl, zkProof: zkProof !== false },
+    session: session || null,
     destroyed: false,
     workers: new Set(),
   };
+  liveClients.set(client.id, client);
   return {
     request({ method, params } = {}, { deadlineMs } = {}) {
       return sendRequest(client, method, params ?? [], deadlineMs);
@@ -406,28 +600,51 @@ function createClient({ chainId, proverUrl, zkProof }) {
     destroy() {
       if (client.destroyed) return;
       client.destroyed = true;
+      liveClients.delete(client.id);
       for (const entry of client.workers) {
         if (entry.terminated) continue;
         try { entry.worker.postMessage({ type: 'destroy', clientId: client.id }); }
         catch { /* the worker is going away */ }
       }
       client.workers.clear();
+      abortBridgeFetches((record) => record.client === client);
     },
   };
 }
 
-function resetForTest({ storageDir: dir = null } = {}) {
+// A private window closed: nothing more is dialled on its session. Its
+// clients are destroyed by colibri-resolver.js, which may have to wait for
+// requests still holding them; their network traffic stops now.
+onBrowsingSessionRetired((retired) => {
+  abortBridgeFetches((record) => record.client.session === retired);
+});
+
+// App quit: stop every bridge fetch still in flight and take no new ones.
+// The workers themselves are unref'd and go with the process.
+function shutdown() {
+  shuttingDown = true;
+  abortBridgeFetches(() => true);
+}
+
+function resetForTest({ storageDir: dir = null, transport = null } = {}) {
   for (const entry of [...workers.values()]) replace(entry, 'test reset');
   workers.clear();
+  abortBridgeFetches(() => true);
+  liveClients.clear();
+  shuttingDown = false;
+  bridgeTransport = transport || gatewayFetch;
   storageDirOverride = dir;
 }
 
 module.exports = {
   createClient,
   ensureWorker,
+  shutdown,
   ColibriWorkerError,
   resetForTest,
   DEFAULT_DEADLINE_MS,
   STUCK_PROBE_MS,
   ABANDONED_MS,
+  MAX_BRIDGE_REQUEST_BYTES,
+  MAX_BRIDGE_RESPONSE_BYTES,
 };

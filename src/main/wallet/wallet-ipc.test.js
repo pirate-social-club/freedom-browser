@@ -3,6 +3,13 @@ jest.mock('electron', () => ({
 }));
 
 jest.mock('qrcode', () => ({}));
+// Handlers here are called with bare `{}` events; they stand for a live
+// window's sender. A sender marked `closing` has no session any more.
+const mockLiveSession = { id: 'live-window' };
+jest.mock('../browsing-transport', () => ({
+  ...jest.requireActual('../browsing-transport'),
+  browsingSessionFor: jest.fn((sender) => (sender?.closing ? null : mockLiveSession)),
+}));
 jest.mock('./balance-service', () => ({ getBalancesWithCache: jest.fn(async () => ({ balances: null, fromCache: false })) }));
 jest.mock('./chains', () => ({}));
 jest.mock('./provider-manager', () => ({}));
@@ -373,5 +380,47 @@ describe('signing handlers require a main-side confirmation', () => {
     const result = await handlers['wallet:confirm-signing']({}, 'dapp-send', 2, { ...TX, gasLimit: 'x' });
     expect(result).toMatchObject({ success: false });
     expect(result.token).toBeUndefined();
+  });
+});
+
+describe('wallet network work runs on the asking window\'s session', () => {
+  const { currentBrowsingSession } = jest.requireActual('../browsing-transport');
+  let handlers;
+
+  beforeEach(() => {
+    handlers = {};
+    getBalancesWithCache.mockClear();
+    ipcMain.handle.mockImplementation((channel, handler) => {
+      handlers[channel] = handler;
+    });
+    registerWalletIpc();
+  });
+
+  test('a closing window gets nothing dialled', async () => {
+    const closing = { sender: { closing: true } };
+    for (const [channel, args] of [
+      ['wallet:get-balances', ['0xabc']],
+      ['wallet:get-balances-cached', ['0xabc']],
+      ['wallet:estimate-gas', [{ from: '0x1', to: '0x2', chainId: 1 }]],
+      ['wallet:get-gas-price', [1]],
+      ['wallet:send-transaction', [{}, {}]],
+      ['wallet:dapp-send-transaction', [{}, 0, { origin: 'https://dapp.example' }]],
+      ['wallet:get-transaction-status', ['0xhash', 1]],
+      ['wallet:wait-for-transaction', ['0xhash', 1]],
+    ]) {
+      await expect(Promise.resolve(handlers[channel](closing, ...args)))
+        .resolves.toMatchObject({ success: false, reason: 'SESSION_UNAVAILABLE' });
+    }
+    expect(getBalancesWithCache).not.toHaveBeenCalled();
+  });
+
+  test("a live window's work runs inside its session", async () => {
+    let seen;
+    getBalancesWithCache.mockImplementationOnce(async () => {
+      seen = currentBrowsingSession();
+      return { balances: {}, fromCache: true };
+    });
+    await handlers['wallet:get-balances-cached']({}, '0xabc');
+    expect(seen).toBe(mockLiveSession);
   });
 });

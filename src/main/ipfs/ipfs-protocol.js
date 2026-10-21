@@ -59,6 +59,7 @@ const {
   redactUrlForLog,
   redactedFailure,
 } = require('../private/private-log-context');
+const { runWithBrowsingSession } = require('../browsing-transport');
 const {
   cidV0ToV1Base32,
   cidV1B58btcToBase32,
@@ -797,11 +798,14 @@ function makeRegister(namespace) {
     }
     // PRIVATE MODE GUARD (request logging): see registerBzzProtocol — one
     // registration per session, so the private session's handler marks
-    // every request it serves as private for the duration.
+    // every request it serves as private for the duration, and names the
+    // session its name lookups are dialled on (browsing-transport.js).
     const isPrivate = !!privatePartition;
     try {
       targetSession.protocol.handle(namespace, (request) =>
-        runWithPrivateLogContext(isPrivate, () => handleRequest(namespace, request))
+        runWithPrivateLogContext(isPrivate, () =>
+          runWithBrowsingSession(targetSession, () => handleRequest(namespace, request))
+        )
       );
       log.info(`[${namespace}-protocol] handler registered`);
     } catch (err) {

@@ -199,6 +199,8 @@ const terminateRouting = createSessionRoutingTermination({ app, log,
   recordNotice: (code) => routingNoticeStore.record(code),
 });
 const { forgetSpacesSession, registerSpacesIpc } = require('./spaces-resolver');
+const { retireBrowsingSession } = require('./browsing-transport');
+const { shutdown: shutdownColibriNetwork } = require('./ens/colibri-worker-host');
 const { registerHnsIpc, startHns, stopHns, registerHnsSession, unregisterHnsSession } = require('./hns-manager');
 const { registerDvpnIpc, initDvpn, stopDvpn } = require('./dvpn-manager');
 const { registerJacktripIpc, stopJacktrip } = require('./jacktrip-manager');
@@ -569,12 +571,19 @@ async function bootstrap() {
     await registerHnsSession(privateSession);
     registerOnionRoutingSession(partition, privateSession);
   }, { canOpen: () => !isQuitting });
-  // On private-window close: cancel the window's still-running downloads
-  // FIRST (once its rows are gone nothing can see or stop them, and a
-  // finished file would leave no record anywhere), then drop the window's
-  // in-memory download rows (they never touch SQLite — completed files stay
-  // on disk, Chromium semantics) and its session-only permission decisions.
-  // The session's storage is cleared by the private-windows module itself.
+  // On private-window close: retire the window's session before anything
+  // else, while its HNS and `.onion` routing are still on it. Every request
+  // the shared gateway transport is still running on that session (ENS quorum
+  // legs, CCIP-Read, chain-data RPC, prefetch and the Colibri bridge) is
+  // aborted at whatever stage it has reached, and nothing new is dialled on
+  // it (browsing-transport.js), so none of them outlives that routing.
+  // Then cancel the window's still-running downloads (once its rows are gone
+  // nothing can see or stop them, and a finished file would leave no record
+  // anywhere), then drop the window's in-memory download rows (they never
+  // touch SQLite — completed files stay on disk, Chromium semantics) and its
+  // session-only permission decisions. The session's storage is cleared by
+  // the private-windows module itself.
+  registerPrivateCleanup((_partition, privateSession) => retireBrowsingSession(privateSession));
   registerPrivateCleanup((_partition, privateSession) => unregisterHnsSession(privateSession));
   registerPrivateCleanup((_partition, privateSession) => forgetSpacesSession(privateSession));
   registerPrivateCleanup((partition) => cancelPrivateDownloads(partition));
@@ -743,6 +752,9 @@ const SHUTDOWN_WATCHDOG_MS = 20_000;
 // place that decides when quitting is allowed.
 async function windDown() {
   const myotisStopped = myotisManager.stopAllMyotis({ shutdown: true });
+  // The Colibri verifier's network requests run in this process on behalf of
+  // its worker threads; stop them before the sessions they use go away.
+  shutdownColibriNetwork();
 
   // Close all DevTools first to prevent crashes during cleanup
   log.info('[App] Closing all DevTools...');

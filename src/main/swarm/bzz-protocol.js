@@ -58,6 +58,7 @@ const {
   redactUrlForLog,
   redactedFailure,
 } = require('../private/private-log-context');
+const { runWithBrowsingSession } = require('../browsing-transport');
 
 // Per-attempt retry schedule. First entry is the delay BEFORE the 2nd
 // attempt, etc. Total backoff budget ≈ sum of all values (~50s). The probe
@@ -530,10 +531,14 @@ function registerBzzProtocol(targetSession, { privatePartition = null } = {}) {
   // the one place where private-ness is known for every request it serves.
   // Marking the whole handler redacts the URL and gateway log lines here
   // AND the name-resolution ones underneath (see private-log-context.js).
+  // The same registration names the session the name lookups underneath
+  // are dialled on (see browsing-transport.js).
   const isPrivate = !!privatePartition;
   try {
     targetSession.protocol.handle('bzz', (request) =>
-      runWithPrivateLogContext(isPrivate, () => handleBzzRequest(request))
+      runWithPrivateLogContext(isPrivate, () =>
+        runWithBrowsingSession(targetSession, () => handleBzzRequest(request))
+      )
     );
     log.info('[bzz-protocol] handler registered');
   } catch (err) {

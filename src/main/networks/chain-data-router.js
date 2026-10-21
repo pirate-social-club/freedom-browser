@@ -2,6 +2,8 @@ const log = require('../logger');
 const registry = require('./network-registry');
 const myotis = require('../myotis/myotis-manager');
 const blockscoutLogs = require('./blockscout-logs');
+const { gatewayFetch, readBoundedBody } = require('../ipfs/gateway-transport');
+const { requireBrowsingSession, sessionKey } = require('../browsing-transport');
 
 const READ_METHODS = new Set([
   'eth_blockNumber',
@@ -302,10 +304,16 @@ function requestTarget(method, params) {
     : '*';
 }
 
-function adaptiveRouteKey(source, chainId, method, params, routingContext) {
+// `browsingKey` (browsing-transport.js `sessionKey`) keeps one window's route
+// state to itself: an app's struggles in a private window neither demote nor
+// unblock that app's route in another, and nothing about either is learned
+// from the other's routing.
+function adaptiveRouteKey(source, chainId, method, params, routingContext, browsingKey) {
   const origin = normalizeRoutingOrigin(routingContext);
   if (!origin) return null;
-  return JSON.stringify([source, Number(chainId), origin, method, requestTarget(method, params)]);
+  return JSON.stringify([
+    source, Number(chainId), browsingKey, origin, method, requestTarget(method, params),
+  ]);
 }
 
 function isCapacityFailure(error) {
@@ -1160,9 +1168,11 @@ async function requestColibri(chainId, method, params, routeKey = null, deadline
   if (!registry.getEndpoints(chainId, 'prover').length) {
     throw new SourceUnavailableError('No Colibri prover configured');
   }
+  // Per browsing session, like the route key that usually stands in for it.
   const inFlightKey = routeKey || JSON.stringify([
     'colibri',
     Number(chainId),
+    sessionKey(requireBrowsingSession()),
     method,
     requestTarget(method, params),
   ]);
@@ -1207,7 +1217,20 @@ async function requestColibri(chainId, method, params, routeKey = null, deadline
   return withSourceDeadline(requestPromise, 'Colibri', budgetMs);
 }
 
+// A remote endpoint is dialled through Chromium (`gatewayFetch`) on the session
+// the read is for (browsing-transport.js): a page's read from a private window
+// follows that window's proxy policy, and internal callers (balances,
+// transactions, Ant) use the default session. A loopback node keeps Node's
+// fetch inside gatewayFetch, which no proxy policy covers anyway. A redirect
+// is not followed on the remote path: it comes back as the 3xx it is, which
+// fails the endpoint below.
+// The most one RPC answer may be, the same bound the Colibri bridge puts on a
+// proof: large log scans fit, and a misbehaving endpoint cannot make this
+// process hold more.
+const MAX_RPC_RESPONSE_BYTES = 16 * 1024 * 1024;
+
 async function requestRpcUrl(url, method, params, timeoutMs, { signal } = {}) {
+  const browsingSession = requireBrowsingSession();
   const controller = new AbortController();
   const abort = () => controller.abort();
   if (signal?.aborted) controller.abort();
@@ -1218,14 +1241,25 @@ async function requestRpcUrl(url, method, params, timeoutMs, { signal } = {}) {
     controller.abort();
   }, timeoutMs);
   try {
-    const response = await fetch(url, {
+    // A redirect is refused on every branch, the loopback one included: an
+    // RPC answer comes from the URL that was asked, never from wherever a
+    // local node or a remote one points next.
+    const response = await gatewayFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
+      redirect: 'error',
       signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
+    }, { session: browsingSession });
+    if (!response.ok) {
+      // An unread body would hold the request, and on a private session the
+      // signal joined to its retirement, until that window closed.
+      await response.body?.cancel().catch(() => {});
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const data = JSON.parse(new TextDecoder().decode(
+      await readBoundedBody(response, MAX_RPC_RESPONSE_BYTES)
+    ));
     if (data.error) {
       const error = new Error(data.error.message || 'RPC request failed');
       error.code = data.error.code;
@@ -2062,6 +2096,9 @@ async function request(
   } = {}
 ) {
   if (!isReadMethod(method)) throw new Error(`Unsupported read method: ${method}`);
+  // Before any source is asked: a private caller that lost its session fails
+  // here (browsing-transport.js), and every route below is this session's.
+  const browsingKey = sessionKey(requireBrowsingSession());
   const network = registry.getNetwork(chainId);
   if (!network) throw new Error(`Unsupported chain ID: ${chainId}`);
   const params = normalizeParams(method, rawParams);
@@ -2117,7 +2154,7 @@ async function request(
     signal?.throwIfAborted();
     const source = order[sourceIndex];
     const routeKey = source === 'myotis' || source === 'colibri' || source === 'quorum'
-      ? adaptiveRouteKey(source, chainId, method, params, routingContext)
+      ? adaptiveRouteKey(source, chainId, method, params, routingContext, browsingKey)
       : null;
     if (adaptiveSourceUnavailable(routeKey)) {
       failures.push(`${source}: temporarily bypassed for this app workload`);

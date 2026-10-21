@@ -15,7 +15,7 @@ module.exports = {
     // real network refuses (`.onion` included), so the real-Electron network
     // probes run in their own ipfs-gateway-proxy CI job instead.
     ...(process.env.FREEDOM_SKIP_ELECTRON_NET_TEST === '1'
-      ? ['/src/main/__tests__/integration/(ens-ccip-proxy|ipfs-gateway-proxy|cert-verify-concurrency)\\.test\\.js$']
+      ? ['/src/main/__tests__/integration/(ens-ccip-proxy|ipfs-gateway-proxy|cert-verify-concurrency|session-transport-proxy)\\.test\\.js$']
       : []),
   ],
   collectCoverageFrom: ['src/**/*.js', '!src/**/*.test.js', '!src/renderer/vendor/**'],

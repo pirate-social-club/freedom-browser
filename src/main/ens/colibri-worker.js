@@ -5,6 +5,9 @@
 // and the verifier's disk storage, and the main process talks to it over
 // messages (`colibri-worker-host.js`). A verification that outlives its caller
 // can then be stopped with `worker.terminate()` instead of running to the end.
+// The worker has no network access of its own: every request the verifier
+// makes is handed back to the host, which dials it on the requesting window's
+// session (`createBridgeFetch` below).
 const fs = require('node:fs');
 const path = require('node:path');
 const { isMainThread, parentPort, threadId, workerData } = require('node:worker_threads');
@@ -17,6 +20,16 @@ const MAX_LATEST_AGE_SECONDS = 60;
 const MAX_ERROR_MESSAGE = 2000;
 // colibri-runtime.js's refusal on an instance retired after a trap.
 const RETIRED_RUNTIME_ERROR = /Colibri WASM runtime was retired after a trap/;
+
+// Network access (see `createBridgeFetch`). The verifier only ever issues
+// GET (cache-friendly proofs) and POST (JSON-RPC, prover requests) with a
+// JSON string body and these three headers (the SDK's http.js), so nothing
+// else is carried across.
+const BRIDGE_METHODS = new Set(['GET', 'POST']);
+const BRIDGE_REQUEST_HEADERS = new Set(['accept', 'content-type', 'cache-control']);
+// The fetch spec forbids a body on these, and `new Response(body, { status })`
+// throws if one is passed (the same list `ipfs/gateway-transport.js` uses).
+const NULL_BODY_STATUSES = new Set([204, 205, 304]);
 
 // Disk-backed storage adapter for Colibri's verifier state (sync committee
 // pubkeys, current head witness, etc — keys like "states_1" / "sync_1_<slot>").
@@ -120,9 +133,103 @@ function serializeError(err) {
   return out;
 }
 
+function bridgeError(message) {
+  return new TypeError(message);
+}
+
+function responseHeaders(pairs) {
+  const headers = new Headers();
+  for (const pair of Array.isArray(pairs) ? pairs : []) {
+    if (!Array.isArray(pair) || typeof pair[0] !== 'string' || typeof pair[1] !== 'string') continue;
+    try { headers.append(pair[0], pair[1]); }
+    catch { /* a header `Headers` refuses is dropped, not fatal */ }
+  }
+  return headers;
+}
+
 function createColibriService({ runtime, storageDir, post }) {
   const { Colibri, Strategy } = runtime;
   const clients = new Map();
+  // Bridge fetches waiting for the host: fid -> { clientId, resolve, reject }.
+  const pendingFetches = new Map();
+  let nextFetchId = 1;
+
+  // The verifier's `fetch`. Left to itself the SDK uses this thread's
+  // `globalThis.fetch`, i.e. Node's undici, which never sees the requesting
+  // window's Electron session: a private window's proofs and RPC calls went
+  // out DIRECT, around its proxy policy and its partition. This hands each
+  // request to the main process instead (`colibri-worker-host.js`), which
+  // performs it through Chromium on the session the client was created for
+  // and answers with the bytes. Only what the SDK sends is accepted (GET/POST,
+  // a string body, three headers); anything else is refused here, before it
+  // crosses. `globalThis.fetch` itself is left alone.
+  function createBridgeFetch(clientId) {
+    return function bridgeFetch(input, init = {}) {
+      return new Promise((resolve, reject) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : null;
+        if (!url) {
+          reject(bridgeError('Colibri bridge fetch needs a URL string'));
+          return;
+        }
+        const method = String(init.method || 'GET').toUpperCase();
+        if (!BRIDGE_METHODS.has(method)) {
+          reject(bridgeError(`Colibri bridge fetch does not carry ${method}`));
+          return;
+        }
+        const body = init.body ?? null;
+        if (body !== null && (typeof body !== 'string' || method === 'GET')) {
+          reject(bridgeError('Colibri bridge fetch carries a string POST body only'));
+          return;
+        }
+        let headers;
+        try {
+          headers = [...new Headers(init.headers ?? {})]
+            .filter(([name]) => BRIDGE_REQUEST_HEADERS.has(name));
+        } catch {
+          reject(bridgeError('Colibri bridge fetch headers are invalid'));
+          return;
+        }
+        const fid = nextFetchId++;
+        pendingFetches.set(fid, { clientId, resolve, reject });
+        try {
+          post({ type: 'fetch', fid, clientId, url, method, headers, body });
+        } catch {
+          pendingFetches.delete(fid);
+          reject(bridgeError('Colibri bridge fetch could not be sent'));
+        }
+      });
+    };
+  }
+
+  function settleFetch(message) {
+    const pending = pendingFetches.get(message.fid);
+    if (!pending) return;
+    pendingFetches.delete(message.fid);
+    if (!message.ok) {
+      pending.reject(bridgeError(String(message.error?.message || 'Colibri bridge fetch failed')));
+      return;
+    }
+    try {
+      const status = Number(message.status);
+      const body = NULL_BODY_STATUSES.has(status) ? null : message.body;
+      pending.resolve(new Response(body, {
+        status,
+        statusText: typeof message.statusText === 'string' ? message.statusText : '',
+        headers: responseHeaders(message.headers),
+      }));
+    } catch {
+      // An out-of-range status: a failed request, as undici would report it.
+      pending.reject(bridgeError('Colibri bridge fetch answer could not be represented'));
+    }
+  }
+
+  function rejectFetchesOf(clientId) {
+    for (const [fid, pending] of [...pendingFetches]) {
+      if (pending.clientId !== clientId) continue;
+      pendingFetches.delete(fid);
+      pending.reject(bridgeError('Colibri client was destroyed'));
+    }
+  }
 
   function clientFor(clientId, config) {
     let client = clients.get(clientId);
@@ -134,6 +241,7 @@ function createColibriService({ runtime, storageDir, post }) {
         privacy_mode: PRIVACY_MODE,
         proofStrategy: Strategy.VerifiedOnly,
         max_latest_age_seconds: MAX_LATEST_AGE_SECONDS,
+        fetch: createBridgeFetch(clientId),
       });
       clients.set(clientId, client);
     }
@@ -143,6 +251,7 @@ function createColibriService({ runtime, storageDir, post }) {
   function destroy(clientId) {
     const client = clients.get(clientId);
     clients.delete(clientId);
+    rejectFetchesOf(clientId);
     try { client?.destroy?.(); } catch { /* the host already dropped it */ }
   }
 
@@ -164,6 +273,10 @@ function createColibriService({ runtime, storageDir, post }) {
       destroy(message.clientId);
       return;
     }
+    if (message?.type === 'fetch-result') {
+      settleFetch(message);
+      return;
+    }
     if (message?.type !== 'request') return;
     const { id, clientId, config, method, params } = message;
     try {
@@ -178,10 +291,16 @@ function createColibriService({ runtime, storageDir, post }) {
     }
   }
 
-  return { init, handle, clients };
+  return { init, handle, clients, pendingFetches };
 }
 
 if (!isMainThread && parentPort) {
+  // The verifier has no network of its own: every request it makes goes
+  // through `config.fetch`, the host's session-bound bridge. A path that
+  // reached for Node's global instead (a future SDK change) fails here
+  // rather than dialling outside the requesting window's session.
+  globalThis.fetch = () =>
+    Promise.reject(new TypeError('Colibri worker has no network of its own; requests go through the host bridge'));
   const post = (message) => parentPort.postMessage(message);
   try {
     // Never require the package directly — colibri-runtime pins the WASM

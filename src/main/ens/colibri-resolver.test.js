@@ -433,3 +433,94 @@ describe('requestViaColibri', () => {
     expect(mockClientInstances[1].request).toHaveBeenCalledTimes(1);
   });
 });
+
+// A client's network traffic is dialled on the session it was built for
+// (colibri-worker-host.js), so each browsing session gets its own.
+describe('per browsing session', () => {
+  const {
+    retireBrowsingSession,
+    runWithBrowsingSession,
+  } = require('../browsing-transport');
+  const { runWithPrivateLogContext } = require('../private/private-log-context');
+
+  test('builds a separate client for each session and reuses it within one', async () => {
+    const first = { id: 'private-a' };
+    const second = { id: 'private-b' };
+    await resolveViaColibri('a.eth', '0x');
+    await runWithBrowsingSession(first, () => resolveViaColibri('a.eth', '0x'));
+    await runWithBrowsingSession(first, () => resolveViaColibri('b.eth', '0x'));
+    await runWithBrowsingSession(second, () => requestViaColibri(1, 'eth_blockNumber'));
+
+    expect(mockCreateClient).toHaveBeenCalledTimes(3);
+    expect(mockCreateClient.mock.calls.map(([config]) => config.session)).toEqual([
+      undefined, first, second,
+    ]);
+    // Each session's lookups ran on its own client.
+    const providerClients = mockUniversalResolverCall.mock.calls.map(([provider]) => provider.client);
+    expect(providerClients[1]).toBe(mockClientInstances[1]);
+    expect(providerClients[2]).toBe(mockClientInstances[1]);
+    expect(mockClientInstances[2].request).toHaveBeenCalledTimes(1);
+  });
+
+  test('a private caller without a session is refused before anything is built', async () => {
+    await expect(runWithPrivateLogContext(true, () => resolveViaColibri('a.eth', '0x')))
+      .rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    await expect(runWithPrivateLogContext(true, () => requestViaColibri(1, 'eth_call')))
+      .rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(mockEnsureWorker).not.toHaveBeenCalled();
+    expect(mockCreateClient).not.toHaveBeenCalled();
+  });
+
+  test("the provider's CCIP-Read callbacks dial on the client's session", async () => {
+    const target = { id: 'private-ccip' };
+    await runWithBrowsingSession(target, () => resolveViaColibri('a.eth', '0x'));
+    const [provider] = mockUniversalResolverCall.mock.calls[0];
+
+    const electron = require('electron');
+    const { createNetMock, emitResponse } = require('../../../test/helpers/fake-electron-net');
+    const originalNetRequest = electron.net.request;
+    const net = createNetMock((request) =>
+      emitResponse(request, { chunks: [JSON.stringify({ data: '0xabcd' })] })
+    );
+    electron.net.request = net.request;
+    try {
+      // Called from outside any context: the binding is the client's, not
+      // whatever context happens to be current.
+      await expect(
+        provider.ccipReadFetch({ to: '0x' + '11'.repeat(20) }, '0x', ['https://ccip.example/{data}'])
+      ).resolves.toBe('0xabcd');
+      expect(net.request.mock.calls[0][0].session).toBe(target);
+    } finally {
+      electron.net.request = originalNetRequest;
+    }
+  });
+
+  test("retiring a session destroys its clients and refuses it afterwards; others stay", async () => {
+    const closing = { id: 'private-closing' };
+    await resolveViaColibri('a.eth', '0x');
+    await runWithBrowsingSession(closing, () => resolveViaColibri('a.eth', '0x'));
+    const [defaultClient, closingClient] = mockClientInstances;
+
+    retireBrowsingSession(closing);
+    expect(closingClient.destroy).toHaveBeenCalledTimes(1);
+    expect(defaultClient.destroy).not.toHaveBeenCalled();
+
+    await expect(runWithBrowsingSession(closing, () => resolveViaColibri('b.eth', '0x')))
+      .rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    await resolveViaColibri('b.eth', '0x');
+    expect(mockCreateClient).toHaveBeenCalledTimes(2);
+  });
+
+  test('a build still in flight when its session retires is discarded', async () => {
+    const closing = { id: 'private-mid-build' };
+    let releaseWorker;
+    mockEnsureWorker.mockImplementationOnce(() => new Promise((resolve) => { releaseWorker = resolve; }));
+    const pending = runWithBrowsingSession(closing, () => resolveViaColibri('a.eth', '0x'));
+    await Promise.resolve();
+    retireBrowsingSession(closing);
+    releaseWorker();
+    await expect(pending).rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    expect(mockClientInstances[0].destroy).toHaveBeenCalledTimes(1);
+    expect(mockUniversalResolverCall).not.toHaveBeenCalled();
+  });
+});

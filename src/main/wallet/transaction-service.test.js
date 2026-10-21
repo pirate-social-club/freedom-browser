@@ -389,4 +389,16 @@ describe('capability-aware transaction routing', () => {
     await expect(pending).resolves.toMatchObject({ status: 'confirmed', blockNumber: 10 });
     jest.useRealTimers();
   });
+
+  test('stops at once when the sending window has closed, leaving the receipt to the boot repoll', async () => {
+    mockChainRequest.mockReset();
+    mockChainRequest.mockRejectedValue(
+      Object.assign(new Error('Browsing session unavailable'), { code: 'SESSION_UNAVAILABLE' })
+    );
+    const started = Date.now();
+    await expect(waitForTransaction(`0x${'33'.repeat(32)}`, 100))
+      .rejects.toMatchObject({ cause: { code: 'SESSION_UNAVAILABLE' } });
+    expect(mockChainRequest).toHaveBeenCalledTimes(1);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
 });

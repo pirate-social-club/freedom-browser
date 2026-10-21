@@ -1,7 +1,8 @@
 const { runWithPrivateLogContext, redactForLog } = require('./private/private-log-context');
-const { getPartitionForWebContents, isPrivateWebContents } = require('./private/private-windows');
+const { isPrivateWebContents } = require('./private/private-windows');
+const { browsingSessionFor } = require('./browsing-transport');
 const log = require('./logger');
-const { BrowserWindow, ipcMain, session } = require('electron');
+const { ipcMain } = require('electron');
 const IPC = require('../shared/ipc-channels');
 const { establishTrust } = require('./spaces/anchors');
 const { fetchBytes } = require('./spaces/transport');
@@ -229,24 +230,6 @@ function forgetSpacesSession(targetSession) {
   resolvers.delete(targetSession);
 }
 
-// The session a window's tabs browse in. A sender that no longer has a window
-// (closing mid-lookup), or a private window whose partition is already gone,
-// gets none, never the default session.
-function hasLiveWindow(sender) {
-  try {
-    return Boolean(sender && !sender.isDestroyed() && BrowserWindow.fromWebContents(sender));
-  } catch {
-    return false;
-  }
-}
-
-function browsingSessionFor(sender) {
-  if (!hasLiveWindow(sender)) return null;
-  const partition = getPartitionForWebContents(sender);
-  if (partition) return session.fromPartition(partition);
-  return isPrivateWebContents(sender) ? null : session.defaultSession;
-}
-
 async function resolveSpace(targetSession, handle) {
   if (!targetSession) {
     return { type: 'error', handle: String(handle ?? '').trim(), reason: 'SESSION_UNAVAILABLE' };
@@ -264,6 +247,9 @@ async function resolveSpace(targetSession, handle) {
   return result;
 }
 
+// `browsingSessionFor` (src/main/browsing-transport.js) picks the session the
+// window's tabs browse in; a sender without a live window, or a private window
+// whose partition is already gone, gets none, never the default session.
 function registerSpacesIpc() {
   ipcMain.handle(IPC.SPACES_RESOLVE, async (event, payload = {}) =>
     runWithPrivateLogContext(isPrivateWebContents(event.sender), () =>

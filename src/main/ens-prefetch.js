@@ -3,6 +3,7 @@ const { sanitizeUrlForLog } = require('./request-rewriter');
 const { getAntApiUrl, getIpfsGatewayUrl } = require('./service-registry');
 const { gatewayFetch, isLoopbackGatewayUrl } = require('./ipfs/gateway-transport');
 const { announceMainProcessAntDial } = require('./swarm/ant-api-main-dials');
+const { requireBrowsingSession } = require('./browsing-transport');
 
 // Hygiene timeout — not trust-critical. A misbehaving gateway shouldn't
 // hold a socket open forever for speculative content the user may never
@@ -110,6 +111,11 @@ function prefetchGatewayUrl(uri) {
       url = `${ipfsGatewayUrl}/ipfs/${afterScheme}`;
     }
 
+    // On the session of the window the name is being resolved for: a
+    // private window's warm-up follows its own partition's proxy policy. A
+    // private caller without one throws here and gets the noop handle.
+    const browsingSession = requireBrowsingSession();
+
     let aborted = false;
     let timer = null;
     const controller = new AbortController();
@@ -139,7 +145,11 @@ function prefetchGatewayUrl(uri) {
     const releaseDial =
       isAntDial && !isLoopbackGatewayUrl(url) ? announceMainProcessAntDial(url) : () => {};
 
-    gatewayFetch(url, { method: 'GET', redirect: 'manual', signal: controller.signal })
+    gatewayFetch(
+      url,
+      { method: 'GET', redirect: 'manual', signal: controller.signal },
+      { session: browsingSession }
+    )
       .then(drainResponseBody)
       .catch((err) => {
         // Includes the refusal to dial a `.onion` gateway the session is not

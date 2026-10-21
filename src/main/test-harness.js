@@ -39,6 +39,7 @@ const {
   runWithPrivateLogContext,
   redactUrlForLog,
 } = require('./private/private-log-context');
+const { runWithBrowsingSession } = require('./browsing-transport');
 const { ipcMain } = require('electron');
 const IPC = require('../shared/ipc-channels');
 const { success, failure } = require('./ipc-contract');
@@ -206,7 +207,8 @@ function registerStubProtocols(targetSession, { privatePartition = null } = {}) 
   // bzz/ipfs/ipns/web3 (and http/https) handlers on private sessions too, so they
   // redact request URLs exactly as those do — otherwise the e2e assertion
   // that a private navigation leaves no trace in main.log would be testing
-  // the harness instead of the app.
+  // the harness instead of the app. They name their session for anything
+  // dialled underneath, as the real handlers do (browsing-transport.js).
   const isPrivate = !!privatePartition;
   // bzz/ipfs/ipns/web3: harness owns these outright (custom standard schemes
   // we register in production too — see src/main/swarm/bzz-protocol.js
@@ -215,7 +217,9 @@ function registerStubProtocols(targetSession, { privatePartition = null } = {}) 
     try {
       const handler = makeProtocolHandler(scheme);
       targetSession.protocol.handle(scheme, (request) =>
-        runWithPrivateLogContext(isPrivate, () => handler(request))
+        runWithPrivateLogContext(isPrivate, () =>
+          runWithBrowsingSession(targetSession, () => handler(request))
+        )
       );
       log.info(`[test-harness] registered stub ${scheme}: handler`);
     } catch (err) {
@@ -237,7 +241,9 @@ function registerStubProtocols(targetSession, { privatePartition = null } = {}) 
     try {
       const handler = makeHttpStubHandler(scheme);
       targetSession.protocol.handle(scheme, (request) =>
-        runWithPrivateLogContext(isPrivate, () => handler(request))
+        runWithPrivateLogContext(isPrivate, () =>
+          runWithBrowsingSession(targetSession, () => handler(request))
+        )
       );
       log.info(`[test-harness] registered stub ${scheme}: handler (owns scheme)`);
     } catch (err) {

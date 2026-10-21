@@ -81,6 +81,8 @@ describe('colibri worker service', () => {
       privacy_mode: 'basic',
       proofStrategy: VerifiedOnly,
       max_latest_age_seconds: 60,
+      // The verifier's network goes through the host (see 'network bridge').
+      fetch: expect.any(Function),
     });
     expect(instances[0].request).toHaveBeenCalledWith({
       method: 'eth_getBalance', params: ['0xabc', 'latest'],
@@ -163,6 +165,150 @@ describe('colibri worker service', () => {
   test('serializeError tolerates non-Error values', () => {
     expect(serializeError('boom')).toEqual({ name: 'Error', message: 'boom' });
     expect(serializeError(undefined)).toEqual({ name: 'Error', message: 'unknown error' });
+  });
+});
+
+// The verifier's network requests leave the worker only through the host,
+// which dials them on the requesting window's Electron session
+// (colibri-worker-host.js). undici, the worker's own `fetch`, sees no session.
+describe('network bridge', () => {
+  const REQUEST = {
+    type: 'request', id: 1, clientId: 9, config: CONFIG, method: 'eth_blockNumber', params: [],
+  };
+
+  // A client whose next request makes one fetch with `init`, then reports what
+  // that fetch produced (or threw) as its result.
+  async function fetchThroughClient(init = { method: 'POST', body: '{"id":1}' }) {
+    const ctx = setup();
+    await ctx.service.handle(REQUEST);
+    const [instance] = ctx.instances;
+    let outcome;
+    instance.request.mockImplementationOnce(async () => {
+      outcome = instance.config.fetch('https://test-prover.example/rpc', init);
+      outcome.catch(() => {});
+      return '0x1';
+    });
+    await ctx.service.handle({ ...REQUEST, id: 2 });
+    const posted = ctx.posted.filter((message) => message.type === 'fetch');
+    return { ...ctx, instance, outcome, posted };
+  }
+
+  test("the verifier gets the bridge as its fetch; the thread's own is untouched", async () => {
+    const before = globalThis.fetch;
+    const { instance } = await fetchThroughClient();
+    expect(typeof instance.config.fetch).toBe('function');
+    expect(instance.config.fetch).not.toBe(globalThis.fetch);
+    expect(globalThis.fetch).toBe(before);
+  });
+
+  test("a verifier request is posted to the host under its client's id", async () => {
+    const { posted } = await fetchThroughClient({
+      method: 'post',
+      body: '{"id":1}',
+      headers: {
+        Accept: 'application/octet-stream',
+        'Content-Type': 'application/json',
+        'Cache-Control': 'max-age=12',
+        Cookie: 'never=sent',
+        'X-Anything': 'else',
+      },
+    });
+    expect(posted).toEqual([{
+      type: 'fetch',
+      fid: expect.any(Number),
+      clientId: 9,
+      url: 'https://test-prover.example/rpc',
+      method: 'POST',
+      headers: [
+        ['accept', 'application/octet-stream'],
+        ['cache-control', 'max-age=12'],
+        ['content-type', 'application/json'],
+      ],
+      body: '{"id":1}',
+    }]);
+  });
+
+  test("the host's answer becomes a real Response", async () => {
+    const { service, posted, outcome } = await fetchThroughClient();
+    const bytes = new TextEncoder().encode('{"result":"0x2a"}');
+    await service.handle({
+      type: 'fetch-result', fid: posted[0].fid, ok: true, status: 200, statusText: 'OK',
+      headers: [['content-type', 'application/json']], body: bytes.buffer,
+    });
+    const response = await outcome;
+    expect(response).toBeInstanceOf(Response);
+    expect(response.ok).toBe(true);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('application/json');
+    await expect(response.clone().text()).resolves.toBe('{"result":"0x2a"}');
+    await expect(response.clone().json()).resolves.toEqual({ result: '0x2a' });
+    const blob = await response.blob();
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(bytes);
+  });
+
+  test('an error status and a bodiless one come through as responses', async () => {
+    const { service, posted, outcome } = await fetchThroughClient();
+    await service.handle({
+      type: 'fetch-result', fid: posted[0].fid, ok: true, status: 503, statusText: 'Busy',
+      headers: [], body: new TextEncoder().encode('busy').buffer,
+    });
+    const response = await outcome;
+    expect(response.ok).toBe(false);
+    await expect(response.text()).resolves.toBe('busy');
+
+    const second = await fetchThroughClient();
+    await second.service.handle({
+      type: 'fetch-result', fid: second.posted[0].fid, ok: true, status: 204, headers: [],
+      body: new ArrayBuffer(0),
+    });
+    expect((await second.outcome).status).toBe(204);
+  });
+
+  test('a refused or failed fetch rejects with a TypeError, as fetch would', async () => {
+    const { service, posted, outcome } = await fetchThroughClient();
+    await service.handle({
+      type: 'fetch-result', fid: posted[0].fid, ok: false,
+      error: { name: 'TypeError', message: 'Colibri network request refused' },
+    });
+    await expect(outcome).rejects.toThrow(TypeError);
+    await expect(outcome).rejects.toThrow('Colibri network request refused');
+  });
+
+  test('destroying a client rejects its pending fetches, and only its own', async () => {
+    const { service, instances, instance, outcome } = await fetchThroughClient();
+    await service.handle({ ...REQUEST, id: 3, clientId: 10 });
+    const other = instances[1];
+    let otherOutcome;
+    other.request.mockImplementationOnce(async () => {
+      otherOutcome = other.config.fetch('https://test-prover.example/rpc', { method: 'GET' });
+      return '0x1';
+    });
+    await service.handle({ ...REQUEST, id: 4, clientId: 10 });
+    const settled = jest.fn();
+    otherOutcome.then(settled, settled);
+
+    await service.handle({ type: 'destroy', clientId: 9 });
+    await expect(outcome).rejects.toThrow('Colibri client was destroyed');
+    expect(instance.destroy).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    expect([...service.pendingFetches.values()].map((pending) => pending.clientId)).toEqual([10]);
+  });
+
+  test.each([
+    ['a method the verifier never uses', { method: 'PUT' }],
+    ['a GET with a body', { method: 'GET', body: 'x' }],
+    ['a body that is not a string', { method: 'POST', body: new Uint8Array([1]) }],
+  ])('%s is refused without reaching the host', async (_label, init) => {
+    const { posted, outcome } = await fetchThroughClient(init);
+    await expect(outcome).rejects.toThrow(TypeError);
+    expect(posted).toEqual([]);
+  });
+
+  test('an answer for no pending fetch is ignored', async () => {
+    const { service } = setup();
+    await expect(service.handle({ type: 'fetch-result', fid: 999, ok: true, status: 200 }))
+      .resolves.toBeUndefined();
   });
 });
 

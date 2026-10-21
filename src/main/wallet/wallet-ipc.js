@@ -28,6 +28,9 @@ const { signAndRecord, KINDS: PAYMENT_KINDS } = require('./tx-recorder');
 const { getActiveWalletIndex } = require('../identity-manager');
 const { getEffectiveRpcUrls } = require('./rpc-manager');
 const chainData = require('../networks/chain-data-router');
+const { browsingSessionFor, runWithBrowsingSession } = require('../browsing-transport');
+const { runWithPrivateLogContext } = require('../private/private-log-context');
+const { isPrivateWebContents } = require('../private/private-windows');
 const { getSigner } = require('./signers');
 const { isVaultLockedError } = require('./vault-errors');
 const {
@@ -186,12 +189,33 @@ async function handleSendTransaction(walletIndex, params, kind, context = {}, au
   }
 }
 
+const SESSION_UNAVAILABLE_RESULT = Object.freeze({
+  success: false,
+  error: 'Browsing session unavailable',
+  reason: 'SESSION_UNAVAILABLE',
+});
+
+// Wallet work that reaches the network (balances, gas, nonce, fee quotes,
+// broadcast, receipts) runs on the session of the window that asked, so a
+// private window's traffic follows its partition's proxy policy and stays out
+// of the default session (browsing-transport.js), and in that window's
+// private log context. A sender whose window is closing gets nothing dialled.
+function onSenderSession(handler) {
+  return (event, ...args) => {
+    const browsingSession = browsingSessionFor(event?.sender);
+    if (!browsingSession) return SESSION_UNAVAILABLE_RESULT;
+    return runWithBrowsingSession(browsingSession, () =>
+      runWithPrivateLogContext(isPrivateWebContents(event?.sender), () => handler(event, ...args))
+    );
+  };
+}
+
 /**
  * Register wallet IPC handlers
  */
 function registerWalletIpc() {
   // Get all balances for an address (always fetches fresh)
-  ipcMain.handle('wallet:get-balances', async (_event, address) => {
+  ipcMain.handle('wallet:get-balances', onSenderSession(async (_event, address) => {
     try {
       if (!address) {
         return { success: false, error: 'Address is required' };
@@ -202,10 +226,10 @@ function registerWalletIpc() {
       console.error('[WalletIPC] Failed to get balances:', err);
       return { success: false, error: err.message };
     }
-  });
+  }));
 
   // Startup display reads cached data only; visible wallet refresh owns fetching.
-  ipcMain.handle('wallet:get-balances-cached', async (_event, address) => {
+  ipcMain.handle('wallet:get-balances-cached', onSenderSession(async (_event, address) => {
     try {
       if (!address) {
         return { success: false, error: 'Address is required' };
@@ -216,7 +240,7 @@ function registerWalletIpc() {
       console.error('[WalletIPC] Failed to get cached balances:', err);
       return { success: false, error: err.message };
     }
-  });
+  }));
 
   // Clear balance cache
   ipcMain.handle('wallet:clear-balance-cache', async (_event, address) => {
@@ -252,14 +276,14 @@ function registerWalletIpc() {
   });
 
   // Test provider connectivity
-  ipcMain.handle('wallet:test-provider', async (_event, chainId) => {
+  ipcMain.handle('wallet:test-provider', onSenderSession(async (_event, chainId) => {
     try {
       const result = await testProvider(chainId);
       return result;
     } catch (err) {
       return { success: false, error: err.message };
     }
-  });
+  }));
 
   // Generate QR code as data URL
   ipcMain.handle('wallet:generate-qr', async (_event, text, options = {}) => {
@@ -288,7 +312,7 @@ function registerWalletIpc() {
   // ============================================
 
   // Estimate gas for a transaction
-  ipcMain.handle('wallet:estimate-gas', async (_event, params) => {
+  ipcMain.handle('wallet:estimate-gas', onSenderSession(async (_event, params) => {
     try {
       const { from, to, value, data, chainId } = params;
       if (!from || !to || chainId === undefined) {
@@ -300,10 +324,10 @@ function registerWalletIpc() {
       console.error('[WalletIPC] Gas estimation failed:', err);
       return { success: false, error: err.message };
     }
-  });
+  }));
 
   // Get current gas prices
-  ipcMain.handle('wallet:get-gas-price', async (_event, chainId) => {
+  ipcMain.handle('wallet:get-gas-price', onSenderSession(async (_event, chainId) => {
     try {
       if (chainId === undefined) {
         return { success: false, error: 'Chain ID is required' };
@@ -314,7 +338,7 @@ function registerWalletIpc() {
       console.error('[WalletIPC] Failed to get gas prices:', err);
       return { success: false, error: err.message };
     }
-  });
+  }));
 
   // Build ERC-20 transfer data
   ipcMain.handle('wallet:build-erc20-data', async (_event, to, amount) => {
@@ -357,17 +381,17 @@ function registerWalletIpc() {
     }
   });
 
-  ipcMain.handle('wallet:send-transaction', (_event, params, context, authorization) =>
+  ipcMain.handle('wallet:send-transaction', onSenderSession((_event, params, context, authorization) =>
     handleSendTransaction(
       getActiveWalletIndex(),
       params,
       PAYMENT_KINDS.WALLET_SEND,
       context,
       authorization
-    ));
+    )));
 
   // Get transaction status
-  ipcMain.handle('wallet:get-transaction-status', async (_event, txHash, chainId) => {
+  ipcMain.handle('wallet:get-transaction-status', onSenderSession(async (_event, txHash, chainId) => {
     try {
       if (!txHash || chainId === undefined) {
         return { success: false, error: 'Transaction hash and chain ID are required' };
@@ -378,10 +402,10 @@ function registerWalletIpc() {
       console.error('[WalletIPC] Failed to get transaction status:', err);
       return { success: false, error: err.message };
     }
-  });
+  }));
 
   // Wait for transaction confirmation
-  ipcMain.handle('wallet:wait-for-transaction', async (_event, txHash, chainId, confirmations = 1) => {
+  ipcMain.handle('wallet:wait-for-transaction', onSenderSession(async (_event, txHash, chainId, confirmations = 1) => {
     try {
       if (!txHash || chainId === undefined) {
         return { success: false, error: 'Transaction hash and chain ID are required' };
@@ -392,7 +416,7 @@ function registerWalletIpc() {
       console.error('[WalletIPC] Wait for transaction failed:', err);
       return { success: false, error: err.message };
     }
-  });
+  }));
 
   // ============================================
   // dApp-specific handlers (use specific wallet index)
@@ -400,12 +424,12 @@ function registerWalletIpc() {
 
   // Renderer threads the dapp's permissionKey through as context.origin
   // so payment-history rows match the x402 permission store's keying.
-  ipcMain.handle('wallet:dapp-send-transaction', (_event, params, walletIndex, context, authorization) => {
+  ipcMain.handle('wallet:dapp-send-transaction', onSenderSession((_event, params, walletIndex, context, authorization) => {
     if (!hasDappPermissionForWallet(context?.origin, walletIndex)) {
       return { success: false, error: 'Unauthorized dApp wallet access' };
     }
     return handleSendTransaction(walletIndex, params, PAYMENT_KINDS.DAPP_SEND, context, authorization);
-  });
+  }));
 
   // Sign a personal message (EIP-191) for a dApp
   ipcMain.handle('wallet:sign-message', async (_event, message, walletIndex, permissionKey, authorization) => {
@@ -606,17 +630,28 @@ function registerWalletIpc() {
   });
 
   // Capability-aware chain request. Myotis and Colibri are attempted before
-  // quorum/direct RPC according to the selected chain's access policy.
+  // quorum/direct RPC according to the selected chain's access policy, all on
+  // the session the sender's window browses in (browsing-transport.js). A
+  // sender without one (its window is closing) gets nothing dialled.
   ipcMain.handle(
     'wallet:chain-request',
-    async (_event, { chainId, method, params, routingContext }) => {
+    async (event, { chainId, method, params, routingContext }) => {
       try {
         if (!chainData.isReadMethod(method)) {
           return { success: false, error: { code: 4200, message: 'Method not supported' } };
         }
-        const response = await chainData.request(chainId, method, params || [], {
-          routingContext,
-        });
+        const browsingSession = browsingSessionFor(event?.sender);
+        if (!browsingSession) {
+          return {
+            success: false,
+            error: { code: -32603, message: 'Browsing session unavailable', reason: 'SESSION_UNAVAILABLE' },
+          };
+        }
+        const response = await runWithBrowsingSession(browsingSession, () =>
+          runWithPrivateLogContext(isPrivateWebContents(event?.sender), () =>
+            chainData.request(chainId, method, params || [], { routingContext })
+          )
+        );
         return { success: true, ...response };
       } catch (err) {
         return {

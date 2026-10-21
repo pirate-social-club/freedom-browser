@@ -576,3 +576,321 @@ describe('colibri worker host', () => {
     await expect(client.request({ method: 'eth_chainId' })).rejects.toThrow(/destroyed/);
   });
 });
+
+// The worker has no network of its own: the verifier's requests come back as
+// 'fetch' messages and are dialled here, on the session the client was made
+// for, through the (injected) gateway transport.
+describe('colibri worker host network bridge', () => {
+  const { retireBrowsingSession } = require('../browsing-transport');
+  const URL_OK = 'https://p.example/proof';
+  let transport;
+  let nextFid;
+  let session;
+
+  const okTransport = (body = '{"result":"0x2a"}', init = {}) =>
+    jest.fn(async () => new Response(body, {
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'application/json', ...init.headers },
+    }));
+
+  // Settles when the transport is aborted, the way gatewayFetch does.
+  const hangingTransport = () => jest.fn((_url, init) => new Promise((_resolve, reject) => {
+    init.signal.addEventListener('abort', () => {
+      reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
+    });
+  }));
+
+  function useTransport(fn) {
+    transport = fn;
+    host.resetForTest({ storageDir: STORAGE_DIR, transport: (...args) => transport(...args) });
+  }
+
+  // What the worker posts for one verifier request (colibri-worker.js).
+  function askToFetch(worker, clientId, overrides = {}) {
+    const fid = nextFid++;
+    worker.emit('message', {
+      type: 'fetch',
+      fid,
+      clientId,
+      url: URL_OK,
+      method: 'POST',
+      headers: [['accept', 'application/json'], ['content-type', 'application/json']],
+      body: '{"id":1}',
+      ...overrides,
+    });
+    return fid;
+  }
+
+  function replies(worker, fid) {
+    return worker.postMessage.mock.calls.filter(
+      ([message]) => message.type === 'fetch-result' && message.fid === fid
+    );
+  }
+
+  async function replyTo(worker, fid) {
+    for (let i = 0; i < 100 && replies(worker, fid).length === 0; i += 1) {
+      await Promise.resolve();
+    }
+    return replies(worker, fid)[0];
+  }
+
+  // A client with one request in flight on its chain's ready worker.
+  async function clientOnWorker(options = {}) {
+    const client = host.createClient({ ...CONFIG, session, ...options });
+    const started = await startRequest(client, { method: 'eth_blockNumber' });
+    const { clientId } = sentRequests(started.worker).at(-1);
+    return { client, clientId, ...started };
+  }
+
+  const REFUSED = {
+    type: 'fetch-result', fid: expect.any(Number), ok: false,
+    error: { name: 'TypeError', message: 'Colibri network request refused' },
+  };
+
+  beforeEach(() => {
+    nextFid = 1;
+    session = { id: `private-${Math.random()}` };
+    useTransport(okTransport());
+  });
+
+  test("dials on the client's session with redirects refused and only the verifier's headers", async () => {
+    const { worker, clientId } = await clientOnWorker();
+    const fid = askToFetch(worker, clientId, {
+      headers: [['accept', 'application/json'], ['x-extra', 'dropped'], ['content-type', 'application/json']],
+    });
+    const [reply, transfer] = await replyTo(worker, fid);
+
+    expect(transport).toHaveBeenCalledTimes(1);
+    const [url, init, deps] = transport.mock.calls[0];
+    expect(url).toBe(URL_OK);
+    expect(init).toEqual({
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: '{"id":1}',
+      redirect: 'error',
+      signal: expect.any(AbortSignal),
+    });
+    expect(deps.session).toBe(session);
+
+    expect(reply).toEqual({
+      type: 'fetch-result', fid, ok: true, status: 200, statusText: 'OK',
+      headers: [['content-type', 'application/json']],
+      body: expect.any(ArrayBuffer),
+    });
+    // The bytes move to the worker rather than being copied.
+    expect(transfer).toEqual([reply.body]);
+    expect(new TextDecoder().decode(reply.body)).toBe('{"result":"0x2a"}');
+  });
+
+  test('drops the encoding headers that describe bytes Chromium already decoded', async () => {
+    useTransport(okTransport('{}', { headers: { 'content-encoding': 'gzip', 'content-length': '2' } }));
+    const { worker, clientId } = await clientOnWorker();
+    const [reply] = await replyTo(worker, askToFetch(worker, clientId));
+    expect(reply.headers).toEqual([['content-type', 'application/json']]);
+  });
+
+  test.each([
+    ['plain http to a remote host', { url: 'http://p.example/proof' }],
+    ['user-info in the URL', { url: 'https://user:secret@p.example/proof' }],
+    ['a URL that does not parse', { url: 'not a url' }],
+    ['a method the verifier never uses', { method: 'PUT' }],
+    ['a GET with a body', { method: 'GET' }],
+    ['a body that is not a string', { body: 42 }],
+    ['malformed headers', { headers: [['accept']] }],
+    ['a body over the cap', { body: 'x'.repeat(1024 * 1024 + 1) }],
+  ])('refuses %s without dialling, and names no URL', async (_label, overrides) => {
+    const { worker, clientId } = await clientOnWorker();
+    const fid = askToFetch(worker, clientId, overrides);
+    const [reply] = await replyTo(worker, fid);
+    expect(reply).toEqual({ ...REFUSED, fid });
+    expect(JSON.stringify(reply)).not.toContain('p.example');
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  test('plain http to a loopback node is dialled (gatewayFetch keeps it on Node fetch)', async () => {
+    const { worker, clientId } = await clientOnWorker();
+    const [reply] = await replyTo(worker, askToFetch(worker, clientId, { url: 'http://127.0.0.1:8545/' }));
+    expect(reply).toMatchObject({ ok: true, status: 200 });
+    expect(transport.mock.calls[0][0]).toBe('http://127.0.0.1:8545/');
+  });
+
+  test('a body of exactly the cap is dialled', async () => {
+    const { worker, clientId } = await clientOnWorker();
+    const body = 'x'.repeat(host.MAX_BRIDGE_REQUEST_BYTES);
+    await replyTo(worker, askToFetch(worker, clientId, { body }));
+    expect(transport.mock.calls[0][1].body).toBe(body);
+  });
+
+  test('refuses a client it does not know, a destroyed one, and one without a session', async () => {
+    const { client, worker, clientId } = await clientOnWorker();
+    expect(await replyTo(worker, askToFetch(worker, clientId + 1000))).toEqual([
+      expect.objectContaining({ ok: false }),
+      undefined,
+    ]);
+
+    const sessionless = host.createClient(CONFIG);
+    await startRequest(sessionless, { method: 'eth_chainId' });
+    const sessionlessId = sentRequests(worker).at(-1).clientId;
+    expect((await replyTo(worker, askToFetch(worker, sessionlessId)))[0]).toMatchObject({ ok: false });
+
+    client.destroy();
+    expect((await replyTo(worker, askToFetch(worker, clientId)))[0]).toMatchObject({ ok: false });
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  test('refuses a fetch for a client that has never been on that worker', async () => {
+    const { worker: chainOneWorker, clientId } = await clientOnWorker();
+    // The same client id, asked for by another chain's worker.
+    const other = await startRequest(host.createClient({ ...CONFIG, chainId: 100, session }),
+      { method: 'eth_chainId' });
+    expect(other.worker).not.toBe(chainOneWorker);
+    const [reply] = await replyTo(other.worker, askToFetch(other.worker, clientId));
+    expect(reply).toMatchObject({ ok: false });
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  test('serves a retiring worker\'s draining requests, and posts nothing to a terminated one', async () => {
+    const { worker, clientId } = await clientOnWorker();
+    worker.emit('message', { type: 'trap', message: 'memory access out of bounds' });
+    expect((await replyTo(worker, askToFetch(worker, clientId)))[0]).toMatchObject({ ok: true });
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport.mock.calls[0][2]).toEqual({ session });
+
+    worker.emit('exit', 1);
+    const fid = askToFetch(worker, clientId);
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    expect(replies(worker, fid)).toEqual([]);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  test("refuses, and aborts in flight, a retired session's fetches; others carry on", async () => {
+    useTransport(hangingTransport());
+    const { worker, clientId } = await clientOnWorker();
+    const otherSession = { id: 'other' };
+    const other = await clientOnWorker({ session: otherSession });
+    const inFlight = askToFetch(worker, clientId);
+    const otherFlight = askToFetch(worker, other.clientId);
+    await Promise.resolve();
+    const signals = transport.mock.calls.map(([, init]) => init.signal);
+
+    retireBrowsingSession(session);
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
+    expect((await replyTo(worker, inFlight))[0]).toMatchObject({
+      ok: false, error: { message: 'Colibri network request failed' },
+    });
+    expect(replies(worker, otherFlight)).toEqual([]);
+
+    const [refused] = await replyTo(worker, askToFetch(worker, clientId));
+    expect(refused).toMatchObject({ ok: false, error: { message: 'Colibri network request refused' } });
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+
+  test('refuses an answer declared over the cap before reading it', async () => {
+    let signal;
+    useTransport(jest.fn(async (_url, init) => {
+      signal = init.signal;
+      return new Response('{}', {
+        status: 200,
+        headers: { 'content-length': String(host.MAX_BRIDGE_RESPONSE_BYTES + 1) },
+      });
+    }));
+    const { worker, clientId } = await clientOnWorker();
+    const [reply] = await replyTo(worker, askToFetch(worker, clientId));
+    expect(reply).toMatchObject({ ok: false, error: { message: 'Colibri network request failed' } });
+    expect(signal.aborted).toBe(true);
+  });
+
+  test('cuts off an answer that streams past the cap', async () => {
+    const MIB = new Uint8Array(1024 * 1024);
+    let pulled = 0;
+    let signal;
+    useTransport(jest.fn(async (_url, init) => {
+      signal = init.signal;
+      return new Response(new ReadableStream({
+        pull(controller) {
+          pulled += 1;
+          if (pulled > 64) controller.close();
+          else controller.enqueue(MIB);
+        },
+      }), { status: 200 });
+    }));
+    const { worker, clientId } = await clientOnWorker();
+    const fid = askToFetch(worker, clientId);
+    for (let i = 0; i < 2000 && replies(worker, fid).length === 0; i += 1) await Promise.resolve();
+    expect(replies(worker, fid)[0][0]).toMatchObject({ ok: false });
+    expect(signal.aborted).toBe(true);
+    expect(pulled).toBeLessThanOrEqual(host.MAX_BRIDGE_RESPONSE_BYTES / MIB.byteLength + 2);
+  });
+
+  test('aborts a destroyed client’s fetches in flight', async () => {
+    useTransport(hangingTransport());
+    const { client, worker, clientId } = await clientOnWorker();
+    askToFetch(worker, clientId);
+    await Promise.resolve();
+    client.destroy();
+    expect(transport.mock.calls[0][1].signal.aborted).toBe(true);
+  });
+
+  test('aborts the fetches of a replaced worker', async () => {
+    useTransport(hangingTransport());
+    const { worker, clientId } = await clientOnWorker();
+    askToFetch(worker, clientId);
+    await Promise.resolve();
+    worker.emit('error', new Error('Worker terminated due to reaching memory limit'));
+    expect(transport.mock.calls[0][1].signal.aborted).toBe(true);
+  });
+
+  test('aborts the fetches of a retired worker when it terminates, not before', async () => {
+    useTransport(hangingTransport());
+    const { worker, clientId, id } = await clientOnWorker();
+    askToFetch(worker, clientId);
+    await Promise.resolve();
+    const { signal } = transport.mock.calls[0][1];
+    worker.emit('message', { type: 'trap', message: 'memory access out of bounds' });
+    expect(signal.aborted).toBe(false);
+    worker.emit('message', { type: 'result', id, ok: true, result: '0x1' });
+    expect(worker.terminate).toHaveBeenCalledTimes(1);
+    expect(signal.aborted).toBe(true);
+  });
+
+  test('shutdown aborts everything in flight and takes nothing new', async () => {
+    useTransport(hangingTransport());
+    const { worker, clientId } = await clientOnWorker();
+    askToFetch(worker, clientId);
+    await Promise.resolve();
+    host.shutdown();
+    expect(transport.mock.calls[0][1].signal.aborted).toBe(true);
+    const [reply] = await replyTo(worker, askToFetch(worker, clientId));
+    expect(reply).toMatchObject({ ok: false, error: { message: 'Colibri network request refused' } });
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  test('a bystander resent to a fresh worker keeps its deadline and its session', async () => {
+    const client = host.createClient({ ...CONFIG, session });
+    const stuck = await startRequest(client, { method: 'eth_call' }, { deadlineMs: 2000 });
+    jest.advanceTimersByTime(1500);
+    const bystander = await startRequest(client, { method: 'eth_chainId' }, { deadlineMs: 2000 });
+    jest.advanceTimersByTime(500 + host.STUCK_PROBE_MS);
+    await expect(stuck.promise).rejects.toThrow(/still running/);
+    await flush();
+    const fresh = lastWorker();
+    fresh.emit('message', { type: 'ready' });
+    await flush();
+    const [resent] = sentRequests(fresh);
+    expect(resent).toMatchObject({ method: 'eth_chainId' });
+
+    const [reply] = await replyTo(fresh, askToFetch(fresh, resent.clientId));
+    expect(reply).toMatchObject({ ok: true });
+    expect(transport.mock.calls[0][2].session).toBe(session);
+
+    // Its deadline ping comes 500 ms in, what it had left, not 2000 ms in.
+    jest.advanceTimersByTime(499);
+    expect(fresh.postMessage.mock.calls.some(([m]) => m.type === 'ping')).toBe(false);
+    jest.advanceTimersByTime(1);
+    expect(fresh.postMessage.mock.calls.some(([m]) => m.type === 'ping')).toBe(true);
+    fresh.emit('message', { type: 'result', id: resent.id, ok: true, result: '0x1' });
+    await expect(bystander.promise).resolves.toBe('0x1');
+  });
+});
