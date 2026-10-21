@@ -1,0 +1,1 @@
+- The local Radicle repository viewer's data is only served to Freedom's own viewer page, not to a look-alike file opened from elsewhere on disk ([#56](https://github.com/pirate-social-club/freedom-browser/pull/56))
