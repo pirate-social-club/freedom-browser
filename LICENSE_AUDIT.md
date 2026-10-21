@@ -78,7 +78,7 @@ Risk levels follow upstream's scheme. Green is permissive with no action beyond 
 
 ## Downloaded Runtime Artifacts
 
-Versions here are the pinned values in the repository, not observed downloads; each names its pin so a drift is checkable. `licenses-audit.test.js` asserts that they match. All five pins are unchanged from upstream 0.8.7.
+Versions here are the pinned values in the repository, not observed downloads; each names its pin so a drift is checkable. `licenses-audit.test.js` asserts that they match. Four of the five pins are unchanged from upstream 0.8.7; the freedom-ipfs pin moved forward to its security release.
 
 ### Ant (antd, Swarm Node)
 
@@ -86,7 +86,7 @@ Ant comes from https://github.com/freedom-hq/ant at version `v0.5.61` (pin: `scr
 
 ### freedom-ipfs (Native IPFS Addon)
 
-freedom-ipfs comes from https://github.com/solardev-xyz/freedom-ipfs at version `v0.4.5` (pin: `scripts/fetch-freedom-ipfs-native.js`). It is MIT OR Apache-2.0 and loads into the Electron main process as a native addon. Attributed in `NOTICES`. Risk: green.
+freedom-ipfs comes from https://github.com/solardev-xyz/freedom-ipfs at version `v0.4.6` (pin: `scripts/fetch-freedom-ipfs-native.js`). It is MIT OR Apache-2.0 and loads into the Electron main process as a native addon. Attributed in `NOTICES`. Risk: green.
 
 ### libradicle (Native Radicle Addon)
 

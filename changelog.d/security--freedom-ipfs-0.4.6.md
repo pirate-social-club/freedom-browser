@@ -1,0 +1,2 @@
+- Updated bundled nodes:
+  - [freedom-ipfs](https://github.com/solardev-xyz/freedom-ipfs) 0.4.5 to 0.4.6: a malicious IPFS provider can no longer exhaust the browser's memory over QUIC, plus further dependency security fixes; two other advisories, in its DNS library hickory-proto (RUSTSEC-2026-0118 and RUSTSEC-2026-0119), stay open upstream until a libp2p upgrade ([#52](https://github.com/pirate-social-club/freedom-browser/pull/52))

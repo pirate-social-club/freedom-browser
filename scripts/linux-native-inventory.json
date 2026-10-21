@@ -56,8 +56,8 @@
       "path": "resources/freedom-ipfs-node/freedom_ipfs_native.node",
       "class": "supported",
       "reason": "freedom-ipfs addon, loaded from process.resourcesPath by src/main/ipfs/freedom-ipfs-native-binding.js and driven by src/main/ipfs/freedom-ipfs-native-node.js.",
-      "sha256": "b0b9773bbeb2a7b3c3994455c0c6bb1a0693d9d0b50c1c01b636fca2563923e8",
-      "pin": "scripts/fetch-freedom-ipfs-native.js v0.4.5 linux-x64: freedom-ipfs-node-electron41-linux-x64.tar.gz 289cb614…, whose freedom_ipfs_native.node member has this digest."
+      "sha256": "b17fcec95e21f532f40e68ff0549b2ae7dc62b83222c6261f6ba4ffdd24cd676",
+      "pin": "scripts/fetch-freedom-ipfs-native.js v0.4.6 linux-x64: freedom-ipfs-node-electron41-linux-x64.tar.gz 26ae72ef…, whose freedom_ipfs_native.node member has this digest."
     },
     {
       "path": "resources/radicle-bin/libradicle.node",
