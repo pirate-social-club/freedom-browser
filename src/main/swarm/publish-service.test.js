@@ -511,6 +511,22 @@ jest.mock('../private/private-windows', () => ({
   isPrivateWebContents: (wc) => wc?.isPrivate === true,
 }));
 
+// The real pick token store, with each store the handlers create kept on the
+// module, so the guard below can show a private refusal never consults it.
+jest.mock('./publish-pick-tokens', () => {
+  const actual = jest.requireActual('./publish-pick-tokens');
+  const stores = [];
+  return {
+    ...actual,
+    createPickTokenStore: (...args) => {
+      const store = actual.createPickTokenStore(...args);
+      stores.push(store);
+      return store;
+    },
+    stores,
+  };
+});
+
 describe('private-window publish guard', () => {
   const PRIVATE_EVENT = { sender: { isPrivate: true } };
   const publishHistory = require('./publish-history');
@@ -536,5 +552,83 @@ describe('private-window publish guard', () => {
     expect(mockUploadData).not.toHaveBeenCalled();
     expect(mockUploadFile).not.toHaveBeenCalled();
     expect(mockUploadFilesFromDirectory).not.toHaveBeenCalled();
+  });
+
+  // The token store spends a token on any lookup that finds it, so a private
+  // refusal made after redemption would burn the token. The refusal comes
+  // first: the store is never consulted and the token stays where it was.
+  describe('refuses before any pick token is redeemed', () => {
+    const PRIVATE_PUBLISH_ERROR = {
+      success: false,
+      error: 'Publishing is unavailable in private windows',
+    };
+    const privateSender = (id) => Object.assign(makeSender(id), { isPrivate: true });
+    let store;
+    let redeem;
+
+    beforeEach(() => {
+      const { stores } = require('./publish-pick-tokens');
+      expect(stores).toHaveLength(1);
+      store = stores[0];
+      redeem = jest.spyOn(store, 'redeem');
+      fs.existsSync.mockReturnValue(true);
+      fs.statSync.mockReturnValue({ size: 5, isDirectory: () => true });
+      fsp.readdir.mockResolvedValue([]);
+      mockGetPostageBatches.mockResolvedValue([makeBatch('b', 1000000000, 86400)]);
+      mockUploadFile.mockResolvedValue({ reference: makeRef('ref'), tagUid: 1 });
+      mockUploadFilesFromDirectory.mockResolvedValue({ reference: makeRef('ref'), tagUid: 1 });
+    });
+
+    afterEach(() => {
+      redeem.mockRestore();
+    });
+
+    const expectRefusedUnredeemed = (result, sizeBefore) => {
+      expect(result).toEqual(PRIVATE_PUBLISH_ERROR);
+      expect(redeem).not.toHaveBeenCalled();
+      expect(store.size()).toBe(sizeBefore);
+      expect(publishHistory.addEntry).not.toHaveBeenCalled();
+      expect(mockUploadFile).not.toHaveBeenCalled();
+      expect(mockUploadFilesFromDirectory).not.toHaveBeenCalled();
+      expect(fs.createReadStream).not.toHaveBeenCalled();
+    };
+
+    test.each([
+      ['file', 'swarm:publish-file', '/home/u/a.txt'],
+      ['directory', 'swarm:publish-directory', '/home/u/site'],
+    ])(
+      'a %s token presented by a private sender stays redeemable by its picker',
+      async (kind, channel, chosenPath) => {
+        const token = await pick(kind, chosenPath);
+        const sizeBefore = store.size();
+
+        const refused = await invokeIpcFrom(privateSender(41), channel, token);
+        expectRefusedUnredeemed(refused, sizeBefore);
+
+        const published = await invokeIpc(channel, token);
+        expect(published.success).toBe(true);
+        expect(redeem).toHaveBeenCalledTimes(1);
+        expect(store.size()).toBe(sizeBefore - 1);
+      }
+    );
+
+    test.each([
+      ['file', 'swarm:publish-file', '/home/u/a.txt'],
+      ['directory', 'swarm:publish-directory', '/home/u/site'],
+    ])(
+      'a private window publishing its own %s pick leaves the token in the store',
+      async (kind, channel, chosenPath) => {
+        const sender = privateSender(42);
+        const token = await pick(kind, chosenPath, sender);
+        const sizeBefore = store.size();
+
+        const refused = await invokeIpcFrom(sender, channel, token);
+        expectRefusedUnredeemed(refused, sizeBefore);
+
+        // Tokens still die with the webContents that picked.
+        sender.emit('destroyed');
+        expect(store.size()).toBe(sizeBefore - 1);
+      }
+    );
   });
 });
