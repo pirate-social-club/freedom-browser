@@ -440,9 +440,25 @@ describe('publish-service', () => {
         expectNothingPublished();
       });
 
+      test('a directory token publishes once; reusing it is refused', async () => {
+        const token = await pick('directory', '/home/u/site');
+        expect((await invokeIpc('swarm:publish-directory', token)).success).toBe(true);
+        jest.clearAllMocks();
+        const again = await invokeIpc('swarm:publish-directory', token);
+        expect(again.success).toBe(false);
+        expectNothingPublished();
+      });
+
       test('a token from another sender is refused', async () => {
         const token = await pick('file', '/home/u/a.txt', makeSender(2));
         const result = await invokeIpc('swarm:publish-file', token);
+        expect(result.success).toBe(false);
+        expectNothingPublished();
+      });
+
+      test('a directory token from another sender is refused', async () => {
+        const token = await pick('directory', '/home/u/site', makeSender(2));
+        const result = await invokeIpc('swarm:publish-directory', token);
         expect(result.success).toBe(false);
         expectNothingPublished();
       });
@@ -616,18 +632,20 @@ describe('private-window publish guard', () => {
       ['file', 'swarm:publish-file', '/home/u/a.txt'],
       ['directory', 'swarm:publish-directory', '/home/u/site'],
     ])(
-      'a private window publishing its own %s pick leaves the token in the store',
-      async (kind, channel, chosenPath) => {
+      "a private window's %s picker is refused before the dialog and mints nothing",
+      async (kind, channel) => {
         const sender = privateSender(42);
-        const token = await pick(kind, chosenPath, sender);
         const sizeBefore = store.size();
+        const pickChannel = kind === 'file' ? 'swarm:pick-file' : 'swarm:pick-directory';
 
-        const refused = await invokeIpcFrom(sender, channel, token);
+        const refusedPick = await invokeIpcFrom(sender, pickChannel);
+        expect(refusedPick).toEqual(PRIVATE_PUBLISH_ERROR);
+        expect(mockShowOpenDialog).not.toHaveBeenCalled();
+        expect(store.size()).toBe(sizeBefore);
+
+        // And it still cannot publish anything, token or not.
+        const refused = await invokeIpcFrom(sender, channel, undefined);
         expectRefusedUnredeemed(refused, sizeBefore);
-
-        // Tokens still die with the webContents that picked.
-        sender.emit('destroyed');
-        expect(store.size()).toBe(sizeBefore - 1);
       }
     );
   });

@@ -396,8 +396,11 @@ function registerPublishIpc() {
   });
 
   // The pickers answer with a token, never the chosen path: the path stays
-  // here until the same sender spends the token on a publish.
+  // here until the same sender spends the token on a publish. A private
+  // window can never publish, so it never opens the dialog either: the
+  // desktop's file chooser may record what was picked in its recent files.
   const pickHandler = (kind) => async (event) => {
+    if (isPrivateSender(event)) return PRIVATE_PUBLISH_ERROR;
     try {
       const senderId = event?.sender?.id;
       if (!Number.isInteger(senderId)) {
