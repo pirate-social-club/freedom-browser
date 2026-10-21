@@ -40,6 +40,10 @@ const browserReadyPromise = new Promise((resolve) => { resolveBrowserReady = res
 // Before any window exists: a source-tree run must not borrow the installed
 // app's WM_CLASS/app_id from package.json's desktopName (issue #142).
 require('./linux-desktop-name').applyLinuxDesktopName(app);
+// Web content sees a plain Chrome User-Agent, without the Freedom/ and
+// Electron/ tokens (issue #471). Before any session exists: each one reads the
+// fallback when it is created.
+require('./web-user-agent').applyWebUserAgent(app);
 
 // E2E test mode (Playwright). `FREEDOM_TEST_MODE=1` activates the
 // fixture-driven harness in src/main/test-harness.js (stubbed protocols,

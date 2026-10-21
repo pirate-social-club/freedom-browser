@@ -536,7 +536,7 @@ jobs:
         if: matrix.group == 'shortcuts-zoom'
         run: xvfb-run -a npm run test:e2e -- test-e2e/zoom.spec.js test-e2e/shortcuts.spec.js
 
-      - name: Run tabs, menus, popovers and dispositions E2E
+      - name: Run tabs, menus, popovers, dispositions and User-Agent E2E
         if: matrix.group == 'tabs'
         run: |
           xvfb-run -a npm run test:e2e -- \
@@ -551,7 +551,8 @@ jobs:
             test-e2e/dweb-link-gesture.spec.js \
             test-e2e/popup-blocker.spec.js \
             test-e2e/popup-close.spec.js \
-            test-e2e/ant-api-guard.spec.js
+            test-e2e/ant-api-guard.spec.js \
+            test-e2e/user-agent.spec.js
 
       - name: Run address-bar + ENSv2 + name-interstitial E2E
         if: matrix.group == 'address-bar-ens'
