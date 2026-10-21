@@ -8,8 +8,15 @@
  * the default session's. The unit suites pin that wiring on fakes; only a real
  * main process shows Chromium actually routing each dial through the session
  * it was given. This probe drives the real `gateway-transport.js`, the real
- * quorum-leg provider from `ens-resolver.js` and the real Colibri worker host
- * and worker thread.
+ * quorum-leg provider from `ens-resolver.js`, the real Colibri worker host
+ * and worker thread, the real CCIP-Read fetch and `session.fetch` (the Spaces
+ * resolver's transport).
+ *
+ * It also sets the User-Agent up the way `src/main/index.js` does, before any
+ * session exists, and the origin records the `User-Agent` header of every
+ * request it is asked: that traffic inherits the session's User-Agent, so it
+ * must carry plain Chrome's, not Electron's default with `freedom/` and
+ * `Electron/` tokens.
  *
  * Nothing leaves the machine:
  *   - one HTTPS origin on 127.0.0.1 with the throwaway test certificate in
@@ -46,6 +53,12 @@ const path = require('path');
 const HOST = 'ccip.example.test';
 
 app.commandLine.appendSwitch('host-resolver-rules', `MAP ${HOST} 127.0.0.1`);
+// As in src/main/index.js: the packaged Linux name, then the web User-Agent,
+// before any session exists. The name puts the `freedom/<version>` token into
+// Electron's default, which is kept for the report as the control.
+app.setName('freedom');
+const ELECTRON_USER_AGENT = app.userAgentFallback;
+require('../../web-user-agent').applyWebUserAgent(app);
 // The Jest wrapper owns the profile directory and removes it when this process
 // and its GPU and Crashpad children are gone; a direct run makes its own.
 const OWN_USER_DATA = !process.env.FREEDOM_PROBE_USER_DATA;
@@ -82,10 +95,20 @@ function startOrigin() {
       (req, res) => {
         const pathname = req.url.split('?')[0];
         const route = pathname.split('/')[1];
-        originRequests.push({ route, method: req.method, peerPort: req.socket.remotePort });
+        originRequests.push({
+          route,
+          method: req.method,
+          peerPort: req.socket.remotePort,
+          userAgent: req.headers['user-agent'] ?? null,
+        });
         if (route === 'x') {
           res.writeHead(200, { 'Content-Type': 'text/plain' });
           res.end('ok');
+          return;
+        }
+        if (route === 'ccip') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ data: '0x01' }));
           return;
         }
         if (route === 'rpc') {
@@ -223,6 +246,7 @@ async function main() {
   } = require('../../browsing-transport');
   const { runWithPrivateLogContext } = require('../../private/private-log-context');
   const { createEthereumProvider } = require('../../ens-resolver');
+  const { ccipReadFetch } = require('../../ens/ccip-fetch');
   const host = require('../../ens/colibri-worker-host');
   host.resetForTest({ storageDir: path.join(PROBE_USER_DATA, 'colibri') });
 
@@ -243,6 +267,7 @@ async function main() {
     recorderB: [...recorderB.seen],
     originRoutes: originRequests.map((entry) => ({ route: entry.route, via: via(entry.peerPort) })),
     directConnections: originConnections.filter((port) => via(port) === 'direct').length,
+    userAgents: originRequests.map((entry) => entry.userAgent),
   });
   const fetchOn = async (ses) => {
     const outcome = await within(
@@ -254,7 +279,16 @@ async function main() {
     );
     return { ...outcome, ...snapshot() };
   };
-  const results = { electron: process.versions.electron, originPort };
+  const results = {
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    originPort,
+    userAgent: {
+      electronDefault: ELECTRON_USER_AGENT,
+      fallback: app.userAgentFallback,
+      sessions: [A, B, C, D].map((ses) => ses.getUserAgent()),
+    },
+  };
 
   // ---- 1. gatewayFetch follows the session it is given --------------------
   await reset(A, B);
@@ -294,6 +328,26 @@ async function main() {
   await waitFor(() => recorderB.seen.some((dest) => dest.startsWith(`${HOST}:`)), 5_000);
   results.colibriB = { ...colibriOutcome, ...snapshot() };
   colibri.destroy();
+
+  // ---- 7. A CCIP-Read gateway and `session.fetch` on the private session --
+  // A resolver names its own gateways, so this header reaches a host it picks.
+  await reset(A, B);
+  const ccip = await within(
+    ccipReadFetch({ to: `0x${'11'.repeat(20)}` }, '0x1234', [`${origin}/ccip/{sender}/{data}`],
+      undefined, { session: B }),
+    10_000
+  );
+  results.ccipB = { ...ccip, ...snapshot() };
+  // The Spaces resolver's relay requests (`spaces-resolver.js`, `resolverFor`).
+  await reset(A, B);
+  const sessionFetch = await within(
+    B.fetch(`${origin}/x`).then(async (response) => ({
+      status: response.status,
+      body: await response.text(),
+    })),
+    10_000
+  );
+  results.sessionFetchB = { ...sessionFetch, ...snapshot() };
 
   // ---- 6. A private caller without a session is refused, for real ---------
   results.privateWithoutSession = runWithPrivateLogContext(true, () => {

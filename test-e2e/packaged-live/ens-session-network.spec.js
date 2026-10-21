@@ -14,7 +14,9 @@
 //      resolved, leave the default session's verifier store as it was, and
 //      nothing in the profile records the second name (the verifier's call
 //      cache keys entries by slots derived from the name;
-//      colibri-worker-host.js, STORAGE);
+//      colibri-worker-host.js, STORAGE). Every request header both windows'
+//      lookups sent carries the web User-Agent, plain Chrome's, with no
+//      `freedom/` or `Electron/` token (#54);
 //   3. closing a private window retires its session, which ends a lookup
 //      held at the prover (second test: a local prover that never answers,
 //      reached on the loopback branch, so the request cannot finish first).
@@ -49,6 +51,11 @@ const CLOSE_NAME = 'nick.eth';
 // Resolved by the private window only.
 const PRIVATE_ONLY_NAME = 'nick.eth';
 const LOOKUP_SETTLE_MS = 25_000;
+
+// Stock Chrome's reduced User-Agent, as test-e2e/user-agent.spec.js pins it.
+const CHROME_SHAPE =
+  /^Mozilla\/5\.0 \((?:X11; Linux x86_64|Macintosh; Intel Mac OS X 10_15_7|Windows NT 10\.0; Win64; x64)\) AppleWebKit\/537\.36 \(KHTML, like Gecko\) Chrome\/\d+\.0\.0\.0 Safari\/537\.36$/;
+const IDENTIFYING_TOKEN = /freedom\/|Electron\//i;
 
 // The hosts an ENS lookup reaches: the configured mainnet prover and RPCs,
 // plus the Colibri SDK's own default beacon and checkpoint endpoints, which
@@ -175,9 +182,10 @@ async function navigate(window, value) {
 }
 
 // NetLog events for URL requests to the ENS hosts: start time, outcome, HTTP
-// status, and the session each one rode, with each session's open interval:
-// an HTTP/2 session through the stream job that opened or found it, or a QUIC
-// session bound to the request directly.
+// status, the User-Agent of every request header it sent (null for headers
+// without one), and the session each one rode, with each session's open
+// interval: an HTTP/2 session through the stream job that opened or found it,
+// or a QUIC session bound to the request directly.
 function ensRequests(netlogFile, hosts) {
   const log = JSON.parse(fs.readFileSync(netlogFile, 'utf8'));
   const types = Object.fromEntries(Object.entries(log.constants.logEventTypes).map(([k, v]) => [v, k]));
@@ -195,7 +203,11 @@ function ensRequests(netlogFile, hosts) {
     if (type === 'URL_REQUEST_START_JOB' && event.phase === 1 && event.params?.url) {
       let host;
       try { host = new URL(event.params.url).hostname; } catch { continue; }
-      if (hosts.has(host) && !bySource.has(id)) bySource.set(id, { host, startedAt: at(event) });
+      if (hosts.has(host) && !bySource.has(id)) bySource.set(id, { host, startedAt: at(event), userAgents: [] });
+    }
+    if (/^HTTP_TRANSACTION_(?:HTTP2_|QUIC_)?SEND_REQUEST_HEADERS$/.test(type) && bySource.has(id)) {
+      const header = (event.params?.headers || []).find((line) => /^user-agent:/i.test(line));
+      bySource.get(id).userAgents.push(header ? header.replace(/^user-agent:\s*/i, '') : null);
     }
     if (type === 'REQUEST_ALIVE' && event.phase === 2 && bySource.has(id)) {
       bySource.get(id).endedAt = at(event);
@@ -278,8 +290,12 @@ test.describe('installed ENS network attribution', () => {
     const phases = {};
     const store = path.join(dirs.userData, 'colibri');
     const stores = {};
+    let webUserAgent;
     try {
       const normal = await chromePage(app, (url) => url.includes('index.html') && !url.includes('privatePartition='), 90_000);
+      // The session's User-Agent, which every webContents and session shares
+      // (test-e2e/user-agent.spec.js); there is no main-process evaluate here.
+      webUserAgent = await normal.evaluate(() => navigator.userAgent);
 
       phases.normalStart = Date.now();
       await navigate(normal, FIRST_NAME);
@@ -347,6 +363,8 @@ test.describe('installed ENS network attribution', () => {
       storeUnchangedByPrivate: JSON.stringify(stores.afterPrivate) === JSON.stringify(stores.beforePrivate),
       privateOnlyNameTraces: traces,
       mainProcessPeers: [...peers],
+      webUserAgent,
+      requestUserAgents: [...new Set(requests.flatMap((request) => request.userAgents))],
     };
     fs.writeFileSync(path.join(evidenceDir, 'summary.json'), JSON.stringify({ summary, stores, requests }, null, 2));
     test.info().annotations.push({ type: 'summary', description: JSON.stringify(summary) });
@@ -361,6 +379,18 @@ test.describe('installed ENS network attribution', () => {
     expect(stores.afterPrivate, "the private window's lookups leave the default session's verifier store as it was")
       .toEqual(stores.beforePrivate);
     expect(traces, 'nothing in the profile records the name only the private window resolved').toEqual([]);
+    // Name-resolution requests are made by the main process on the window's
+    // session, so they send the session's User-Agent: plain Chrome's, never
+    // Electron's default naming Freedom and Electron to the provers and RPCs.
+    expect(webUserAgent, 'the web User-Agent is plain Chrome').toMatch(CHROME_SHAPE);
+    expect(webUserAgent, 'the web User-Agent names neither Freedom nor Electron').not.toMatch(IDENTIFYING_TOKEN);
+    expect(
+      requests.filter((request) => request.status !== undefined && request.userAgents.length === 0).map((r) => r.host),
+      'every answered request has its request headers in the NetLog'
+    ).toEqual([]);
+    expect(summary.requestUserAgents.length, 'the lookups sent request headers').toBeGreaterThan(0);
+    expect(summary.requestUserAgents, 'every request header the lookups sent carries the web User-Agent')
+      .toEqual([webUserAgent]);
     const allowed = await allowedMainProcessPeers();
     const unexpected = [...peers].filter((peer) => !isLoopbackPeer(peer) && !allowed.has(peer));
     expect(unexpected, 'no main-process peer but the HNS relay was seen in 50 ms samples').toEqual([]);
