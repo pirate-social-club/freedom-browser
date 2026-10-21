@@ -1,0 +1,230 @@
+{
+  "description": "Every ELF file in the Linux x64 deb, by path under installRoot, with its class. scripts/linux-native-scan.js fails on a missing or extra file, a changed pinned digest, a file whose ELF target contradicts its class, or a supported file (or a dormant prebuild selectedWhen PREBUILDS_ONLY=1) with a non-weak GLIBC need above glibcFloor. scripts/linux-packaging-gate.js runs the scan and the floor-image checks. A new ELF file, a class change or a changed pinned digest needs a reviewed commit here that says why. Only pinned downloads carry a sha256; source-built and npm-packaged files depend on the build, and the successor inspection's package comparison catches their changes.",
+  "package": "freedom-browser",
+  "architecture": "amd64",
+  "installRoot": "/opt/Freedom",
+  "glibcFloor": "2.39",
+  "glibcFloorReason": "freedom-ipfs-node/freedom_ipfs_native.node needs GLIBC_2.39 (pidfd_getpid, pidfd_spawnp) and usb/build/Release/usb_bindings.node GLIBC_2.38, neither weak. package.json build.deb.depends declares libc6 (>= 2.39) to match.",
+  "classes": {
+    "supported": "x86-64 glibc (or static x86-64) files the app executes or loads on Linux x64.",
+    "foreign": "Built for another architecture or C library, so the Linux x64 glibc loader cannot select them. node-gyp-build matches prebuilds/<platform>-<arch> and the libc tag to the running process (node_modules/node-gyp-build/node-gyp-build.js:62-73,109-114,142-161).",
+    "dormant": "x86-64 glibc variants the app does not select, each with the code that keeps it unselected."
+  },
+  "loaderSelection": {
+    "assumption": "PREBUILDS_ONLY, <NAME>_PREBUILD, LIBC, npm_config_arch and npm_config_platform are unset and /etc/alpine-release is absent (node_modules/node-gyp-build/node-gyp-build.js:9-35,196-197).",
+    "prebuildsOnly": "Under PREBUILDS_ONLY=1 node-gyp-build skips build/Release and loads the usb and keccak glibc prebuilds, so those two are held to the floor too and the gate's probes load them in that mode."
+  },
+  "files": [
+    {
+      "path": "freedom",
+      "class": "supported",
+      "reason": "Electron browser executable, the package's entry point. Links libasound.so.2, libgbm.so.1 and libudev.so.1 among others."
+    },
+    {
+      "path": "chrome-sandbox",
+      "class": "supported",
+      "reason": "Chromium setuid sandbox helper, used when unprivileged user namespaces are unavailable."
+    },
+    {
+      "path": "chrome_crashpad_handler",
+      "class": "supported",
+      "reason": "Crashpad handler process Electron starts beside the browser."
+    },
+    {
+      "path": "libffmpeg.so",
+      "class": "supported",
+      "reason": "Electron's media codec library, NEEDED by freedom through RPATH $ORIGIN."
+    },
+    {
+      "path": "libvk_swiftshader.so",
+      "class": "supported",
+      "reason": "SwiftShader Vulkan software renderer, Chromium's GPU fallback."
+    },
+    {
+      "path": "libvulkan.so.1",
+      "class": "supported",
+      "reason": "Vulkan loader shipped with Electron for Chromium's GPU process."
+    },
+    {
+      "path": "resources/ant-bin/antd",
+      "class": "supported",
+      "reason": "Ant Swarm node, spawned by src/main/ant-manager.js.",
+      "sha256": "ad135e666283edd043800207e23294c3df7cfc02eb377d14bcc72021d4f106dd",
+      "pin": "scripts/fetch-ant.js v0.5.61: PINNED_SHA256SUMS_DIGEST 6ca399a0… covers antd-v0.5.61-linux-amd64.tar.gz (ddea79ee…), whose antd member has this digest."
+    },
+    {
+      "path": "resources/freedom-ipfs-node/freedom_ipfs_native.node",
+      "class": "supported",
+      "reason": "freedom-ipfs addon, loaded from process.resourcesPath by src/main/ipfs/freedom-ipfs-native-binding.js and driven by src/main/ipfs/freedom-ipfs-native-node.js.",
+      "sha256": "b0b9773bbeb2a7b3c3994455c0c6bb1a0693d9d0b50c1c01b636fca2563923e8",
+      "pin": "scripts/fetch-freedom-ipfs-native.js v0.4.5 linux-x64: freedom-ipfs-node-electron41-linux-x64.tar.gz 289cb614…, whose freedom_ipfs_native.node member has this digest."
+    },
+    {
+      "path": "resources/radicle-bin/libradicle.node",
+      "class": "supported",
+      "reason": "Embedded Radicle node addon, loaded by src/main/radicle-embedded.js.",
+      "sha256": "ef1ad8a108075c024d0acd79149e8d4749d1f3f4149dc41c8d0c6e56116a5b7e",
+      "pin": "scripts/fetch-radicle-addon.js v0.8.0: PINNED_SHA256SUMS fa2470da… lists this digest for libradicle-linux-x64.node (mirrored in scripts/fetch-radicle-addon.test.js)."
+    },
+    {
+      "path": "resources/hns-bin/hnsd",
+      "class": "supported",
+      "reason": "Handshake resolver, started by fingertipd through assets/hns/hnsd-encrypted.",
+      "sha256": "d539d508d10773a89f4a4e900b3c2c87b38a130908049d0566a1d03473984a0f",
+      "pin": "Committed hns-bin/linux-x64/hnsd, bound by hns-bin/linux-x64/PROVENANCE.md, encrypted-validator.json and licenses/source-record.json."
+    },
+    {
+      "path": "resources/hns-bin/fingertipd",
+      "class": "supported",
+      "reason": "Static Handshake DNSSEC/DANE proxy, spawned by src/main/hns-manager.js.",
+      "sha256": "065e4f0d5c118213f09319998c94633033cae7f96dc6d714083208468225f766",
+      "pin": "Committed hns-bin/linux-x64/fingertipd, bound by hns-bin/linux-x64/PROVENANCE.md and licenses/source-record.json."
+    },
+    {
+      "path": "resources/dvpn-bin/v2ray",
+      "class": "supported",
+      "reason": "Static dVPN proxy, spawned by src/main/dvpn-manager.js.",
+      "sha256": "bf9699e6b3665f749b63bdead2e1a95a00b10d9901a9a952858b9e17d4bc43dd",
+      "pin": "Committed dvpn-bin/linux-x64/v2ray, bound by dvpn-bin/linux-x64/licenses/source-record.json."
+    },
+    {
+      "path": "resources/app.asar.unpacked/node_modules/better-sqlite3/prebuilds/linux-x64.node",
+      "class": "supported",
+      "reason": "better-sqlite3's npm-packaged Node-API prebuild, which its lib/binding.js selects for linux-x64 glibc; used by the history, downloads and publish-history stores."
+    },
+    {
+      "path": "resources/app.asar.unpacked/node_modules/keccak/build/Release/addon.node",
+      "class": "supported",
+      "reason": "keccak addon source-built by electron-builder install-app-deps. node-gyp-build returns build/Release first (node_modules/node-gyp-build/node-gyp-build.js:33-35); loaded through @ledgerhq/hw-app-eth's eip55."
+    },
+    {
+      "path": "resources/app.asar.unpacked/node_modules/node-hid/build/Release/HID_hidraw.node",
+      "class": "supported",
+      "reason": "node-hid's Linux default hidraw driver (node_modules/node-hid/nodehid.js:16-19), used by @ledgerhq/hw-transport-node-hid."
+    },
+    {
+      "path": "resources/app.asar.unpacked/node_modules/usb/build/Release/usb_bindings.node",
+      "class": "supported",
+      "reason": "usb addon source-built by electron-builder install-app-deps, which node-gyp-build returns ahead of prebuilds; required by @ledgerhq/hw-transport-node-hid's listenDevices once a Ledger feature loads (src/main/wallet/ledger/transport.js:21-30)."
+    },
+    {
+      "path": "resources/app.asar.unpacked/node_modules/keccak/prebuilds/linux-x64/node.napi.glibc.node",
+      "class": "dormant",
+      "reason": "keccak's glibc prebuild. node-gyp-build 4.8.4 returns build/Release/addon.node first and keccak loads it with one require and no retry, so this file is selected only under PREBUILDS_ONLY=1.",
+      "selectedWhen": "PREBUILDS_ONLY=1",
+      "evidence": {
+        "citation": "node_modules/node-gyp-build/node-gyp-build.js:21-23,33-35; node_modules/keccak/bindings.js:1",
+        "assumes": "PREBUILDS_ONLY, <NAME>_PREBUILD, LIBC, npm_config_arch and npm_config_platform are unset and /etc/alpine-release is absent (node_modules/node-gyp-build/node-gyp-build.js:9-35,196-197)."
+      }
+    },
+    {
+      "path": "resources/app.asar.unpacked/node_modules/usb/prebuilds/linux-x64/node.napi.glibc.node",
+      "class": "dormant",
+      "reason": "usb's glibc prebuild (GLIBC_2.17). node-gyp-build 4.8.4 returns build/Release/usb_bindings.node first and usb loads it with one require and no retry, so this file is selected only under PREBUILDS_ONLY=1.",
+      "selectedWhen": "PREBUILDS_ONLY=1",
+      "evidence": {
+        "citation": "node_modules/node-gyp-build/node-gyp-build.js:21-23,33-35; node_modules/usb/dist/usb/bindings.js:8",
+        "assumes": "PREBUILDS_ONLY, <NAME>_PREBUILD, LIBC, npm_config_arch and npm_config_platform are unset and /etc/alpine-release is absent (node_modules/node-gyp-build/node-gyp-build.js:9-35,196-197)."
+      }
+    },
+    {
+      "path": "resources/app.asar.unpacked/node_modules/node-hid/build/Release/HID.node",
+      "class": "dormant",
+      "reason": "node-hid's libusb driver (it links libusb-1.0.so.0, which the package does not declare). On Linux any truthy driver type other than hidraw selects it, and no caller in src or in @ledgerhq calls setDriverType.",
+      "evidence": {
+        "citation": "node_modules/node-hid/nodehid.js:7-27",
+        "assumes": "PREBUILDS_ONLY, <NAME>_PREBUILD, LIBC, npm_config_arch and npm_config_platform are unset and /etc/alpine-release is absent (node_modules/node-gyp-build/node-gyp-build.js:9-35,196-197)."
+      }
+    },
+    {
+      "path": "resources/app.asar.unpacked/node_modules/@corpus-core/colibri-stateless/prebuilds/linux-x64/colibri_native.node",
+      "class": "dormant",
+      "reason": "Colibri's native verifier (GLIBCXX_3.4.32). The fork's single Colibri entry point sets C4_DISABLE_NATIVE=1 before the package loads and installs a WASM runtime provider, so the native prebuild is never opened.",
+      "evidence": {
+        "citation": "src/main/ens/colibri-runtime.js:37,123,135,192",
+        "assumes": "PREBUILDS_ONLY, <NAME>_PREBUILD, LIBC, npm_config_arch and npm_config_platform are unset and /etc/alpine-release is absent (node_modules/node-gyp-build/node-gyp-build.js:9-35,196-197)."
+      }
+    },
+    {
+      "path": "resources/app.asar.unpacked/node_modules/keccak/prebuilds/linux-x64/node.napi.musl.node",
+      "class": "foreign",
+      "reason": "musl prebuild (NEEDED libc.musl-x86_64.so.1); node-gyp-build picks the musl tag only on Alpine or with LIBC=musl.",
+      "evidence": {
+        "citation": "node_modules/node-gyp-build/node-gyp-build.js:15,142-161,196-197",
+        "assumes": "PREBUILDS_ONLY, <NAME>_PREBUILD, LIBC, npm_config_arch and npm_config_platform are unset and /etc/alpine-release is absent (node_modules/node-gyp-build/node-gyp-build.js:9-35,196-197)."
+      }
+    },
+    {
+      "path": "resources/app.asar.unpacked/node_modules/usb/prebuilds/linux-x64/node.napi.musl.node",
+      "class": "foreign",
+      "reason": "musl prebuild (NEEDED libc.musl-x86_64.so.1); node-gyp-build picks the musl tag only on Alpine or with LIBC=musl.",
+      "evidence": {
+        "citation": "node_modules/node-gyp-build/node-gyp-build.js:15,142-161,196-197",
+        "assumes": "PREBUILDS_ONLY, <NAME>_PREBUILD, LIBC, npm_config_arch and npm_config_platform are unset and /etc/alpine-release is absent (node_modules/node-gyp-build/node-gyp-build.js:9-35,196-197)."
+      }
+    },
+    {
+      "path": "resources/app.asar.unpacked/node_modules/usb/prebuilds/android-arm/node.napi.armv7.node",
+      "class": "foreign",
+      "reason": "Android (bionic) ARM prebuild; node-gyp-build matches prebuilds/<platform>-<arch> to the running linux-x64 process.",
+      "evidence": {
+        "citation": "node_modules/node-gyp-build/node-gyp-build.js:13-14,62-66,109-114",
+        "assumes": "PREBUILDS_ONLY, <NAME>_PREBUILD, LIBC, npm_config_arch and npm_config_platform are unset and /etc/alpine-release is absent (node_modules/node-gyp-build/node-gyp-build.js:9-35,196-197)."
+      }
+    },
+    {
+      "path": "resources/app.asar.unpacked/node_modules/usb/prebuilds/android-arm64/node.napi.armv8.node",
+      "class": "foreign",
+      "reason": "Android (bionic) AArch64 prebuild; node-gyp-build matches prebuilds/<platform>-<arch> to the running linux-x64 process.",
+      "evidence": {
+        "citation": "node_modules/node-gyp-build/node-gyp-build.js:13-14,62-66,109-114",
+        "assumes": "PREBUILDS_ONLY, <NAME>_PREBUILD, LIBC, npm_config_arch and npm_config_platform are unset and /etc/alpine-release is absent (node_modules/node-gyp-build/node-gyp-build.js:9-35,196-197)."
+      }
+    },
+    {
+      "path": "resources/app.asar.unpacked/node_modules/usb/prebuilds/linux-arm/node.napi.armv6.node",
+      "class": "foreign",
+      "reason": "ARM prebuild; node-gyp-build matches prebuilds/<platform>-<arch> to the running linux-x64 process.",
+      "evidence": {
+        "citation": "node_modules/node-gyp-build/node-gyp-build.js:13-14,62-66,109-114",
+        "assumes": "PREBUILDS_ONLY, <NAME>_PREBUILD, LIBC, npm_config_arch and npm_config_platform are unset and /etc/alpine-release is absent (node_modules/node-gyp-build/node-gyp-build.js:9-35,196-197)."
+      }
+    },
+    {
+      "path": "resources/app.asar.unpacked/node_modules/usb/prebuilds/linux-arm/node.napi.armv7.node",
+      "class": "foreign",
+      "reason": "ARM prebuild; node-gyp-build matches prebuilds/<platform>-<arch> to the running linux-x64 process.",
+      "evidence": {
+        "citation": "node_modules/node-gyp-build/node-gyp-build.js:13-14,62-66,109-114",
+        "assumes": "PREBUILDS_ONLY, <NAME>_PREBUILD, LIBC, npm_config_arch and npm_config_platform are unset and /etc/alpine-release is absent (node_modules/node-gyp-build/node-gyp-build.js:9-35,196-197)."
+      }
+    },
+    {
+      "path": "resources/app.asar.unpacked/node_modules/usb/prebuilds/linux-arm64/node.napi.armv8.node",
+      "class": "foreign",
+      "reason": "AArch64 prebuild; node-gyp-build matches prebuilds/<platform>-<arch> to the running linux-x64 process.",
+      "evidence": {
+        "citation": "node_modules/node-gyp-build/node-gyp-build.js:13-14,62-66,109-114",
+        "assumes": "PREBUILDS_ONLY, <NAME>_PREBUILD, LIBC, npm_config_arch and npm_config_platform are unset and /etc/alpine-release is absent (node_modules/node-gyp-build/node-gyp-build.js:9-35,196-197)."
+      }
+    },
+    {
+      "path": "resources/app.asar.unpacked/node_modules/usb/prebuilds/linux-ia32/node.napi.node",
+      "class": "foreign",
+      "reason": "i386 (ELF32) prebuild; node-gyp-build matches prebuilds/<platform>-<arch> to the running linux-x64 process.",
+      "evidence": {
+        "citation": "node_modules/node-gyp-build/node-gyp-build.js:13-14,62-66,109-114",
+        "assumes": "PREBUILDS_ONLY, <NAME>_PREBUILD, LIBC, npm_config_arch and npm_config_platform are unset and /etc/alpine-release is absent (node_modules/node-gyp-build/node-gyp-build.js:9-35,196-197)."
+      }
+    },
+    {
+      "path": "resources/app.asar.unpacked/node_modules/@corpus-core/colibri-stateless/prebuilds/linux-arm64/colibri_native.node",
+      "class": "foreign",
+      "reason": "Colibri's AArch64 prebuild. Colibri resolves prebuilds/<platform>-<arch>, and the fork never loads the native verifier at all (src/main/ens/colibri-runtime.js:37).",
+      "evidence": {
+        "citation": "node_modules/@corpus-core/colibri-stateless/cjs/runtime_node.js:39-42,89; src/main/ens/colibri-runtime.js:37,192",
+        "assumes": "PREBUILDS_ONLY, <NAME>_PREBUILD, LIBC, npm_config_arch and npm_config_platform are unset and /etc/alpine-release is absent (node_modules/node-gyp-build/node-gyp-build.js:9-35,196-197)."
+      }
+    }
+  ]
+}

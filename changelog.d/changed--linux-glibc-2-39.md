@@ -1,0 +1,4 @@
+- Linux deb requires glibc 2.39 or later ([#51](https://github.com/pirate-social-club/freedom-browser/pull/51))
+  - Installation and bundled native components tested on Ubuntu 24.04 and Debian 13
+  - Debian 12 and its derivatives are no longer supported — their glibc cannot load the bundled IPFS node
+  - Declares the sound, graphics and device libraries the browser links, so minimal installs can start it

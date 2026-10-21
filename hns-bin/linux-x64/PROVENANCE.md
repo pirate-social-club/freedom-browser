@@ -20,3 +20,7 @@ d539d508d10773a89f4a4e900b3c2c87b38a130908049d0566a1d03473984a0f  hnsd
 ```
 
 Handshake browsing is supported on Linux x64 only by the existing capability manifest. Other shipping browser platforms do not ship these helper artifacts or enable Handshake browsing. This artifact change adds encrypted delegated DNS beneath owned local validation. It does not add platform support or permit a fallback without local DNSSEC/DANE authentication. The sibling encrypted-validator.json and runtime source pin bind the source, patch and native digest.
+
+## Amendment, 2026-10-21
+
+This note amends the dependency sentence in the hnsd record above, which says the Linux deb declares libc6 >= 2.36, and leaves the reviewed text as it was. hnsd's own requirement is unchanged at GLIBC_2.36. The Linux deb now declares libc6 >= 2.39, because the bundled freedom-ipfs addon needs GLIBC_2.39 and the source-built usb addon GLIBC_2.38, and it also declares libudev1, libasound2t64 | libasound2 (>= 1.0.17) and libgbm1, which the browser binary links. The helper binaries and their digests are unchanged.

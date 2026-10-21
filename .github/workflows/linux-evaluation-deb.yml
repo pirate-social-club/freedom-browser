@@ -80,3 +80,58 @@ jobs:
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
+
+  # The Linux packaging gate (scripts/linux-packaging-gate.js) on the deb the
+  # job above built: the ELF scan of the unpacked deb against
+  # scripts/linux-native-inventory.json and the deb's own libc6 floor; apt
+  # install, loader resolution and the packaged-runtime probes on digest-pinned
+  # ubuntu:24.04 and debian:13; and apt's refusal on debian:12. The gate's own
+  # time budget ends five minutes before the job timeout, so its summary is
+  # written and uploaded even when a step hangs.
+  packaging-gate:
+    needs: deb
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Confirm the checked-out source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - name: Set up pinned Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24.14.0
+      - name: Download the deb
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: freedom-linux-evaluation-deb-${{ env.SOURCE_SHA }}
+          path: deb
+      - name: Confirm the deb's digest
+        run: |
+          set -euo pipefail
+          cd deb
+          grep -E '\.deb$' SHA256SUMS.txt | sha256sum -c -
+          grep -qx "source $SOURCE_SHA" SHA256SUMS.txt
+      - name: Run the packaging gate
+        run: node scripts/linux-packaging-gate.js --budget-minutes 35 deb/*.deb packaging-gate
+      - name: Upload the gate results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: freedom-linux-packaging-gate-${{ env.SOURCE_SHA }}
+          path: packaging-gate/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Confirm the control file carries package.json's Depends unchanged
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          expected="$(node -p "require('./package.json').build.deb.depends.join(', ')")"
+          actual="$(dpkg-deb -f deb/*.deb Depends)"
+          printf 'expected: %s\nactual:   %s\n' "$expected" "$actual"
+          test "$actual" = "$expected"
