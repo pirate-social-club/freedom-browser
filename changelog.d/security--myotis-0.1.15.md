@@ -1,0 +1,2 @@
+- Updated bundled nodes:
+  - [Myotis](https://github.com/biafra23/myotis) 0.1.14 to 0.1.15: a single malicious peer can no longer forge verified balances, nonces or contract state ([biafra23/myotis#611](https://github.com/biafra23/myotis/pull/611))
