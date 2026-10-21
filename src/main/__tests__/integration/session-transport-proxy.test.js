@@ -15,6 +15,10 @@
  * HTTPS origin that tells which recorder each connection came through, and
  * asserts the probe's report. Nothing it dials leaves the machine.
  *
+ * The probe also applies `web-user-agent.js` as `src/main/index.js` does, and
+ * the origin records each request's `User-Agent`: the same traffic must carry
+ * plain Chrome's, with no `freedom/` or `Electron/` token.
+ *
  * Skipped when the Electron binary cannot be resolved; the `ipfs-gateway-proxy`
  * CI job sets `FREEDOM_ELECTRON_NET_TEST=1`, which turns a missing binary into
  * a failure instead (see `ipfs-gateway-proxy.test.js` for the details, including
@@ -51,6 +55,11 @@ const describeWithElectron = ELECTRON_PATH ? describe : describe.skip;
 const PROBE = path.join(__dirname, 'session-transport-proxy-electron-probe.js');
 const PROBE_TIMEOUT_MS = 90_000;
 const HOST = 'ccip.example.test';
+
+// Stock Chrome's reduced User-Agent, as `test-e2e/user-agent.spec.js` pins it.
+const CHROME_SHAPE =
+  /^Mozilla\/5\.0 \((?:X11; Linux x86_64|Macintosh; Intel Mac OS X 10_15_7|Windows NT 10\.0; Win64; x64)\) AppleWebKit\/537\.36 \(KHTML, like Gecko\) Chrome\/\d+\.0\.0\.0 Safari\/537\.36$/;
+const IDENTIFYING_TOKEN = /freedom\/|Electron\//i;
 
 function runProbe() {
   return new Promise((resolve, reject) => {
@@ -189,5 +198,44 @@ describeWithElectron('session-bound name-resolution transport in a real Electron
   test('a private caller without a session is refused rather than given the default one', () => {
     expect(results.privateWithoutSession).toEqual({ threw: true, code: 'SESSION_UNAVAILABLE' });
     expect(results.noContextIsDefault).toBe(true);
+  });
+
+  // The control: without the app's setup every session would send Electron's
+  // default, which names Freedom and Electron.
+  test("every session inherits the reduced User-Agent in place of Electron's default", () => {
+    const { electronDefault, fallback, sessions } = results.userAgent;
+    expect(electronDefault).toMatch(/ freedom\/\S+ /);
+    expect(electronDefault).toMatch(/ Electron\/\S+ /);
+    expect(fallback).toMatch(CHROME_SHAPE);
+    expect(fallback).toContain(` Chrome/${results.chrome.split('.')[0]}.0.0.0 `);
+    expect(fallback).not.toMatch(IDENTIFYING_TOKEN);
+    expect(sessions).toEqual(sessions.map(() => fallback));
+  });
+
+  test.each([
+    ['a gateway dial on the private session', 'fetchB'],
+    ['a gateway dial on the default session', 'fetchA'],
+    ['a gateway dial on a DIRECT session', 'fetchDirectControl'],
+    ['the ENS quorum-leg JSON-RPC on the private session', 'ensB'],
+    ['the ENS quorum-leg JSON-RPC on the default session', 'ensA'],
+    ["the Colibri worker's prover requests", 'colibriB'],
+    ['a CCIP-Read gateway request', 'ccipB'],
+    ["session.fetch, the Spaces resolver's transport", 'sessionFetchB'],
+  ])('%s carries the reduced User-Agent', (_label, leg) => {
+    const { userAgents } = results[leg];
+    expect(userAgents.length).toBeGreaterThan(0);
+    for (const userAgent of userAgents) {
+      expect(userAgent).toBe(results.userAgent.fallback);
+      expect(userAgent).not.toMatch(IDENTIFYING_TOKEN);
+    }
+  });
+
+  test('the CCIP-Read and session.fetch requests went through the private session', () => {
+    expect(results.ccipB.value).toBe('0x01');
+    expect(results.ccipB.originRoutes).toEqual([{ route: 'ccip', via: 'B' }]);
+    expect(results.ccipB.directConnections).toBe(0);
+    expect(results.sessionFetchB.value).toEqual({ status: 200, body: 'ok' });
+    expect(results.sessionFetchB.originRoutes).toEqual([{ route: 'x', via: 'B' }]);
+    expect(results.sessionFetchB.directConnections).toBe(0);
   });
 });
