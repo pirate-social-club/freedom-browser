@@ -621,6 +621,18 @@ describe('navigation', () => {
     }
   });
 
+  test.each(['0xdeadbeef', '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045'])(
+    'a hex IPv4 number or 0x address (%s) is never loaded as a Handshake host',
+    async (input) => {
+      const ctx = await loadNavigationModule({ enableHnsIntegration: true, registry: { hns: { synced: true } } });
+      await ctx.mod.initNavigation();
+      ctx.mod.loadTarget(input);
+      for (const [loaded] of ctx.activeRef.tab.webview.loadURL.mock.calls) {
+        expect(loaded).not.toMatch(/^https:\/\/(0x|\d+\.\d+\.\d+\.\d+)/i);
+      }
+    }
+  );
+
   test('Home cancels a waiting Handshake navigation', async () => {
     const ctx = await loadNavigationModule({ enableHnsIntegration: true, registry: { hns: { synced: false } } });
     await ctx.mod.initNavigation();

@@ -1529,7 +1529,18 @@ describe('normalizeHnsHostInput', () => {
     expect(normalizeHnsHostInput(input)).toBe(url);
   });
 
-  test.each(['123', '1234/path', '-8s28', '8s28-', 'app.unlisted', 'app..pirate'])(
+  test.each([
+    '123',
+    '1234/path',
+    '-8s28',
+    '8s28-',
+    'app.unlisted',
+    'app..pirate',
+    '0xdeadbeef',
+    '0X7F000001/admin',
+    '0x',
+    '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045',
+  ])(
     'leaves %s alone',
     (input) => {
       expect(normalizeHnsHostInput(input)).toBeNull();

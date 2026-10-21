@@ -185,6 +185,17 @@ export const normalizeLocalhostInput = (str) => {
 // is the same name as `pirate`. All-digit input is refused before this.
 const isValidHostLabel = (value) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(value);
 
+// The URL parser reads hex and other IPv4-number forms (`0xdeadbeef`) as an
+// IP address and refuses ones that overflow (a pasted `0x…` Ethereum
+// address). A host it rewrites or refuses is not a Handshake name.
+const parsesAsSameHost = (host) => {
+  try {
+    return new URL(`https://${host}/`).hostname === host.toLowerCase();
+  } catch {
+    return false;
+  }
+};
+
 const getHnsPublicTlds = () => {
   const suffixes = globalThis.FREEDOM_HNS_HOSTS?.getHnsPublicSuffixes?.() || fallbackHnsPublicSuffixes;
   return new Set(suffixes.map((suffix) => String(suffix).replace(/^\./, '')));
@@ -214,6 +225,7 @@ const looksLikeHnsHost = (str) => {
   if (isValidRadicleId(hostPart)) return false;
 
   if (hostPart.length > 63) return false;
+  if (!parsesAsSameHost(hostPart)) return false;
 
   const hnsPublicTlds = getHnsPublicTlds();
 
