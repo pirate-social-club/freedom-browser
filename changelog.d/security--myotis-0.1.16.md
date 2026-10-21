@@ -1,0 +1,2 @@
+- Updated bundled nodes in the macOS and Windows builds:
+  - Myotis 0.1.14 to 0.1.16: a single malicious peer can no longer forge verified balances, nonces or contract state ([#57](https://github.com/pirate-social-club/freedom-browser/pull/57))

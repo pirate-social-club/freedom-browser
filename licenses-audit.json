@@ -149,7 +149,7 @@
     },
     {
       "name": "myotis",
-      "version": "v0.1.15",
+      "version": "v0.1.16",
       "type": "native-addon",
       "scope": "runtime",
       "source": {

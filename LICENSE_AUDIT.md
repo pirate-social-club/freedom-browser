@@ -78,7 +78,7 @@ Risk levels follow upstream's scheme. Green is permissive with no action beyond 
 
 ## Downloaded Runtime Artifacts
 
-Versions here are the pinned values in the repository, not observed downloads; each names its pin so a drift is checkable. `licenses-audit.test.js` asserts that they match. Three of the five pins are unchanged from upstream 0.8.7; the freedom-ipfs and Ant pins moved forward to their security releases.
+Versions here are the pinned values in the repository, not observed downloads; each names its pin so a drift is checkable. `licenses-audit.test.js` asserts that they match. Two of the five pins are unchanged from upstream 0.8.7; the freedom-ipfs, Ant and Myotis pins moved forward to their security releases.
 
 ### Ant (antd, Swarm Node)
 
@@ -94,11 +94,11 @@ libradicle comes from https://github.com/solardev-xyz/libradicle at version `0.8
 
 ### Myotis (Native Wallet-Engine Addon)
 
-Myotis comes from https://github.com/biafra23/myotis at version `v0.1.14` (pin: `scripts/myotis-release.json` `releaseTag`). It is Apache-2.0 only and runs out of process as `myotis-node.node` under upstream's own supervisor.
+Myotis comes from https://github.com/biafra23/myotis at version `v0.1.16` (pin: `scripts/myotis-release.json` `releaseTag`). It is Apache-2.0 only and runs out of process as `myotis-node.node` under upstream's own supervisor.
 
 Myotis ships in the macOS and Windows builds only.
 
-The fork's Linux deb omits it, because `build.linux.extraResources` does not name `myotis-bin/` (commit adafb252). Upstream ships a `NOTICE` file, so Apache-2.0 section 4(d) requires its attribution text in any redistribution. `NOTICES` reproduces it verbatim; its copyright line names the Myotis author. Upstream's audit recorded that `NOTICE` as byte-identical across v0.1.10 to v0.1.14 (sha256 `ee84afd3b5c6a7c9d1bd9f1c22c915f86a8b42886e3eea8c7cad283603de53e1`). Re-read it on every version bump. Risk: yellow.
+The fork's Linux deb omits it, because `build.linux.extraResources` does not name `myotis-bin/` (commit adafb252). Upstream ships a `NOTICE` file, so Apache-2.0 section 4(d) requires its attribution text in any redistribution. `NOTICES` reproduces it verbatim; its copyright line names the Myotis author. Upstream's audit recorded that `NOTICE` as byte-identical across v0.1.10 to v0.1.14, and the fork's 2026-10-21 qualification found it unchanged through the current pin (sha256 `ee84afd3b5c6a7c9d1bd9f1c22c915f86a8b42886e3eea8c7cad283603de53e1`). Re-read it on every version bump. Risk: yellow.
 
 ### Arti (Tor Client)
 
