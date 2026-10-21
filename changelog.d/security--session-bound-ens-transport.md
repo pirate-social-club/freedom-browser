@@ -1,0 +1,1 @@
+- Send ENS lookups, Colibri verification and dApp chain reads through the asking window's connection, keeping private-window lookups on their proxy and out of shared caches
