@@ -31,6 +31,7 @@ const os = require('os');
 const path = require('path');
 
 const { test: liveTest, expect, watchProcessExit } = require('../live-fixtures');
+const { waitForNodeToSettle, expectNodeRunning, registryEntry } = require('./installed-acceptance');
 
 // The embedded Radicle node binds a Unix socket at $RAD_HOME/node/control.sock,
 // and sockaddr_un caps that path at ~104 bytes on macOS. The live fixtures' own
@@ -92,47 +93,8 @@ const NODES_OFF = {
   startTorAtLaunch: false,
 };
 
-// Poll until the manager reaches a state it will not leave on its own —
-// 'running' or 'error'. Waiting for 'running' directly would spend the whole
-// budget on a node that already reported 'error' and then fail with a bare
-// timeout instead of the manager's own message.
-async function waitForNodeToSettle(window, api, { label, timeout }) {
-  let last = null;
-
-  await expect
-    .poll(
-      async () => {
-        last = await window.evaluate((name) => window[name].getStatus(), api);
-        return last.status === 'running' || last.status === 'error';
-      },
-      {
-        message: `Waiting for the packaged ${label} node to finish starting`,
-        timeout,
-        intervals: [1_000, 2_000],
-      }
-    )
-    .toBe(true);
-
-  return last;
-}
-
-async function expectNodeRunning(window, api, { label, timeout }) {
-  const status = await waitForNodeToSettle(window, api, { label, timeout });
-
-  expect(status.status, `${label} did not start: ${status.error || 'no error reported'}`).toBe(
-    'running'
-  );
-
-  return status;
-}
-
-// The address the app itself published for a service, e.g.
-// 'http://127.0.0.1:1634' for Ant. Read from the registry rather than
-// hardcoded: the configured port is per profile, and a busy port makes the
-// manager fall back to the next free one (both true on a dev machine that
-// already runs a node).
-const registryEntry = (window, service) =>
-  window.evaluate(async (name) => (await window.serviceRegistry.getRegistry())[name], service);
+// waitForNodeToSettle, expectNodeRunning and registryEntry live in
+// installed-acceptance.js, shared with the installed retrieval specs.
 
 test.describe('packaged bundled nodes', () => {
   test.describe('Ant', () => {

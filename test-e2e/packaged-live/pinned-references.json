@@ -1,0 +1,63 @@
+{
+  "description": "Pinned content for swarm-retrieval.spec.js and ipfs-retrieval.spec.js. Reference A is retrieved cold through the bundled node; reference B is requested only after the node is stopped, as the negative control, and is never fetched by the browser. Each entry's expected bytes were recorded from independent public gateways on 2026-10-21 (UTC) and agreed byte for byte. Each reference also self-certified: the Swarm root chunk fetched from a gateway hashes (BMT) to the reference, and the IPFS raw block's sha2-256 equals the CID's multihash digest. The fetched bodies and the full record are in the PR 9 calibration evidence, not in the repository.",
+  "recordedAt": "2026-10-21",
+  "swarm": {
+    "A": {
+      "reference": "c9890fb248c99015bb05b728d14a268d66b784f73d2e4fb28ac6c45696dcbeac",
+      "content": "The Swarm Foundation's website (title 'Digital Freedom now - Swarm'), version 91 of the swarm.eth feed (owner f77a13dc2f786b4523f5e0bf6db6757f4cf60ebb), published 2026-10-05T14:42:35Z. The reference is the immutable website manifest the feed update points at, not the feed manifest swarm.eth resolves to. The retrieval loads the site's favicon.png (a 512x521 PNG) rather than its index page: the index page itself loads a video from the public gateway bzz.link, which would put a page-initiated gateway request in the NetLog. An image document loads nothing else.",
+      "expected": { "path": "/favicon.png", "contentType": "image/png", "length": 3784, "sha256": "9c1e23ef9cf10b165ab5f57481ec48be1cc11a85d218d270b5f7cb56fd9809cf" },
+      "sources": [
+        { "operator": "Swarm Foundation", "url": "https://download.gateway.ethswarm.org/bzz/c9890fb248c99015bb05b728d14a268d66b784f73d2e4fb28ac6c45696dcbeac/favicon.png", "fetchedAt": "2026-10-21T21:27:46Z", "length": 3784, "sha256": "9c1e23ef9cf10b165ab5f57481ec48be1cc11a85d218d270b5f7cb56fd9809cf" },
+        { "operator": "bzz.limo, operator not established (DigitalOcean-hosted, DigitalOcean nameservers; not the Swarm Foundation's Hetzner host or ethswarm.org nameservers)", "url": "https://bzz.limo/bzz/c9890fb248c99015bb05b728d14a268d66b784f73d2e4fb28ac6c45696dcbeac/favicon.png", "fetchedAt": "2026-10-21T21:27:46Z", "length": 3784, "sha256": "9c1e23ef9cf10b165ab5f57481ec48be1cc11a85d218d270b5f7cb56fd9809cf" },
+        { "operator": "eth.limo, by ENS name while the swarm.eth feed index was 0x5b", "url": "https://swarm.eth.limo/favicon.png", "fetchedAt": "2026-10-21T21:27:47Z", "length": 3784, "sha256": "9c1e23ef9cf10b165ab5f57481ec48be1cc11a85d218d270b5f7cb56fd9809cf" }
+      ],
+      "indexDocument": { "path": "/", "length": 72966, "sha256": "8326adc006b606edaa3b438f4500db8d1afd253c8619356a63f7719d74edb581", "agreeingSources": ["download.gateway.ethswarm.org", "bzz.limo", "swarm.eth.limo"], "fetchedAt": "2026-10-21T21:11:42Z" },
+      "selfCertification": { "rootChunkUrl": "https://download.gateway.ethswarm.org/chunks/c9890fb248c99015bb05b728d14a268d66b784f73d2e4fb28ac6c45696dcbeac", "rootChunkBytes": 2856, "bmtAddressMatches": true }
+    },
+    "B": {
+      "reference": "ea8a4d4f34b9ac9030ce9b0a4763437a61b2e6c82dd1252ecc2192cd55fa1daf",
+      "content": "The Swarm documentation site (title 'Welcome | Swarm Documentation'), version 5 of the docs.swarm.eth feed (same owner as swarm.eth), published 2026-10-21T15:03:37Z. A different site from A, so it shares no root chunk with A. Only requested while the node is stopped, so the browser never fetches it.",
+      "expected": { "path": "/", "document": "index.html", "contentType": "text/html", "length": 17868, "sha256": "f938c619e368342c4f70886de59a52aeb5a91494ab989c82d21bd06833bb10f0" },
+      "sources": [
+        { "operator": "Swarm Foundation", "url": "https://download.gateway.ethswarm.org/bzz/ea8a4d4f34b9ac9030ce9b0a4763437a61b2e6c82dd1252ecc2192cd55fa1daf/", "fetchedAt": "2026-10-21T21:13:46Z", "length": 17868, "sha256": "f938c619e368342c4f70886de59a52aeb5a91494ab989c82d21bd06833bb10f0" },
+        { "operator": "bzz.limo, operator not established (DigitalOcean-hosted)", "url": "https://bzz.limo/bzz/ea8a4d4f34b9ac9030ce9b0a4763437a61b2e6c82dd1252ecc2192cd55fa1daf/", "fetchedAt": "2026-10-21T21:13:47Z", "length": 17868, "sha256": "f938c619e368342c4f70886de59a52aeb5a91494ab989c82d21bd06833bb10f0" }
+      ],
+      "selfCertification": { "rootChunkUrl": "https://download.gateway.ethswarm.org/chunks/ea8a4d4f34b9ac9030ce9b0a4763437a61b2e6c82dd1252ecc2192cd55fa1daf", "rootChunkBytes": 1512, "bmtAddressMatches": true }
+    },
+    "postageBatches": {
+      "status": "not established",
+      "tried": [
+        "GET /chunks/<reference> and HEAD /chunks/<reference> on download.gateway.ethswarm.org and bzz.limo return the chunk (span and payload) with no stamp or batch header.",
+        "GET /bytes/<reference> on both gateways returns the manifest bytes only; GET /stewardship/<reference> answers only whether the content is retrievable.",
+        "The Swarmscan API (api.swarmscan.io, its OpenAPI listing) offers postage-stamp statistics and contract events but no reference-to-batch lookup.",
+        "The bundled antd's chunks.sqlite schema (address, data, size, last_access, inserted_at, pin_count, from the binary's SQL) stores no stamp, so a retrieval by the node under test cannot name the batch either."
+      ],
+      "consequence": "No batch and no remaining lifetime is recorded for either reference, and none is assumed. This is a known gap against plan v3's 60-day margin.",
+      "longevityEvidence": "Both references are Swarm Foundation content. On 2026-10-21 every sampled earlier version of both feeds was still retrievable through both gateways: swarm.eth versions 0 (2024-12-06), 30, 60, 80, 90 and 91, and docs.swarm.eth versions 0 (2026-08-04) to 5. That shows the operator keeps superseded versions stamped for at least 22 months; it does not establish either reference's batch lifetime."
+    }
+  },
+  "ipfs": {
+    "A": {
+      "cid": "bafybeifx7yeb55armcsxwwitkymga5xf53dxiarykms3ygqic223w5sk3m",
+      "content": "The IPFS public gateway checker's test file (HASH_TO_TEST in ipfs/public-gateway-checker src/constants.ts), the text 'Hello from IPFS Gateway Checker' and a newline. A single dag-pb UnixFS block. Small UTF-8 text, so the ipfs: handler serves a navigation as text/plain (src/main/ipfs/ipfs-protocol.js renderSmallTextResponse).",
+      "expected": { "length": 32, "sha256": "7530010a7ec61daef2e028720f102a75d40af932528e742eb10cdae4de8d7004" },
+      "sources": [
+        { "operator": "Pinata", "url": "https://gateway.pinata.cloud/ipfs/bafybeifx7yeb55armcsxwwitkymga5xf53dxiarykms3ygqic223w5sk3m", "fetchedAt": "2026-10-21T21:15:49Z", "length": 32, "sha256": "7530010a7ec61daef2e028720f102a75d40af932528e742eb10cdae4de8d7004" },
+        { "operator": "Filebase", "url": "https://ipfs.filebase.io/ipfs/bafybeifx7yeb55armcsxwwitkymga5xf53dxiarykms3ygqic223w5sk3m", "fetchedAt": "2026-10-21T21:15:55Z", "length": 32, "sha256": "7530010a7ec61daef2e028720f102a75d40af932528e742eb10cdae4de8d7004" }
+      ],
+      "selfCertification": { "rawBlockUrl": "https://ipfs.filebase.io/ipfs/bafybeifx7yeb55armcsxwwitkymga5xf53dxiarykms3ygqic223w5sk3m?format=raw", "rawBlockBytes": 40, "multihashMatches": true }
+    },
+    "B": {
+      "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+      "content": "The example image used throughout the IPFS documentation (seven pages of ipfs/ipfs-docs, among them docs/concepts/content-addressing.md and docs/reference/http/gateway.md), a 119762-byte JPEG in a single dag-pb block.",
+      "expected": { "length": 119762, "sha256": "c7d01489080858c500065836c658f847a6ca67c4864619212be4f8200e4bbace" },
+      "sources": [
+        { "operator": "Pinata", "url": "https://gateway.pinata.cloud/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi", "fetchedAt": "2026-10-21T21:15:56Z", "length": 119762, "sha256": "c7d01489080858c500065836c658f847a6ca67c4864619212be4f8200e4bbace" },
+        { "operator": "Filebase", "url": "https://ipfs.filebase.io/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi", "fetchedAt": "2026-10-21T21:16:00Z", "length": 119762, "sha256": "c7d01489080858c500065836c658f847a6ca67c4864619212be4f8200e4bbace" },
+        { "operator": "Lighthouse", "url": "https://gateway.lighthouse.storage/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi", "fetchedAt": "2026-10-21T21:16:00Z", "length": 119762, "sha256": "c7d01489080858c500065836c658f847a6ca67c4864619212be4f8200e4bbace" }
+      ],
+      "selfCertification": { "rawBlockUrl": "https://ipfs.filebase.io/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi?format=raw", "rawBlockBytes": 119776, "multihashMatches": true }
+    },
+    "longevityEvidence": "On 2026-10-21 the delegated routing endpoint (delegated-ipfs.dev/routing/v1/providers) returned its maximum of 50 provider records for each CID, over Bitswap and HTTP gateways. ipfs.io answered 429 from this host's exit address that day, so it is not among the sources."
+  }
+}

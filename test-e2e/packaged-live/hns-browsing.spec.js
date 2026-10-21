@@ -27,6 +27,7 @@ const path = require('path');
 const { test, expect } = require('@playwright/test');
 const { launchApp, packagedLaunchTarget, isPackagedRun } = require('../packaged-launch');
 const { closeApp } = require('../close-app');
+const { installedResourcesDir, anyPackagedHelpers, quitCleanly } = require('./installed-acceptance');
 
 const ENABLED = process.env.FREEDOM_E2E_HNS_LIVE === '1';
 
@@ -135,79 +136,6 @@ async function launch(dirs) {
   }
 }
 
-// Linux process inventory from /proc: pid, parent pid, start time (clock
-// ticks since boot, so a reused pid is told apart) and the executable path.
-function processTable() {
-  const table = new Map();
-  for (const name of fs.readdirSync('/proc')) {
-    if (!/^\d+$/.test(name)) continue;
-    try {
-      const stat = fs.readFileSync(`/proc/${name}/stat`, 'utf8');
-      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-      let exe = null;
-      try {
-        exe = fs.readlinkSync(`/proc/${name}/exe`);
-      } catch {
-        // Another user's process, or a kernel thread.
-      }
-      table.set(Number(name), { pid: Number(name), ppid: Number(fields[1]), start: fields[19], exe });
-    } catch {
-      // Exited while the table was read.
-    }
-  }
-  return table;
-}
-
-// Every process the launched app started from the installed package's own
-// resources (the HNS and dVPN helpers), found by walking the app's tree.
-function packagedHelpers(appPid, resourcesDir) {
-  const table = processTable();
-  const children = new Map();
-  for (const proc of table.values()) {
-    if (!children.has(proc.ppid)) children.set(proc.ppid, []);
-    children.get(proc.ppid).push(proc);
-  }
-  const helpers = [];
-  const queue = [...(children.get(appPid) || [])];
-  while (queue.length) {
-    const proc = queue.shift();
-    if (proc.exe && proc.exe.startsWith(`${resourcesDir}${path.sep}`)) helpers.push(proc);
-    queue.push(...(children.get(proc.pid) || []));
-  }
-  return helpers;
-}
-
-// Every process anywhere on the machine running an executable from the
-// installed package's resources. A helper that was reparented away from the
-// app (a restarted fingertipd's hnsd, say) or left by an earlier run shows here.
-function anyPackagedHelpers(resourcesDir) {
-  return [...processTable().values()].filter((proc) => proc.exe && proc.exe.startsWith(`${resourcesDir}${path.sep}`));
-}
-
-// Quit the way a user does and require a clean shutdown: the app exits by
-// itself with code 0 (never killed at the launcher's quit deadline), and no
-// process from the package's resources is left anywhere. Returns the evidence.
-async function quitCleanly(app, resourcesDir, phase) {
-  const helpers = packagedHelpers(app.process().pid, resourcesDir);
-  expect(helpers.map((proc) => path.basename(proc.exe)), `the HNS helpers were running (${phase})`).toEqual(
-    expect.arrayContaining(['hnsd', 'fingertipd'])
-  );
-  await closeApp(app, { timeout: 100_000 });
-  const exit = app.exitResult();
-  expect(exit, `the app must quit by itself with code 0 (${phase})`).toEqual({ code: 0, signal: null, forced: false });
-  let survivors = [];
-  await expect
-    .poll(
-      () => {
-        survivors = anyPackagedHelpers(resourcesDir).map((proc) => ({ pid: proc.pid, exe: proc.exe }));
-        return survivors.length;
-      },
-      { message: `packaged helpers left running after quit (${phase})`, timeout: 15_000, intervals: [500] }
-    )
-    .toBe(0);
-  return { exit, helpers: helpers.map((proc) => ({ pid: proc.pid, exe: proc.exe })), survivors };
-}
-
 // The main-frame HTTP status every tab saw for `host`, read from each guest
 // webview's own network events. It holds whether Chromium committed the
 // response or turned an empty error response into a load failure.
@@ -267,9 +195,7 @@ test.describe('installed HNS browsing', () => {
     );
 
     // The installed package's resources directory, next to its executable.
-    const resourcesDir = fs.realpathSync(
-      path.join(path.dirname(fs.realpathSync(packagedLaunchTarget().executablePath)), 'resources')
-    );
+    const resourcesDir = installedResourcesDir();
     // Nothing from the package may be running before the first launch, so the
     // post-quit scan can only find what this run left behind.
     expect(anyPackagedHelpers(resourcesDir), 'packaged helpers already running before launch').toEqual([]);
@@ -315,7 +241,10 @@ test.describe('installed HNS browsing', () => {
           type: phase,
           description: `${UNCLAIMED}: ${JSON.stringify({ ...unclaimed, responseStatuses: documentStatus.statuses, responseServers: documentStatus.servers })}`,
         });
-        const quit = await quitCleanly(session.app, resourcesDir, phase);
+        const quit = await quitCleanly(session.app, resourcesDir, phase, {
+          requiredHelpers: ['hnsd', 'fingertipd'],
+          label: 'the HNS helpers',
+        });
         session = null;
         test.info().annotations.push({ type: phase, description: `quit: ${JSON.stringify(quit)}` });
       }
