@@ -187,7 +187,9 @@ const isValidHostLabel = (value) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.te
 
 // The URL parser reads hex and other IPv4-number forms (`0xdeadbeef`) as an
 // IP address and refuses ones that overflow (a pasted `0x…` Ethereum
-// address). A host it rewrites or refuses is not a Handshake name.
+// address). A host it rewrites or refuses is not a Handshake name. Node's
+// parser, which Jest uses, also refuses malformed `xn--` labels that
+// Chromium accepts, so tests can't speak for those.
 const parsesAsSameHost = (host) => {
   try {
     return new URL(`https://${host}/`).hostname === host.toLowerCase();
