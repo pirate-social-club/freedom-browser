@@ -35,10 +35,10 @@ const os = require('os');
 const path = require('path');
 
 const { test, expect } = require('@playwright/test');
-const { launchApp, packagedLaunchTarget, isPackagedRun } = require('../packaged-launch');
+const { launchApp, packagedLaunchTarget } = require('../packaged-launch');
 const { closeApp } = require('../close-app');
+const { gateLiveSpec } = require('./installed-acceptance');
 
-const ENABLED = process.env.FREEDOM_E2E_TOR_REFUSAL_LIVE === '1';
 // Any syntactically valid v3 onion name will do: nothing here reaches Tor.
 const ONION_HOST = 'duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion';
 const PAGE_TIMEOUT_MS = 60_000;
@@ -229,8 +229,9 @@ function onionTraffic(netlogFile) {
 }
 
 test.describe('installed unavailable-proxy refusal', () => {
-  test.skip(!ENABLED, 'set FREEDOM_E2E_TOR_REFUSAL_LIVE=1 to drive Tor routing in the installed browser');
-  test.skip(ENABLED && !isPackagedRun(), 'set FREEDOM_E2E_EXECUTABLE to the installed Freedom binary');
+  // Skipped without its flag or executable; in acceptance mode
+  // (FREEDOM_E2E_ACCEPTANCE=1) either fails instead (installed-acceptance.js).
+  gateLiveSpec(test, { flag: 'FREEDOM_E2E_TOR_REFUSAL_LIVE', purpose: 'to drive Tor routing in the installed browser' });
 
   test('a .onion name goes only to the Tor endpoint, and is refused in both windows once it is gone', async () => {
     test.setTimeout(6 * 60_000);

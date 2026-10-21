@@ -42,10 +42,10 @@ const os = require('os');
 const path = require('path');
 
 const { test, expect } = require('@playwright/test');
-const { launchApp, packagedLaunchTarget, isPackagedRun } = require('../packaged-launch');
+const { launchApp, packagedLaunchTarget } = require('../packaged-launch');
 const { closeApp } = require('../close-app');
+const { gateLiveSpec } = require('./installed-acceptance');
 
-const ENABLED = process.env.FREEDOM_E2E_ENS_SESSION_LIVE === '1';
 const FIRST_NAME = 'vitalik.eth';
 const CLOSE_NAME = 'nick.eth';
 // Resolved by the private window only.
@@ -236,8 +236,9 @@ function ensRequests(netlogFile, hosts) {
 }
 
 test.describe('installed ENS network attribution', () => {
-  test.skip(!ENABLED, 'set FREEDOM_E2E_ENS_SESSION_LIVE=1 to resolve ENS names over the network');
-  test.skip(ENABLED && !isPackagedRun(), 'set FREEDOM_E2E_EXECUTABLE to the installed Freedom binary');
+  // Skipped without its flag or executable; in acceptance mode
+  // (FREEDOM_E2E_ACCEPTANCE=1) either fails instead (installed-acceptance.js).
+  gateLiveSpec(test, { flag: 'FREEDOM_E2E_ENS_SESSION_LIVE', purpose: 'to resolve ENS names over the network' });
 
   test('normal and private windows resolve through Chromium, each afresh', async () => {
     test.setTimeout(8 * 60_000);
