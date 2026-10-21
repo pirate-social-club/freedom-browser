@@ -34,7 +34,7 @@
   "dependencies": [
     {
       "name": "electron",
-      "version": "44.7.0",
+      "version": "44.9.3",
       "type": "direct",
       "scope": "runtime",
       "source": {
