@@ -746,6 +746,22 @@ describe('swarm-provider-ipc', () => {
       expect(validateVirtualPath(`${name}/index.html`).valid).toBe(false);
     });
 
+    test.each(['foo.', 'foo ', '.. ', '. ', '...', 'a/b./c.txt', 'dir /index.html', 'index.html.'])(
+      'rejects %j: Win32 trims a trailing dot or space from a segment',
+      (p) => {
+        const result = validateVirtualPath(p);
+        expect(result.valid).toBe(false);
+        expect(result.message).toBe('Path segments may not end in a dot or space');
+      }
+    );
+
+    test.each(['.well-known/a.txt', '.hidden', 'a b/c d.txt', 'v1.2/x.js'])(
+      'still accepts the inner-dot/space name %j',
+      (p) => {
+        expect(validateVirtualPath(p).valid).toBe(true);
+      }
+    );
+
     test.each(['console.log', 'null', 'nullable.txt', 'com10', 'lpt', 'auxiliary/a.css', 'my-con.txt', 'icon.png'])(
       'still accepts the ordinary name %j',
       (name) => {

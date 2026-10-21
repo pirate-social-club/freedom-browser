@@ -285,10 +285,36 @@ describe('publish-service', () => {
     test('swarm:publish-file rejects missing file', async () => {
       fs.existsSync.mockReturnValue(false);
 
-      const token = await pick('file', '/tmp/nonexistent.txt');
+      const token = await pick('file', '/home/u/docs/nonexistent.txt');
       const result = await invokeIpc('swarm:publish-file', token);
       expect(result.success).toBe(false);
-      expect(result.error).toContain('not found');
+      expect(result.error).toBe('File not found: nonexistent.txt');
+      expect(result.error).not.toContain('/home/u');
+    });
+
+    test('swarm:publish-directory reports a missing folder by name only', async () => {
+      fs.existsSync.mockReturnValue(false);
+
+      const token = await pick('directory', '/home/u/sites/blog');
+      const result = await invokeIpc('swarm:publish-directory', token);
+      expect(result).toEqual({ success: false, error: 'Directory not found: blog' });
+    });
+
+    test('an fs error during publish (file vanished after the check) never returns the absolute path', async () => {
+      fs.existsSync.mockReturnValue(true);
+      const enoent = Object.assign(
+        new Error("ENOENT: no such file or directory, stat '/home/u/docs/x.txt'"),
+        { code: 'ENOENT', syscall: 'stat', path: '/home/u/docs/x.txt' }
+      );
+      fs.statSync.mockImplementationOnce(() => { throw enoent; });
+
+      const token = await pick('file', '/home/u/docs/x.txt');
+      const result = await invokeIpc('swarm:publish-file', token);
+      expect(result).toEqual({ success: false, error: 'Could not read "x.txt" (ENOENT)' });
+      expect(require('./publish-history').updateEntry).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ status: 'failed', errorMessage: 'Could not read "x.txt" (ENOENT)' })
+      );
     });
 
     test('swarm:publish-directory uploads with auto index.html detection', async () => {

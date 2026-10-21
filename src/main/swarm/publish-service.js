@@ -29,10 +29,24 @@ function describePublishError(err) {
 
 // The failed-publish IPC result. `needsStorage` tells freedom://publish to
 // offer the publish setup: no batch had room for the upload.
-function publishFailure(err) {
-  const failure = { success: false, error: describePublishError(err) };
+function publishFailure(err, message = describePublishError(err)) {
+  const failure = { success: false, error: message };
   if (isNoUsableBatchError(err)) failure.needsStorage = true;
   return failure;
+}
+
+// A picked path's absolute location never reaches the renderer (S-7): only
+// its basename, which swarm:pick-* already handed back. Node's fs errors
+// (ENOENT/EACCES from stat or the read stream, e.g. the file was deleted or
+// its permissions changed between pick and publish) carry the full path in
+// err.message, so those are reported by basename and error code instead.
+function describePickedPathError(err, pickedPath) {
+  if (err && typeof err.code === 'string' && typeof err.syscall === 'string') {
+    const name = path.basename(err.path || pickedPath);
+    return `Could not read "${name}" (${err.code})`;
+  }
+  const message = describePublishError(err);
+  return typeof message === 'string' ? message.split(pickedPath).join(path.basename(pickedPath)) : message;
 }
 
 // Sentinel for user-initiated publishes (text/file/directory triggered from
@@ -312,7 +326,7 @@ function registerPublishIpc() {
     if (redeemed.error) return { success: false, error: redeemed.error };
     const filePath = redeemed.path;
     if (!fs.existsSync(filePath)) {
-      return { success: false, error: `File not found: ${filePath}` };
+      return { success: false, error: `File not found: ${path.basename(filePath)}` };
     }
     const name = path.basename(filePath);
     const historyEntry = addEntry({
@@ -327,8 +341,9 @@ function registerPublishIpc() {
       return { success: true, reference: result.reference, bzzUrl: result.bzzUrl, tagUid: result.tagUid };
     } catch (err) {
       log.error('[PublishService] Failed to publish file:', err.message);
-      updateEntry(historyEntry.id, { status: 'failed', errorMessage: err.message });
-      return publishFailure(err);
+      const message = describePickedPathError(err, filePath);
+      updateEntry(historyEntry.id, { status: 'failed', errorMessage: message });
+      return publishFailure(err, message);
     }
   });
 
@@ -338,7 +353,7 @@ function registerPublishIpc() {
     if (redeemed.error) return { success: false, error: redeemed.error };
     const dirPath = redeemed.path;
     if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) {
-      return { success: false, error: `Directory not found: ${dirPath}` };
+      return { success: false, error: `Directory not found: ${path.basename(dirPath)}` };
     }
     const name = path.basename(dirPath);
     const historyEntry = addEntry({
@@ -353,8 +368,9 @@ function registerPublishIpc() {
       return { success: true, reference: result.reference, bzzUrl: result.bzzUrl, tagUid: result.tagUid };
     } catch (err) {
       log.error('[PublishService] Failed to publish directory:', err.message);
-      updateEntry(historyEntry.id, { status: 'failed', errorMessage: err.message });
-      return publishFailure(err);
+      const message = describePickedPathError(err, dirPath);
+      updateEntry(historyEntry.id, { status: 'failed', errorMessage: message });
+      return publishFailure(err, message);
     }
   });
 

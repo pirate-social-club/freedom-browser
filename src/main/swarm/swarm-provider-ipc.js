@@ -567,10 +567,6 @@ async function handlePublishData(params, origin) {
   }
 }
 
-/**
- * Validate a virtual path for manifest inclusion.
- * @returns {{ valid: boolean, message?: string }}
- */
 // Windows device names: a path segment named one of these (any case, with or
 // without an extension, trailing dots/spaces ignored) opens the device instead
 // of a file in the temp directory publishFilesFromContent writes to.
@@ -581,6 +577,10 @@ function isWindowsReservedName(segment) {
   return WINDOWS_RESERVED_NAMES.test(stem);
 }
 
+/**
+ * Validate a virtual path for manifest inclusion.
+ * @returns {{ valid: boolean, message?: string }}
+ */
 function validateVirtualPath(p) {
   if (typeof p !== 'string' || p.length === 0) {
     return { valid: false, message: 'Path must be a non-empty string' };
@@ -612,6 +612,12 @@ function validateVirtualPath(p) {
     }
     if (seg === '.' || seg === '..') {
       return { valid: false, message: '"." and ".." segments are not allowed' };
+    }
+    // Win32 path normalization trims a trailing dot or space from every
+    // segment, so 'foo.' would land on 'foo' (silently overwriting it in the
+    // temp directory) and '.. ' would trim toward '..'.
+    if (/[. ]$/.test(seg)) {
+      return { valid: false, message: 'Path segments may not end in a dot or space' };
     }
     if (isWindowsReservedName(seg)) {
       return { valid: false, message: `"${seg}" is a reserved device name on Windows` };
