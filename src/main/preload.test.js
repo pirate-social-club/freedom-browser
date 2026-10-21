@@ -390,6 +390,21 @@ describe('preload', () => {
     });
   });
 
+  // The shell has no way to publish a file or folder by path: those publish
+  // only by a pick token, from freedom://publish. getStamps stays, for the
+  // wallet's stamp manager.
+  test('swarmNode exposes no raw-path publish methods and keeps getStamps', async () => {
+    const { exposures, ipcRenderer } = loadPreloadModule();
+
+    expect(Object.keys(exposures.swarmNode)).toEqual(['getStamps', 'publishData', 'getUploadStatus']);
+    expect(exposures.swarmNode).not.toHaveProperty('publishFile');
+    expect(exposures.swarmNode).not.toHaveProperty('publishDirectory');
+
+    ipcRenderer.invoke.mockClear();
+    await exposures.swarmNode.getStamps();
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith('swarm:get-stamps');
+  });
+
   test('contains an eager Myotis status failure inside the preload bridge', async () => {
     const { exposures, ipcRenderer } = loadPreloadModule();
     const callback = jest.fn();

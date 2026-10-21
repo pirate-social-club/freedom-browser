@@ -1421,16 +1421,18 @@ contextBridge.exposeInMainWorld('freedomAPI', {
   // Clipboard
   copyText: guardInternal('copyText', (text) => ipcRenderer.invoke('clipboard:copy-text', text)),
 
-  // Swarm publishing (internal-only, path-based methods)
+  // Swarm publishing (internal-only; files and folders go by pick token)
   swarm: {
     publishData: guardInternal('swarm.publishData', (data) =>
       ipcRenderer.invoke('swarm:publish-data', data)
     ),
-    publishFilePath: guardInternal('swarm.publishFilePath', (filePath) =>
-      ipcRenderer.invoke('swarm:publish-file', filePath)
+    // Takes the token pickFileForPublish returned, not a filesystem path.
+    publishFilePath: guardInternal('swarm.publishFilePath', (pickToken) =>
+      ipcRenderer.invoke('swarm:publish-file', pickToken)
     ),
-    publishDirectoryPath: guardInternal('swarm.publishDirectoryPath', (dirPath) =>
-      ipcRenderer.invoke('swarm:publish-directory', dirPath)
+    // Takes the token pickDirectoryForPublish returned, not a filesystem path.
+    publishDirectoryPath: guardInternal('swarm.publishDirectoryPath', (pickToken) =>
+      ipcRenderer.invoke('swarm:publish-directory', pickToken)
     ),
     getUploadStatus: guardInternal('swarm.getUploadStatus', (tagUid) =>
       ipcRenderer.invoke('swarm:get-upload-status', tagUid)
