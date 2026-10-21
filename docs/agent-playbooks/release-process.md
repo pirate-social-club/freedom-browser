@@ -2,6 +2,8 @@
 
 Use this playbook when cutting a new Freedom release (any `MAJOR.MINOR.PATCH` bump).
 
+> In this fork, `.github/workflows/release.yml` publishes nothing. It has no tag trigger and no publish job, and runs only on manual dispatch to build every desktop target for qualification. The tag-driven flow below is upstream's and does not run here. A Linux evaluation release instead promotes the exact deb that the "Linux evaluation deb" workflow built, and that was inspected and accepted installed, into a draft pre-release, which a person publishes by hand.
+
 It complements `changelog-process.md` — that playbook covers the mechanics of writing `CHANGELOG.md`; this one covers the surrounding branch, version-bump, build, tag, and publish steps.
 
 **Builds are made by CI, not on a laptop.** Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds every platform on GitHub-hosted runners, signs and notarizes macOS, and attaches the artifacts to a GitHub Release. A release therefore needs no `.env`, no Mac, no Docker and no Windows VM to _build_ — only to _test_ (§6). The version string is the marker for what a build is: `<version>-rc.N` tags become public **Pre-releases** for testing, the bare `<version>` tag becomes a **draft** that is published after the smoke test. Tags are never moved; a bad build means a new number. Building locally remains possible as a fallback (Appendix A).
