@@ -25,6 +25,10 @@
 //      lies under the package's resources survives. The Radicle node is an
 //      addon in the main process and has no pid of its own.
 //
+// In acceptance mode (FREEDOM_E2E_ACCEPTANCE=1) a missing live flag or
+// executable fails instead of skipping, and the calibration override is
+// refused, as for the retrieval specs; summary.json records the digest source.
+//
 //   FREEDOM_E2E_RADICLE_VIEWER_LIVE=1 FREEDOM_E2E_EXECUTABLE=/opt/Freedom/freedom \
 //   FREEDOM_E2E_EVIDENCE_DIR=<dir> \
 //     npx playwright test --project=packaged-live test-e2e/packaged-live/radicle-viewer.spec.js
@@ -34,7 +38,7 @@ const http = require('http');
 const path = require('path');
 
 const { test, expect } = require('@playwright/test');
-const { isPackagedRun, CHROME_PAGE } = require('../packaged-launch');
+const { CHROME_PAGE } = require('../packaged-launch');
 const { closeApp } = require('../close-app');
 const { watchProcessExit } = require('../live-fixtures');
 const {
@@ -54,9 +58,9 @@ const {
   activeHref,
   navigate,
   navigateFromStartPage,
+  nativeDigestSource,
+  gateLiveSpec,
 } = require('./installed-acceptance');
-
-const ENABLED = process.env.FREEDOM_E2E_RADICLE_VIEWER_LIVE === '1';
 
 const NODE_START_TIMEOUT_MS = 3 * 60_000;
 // connectAndSeedDefault: a 15 s seed bootstrap, then a clone bounded at 120 s.
@@ -177,8 +181,10 @@ async function viewerState(window) {
 }
 
 test.describe('installed Radicle node and viewer', () => {
-  test.skip(!ENABLED, 'set FREEDOM_E2E_RADICLE_VIEWER_LIVE=1 to start the embedded Radicle node and reach the public seeds');
-  test.skip(ENABLED && !isPackagedRun(), 'set FREEDOM_E2E_EXECUTABLE to the installed Freedom binary');
+  gateLiveSpec(test, {
+    flag: 'FREEDOM_E2E_RADICLE_VIEWER_LIVE',
+    purpose: 'to start the embedded Radicle node and reach the public seeds',
+  });
 
   test('the embedded node returns its identity and the viewer loads local and public-seed repositories', async () => {
     test.setTimeout(12 * 60_000);
@@ -189,7 +195,17 @@ test.describe('installed Radicle node and viewer', () => {
     const controlSocket = path.join(dirs.radicle, 'node', 'control.sock');
     expect(controlSocket.length, `the Radicle control socket path is short enough: ${controlSocket}`).toBeLessThan(100);
     const defaultRid = defaultRepositoryRid();
-    const summary = { defaultRid, absentRid: ABSENT_RID };
+    // No native digest is asserted here, but the same source rules apply, so
+    // a stray override fails this gate too.
+    const digests = nativeDigestSource();
+    const summary = {
+      defaultRid,
+      absentRid: ABSENT_RID,
+      digestSource: digests.source,
+      digestSourceKind: digests.kind,
+      calibration: digests.calibration,
+      acceptance: digests.acceptance,
+    };
     const record = () => writeJson(evidence, 'summary.json', summary);
 
     expect(anyPackagedHelpers(resourcesDir), 'packaged helpers already running before launch').toEqual([]);

@@ -25,11 +25,9 @@ const os = require('os');
 const path = require('path');
 
 const { test, expect } = require('@playwright/test');
-const { launchApp, packagedLaunchTarget, isPackagedRun } = require('../packaged-launch');
+const { launchApp, packagedLaunchTarget } = require('../packaged-launch');
 const { closeApp } = require('../close-app');
-const { installedResourcesDir, anyPackagedHelpers, quitCleanly } = require('./installed-acceptance');
-
-const ENABLED = process.env.FREEDOM_E2E_HNS_LIVE === '1';
+const { installedResourcesDir, anyPackagedHelpers, quitCleanly, gateLiveSpec } = require('./installed-acceptance');
 
 const DEFAULT_HOSTS = [
   ['app.pirate', 'Videos for you'],
@@ -169,8 +167,9 @@ async function watchDocumentStatus(app, host) {
 }
 
 test.describe('installed HNS browsing', () => {
-  test.skip(!ENABLED, 'set FREEDOM_E2E_HNS_LIVE=1 to browse the public HNS test hosts');
-  test.skip(ENABLED && !isPackagedRun(), 'set FREEDOM_E2E_EXECUTABLE to the installed Freedom binary');
+  // Skipped without its flag or executable; in acceptance mode
+  // (FREEDOM_E2E_ACCEPTANCE=1) either fails instead (installed-acceptance.js).
+  gateLiveSpec(test, { flag: 'FREEDOM_E2E_HNS_LIVE', purpose: 'to browse the public HNS test hosts' });
 
   test('opens every HNS host, refuses an unclaimed one, and does it again after a full restart', async () => {
     test.setTimeout(20 * 60_000);

@@ -7,10 +7,15 @@ const os = require('os');
 const path = require('path');
 
 const {
+  processTable,
   parseProcNetTcp,
   digestMap,
+  nativeDigestSource,
   expectedNativeDigests,
+  gateLiveSpec,
   DIGESTS_VAR,
+  CALIBRATION_VAR,
+  ACCEPTANCE_VAR,
   cidV1Bytes,
   pinnedReferences,
   errorPageParams,
@@ -20,6 +25,32 @@ const {
   phaseOrderEvidence,
   classifyRequestUrls,
 } = require('./installed-acceptance');
+
+// Runs `fn` with exactly these mode variables set (undefined unsets one), and
+// restores the environment afterwards.
+const MODE_VARS = ['FREEDOM_EXPECTED_NATIVE_DIGESTS', 'FREEDOM_E2E_CALIBRATION', 'FREEDOM_E2E_ACCEPTANCE', 'FREEDOM_E2E_EXECUTABLE', 'FREEDOM_E2E_DEMO_LIVE'];
+function withEnv(values, fn) {
+  const saved = Object.fromEntries(MODE_VARS.map((name) => [name, process.env[name]]));
+  try {
+    for (const name of MODE_VARS) {
+      if (values[name] === undefined) delete process.env[name];
+      else process.env[name] = values[name];
+    }
+    return fn();
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
+(process.platform === 'linux' ? describe : describe.skip)('processTable', () => {
+  it('sees this test process and its executable', () => {
+    const self = processTable().get(process.pid);
+    expect(self.exe).toBe(fs.realpathSync(process.execPath));
+  });
+});
 
 describe('parseProcNetTcp', () => {
   const table = [
@@ -58,10 +89,9 @@ describe('expected native digests', () => {
     ]);
   });
 
-  it('takes the named inspection input over the inventory, and fails when a digest is missing', () => {
+  it('takes the named inspection input only in a calibration run, and fails when a digest is missing', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'installed-acceptance-'));
     const file = path.join(dir, 'digests.json');
-    const saved = process.env[DIGESTS_VAR];
     try {
       fs.writeFileSync(
         file,
@@ -70,28 +100,103 @@ describe('expected native digests', () => {
           'resources/freedom-ipfs-node/freedom_ipfs_native.node': ipfs,
         })
       );
-      process.env[DIGESTS_VAR] = file;
-      expect(expectedNativeDigests()).toEqual({ source: file, antd: ant, ipfsAddon: ipfs });
-      fs.writeFileSync(file, JSON.stringify({ 'resources/ant-bin/antd': ant }));
-      expect(() => expectedNativeDigests()).toThrow(/freedom_ipfs_native\.node/);
+      withEnv({ [DIGESTS_VAR]: file, [CALIBRATION_VAR]: '1' }, () => {
+        expect(expectedNativeDigests()).toEqual({
+          source: file,
+          kind: 'calibration-override',
+          calibration: true,
+          acceptance: false,
+          antd: ant,
+          ipfsAddon: ipfs,
+        });
+        fs.writeFileSync(file, JSON.stringify({ 'resources/ant-bin/antd': ant }));
+        expect(() => expectedNativeDigests()).toThrow(/freedom_ipfs_native\.node/);
+      });
     } finally {
-      if (saved === undefined) delete process.env[DIGESTS_VAR];
-      else process.env[DIGESTS_VAR] = saved;
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
+  it('fails at once when the override is set without the calibration flag', () => {
+    withEnv({ [DIGESTS_VAR]: '/nonexistent/digests.json' }, () => {
+      expect(() => nativeDigestSource()).toThrow(/FREEDOM_EXPECTED_NATIVE_DIGESTS is set without FREEDOM_E2E_CALIBRATION=1/);
+      expect(() => expectedNativeDigests()).toThrow(/without FREEDOM_E2E_CALIBRATION=1/);
+    });
+    withEnv({ [DIGESTS_VAR]: '/nonexistent/digests.json', [CALIBRATION_VAR]: '0' }, () => {
+      expect(() => nativeDigestSource()).toThrow(/without FREEDOM_E2E_CALIBRATION=1/);
+    });
+  });
+
+  it('refuses the override, and the calibration flag, in acceptance mode', () => {
+    withEnv({ [DIGESTS_VAR]: '/nonexistent/digests.json', [ACCEPTANCE_VAR]: '1' }, () => {
+      expect(() => nativeDigestSource()).toThrow(/acceptance mode \(FREEDOM_E2E_ACCEPTANCE=1\) refuses it/);
+    });
+    withEnv({ [CALIBRATION_VAR]: '1', [ACCEPTANCE_VAR]: '1' }, () => {
+      expect(() => nativeDigestSource()).toThrow(/cannot be a calibration run/);
+    });
+    withEnv({ [ACCEPTANCE_VAR]: '1' }, () => {
+      expect(nativeDigestSource()).toMatchObject({ kind: 'inventory', acceptance: true, calibration: false });
+    });
+  });
+
   it('defaults to the inventory, which pins both files', () => {
-    const saved = process.env[DIGESTS_VAR];
-    delete process.env[DIGESTS_VAR];
-    try {
+    withEnv({}, () => {
       const digests = expectedNativeDigests();
+      expect(digests.kind).toBe('inventory');
       expect(digests.source).toMatch(/scripts[\\/]linux-native-inventory\.json$/);
       expect(digests.antd).toMatch(/^[0-9a-f]{64}$/);
       expect(digests.ipfsAddon).toMatch(/^[0-9a-f]{64}$/);
-    } finally {
-      if (saved !== undefined) process.env[DIGESTS_VAR] = saved;
-    }
+    });
+  });
+});
+
+describe('gateLiveSpec', () => {
+  // A stand-in for Playwright's `test` that records what the gate registers.
+  const fakeTest = () => {
+    const calls = { skips: [], hooks: [] };
+    return {
+      calls,
+      skip: (condition, reason) => calls.skips.push({ condition, reason }),
+      beforeEach: (fn) => calls.hooks.push(fn),
+    };
+  };
+  const gate = { flag: 'FREEDOM_E2E_DEMO_LIVE', purpose: 'to run the demo' };
+
+  it('skips, as before, outside acceptance mode', () => {
+    withEnv({}, () => {
+      const test = fakeTest();
+      gateLiveSpec(test, gate);
+      expect(test.calls.skips).toEqual([
+        { condition: true, reason: 'set FREEDOM_E2E_DEMO_LIVE=1 to run the demo' },
+        { condition: false, reason: 'set FREEDOM_E2E_EXECUTABLE to the installed Freedom binary' },
+      ]);
+      expect(test.calls.hooks).toEqual([]);
+    });
+    withEnv({ FREEDOM_E2E_DEMO_LIVE: '1' }, () => {
+      const test = fakeTest();
+      gateLiveSpec(test, gate);
+      expect(test.calls.skips.map((skip) => skip.condition)).toEqual([false, true]);
+    });
+  });
+
+  it('fails instead of skipping in acceptance mode', () => {
+    withEnv({ [ACCEPTANCE_VAR]: '1' }, () => {
+      const test = fakeTest();
+      gateLiveSpec(test, gate);
+      expect(test.calls.skips).toEqual([]);
+      expect(test.calls.hooks).toHaveLength(1);
+      expect(() => test.calls.hooks[0]()).toThrow(/FREEDOM_E2E_DEMO_LIVE=1 is not set; FREEDOM_E2E_EXECUTABLE is not set/);
+    });
+    withEnv({ [ACCEPTANCE_VAR]: '1', FREEDOM_E2E_DEMO_LIVE: '1', FREEDOM_E2E_EXECUTABLE: '/opt/Freedom/freedom', [DIGESTS_VAR]: '/x.json' }, () => {
+      const test = fakeTest();
+      gateLiveSpec(test, gate);
+      expect(() => test.calls.hooks[0]()).toThrow(/FREEDOM_EXPECTED_NATIVE_DIGESTS is set/);
+    });
+    withEnv({ [ACCEPTANCE_VAR]: '1', FREEDOM_E2E_DEMO_LIVE: '1', FREEDOM_E2E_EXECUTABLE: '/opt/Freedom/freedom' }, () => {
+      const test = fakeTest();
+      gateLiveSpec(test, gate);
+      expect(() => test.calls.hooks[0]()).not.toThrow();
+    });
   });
 });
 

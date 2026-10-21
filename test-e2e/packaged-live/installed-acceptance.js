@@ -19,7 +19,7 @@ const os = require('os');
 const path = require('path');
 
 const { expect } = require('@playwright/test');
-const { launchApp, packagedLaunchTarget, CHROME_PAGE } = require('../packaged-launch');
+const { launchApp, packagedLaunchTarget, isPackagedRun, CHROME_PAGE } = require('../packaged-launch');
 const { closeApp } = require('../close-app');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -53,6 +53,16 @@ function processTable() {
     } catch {
       // Exited while the table was read.
     }
+  }
+  // Positive control: the table must at least see this test process and its
+  // executable. Otherwise an unreadable /proc would make every scan for
+  // survivors come back empty, which reads as a pass.
+  const self = table.get(process.pid);
+  if (!self || !self.exe) {
+    throw new Error(
+      `the /proc process table is unreadable: ${table.size} entries, and this process (pid ${process.pid}) ` +
+        `${self ? 'has no readable exe' : 'is missing'}`
+    );
   }
   return table;
 }
@@ -249,19 +259,87 @@ function digestMap(data) {
   return new Map(entries.filter(([, digest]) => typeof digest === 'string' && /^[0-9a-f]{64}$/.test(digest)));
 }
 
-// The digests the installed antd and IPFS addon must have. They come from the
-// inventory at the commit under test, or, when FREEDOM_EXPECTED_NATIVE_DIGESTS
-// names a JSON file, from that inspection input instead (a baseline built
-// before the inventory's pins moved has its own digests).
-function expectedNativeDigests() {
+const CALIBRATION_VAR = 'FREEDOM_E2E_CALIBRATION';
+const ACCEPTANCE_VAR = 'FREEDOM_E2E_ACCEPTANCE';
+
+const flagSet = (name) => (process.env[name] || '').trim() === '1';
+const acceptanceMode = () => flagSet(ACCEPTANCE_VAR);
+const calibrationMode = () => flagSet(CALIBRATION_VAR);
+
+// Where the expected native digests come from, with the rules that keep a
+// stale inspection input from passing the wrong package:
+//   - by default, scripts/linux-native-inventory.json at the commit under test
+//     (kind `inventory`);
+//   - FREEDOM_EXPECTED_NATIVE_DIGESTS names a JSON file to use instead only in
+//     a calibration run, FREEDOM_E2E_CALIBRATION=1 (kind
+//     `calibration-override`), for a baseline built before the inventory's pins
+//     moved. Set without that flag it fails at once rather than silently
+//     replacing the inventory;
+//   - acceptance mode, FREEDOM_E2E_ACCEPTANCE=1, refuses the override and the
+//     calibration flag alike, so its source is always the inventory.
+function nativeDigestSource() {
   const named = (process.env[DIGESTS_VAR] || '').trim();
-  const source = named ? path.resolve(named) : INVENTORY_FILE;
-  const map = digestMap(JSON.parse(fs.readFileSync(source, 'utf8')));
-  const result = { source, antd: map.get(ANTD_PATH) || null, ipfsAddon: map.get(IPFS_ADDON_PATH) || null };
+  const acceptance = acceptanceMode();
+  const calibration = calibrationMode();
+  if (acceptance && calibration) {
+    throw new Error(`${ACCEPTANCE_VAR}=1 and ${CALIBRATION_VAR}=1 are both set: an acceptance run cannot be a calibration run`);
+  }
+  if (named && acceptance) {
+    throw new Error(
+      `${DIGESTS_VAR} is set, and acceptance mode (${ACCEPTANCE_VAR}=1) refuses it: acceptance takes the expected ` +
+        `digests from ${path.relative(REPO_ROOT, INVENTORY_FILE)} at the commit under test. Unset ${DIGESTS_VAR}.`
+    );
+  }
+  if (named && !calibration) {
+    throw new Error(
+      `${DIGESTS_VAR} is set without ${CALIBRATION_VAR}=1. It would replace ` +
+        `${path.relative(REPO_ROOT, INVENTORY_FILE)}'s digests, so it is honoured only in a calibration run. ` +
+        `Unset it, or set ${CALIBRATION_VAR}=1 if this run is a calibration against a baseline.`
+    );
+  }
+  return named
+    ? { source: path.resolve(named), kind: 'calibration-override', calibration: true, acceptance }
+    : { source: INVENTORY_FILE, kind: 'inventory', calibration, acceptance };
+}
+
+// The digests the installed antd and IPFS addon must have, from
+// nativeDigestSource().
+function expectedNativeDigests() {
+  const origin = nativeDigestSource();
+  const map = digestMap(JSON.parse(fs.readFileSync(origin.source, 'utf8')));
+  const result = { ...origin, antd: map.get(ANTD_PATH) || null, ipfsAddon: map.get(IPFS_ADDON_PATH) || null };
   for (const [key, file] of [['antd', ANTD_PATH], ['ipfsAddon', IPFS_ADDON_PATH]]) {
-    if (!result[key]) throw new Error(`${source} gives no sha256 for ${file}`);
+    if (!result[key]) throw new Error(`${origin.source} gives no sha256 for ${file}`);
   }
   return result;
+}
+
+// The live-flag and executable gate every opt-in packaged-live spec shares.
+// Normally a spec without its flag, or without FREEDOM_E2E_EXECUTABLE, is
+// skipped, as `npm run test:e2e:packaged` and CI expect. In acceptance mode
+// (FREEDOM_E2E_ACCEPTANCE=1) each of those conditions fails the test instead,
+// because a skipped gate must never pass an acceptance run, and so does a
+// calibration flag or digest override left in the environment.
+function gateLiveSpec(test, { flag, purpose }) {
+  const enabled = flagSet(flag);
+  if (!acceptanceMode()) {
+    test.skip(!enabled, `set ${flag}=1 ${purpose}`);
+    test.skip(enabled && !isPackagedRun(), 'set FREEDOM_E2E_EXECUTABLE to the installed Freedom binary');
+    return;
+  }
+  test.beforeEach(() => {
+    const problems = [];
+    if (!flagSet(flag)) problems.push(`${flag}=1 is not set`);
+    if (!isPackagedRun()) problems.push('FREEDOM_E2E_EXECUTABLE is not set');
+    if ((process.env[DIGESTS_VAR] || '').trim()) problems.push(`${DIGESTS_VAR} is set`);
+    if (calibrationMode()) problems.push(`${CALIBRATION_VAR}=1 is set`);
+    if (problems.length) {
+      throw new Error(
+        `acceptance mode (${ACCEPTANCE_VAR}=1) does not run this gate as configured: ${problems.join('; ')}. ` +
+          'Outside acceptance mode this would be a skip, and a skip must not pass acceptance.'
+      );
+    }
+  });
 }
 
 function sha256(buffer) {
@@ -785,8 +863,14 @@ module.exports = {
   mappedFiles,
   canConnect,
   DIGESTS_VAR,
+  CALIBRATION_VAR,
+  ACCEPTANCE_VAR,
+  acceptanceMode,
+  calibrationMode,
   digestMap,
+  nativeDigestSource,
   expectedNativeDigests,
+  gateLiveSpec,
   sha256,
   sha256File,
   pinnedReferences,

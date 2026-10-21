@@ -51,6 +51,13 @@
 // there fails as "not established" and is rerun, never counted), the
 // retrieval within 3 minutes, the stop within 30 seconds.
 //
+// Expected digests come from scripts/linux-native-inventory.json at the commit
+// under test. FREEDOM_EXPECTED_NATIVE_DIGESTS may name another JSON file only in
+// a calibration run against a baseline (FREEDOM_E2E_CALIBRATION=1); set without
+// that flag it fails at once, and acceptance mode (FREEDOM_E2E_ACCEPTANCE=1)
+// refuses it. In acceptance mode a missing live flag or executable fails
+// instead of skipping.
+//
 //   FREEDOM_E2E_IPFS_RETRIEVAL_LIVE=1 FREEDOM_E2E_EXECUTABLE=/opt/Freedom/freedom \
 //   FREEDOM_E2E_EVIDENCE_DIR=<dir> \
 //     npx playwright test --project=packaged-live test-e2e/packaged-live/ipfs-retrieval.spec.js
@@ -59,7 +66,6 @@ const fs = require('fs');
 const path = require('path');
 
 const { test, expect } = require('@playwright/test');
-const { isPackagedRun } = require('../packaged-launch');
 const { closeApp } = require('../close-app');
 const { watchProcessExit } = require('../live-fixtures');
 const {
@@ -72,6 +78,7 @@ const {
   openFiles,
   mappedFiles,
   expectedNativeDigests,
+  gateLiveSpec,
   sha256,
   sha256File,
   pinnedReferences,
@@ -95,8 +102,6 @@ const {
   progressItemsFor,
   phaseOrderEvidence,
 } = require('./installed-acceptance');
-
-const ENABLED = process.env.FREEDOM_E2E_IPFS_RETRIEVAL_LIVE === '1';
 
 const RUNNING_TIMEOUT_MS = 5 * 60_000;
 const RETRIEVAL_TIMEOUT_MS = 3 * 60_000;
@@ -145,8 +150,7 @@ function collectProgress(window) {
 }
 
 test.describe('installed IPFS retrieval', () => {
-  test.skip(!ENABLED, 'set FREEDOM_E2E_IPFS_RETRIEVAL_LIVE=1 to retrieve pinned IPFS content over the network');
-  test.skip(ENABLED && !isPackagedRun(), 'set FREEDOM_E2E_EXECUTABLE to the installed Freedom binary');
+  gateLiveSpec(test, { flag: 'FREEDOM_E2E_IPFS_RETRIEVAL_LIVE', purpose: 'to retrieve pinned IPFS content over the network' });
 
   test('the bundled freedom-ipfs node serves a pinned CID cold and refuses it once stopped', async () => {
     test.setTimeout(15 * 60_000);
@@ -157,8 +161,18 @@ test.describe('installed IPFS retrieval', () => {
     const netlog = path.join(evidence, 'netlog.json');
     const dirs = makeScratchRoot('freedom-ipfs-retrieval-');
     const nodeDataDir = path.join(dirs.ipfs, 'freedom-ipfs');
-    const summary = { references: { A: A.cid, B: B.cid }, digestSource: digests.source };
+    const summary = {
+      references: { A: A.cid, B: B.cid },
+      digestSource: digests.source,
+      digestSourceKind: digests.kind,
+      calibration: digests.calibration,
+      acceptance: digests.acceptance,
+    };
     const record = () => writeJson(evidence, 'summary.json', summary);
+    if (digests.calibration) {
+      test.info().annotations.push({ type: 'calibration', description: `expected native digests from ${digests.source}` });
+    }
+    if (digests.acceptance) expect(digests.kind, 'acceptance takes its digests from the inventory').toBe('inventory');
 
     summary.port1633Listeners = tcpListeners(ANT_DEFAULT_PORT);
     expect(summary.port1633Listeners, `something already listens on TCP ${ANT_DEFAULT_PORT}; the test profile would reuse it`).toEqual([]);
@@ -259,6 +273,10 @@ test.describe('installed IPFS retrieval', () => {
 
       // 3. Stop through the app's own path, and wait for it to finish.
       summary.beforeStop = await readNodeState(window, 'ipfs');
+      record();
+      expect(summary.beforeStop.mode, 'IPFS is still the bundled node before the stop').toBe('bundled');
+      expect(summary.beforeStop.backend, 'with the freedom-ipfs backend').toBe('freedom-ipfs');
+      expect(summary.beforeStop.status, 'and running').toBe('running');
       const stopStart = Date.now();
       summary.stopResult = await window.evaluate(() => window.ipfs.stop());
       let afterStop = null;

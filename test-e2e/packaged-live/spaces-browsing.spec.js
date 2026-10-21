@@ -22,10 +22,10 @@ const os = require('os');
 const path = require('path');
 
 const { test, expect } = require('@playwright/test');
-const { launchApp, packagedLaunchTarget, isPackagedRun } = require('../packaged-launch');
+const { launchApp, packagedLaunchTarget } = require('../packaged-launch');
 const { closeApp } = require('../close-app');
+const { gateLiveSpec } = require('./installed-acceptance');
 
-const ENABLED = process.env.FREEDOM_E2E_SPACES_LIVE === '1';
 const YAHOO_URL =
   process.env.FREEDOM_E2E_SPACES_YAHOO_URL || 'https://web-next-staging.pirate.sc/c/@yahoo';
 const WEBSITE = (() => {
@@ -117,14 +117,9 @@ async function launch(dirs) {
 }
 
 test.describe('installed Spaces browsing', () => {
-  test.skip(
-    !ENABLED,
-    'set FREEDOM_E2E_SPACES_LIVE=1 to resolve names through the public Spaces relays'
-  );
-  test.skip(
-    ENABLED && !isPackagedRun(),
-    'set FREEDOM_E2E_EXECUTABLE to the installed Freedom binary'
-  );
+  // Skipped without its flag or executable; in acceptance mode
+  // (FREEDOM_E2E_ACCEPTANCE=1) either fails instead (installed-acceptance.js).
+  gateLiveSpec(test, { flag: 'FREEDOM_E2E_SPACES_LIVE', purpose: 'to resolve names through the public Spaces relays' });
 
   test('verifies a real space, refuses what it cannot verify, and quits cleanly', async () => {
     test.setTimeout(10 * 60_000);
