@@ -42,18 +42,28 @@
 //      Node's fetch). Its silence shows only that Chromium itself went to no
 //      public gateway; the claim that the bundled node served the content rests
 //      on 1–3.
-//   5. A clean quit with exit code 0, after which no process whose executable
-//      lies under the package's resources survives. The helpers that really
-//      ran are recorded: antd until the stop, and whatever HNS started.
+//   5. A clean quit with antd running, then no survivor. Once the negative
+//      control is complete, Ant is started again through `window.ant.start()`;
+//      it must come back bundled on the same API URL with /readiness 200 within
+//      the bound, and its new pid must pass the same identity checks as in 1.
+//      The app then quits with exit code 0, antd must have been running at the
+//      quit, and afterwards no process whose executable lies under the
+//      package's resources may survive, that antd's pid included. Restarting
+//      after the control does not touch it: every request for B and every read
+//      around them is already done. The helpers that really ran are recorded.
 //
-// Bounds: /readiness 200 within 5 minutes of launch, the retrieval within 3
-// minutes, the stop within 30 seconds. A run whose Ant never reaches readiness
-// fails as "not established": rerun it; it never counts as a pass.
+// Bounds: /readiness 200 within 5 minutes of launch (and of the restart), the
+// retrieval within 3 minutes, the stop within 30 seconds. A run whose Ant never
+// reaches readiness fails as "not established": rerun it; it never counts as a
+// pass.
 //
 // Expected digests come from scripts/linux-native-inventory.json at the commit
-// under test, or from the JSON file FREEDOM_EXPECTED_NATIVE_DIGESTS names
-// (installed-acceptance.js expectedNativeDigests). The pinned references and
-// their provenance are in pinned-references.json.
+// under test. FREEDOM_EXPECTED_NATIVE_DIGESTS may name another JSON file only in
+// a calibration run against a baseline (FREEDOM_E2E_CALIBRATION=1); set without
+// that flag it fails at once, and acceptance mode (FREEDOM_E2E_ACCEPTANCE=1)
+// refuses it (installed-acceptance.js nativeDigestSource). In acceptance mode a
+// missing live flag or executable fails instead of skipping. The pinned
+// references and their provenance are in pinned-references.json.
 //
 //   FREEDOM_E2E_SWARM_RETRIEVAL_LIVE=1 FREEDOM_E2E_EXECUTABLE=/opt/Freedom/freedom \
 //   FREEDOM_E2E_EVIDENCE_DIR=<dir> \
@@ -63,7 +73,6 @@ const fs = require('fs');
 const path = require('path');
 
 const { test, expect } = require('@playwright/test');
-const { isPackagedRun } = require('../packaged-launch');
 const { closeApp } = require('../close-app');
 const { watchProcessExit } = require('../live-fixtures');
 const {
@@ -78,6 +87,7 @@ const {
   pidsHoldingSocket,
   canConnect,
   expectedNativeDigests,
+  gateLiveSpec,
   sha256,
   sha256File,
   pinnedReferences,
@@ -98,8 +108,6 @@ const {
   copySqlite,
   scanNetlogForGateways,
 } = require('./installed-acceptance');
-
-const ENABLED = process.env.FREEDOM_E2E_SWARM_RETRIEVAL_LIVE === '1';
 
 const READINESS_TIMEOUT_MS = 5 * 60_000;
 const RETRIEVAL_TIMEOUT_MS = 3 * 60_000;
@@ -131,9 +139,43 @@ function antConfigDataDir(configPath) {
   return match ? match[1] : null;
 }
 
+// The process behind the registry's API port, from /proc: the listening
+// sockets matched to pids through /proc/net/tcp and /proc/<pid>/fd, and the one
+// holder's parent, executable, sha256 and configured data directory.
+function antdFacts(port) {
+  const listeners = tcpListeners(port);
+  const holders = [...new Set(listeners.flatMap((listener) => pidsHoldingSocket(listener.inode)))];
+  const facts = { port, listeners: listeners.length, holders };
+  if (holders.length !== 1) return facts;
+  const pid = holders[0];
+  const antd = processInfo(pid);
+  const configArg = antd?.cmdline.find((arg) => arg.startsWith('--config='));
+  const configPath = configArg ? configArg.slice('--config='.length) : null;
+  return {
+    ...facts,
+    pid,
+    ppid: antd?.ppid ?? null,
+    exe: antd?.exe ?? null,
+    sha256: sha256File(`/proc/${pid}/exe`),
+    configPath,
+    dataDir: configPath ? antConfigDataDir(configPath) : null,
+  };
+}
+
+// Those facts against the launched main process, the package's own binary and
+// its expected sha256, and the data directory this run passed.
+function expectBundledAntd(facts, { mainPid, resourcesDir, expectedSha256, dataDir, phase }) {
+  expect(facts.listeners, `a socket listens on the registry's API port ${facts.port} (${phase})`).toBeGreaterThan(0);
+  expect(facts.holders.length, `exactly one process holds the listening socket on ${facts.port} (${phase}): ${facts.holders}`).toBe(1);
+  expect(facts.ppid, `antd is a child of the launched main process (${phase})`).toBe(mainPid);
+  expect(facts.exe, `antd runs the package's own binary (${phase})`).toBe(path.join(resourcesDir, 'ant-bin', 'antd'));
+  expect(facts.sha256, `the running antd has the expected sha256 (${phase})`).toBe(expectedSha256);
+  expect(facts.configPath, `antd was started with --config= (${phase})`).not.toBeNull();
+  expect(facts.dataDir, `antd's data-dir is the FREEDOM_ANT_DATA this run passed (${phase})`).toBe(dataDir);
+}
+
 test.describe('installed Swarm retrieval', () => {
-  test.skip(!ENABLED, 'set FREEDOM_E2E_SWARM_RETRIEVAL_LIVE=1 to retrieve pinned Swarm content over the network');
-  test.skip(ENABLED && !isPackagedRun(), 'set FREEDOM_E2E_EXECUTABLE to the installed Freedom binary');
+  gateLiveSpec(test, { flag: 'FREEDOM_E2E_SWARM_RETRIEVAL_LIVE', purpose: 'to retrieve pinned Swarm content over the network' });
 
   test('the bundled Ant serves pinned content cold and refuses it once stopped', async () => {
     test.setTimeout(15 * 60_000);
@@ -143,8 +185,18 @@ test.describe('installed Swarm retrieval', () => {
     const evidence = evidenceDir('freedom-swarm-retrieval-');
     const netlog = path.join(evidence, 'netlog.json');
     const dirs = makeScratchRoot('freedom-swarm-retrieval-');
-    const summary = { references: { A: A.reference, B: B.reference }, digestSource: digests.source };
+    const summary = {
+      references: { A: A.reference, B: B.reference },
+      digestSource: digests.source,
+      digestSourceKind: digests.kind,
+      calibration: digests.calibration,
+      acceptance: digests.acceptance,
+    };
     const record = () => writeJson(evidence, 'summary.json', summary);
+    if (digests.calibration) {
+      test.info().annotations.push({ type: 'calibration', description: `expected native digests from ${digests.source}` });
+    }
+    if (digests.acceptance) expect(digests.kind, 'acceptance takes its digests from the inventory').toBe('inventory');
 
     // Preconditions: nothing on Ant's default port (the scratch profile would
     // reuse it), nothing from the package already running, empty data dirs.
@@ -179,30 +231,11 @@ test.describe('installed Swarm retrieval', () => {
       expect(atStart.gateway).toBe(atStart.api);
       const port = Number(api.port);
 
-      const listeners = tcpListeners(port);
-      const holders = [...new Set(listeners.flatMap((listener) => pidsHoldingSocket(listener.inode)))];
-      expect(listeners.length, `a socket listens on the registry's API port ${port}`).toBeGreaterThan(0);
-      expect(holders.length, `exactly one process holds the listening socket on ${port}: ${holders}`).toBe(1);
-      const antPid = holders[0];
-      const antd = processInfo(antPid);
-      const configArg = antd.cmdline.find((arg) => arg.startsWith('--config='));
-      const configPath = configArg ? configArg.slice('--config='.length) : null;
-      summary.antd = {
-        pid: antPid,
-        ppid: antd.ppid,
-        exe: antd.exe,
-        sha256: sha256File(`/proc/${antPid}/exe`),
-        expectedSha256: digests.antd,
-        configPath,
-        dataDir: configPath ? antConfigDataDir(configPath) : null,
-        expectedDataDir: dirs.ant,
-      };
+      const expected = { mainPid, resourcesDir, expectedSha256: digests.antd, dataDir: dirs.ant };
+      summary.antd = { ...antdFacts(port), expectedSha256: digests.antd, expectedDataDir: dirs.ant };
       record();
-      expect(antd.ppid, 'antd is a child of the launched main process').toBe(mainPid);
-      expect(antd.exe, "antd runs the package's own binary").toBe(path.join(resourcesDir, 'ant-bin', 'antd'));
-      expect(summary.antd.sha256, 'the running antd has the expected sha256').toBe(digests.antd);
-      expect(configPath, 'antd was started with --config=').not.toBeNull();
-      expect(summary.antd.dataDir, "antd's data-dir is the FREEDOM_ANT_DATA this run passed").toBe(dirs.ant);
+      expectBundledAntd(summary.antd, { ...expected, phase: 'at start' });
+      const antPid = summary.antd.pid;
       summary.helpersAtStart = packagedHelpers(mainPid, resourcesDir).map((proc) => ({ pid: proc.pid, exe: proc.exe }));
       expect(summary.helpersAtStart.map((proc) => proc.pid)).toContain(antPid);
 
@@ -235,8 +268,14 @@ test.describe('installed Swarm retrieval', () => {
       expect(sha256(aDoc.body), 'A has the pinned sha256').toBe(A.expected.sha256);
       expect(summary.retrievalA.msAfterNavigation, 'A was retrieved within the bound').toBeLessThanOrEqual(RETRIEVAL_TIMEOUT_MS);
 
-      // 3. Stop through the app's own path, and wait for it to finish.
+      // 3. Stop through the app's own path, and wait for it to finish. Just
+      // before it, the backend must still be the one identified at start.
       summary.beforeStop = await readNodeState(window, 'ant');
+      summary.beforeStopListeners = [...new Set(tcpListeners(port).flatMap((listener) => pidsHoldingSocket(listener.inode)))];
+      record();
+      expect(summary.beforeStop.mode, 'Ant is still the bundled node before the stop').toBe('bundled');
+      expect(summary.beforeStop.api, 'on the API URL it started with').toBe(atStart.api);
+      expect(summary.beforeStopListeners, 'served by the antd identified at start').toEqual([antPid]);
       const stopStart = Date.now();
       summary.stopResult = await window.evaluate(() => window.ant.stop());
       let afterStop = null;
@@ -305,13 +344,47 @@ test.describe('installed Swarm retrieval', () => {
         expect(['external', 'reused'], `no external or reused node ${read.phase}`).not.toContain(read.mode);
       }
 
-      // 5. Shutdown and orphans.
+      // 5. Shutdown and orphans, with antd running. The control is complete,
+      // so Ant is started again for the quit to have to stop it.
+      const restartStart = Date.now();
+      summary.restartResult = await window.evaluate(() => window.ant.start());
+      const restarted = await waitForNodeToSettle(window, 'ant', { label: 'Ant (restart)', timeout: READINESS_TIMEOUT_MS });
+      const atRestart = await readNodeState(window, 'ant');
+      summary.restart = { state: atRestart, settledMs: Date.now() - restartStart };
+      record();
+      expect(restarted.status, `Ant did not start again: ${restarted.error || 'no error reported'}`).toBe('running');
+      expect(atRestart.mode, `the restarted node is the package's own antd, not "${atRestart.mode}"`).toBe('bundled');
+      expect(atRestart.api, 'on the same API URL').toBe(atStart.api);
+      summary.restart.antd = antdFacts(port);
+      record();
+      expectBundledAntd(summary.restart.antd, { ...expected, phase: 'after the restart' });
+      expect(summary.restart.antd.pid, 'the restart spawned a new antd').not.toBe(antPid);
+      const restartReadiness = await waitForReadiness(atRestart.api, restartStart + READINESS_TIMEOUT_MS);
+      summary.restart.readiness = {
+        ok: restartReadiness.ok,
+        last: restartReadiness.last,
+        msAfterRestart: restartReadiness.ok ? restartReadiness.at - restartStart : null,
+      };
+      record();
+      if (!restartReadiness.ok) {
+        throw new Error(
+          `not established: the restarted Ant's /readiness did not answer 200 within ${READINESS_TIMEOUT_MS / 60_000} ` +
+            `minutes (last: ${restartReadiness.last}). This run proves nothing either way; rerun it.`
+        );
+      }
+
       summary.helpersBeforeQuit = packagedHelpers(mainPid, resourcesDir).map((proc) => ({ pid: proc.pid, exe: proc.exe }));
       summary.notExercised = ['v2ray (dVPN) runs only with a dVPN connection, which this spec does not make'];
-      summary.quit = await quitCleanly(app, resourcesDir, 'after Swarm retrieval');
+      summary.quit = await quitCleanly(app, resourcesDir, 'after Swarm retrieval', {
+        requiredHelpers: ['antd'],
+        label: 'antd and the other helpers',
+      });
       session = null;
       await expectCleanExit();
+      summary.quit.restartedAntdRunning = isRunningPid(summary.restart.antd.pid);
       record();
+      expect(summary.quit.helpers.map((proc) => proc.pid), 'the restarted antd was running at the quit').toContain(summary.restart.antd.pid);
+      expect(summary.quit.restartedAntdRunning, 'the restarted antd did not survive the quit').toBe(false);
 
       // 4. NetLog, written at quit.
       summary.netlog = {
