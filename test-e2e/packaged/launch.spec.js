@@ -64,8 +64,17 @@ test('the binary under test really is a packaged Electron build', async ({
   // The renderer has to be running on that same Chromium; anything else would
   // mean the window we are driving did not come from this package. Its UA is
   // plain Chrome's (#471): no Electron/ or Freedom/ token, and the version
-  // reduced to the major the way stock Chrome sends it.
+  // reduced to the major the way stock Chrome sends it. The platform token is
+  // Chromium's frozen one for the OS family, never the host CPU: the linux
+  // arm64 smoke leg must still see `X11; Linux x86_64`, not `Linux aarch64`.
   const userAgent = await window.evaluate(() => navigator.userAgent);
+  expect(userAgent).toMatch(
+    {
+      darwin: /^Mozilla\/5\.0 \(Macintosh; Intel Mac OS X 10_15_7\) /,
+      win32: /^Mozilla\/5\.0 \(Windows NT 10\.0; Win64; x64\) /,
+      linux: /^Mozilla\/5\.0 \(X11; Linux x86_64\) /,
+    }[process.platform] || /^Mozilla\/5\.0 /
+  );
   expect(userAgent).toContain(` Chrome/${build.chrome.split('.')[0]}.0.0.0 `);
   expect(userAgent).not.toMatch(/Freedom|Electron/i);
 });

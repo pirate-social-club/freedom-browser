@@ -23,6 +23,23 @@ describe('chromeUserAgent', () => {
     expect(ua).not.toMatch(/Freedom|Electron\//i);
   });
 
+  test.each([
+    ['X11; Linux aarch64', 'X11; Linux x86_64'],
+    ['X11; Linux i686', 'X11; Linux x86_64'],
+    ['X11; Linux armv7l', 'X11; Linux x86_64'],
+    ['Windows NT 10.0; ARM64', 'Windows NT 10.0; Win64; x64'],
+    ['Windows NT 6.1; WOW64', 'Windows NT 10.0; Win64; x64'],
+    ['Macintosh; Intel Mac OS X 14_5', 'Macintosh; Intel Mac OS X 10_15_7'],
+  ])("platform %s is frozen to Chrome's unified %s", (electron, chrome) => {
+    const ua = chromeUserAgent(
+      ELECTRON_UA.linux.replace('X11; Linux x86_64', electron),
+      '152.0.7977.130'
+    );
+    expect(ua).toBe(
+      `Mozilla/5.0 (${chrome}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36`
+    );
+  });
+
   test('the Chrome major comes from the running Chromium, not the old string', () => {
     expect(chromeUserAgent(ELECTRON_UA.linux, '153.0.1.2')).toContain(' Chrome/153.0.0.0 ');
   });

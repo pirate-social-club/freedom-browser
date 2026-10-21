@@ -14,9 +14,10 @@ const { evalInWebview } = require('./permission-fixtures');
 
 const ORIGIN = 'https://ua-check.test';
 
-// Stock Chrome's reduced UA: real platform, `Chrome/<major>.0.0.0`.
+// Stock Chrome's reduced UA: one of Chromium's frozen desktop platform tokens
+// (never the host CPU, e.g. `Linux aarch64`), then `Chrome/<major>.0.0.0`.
 const CHROME_SHAPE =
-  /^Mozilla\/5\.0 \([^()]+\) AppleWebKit\/537\.36 \(KHTML, like Gecko\) Chrome\/\d+\.0\.0\.0 Safari\/537\.36$/;
+  /^Mozilla\/5\.0 \((?:X11; Linux x86_64|Macintosh; Intel Mac OS X 10_15_7|Windows NT 10\.0; Win64; x64)\) AppleWebKit\/537\.36 \(KHTML, like Gecko\) Chrome\/\d+\.0\.0\.0 Safari\/537\.36$/;
 
 const PAGE = `<!doctype html><title>ua check</title><div id="out">none</div>
 <script>
