@@ -70,9 +70,10 @@ function ensHosts(repoRoot) {
   return new Set([...endpointHosts(repoRoot, ['prover', 'rpc']), ...COLIBRI_SDK_HOSTS]);
 }
 
-// The hosts only the Colibri verifier reaches, as opposed to the quorum RPCs.
-function colibriHosts(repoRoot) {
-  return new Set([...endpointHosts(repoRoot, ['prover']), ...COLIBRI_SDK_HOSTS]);
+// The configured Colibri prover, which only the verifier reaches, and only
+// once it has synced: the call it answers is what the verifier caches.
+function proverHosts(repoRoot) {
+  return new Set(endpointHosts(repoRoot, ['prover']));
 }
 
 // The only remote peer the main process may hold: the HNS encrypted DNS relay
@@ -173,9 +174,10 @@ async function navigate(window, value) {
   await address.press('Enter');
 }
 
-// NetLog events for URL requests to the ENS hosts: start time, outcome, and
-// the HTTP/2 session each one rode (request → stream job → session), with
-// each session's open interval.
+// NetLog events for URL requests to the ENS hosts: start time, outcome, HTTP
+// status, and the session each one rode, with each session's open interval:
+// an HTTP/2 session through the stream job that opened or found it, or a QUIC
+// session bound to the request directly.
 function ensRequests(netlogFile, hosts) {
   const log = JSON.parse(fs.readFileSync(netlogFile, 'utf8'));
   const types = Object.fromEntries(Object.entries(log.constants.logEventTypes).map(([k, v]) => [v, k]));
@@ -184,6 +186,7 @@ function ensRequests(netlogFile, hosts) {
   const bySource = new Map();
   const jobOfRequest = new Map();
   const sessionOfJob = new Map();
+  const quicOfRequest = new Map();
   const sessionSpan = new Map();
   for (const event of log.events) {
     const type = types[event.type];
@@ -198,11 +201,16 @@ function ensRequests(netlogFile, hosts) {
       bySource.get(id).endedAt = at(event);
       bySource.get(id).netError = event.params?.net_error ?? 0;
     }
+    if (type === 'HTTP_TRANSACTION_READ_RESPONSE_HEADERS' && bySource.has(id)) {
+      const status = /^HTTP\/\S+ (\d{3})/.exec(event.params?.headers?.[0] || '');
+      if (status) bySource.get(id).status = Number(status[1]);
+    }
     if (type === 'HTTP_STREAM_REQUEST_BOUND_TO_JOB' && dependency !== undefined) jobOfRequest.set(id, dependency);
+    if (type === 'HTTP_STREAM_REQUEST_BOUND_TO_QUIC_SESSION' && dependency !== undefined) quicOfRequest.set(id, dependency);
     if (/^HTTP2_SESSION_POOL_(IMPORTED_SESSION_FROM_SOCKET|FOUND_EXISTING_SESSION)/.test(type) && dependency !== undefined) {
       sessionOfJob.set(id, dependency);
     }
-    if (type === 'HTTP2_SESSION') {
+    if (type === 'HTTP2_SESSION' || type === 'QUIC_SESSION') {
       const span = sessionSpan.get(id) || { openedAt: at(event), closedAt: Infinity };
       if (event.phase === 1) span.openedAt = at(event);
       if (event.phase === 2) span.closedAt = at(event);
@@ -210,7 +218,7 @@ function ensRequests(netlogFile, hosts) {
     }
   }
   return [...bySource.entries()].map(([id, request]) => {
-    const session = sessionOfJob.get(jobOfRequest.get(id));
+    const session = quicOfRequest.get(id) ?? sessionOfJob.get(jobOfRequest.get(id));
     return { ...request, session, sessionSpan: sessionSpan.get(session) };
   });
 }
@@ -223,7 +231,7 @@ test.describe('installed ENS network attribution', () => {
     test.setTimeout(8 * 60_000);
     const repoRoot = path.resolve(__dirname, '..', '..');
     const hosts = ensHosts(repoRoot);
-    const verifierHosts = colibriHosts(repoRoot);
+    const provers = proverHosts(repoRoot);
     const evidenceDir = process.env.FREEDOM_E2E_EVIDENCE_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-ens-session-'));
     fs.mkdirSync(evidenceDir, { recursive: true });
     const netlog = path.join(evidenceDir, 'netlog.json');
@@ -299,10 +307,18 @@ test.describe('installed ENS network attribution', () => {
     const normalRequests = within(phases.normalStart, phases.normalEnd);
     const privateRequests = within(phases.privateStart, phases.privateOnlyStart);
     const privateOnlyRequests = within(phases.privateOnlyStart, phases.privateEnd);
-    // Answered verifier requests: the store checks below mean nothing if the
-    // private-only lookup never reached Colibri (a quorum-RPC answer alone).
+    // Prover calls the private window made and was answered: the store checks
+    // below mean nothing if its own lookup never reached the prover (a cold
+    // sync alone, or a quorum-RPC answer), and a call on a session the normal
+    // window used could be the normal window's.
+    const normalSessions = new Set(normalRequests.map((request) => request.session).filter((id) => id !== undefined));
     const privateOnlyVerified = privateOnlyRequests.filter(
-      (request) => verifierHosts.has(request.host) && request.netError === 0
+      (request) =>
+        provers.has(request.host) &&
+        request.netError === 0 &&
+        request.status >= 200 && request.status < 300 &&
+        request.session !== undefined &&
+        !normalSessions.has(request.session)
     );
     // Read after quit, once everything the app keeps on disk is written.
     const traces = filesContaining(root, nameTraces(PRIVATE_ONLY_NAME));
@@ -338,7 +354,7 @@ test.describe('installed ENS network attribution', () => {
     expect(normalRequests.length, 'the normal window resolves through Chromium').toBeGreaterThan(0);
     expect(privateRequests.length, 'the private window resolves afresh, through Chromium').toBeGreaterThan(0);
     expect(separateContext.length, 'the private window dials in a network context of its own').toBeGreaterThan(0);
-    expect(privateOnlyVerified.length, "the private window's own lookup goes through the Colibri verifier")
+    expect(privateOnlyVerified.length, "the private window's own lookup is answered by the Colibri prover")
       .toBeGreaterThan(0);
     expect(summary.storeEntriesBeforePrivate, "the normal window's lookup fills the default session's verifier store")
       .toBeGreaterThan(0);
