@@ -606,6 +606,33 @@ describe('navigation', () => {
     expect(guest.loadURL).toHaveBeenLastCalledWith('https://app.pirate/');
   });
 
+  test.each([
+    ['8s28', 'https://8s28/'],
+    ['PIRATE', 'https://app.pirate/'],
+    ['App.Pirate/Case?Q=X#Frag', 'https://app.pirate/Case?Q=X#Frag'],
+  ])('a typed Handshake name (%s) loads over Handshake, never the search provider', async (input, url) => {
+    const ctx = await loadNavigationModule({ enableHnsIntegration: true, registry: { hns: { synced: true } } });
+    await ctx.mod.initNavigation();
+    ctx.mod.loadTarget(input);
+    const guest = ctx.activeRef.tab.webview;
+    expect(guest.loadURL).toHaveBeenLastCalledWith(url);
+    for (const [loaded] of guest.loadURL.mock.calls) {
+      expect(loaded).not.toContain('duckduckgo.com');
+    }
+  });
+
+  test.each(['0xdeadbeef', '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045'])(
+    'a hex IPv4 number or 0x address (%s) is never loaded as a Handshake host',
+    async (input) => {
+      const ctx = await loadNavigationModule({ enableHnsIntegration: true, registry: { hns: { synced: true } } });
+      await ctx.mod.initNavigation();
+      ctx.mod.loadTarget(input);
+      for (const [loaded] of ctx.activeRef.tab.webview.loadURL.mock.calls) {
+        expect(loaded).not.toMatch(/^https:\/\/(0x|\d+\.\d+\.\d+\.\d+)/i);
+      }
+    }
+  );
+
   test('Home cancels a waiting Handshake navigation', async () => {
     const ctx = await loadNavigationModule({ enableHnsIntegration: true, registry: { hns: { synced: false } } });
     await ctx.mod.initNavigation();
@@ -1346,6 +1373,58 @@ describe('navigation', () => {
   });
 
   describe('address bar search fallback', () => {
+    test.each(['ipfs://', 'bzz:', 'bzz://', 'ens://', 'freedom://', 'ethereum:', 'rad:'])(
+      'an explicit dweb address (%s) is never sent to the search provider',
+      async (input) => {
+        const ctx = await loadNavigationModule();
+        await ctx.mod.initNavigation();
+        await flushMicrotasks();
+
+        ctx.mod.loadTarget(input);
+
+        for (const [url] of ctx.activeRef.tab.webview.loadURL.mock.calls) {
+          expect(url).not.toContain('duckduckgo.com');
+        }
+      }
+    );
+
+    test('a malformed dweb address lands on the invalid-address page', async () => {
+      const ctx = await loadNavigationModule();
+      await ctx.mod.initNavigation();
+      await flushMicrotasks();
+
+      ctx.mod.loadTarget('bzz:');
+
+      const [url] = ctx.activeRef.tab.webview.loadURL.mock.calls.at(-1);
+      expect(url).toContain('pages/error.html?error=invalid_address');
+      expect(new URL(url).searchParams.get('url')).toBe('bzz:');
+    });
+
+    test('a scheme-like query with spaces still searches', async () => {
+      const ctx = await loadNavigationModule();
+      await ctx.mod.initNavigation();
+      await flushMicrotasks();
+
+      ctx.mod.loadTarget('freedom: what is it');
+
+      expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenCalledWith(
+        'https://duckduckgo.com/?q=freedom%3A%20what%20is%20it'
+      );
+    });
+
+    test('an all-digit Swarm reference gets its own error page, not a probe', async () => {
+      const ctx = await loadNavigationModule();
+      await ctx.mod.initNavigation();
+      await flushMicrotasks();
+
+      ctx.mod.loadTarget(`bzz://${'3'.repeat(64)}`);
+      await flushMicrotasks();
+
+      expect(ctx.electronAPI.startSwarmProbe).not.toHaveBeenCalled();
+      const [url] = ctx.activeRef.tab.webview.loadURL.mock.calls.at(-1);
+      expect(url).toContain('pages/error.html?error=unloadable_swarm_hash');
+    });
+
     test('loads the default provider results page for non-URL input', async () => {
       const ctx = await loadNavigationModule();
       await ctx.mod.initNavigation();

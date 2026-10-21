@@ -24,6 +24,7 @@ import {
   looksLikeOnchainAppInput,
   parseOnchainAppUrl,
   parseSpacesInput,
+  normalizeHnsHostInput,
 } from './url-utils.js';
 
 const BZZ_ROUTE_PREFIX = 'http://127.0.0.1:1633/bzz/';
@@ -274,6 +275,26 @@ describe('url-utils', () => {
   });
 
   describe('formatBzzUrl', () => {
+    test('finds the hash when the URL parser rejects bzz://<all digits>', () => {
+      // Chromium parses a standard scheme's host like a web host, so an
+      // all-digit one is an overflowing IPv4 number and `new URL` throws.
+      // Node's parser doesn't, so stand in for Chromium's here.
+      const RealURL = global.URL;
+      global.URL = class extends RealURL {
+        constructor(input, base) {
+          if (/^bzz:\/\/[0-9]+(?:[/?#]|$)/i.test(String(input))) throw new TypeError('Invalid URL');
+          super(input, base);
+        }
+      };
+      try {
+        const digits = '3'.repeat(64);
+        const result = formatBzzUrl(`bzz://${digits}/a.html`, 'http://127.0.0.1:1633/bzz/');
+        expect(result?.displayValue).toBe(`bzz://${digits}/a.html`);
+      } finally {
+        global.URL = RealURL;
+      }
+    });
+
     test('formats explicit bzz:// protocol with hash only', () => {
       const input = 'bzz://1234567890abcdef';
       const result = formatBzzUrl(input, BZZ_ROUTE_PREFIX);
@@ -1481,6 +1502,48 @@ describe('parseSpacesInput', () => {
     'leaves %s alone',
     (input) => {
       expect(parseSpacesInput(input)).toBeNull();
+    }
+  );
+});
+
+describe('normalizeHnsHostInput', () => {
+  const hostsApi = globalThis.FREEDOM_HNS_HOSTS;
+
+  beforeEach(() => {
+    globalThis.FREEDOM_HNS_HOSTS = { getHnsPublicSuffixes: () => ['.pirate', '.8s28'] };
+  });
+
+  afterEach(() => {
+    globalThis.FREEDOM_HNS_HOSTS = hostsApi;
+  });
+
+  test.each([
+    ['8s28', 'https://8s28/'],
+    ['PIRATE', 'https://app.pirate/'],
+    ['Pirate/Feed', 'https://app.pirate/Feed'],
+    ['App.8S28', 'https://app.8s28/'],
+    ['9app.pirate', 'https://9app.pirate/'],
+    ['APP.PIRATE/Case?Q=X#Frag', 'https://app.pirate/Case?Q=X#Frag'],
+    ['a18n', 'https://a18n/'],
+  ])('routes %s to %s', (input, url) => {
+    expect(normalizeHnsHostInput(input)).toBe(url);
+  });
+
+  test.each([
+    '123',
+    '1234/path',
+    '-8s28',
+    '8s28-',
+    'app.unlisted',
+    'app..pirate',
+    '0xdeadbeef',
+    '0X7F000001/admin',
+    '0x',
+    '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045',
+  ])(
+    'leaves %s alone',
+    (input) => {
+      expect(normalizeHnsHostInput(input)).toBeNull();
     }
   );
 });

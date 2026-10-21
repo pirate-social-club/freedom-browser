@@ -1,0 +1,1 @@
+- A typed Handshake name that starts with a digit, such as `8s28`, or is typed in capitals, such as `PIRATE`, opens over Handshake instead of going to the search engine.
