@@ -90,8 +90,9 @@ async function fetchOnce(ses, url) {
 async function main() {
   const { server, port } = await startOrigin();
   const ses = session.fromPartition('cert-verify-concurrency-probe');
-  // A fresh session otherwise fetches its dictionary from a Google host.
-  ses.setSpellCheckerEnabled(false);
+  // A fresh session starts fetching its spellchecker dictionary from a Google
+  // host as soon as it exists; with no languages there is nothing to fetch.
+  ses.setSpellCheckerLanguages([]);
   const verifierSaw = [];
   const firstSeen = new Set();
   const overlapping = [];
