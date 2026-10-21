@@ -720,15 +720,18 @@ async function feeEstimate(chainId = 1) {
 
 const MAX_REJECTION_REASON = 300;
 
-// ABI 36: the engine judged the transaction on freshly verified state (sender
-// cannot pay, or its nonce is used) and did NOT broadcast it. That is a
-// definite answer, not an uncertain outcome: geth's txpool verdict under -32000.
+// Engine-supplied refusal text, whitespace-collapsed and capped before it
+// becomes an error message a dApp sees; `fallback` when it is empty or absent.
+// Shared by both definite refusals below (ABI 36 `rejected`, ABI 44 -32602).
 function boundedReason(value, fallback) {
   return typeof value === 'string' && value.trim()
     ? value.trim().replace(/\s+/g, ' ').slice(0, MAX_REJECTION_REASON)
     : fallback;
 }
 
+// ABI 36: the engine judged the transaction on freshly verified state (sender
+// cannot pay, or its nonce is used) and did NOT broadcast it. That is a
+// definite answer, not an uncertain outcome: geth's txpool verdict under -32000.
 function broadcastRejected(result) {
   const error = new Error(boundedReason(result.reason, 'transaction rejected before broadcast'));
   error.code = -32000;
