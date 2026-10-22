@@ -1,15 +1,16 @@
 // Read-only cache evidence for installed, unstubbed acceptance. Ordinary
 // profiles and fixture-harness launches never register this operation.
-const { remoteDebuggingPortOpen } = require('./test-mode');
+const { isTestModeRequested, remoteDebuggingPortOpen } = require('./test-mode');
 
 const CHANNEL = 'acceptance:http-cache-state';
 
 function registerAcceptanceHttpCache({ app, ipcMain, webContents, profile, env = process.env }) {
+  const debugPortOpen = remoteDebuggingPortOpen({ app, env });
   if (
     profile?.source !== 'test-user-data' ||
     env.FREEDOM_E2E_ACCEPTANCE !== '1' ||
-    env.FREEDOM_TEST_MODE === '1' ||
-    !remoteDebuggingPortOpen({ app, env })
+    isTestModeRequested({ env, isPackaged: app.isPackaged === true, debugPortOpen: () => debugPortOpen }) ||
+    !debugPortOpen
   ) return false;
 
   // ipc-sender-policy leaves this channel chrome-only. No URL, file path,
