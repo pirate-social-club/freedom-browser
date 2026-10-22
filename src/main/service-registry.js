@@ -80,6 +80,11 @@ const registry = {
     peerCount: 0,
     syncProgress: 0,
     publicSuffixes: ['.pirate'],
+    // Namespace discovery (hns-manager.js): `fresh`, `stale` or `unavailable`,
+    // when the list last arrived, and from which origin.
+    discovery: { state: 'unavailable', lastSuccessAt: null, origin: null },
+    // Whether single labels route to the Handshake guard (hns-manager.js).
+    guardRouting: false,
   },
   dvpn: {
     api: null,
@@ -268,16 +273,18 @@ const SERVICE_DEFAULTS = Object.fromEntries(
 );
 
 /**
- * Clear service state (when stopped)
+ * Clear service state (when stopped). `retained` holds fields that outlive the
+ * stop; they land in the same broadcast as the reset, so no window ever sees
+ * them cleared.
  */
-function clearService(service) {
+function clearService(service, retained = {}) {
   if (!registry[service]) return;
 
   if (registry[service].tempMessageTimeout) {
     clearTimeout(registry[service].tempMessageTimeout);
   }
 
-  registry[service] = createEmptyServiceState(service);
+  registry[service] = { ...createEmptyServiceState(service), ...retained };
 
   broadcastRegistryUpdate();
 }

@@ -1,0 +1,1 @@
+- Pages no longer fail to load for several seconds when the network route changes while a private window is open ([#62](https://github.com/pirate-social-club/freedom-browser/pull/62))

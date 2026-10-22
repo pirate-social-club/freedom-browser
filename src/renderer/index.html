@@ -4731,6 +4731,12 @@
       </div>
     </dialog>
 
+    <!-- The shared Handshake host rule (window.FREEDOM_HNS_HOSTS), with the IANA
+         snapshot it refuses roots against. Classic scripts, so both run before
+         the deferred module below; state.js keeps their root set in step with
+         the main process. -->
+    <script src="../shared/hns-iana-tld-snapshot.js"></script>
+    <script src="../shared/hns-hosts.js"></script>
     <script type="module" src="./index.js"></script>
   </body>
 </html>

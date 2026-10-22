@@ -320,6 +320,7 @@ jobs:
           src/main/__tests__/integration/ens-ccip-proxy.test.js
           src/main/__tests__/integration/cert-verify-concurrency.test.js
           src/main/__tests__/integration/session-transport-proxy.test.js
+          src/main/__tests__/integration/hns-namespace-discovery.test.js
       - name: Confirm runtime cleanup
         if: always()
         run: |

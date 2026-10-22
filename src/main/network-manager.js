@@ -11,13 +11,39 @@ const { createHnsGuardForwarding, HNS_PROXY_CONNECT_TIMEOUT_MS } = require('./hn
 const { runRoutingOperation } = require('./session-routing-operation');
 const { resolveHnsDohAddresses } = require('./hns-doh-resolver');
 const { resolveHnsLocalAddresses } = require('./hns-local-resolver');
+const { getActiveProfile } = require('./profile-resolver');
 const {
   getHnsPublicSuffixes,
   isHnsHost,
+  isReservedHnsRoot,
+  isValidHostnameLabel,
   setDynamicHnsPublicSuffixes,
 } = require('../shared/hns-hosts');
 
-const PUBLIC_NAMESPACES_URL = process.env.PIRATE_PUBLIC_NAMESPACES_URL || 'https://api.pirate.sc/public-namespaces';
+// Namespace discovery reads the roots whose zones Pirate currently serves
+// (api-next ListHnsNamespaces), so names under them go to the Handshake
+// resolver without a system-DNS probe first. The list decides routing only:
+// DNSSEC, DANE and certificates stay with native HNS verification.
+const HNS_DISCOVERY_ORIGIN = 'https://api-next.pirate.sc';
+const HNS_DISCOVERY_STAGING_ORIGIN = 'https://api-next-staging.pirate.sc';
+const HNS_DISCOVERY_PATH = '/public/hns/namespaces/v1';
+// A scratch test profile (FREEDOM_TEST_USER_DATA) has no catalog metadata.
+// FREEDOM_TEST_HNS_DISCOVERY_ORIGIN gives that profile, and only that profile,
+// the staging list instead, so installed acceptance can drive the staging
+// roots (test-e2e/packaged-live/hns-browsing.spec.js). Any other value, and
+// the variable on a catalog profile, leaves the production list.
+const TEST_HNS_DISCOVERY_ORIGIN_VAR = 'FREEDOM_TEST_HNS_DISCOVERY_ORIGIN';
+const HNS_DISCOVERY_DEADLINE_MS = 3000;
+const HNS_DISCOVERY_MAX_BYTES = 64 * 1024;
+// api-next's HnsNamespaceInstantV1: one database instant, in milliseconds.
+const HNS_DISCOVERY_INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+function getHnsDiscoveryUrl(profile = getActiveProfile(), env = process.env) {
+  const origin = profile?.source === 'test-user-data' && env[TEST_HNS_DISCOVERY_ORIGIN_VAR] === HNS_DISCOVERY_STAGING_ORIGIN
+    ? HNS_DISCOVERY_STAGING_ORIGIN
+    : HNS_DISCOVERY_ORIGIN;
+  return `${origin}${HNS_DISCOVERY_PATH}`;
+}
 
 let hnsProxyAddr = null;
 let hnsUpstreamProxyAddr = null;
@@ -372,11 +398,33 @@ const guardForwarding = createHnsGuardForwarding({
   log, timeoutMs: HNS_PROXY_CONNECT_TIMEOUT_MS,
 });
 
-function extractNamespaceSuffixes(payload) {
-  const namespaces = Array.isArray(payload?.namespaces) ? payload.namespaces : [];
-  return namespaces
-    .map((entry) => entry?.root_label)
-    .filter((value) => typeof value === 'string' && value.trim());
+function parseHnsDiscoveryInstant(value) {
+  const instant = typeof value === 'string' && HNS_DISCOVERY_INSTANT_RE.test(value) ? Date.parse(value) : NaN;
+  if (!Number.isFinite(instant)) throw new Error('namespace list carries an invalid time');
+  return instant;
+}
+
+// The list api-next's HnsNamespaceDiscoveryV1 describes, as each root's
+// lifetime on the server's own clock: `expires_at - generated_at`. Anything
+// the list cannot vouch for makes the whole response unavailable, never partly
+// applied, because applying a list also removes every root it omits. A reserved
+// root is the one entry dropped instead, so no server mistake captures a TLD.
+function parseHnsNamespaceList(payload) {
+  if (payload?.version !== 1) throw new Error('namespace list has an unknown version');
+  const generatedAt = parseHnsDiscoveryInstant(payload.generated_at);
+  if (!Array.isArray(payload.roots)) throw new Error('namespace list has no roots');
+  const roots = new Map();
+  for (const entry of payload.roots) {
+    if (typeof entry?.root !== 'string' || !isValidHostnameLabel(entry.root)) {
+      throw new Error('namespace list carries an invalid root');
+    }
+    const lifetimeMs = parseHnsDiscoveryInstant(entry.expires_at) - generatedAt;
+    if (!(lifetimeMs > 0)) throw new Error('namespace list carries a root that expired when it was generated');
+    if (!isReservedHnsRoot(entry.root)) {
+      roots.set(entry.root, Math.min(lifetimeMs, roots.get(entry.root) ?? Infinity));
+    }
+  }
+  return { generatedAt, roots };
 }
 
 function buildPacScript(intent = getRoutingIntent()) {
@@ -611,6 +659,20 @@ async function prepareProxyPolicy(intent) {
 
 let torSocksEndpoint = null;
 let torRoutingConfigured = false;
+// Whether the committed policy sends Handshake names, single labels included,
+// to the guard. It follows routing, not the helper: a starting or recovering
+// helper is still behind the guard.
+let hnsGuardRouting = false;
+let hnsGuardRoutingObserver = null;
+
+function isHnsGuardRouting() {
+  return hnsGuardRouting;
+}
+
+function setHnsGuardRoutingObserver(observer) {
+  if (typeof observer !== 'function' || hnsGuardRoutingObserver) throw new TypeError('Invalid HNS guard routing observer');
+  hnsGuardRoutingObserver = observer;
+}
 
 const sessionDispatcherOptions = new WeakMap();
 
@@ -634,6 +696,10 @@ const routing = createSessionRoutingCoordinator(proxySessions, {
   publish: (policy) => {
     guardAllowed = policy.guardNeeded;
     if (guardAllowed) guardResources.publish();
+    if (hnsGuardRouting !== policy.guardNeeded) {
+      hnsGuardRouting = policy.guardNeeded;
+      try { hnsGuardRoutingObserver?.(hnsGuardRouting); } catch { /* Feedback has no routing authority. */ }
+    }
   },
   attach: (targetSession, getRequestPolicy) => attachWebRequestDispatcher(targetSession, { ...sessionDispatcherOptions.get(targetSession), getRequestPolicy }),
 });
@@ -749,34 +815,80 @@ function unregisterProxySession(targetSession) {
   proxySessions.unregister(targetSession);
 }
 
-async function refreshImportedHnsSuffixes(fetchImpl = fetch, url = PUBLIC_NAMESPACES_URL) {
-  let timeout = null;
-  try {
-    const controller = new AbortController();
-    timeout = setTimeout(() => controller.abort(), 3000);
+// The default session, so the request follows the browser's own proxy policy
+// (the dVPN when it is up) instead of Node's direct dial. It never falls back
+// to Node fetch, not even while that session is withdrawn: hns-manager.js
+// retries instead. It keeps custom protocol handlers: production registers
+// none for https, and the test harness's https stub keeps test runs offline.
+function fetchOnDefaultSession(url, init) {
+  return session.defaultSession.fetch(url, init);
+}
+
+// Reads the body, refusing it past HNS_DISCOVERY_MAX_BYTES rather than holding
+// more. The caller's abort cancels the reader, which is what releases a body
+// that stalls part way.
+async function readHnsDiscoveryBody(response, signal) {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('namespace list has no body');
+  signal.addEventListener('abort', () => reader.cancel().catch(() => {}), { once: true });
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (signal.aborted) throw new Error('namespace list request aborted');
+    if (done) return Buffer.concat(chunks).toString('utf8');
+    size += value.byteLength;
+    if (size > HNS_DISCOVERY_MAX_BYTES) throw new Error('namespace list exceeds 64 KiB');
+    chunks.push(value);
+  }
+}
+
+// One discovery request: no cookies or other credentials, no HTTP cache, no
+// redirect taken, no identifying headers of its own. A single deadline covers
+// the headers and the whole body. Any failure rejects, and the caller counts
+// it as unavailable. The result carries its monotonic receipt time, which
+// local deadlines are measured from.
+async function fetchHnsNamespaces({ fetchImpl = fetchOnDefaultSession, url = getHnsDiscoveryUrl() } = {}) {
+  const controller = new AbortController();
+  let timer = null;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error('namespace list deadline exceeded'));
+      controller.abort();
+    }, HNS_DISCOVERY_DEADLINE_MS);
+  });
+  const read = (async () => {
     const response = await fetchImpl(url, {
-      headers: { accept: 'application/json' },
+      credentials: 'omit',
+      cache: 'no-store',
+      redirect: 'error',
       signal: controller.signal,
     });
-    clearTimeout(timeout);
-    if (!response.ok) {
-      throw new Error(`public namespace fetch failed with ${response.status}`);
-    }
-    const suffixes = setDynamicHnsPublicSuffixes(extractNamespaceSuffixes(await response.json()));
-    const changed = routing.intentChanged();
-    log.info(`[Network] Imported HNS suffixes loaded: ${formatImportedHnsSuffixesLog(suffixes)}`);
-    if (changed || hnsUpstreamProxyAddr || dvpnProxyHost) {
-      await rebuild();
-    }
-    return suffixes;
-  } catch (err) {
-    log.warn(`[Network] Imported HNS suffix refresh failed: ${err.message}`);
-    return getHnsPublicSuffixes();
+    if (response.status !== 200) throw new Error(`namespace list answered ${response.status}`);
+    const list = parseHnsNamespaceList(JSON.parse(await readHnsDiscoveryBody(response, controller.signal)));
+    return { ...list, origin: new URL(url).origin, receivedAt: performance.now() };
+  })();
+  try {
+    return await Promise.race([read, deadline]);
   } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
+    clearTimeout(timer);
+    controller.abort();
   }
+}
+
+// Routes exactly these imported roots, beside the built-in `.pirate`. Only a
+// changed root set changes the routing intent, so an unchanged one withdraws
+// no session and drains no guard connection. The rebuild still runs while a
+// helper or the dVPN is up: with nothing changed it re-applies nothing, and
+// it recovers a policy that was lost.
+function setImportedHnsRoots(roots = []) {
+  const suffixes = setDynamicHnsPublicSuffixes(roots);
+  const changed = routing.intentChanged();
+  if (changed) log.info(`[Network] Imported HNS suffixes loaded: ${formatImportedHnsSuffixesLog(suffixes)}`);
+  if (changed || hnsUpstreamProxyAddr || dvpnProxyHost) {
+    rebuild().catch((err) => log.warn(`[Network] Routing rebuild after a namespace change failed: ${err.message}`));
+  }
+  return suffixes;
 }
 
 function getHnsProxyAddr() {
@@ -809,8 +921,12 @@ module.exports = {
   unregisterProxySession,
   getHnsProxyAddr,
   getDvpnProxy,
+  isHnsGuardRouting,
+  setHnsGuardRoutingObserver,
   buildPacScript,
-  refreshImportedHnsSuffixes,
+  getHnsDiscoveryUrl,
+  fetchHnsNamespaces,
+  setImportedHnsRoots,
   registerApiRequestDiagnostics,
   sanitizeApiRequestUrl,
   getHnsResolutionForHost,

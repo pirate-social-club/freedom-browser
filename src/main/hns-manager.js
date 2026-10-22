@@ -69,6 +69,18 @@ const HNS_HEALTH_TRANSIENT_RETRIES = 2;
 const HNS_HEALTH_TRANSIENT_RETRY_MS = 1000;
 const HNS_LOCAL_READY_SUCCESS_THRESHOLD = 2;
 const HNS_LOCAL_READY_FAILURE_THRESHOLD = 2;
+// Namespace discovery (networkManager.fetchHnsNamespaces): first at
+// helper-ready, then every 10 minutes. A failure backs off from 30 seconds,
+// doubling, each delay up to half again longer for jitter, to a 10-minute
+// cap; a fetch that a routing transition cancelled is first retried once,
+// after 2 seconds.
+const HNS_DISCOVERY_REFRESH_MS = 10 * 60 * 1000;
+const HNS_DISCOVERY_RETRY_MS = 2000;
+const HNS_DISCOVERY_BACKOFF_BASE_MS = 30 * 1000;
+// A listed root routes for at most 7 days from receipt, the server's own
+// evidence window (api-next 0098_hns_dns_evidence_lease_window.sql), however
+// far ahead its expires_at is (contract v4 addendum 1).
+const HNS_NAMESPACE_MAX_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 const FORBIDDEN_HELPER_CANARIES = [['shake', 'station'].join('')];
 const HNS_HELPER_TUNNEL_DNS_FAILURE_RE = /\[WARN\]\s+tunnel:\s+502\s+CONNECT\s+\S+\s+dns lookup failed/i;
 
@@ -102,6 +114,23 @@ let lastBroadcastReadiness = {
   dohFallbackReady: null,
   localResolverReady: null,
 };
+let hnsDiscoveryTimer = null;
+let hnsDiscoveryFailures = 0;
+let hnsDiscoveryLastAttemptOk = false;
+let hnsDiscoveryLastSuccessAt = null;
+let hnsDiscoveryOrigin = null;
+// How many roots the last successful list gave, so `fresh` can tell whether
+// every one of them is still live.
+let hnsDiscoveryListedCount = 0;
+let hnsHistoryPrunedGeneration = null;
+// Each listed root's local deadline on the monotonic clock: its receipt time
+// plus the server's own `expires_at - generated_at`, so the two clocks are
+// never compared. The deadlines and their timer belong to no helper: they keep
+// running through restarts and invalidation, and nothing but expiry or a newer
+// list removes a root.
+const hnsNamespaceDeadlines = new Map();
+let hnsNamespaceGeneratedAt = -Infinity;
+let hnsNamespaceExpiryTimer = null;
 
 function normalizeHnsStderrLine(line) {
   return line.replace(/^\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2}\s+/, '');
@@ -361,6 +390,9 @@ function invalidateHnsGeneration(reason, startupError = null) {
   if (startupError) permanentStartupError = startupError;
   authority?.retire();
   readyPublished = false;
+  // Only the refresh stops: listed roots keep their own deadlines, and the
+  // restart's helper-ready fetches again.
+  clearHnsDiscoveryTimer();
   networkManager.clearHnsProxy();
   caCertFingerprint = null;
   resetHnsReadiness();
@@ -709,6 +741,133 @@ function loadCaFingerprint(pemPath) {
   }
 }
 
+// Contract v4 addendum 1. `fresh`: the last attempt succeeded and every root it
+// listed is still live, as an empty list always is. `stale`: not fresh, but a
+// listed root is still live. `unavailable`: neither, so a populated list whose
+// roots have all expired is unavailable. With the last success's time and the
+// origin that answered it.
+function getHnsDiscovery() {
+  const live = hnsNamespaceDeadlines.size;
+  let state = 'unavailable';
+  if (hnsDiscoveryLastAttemptOk && live === hnsDiscoveryListedCount) state = 'fresh';
+  else if (live > 0) state = 'stale';
+  return { state, lastSuccessAt: hnsDiscoveryLastSuccessAt, origin: hnsDiscoveryOrigin };
+}
+
+// Whether a single label is a Handshake name for the renderer's error page
+// (contract v4 addendum 1): the platform supports Handshake browsing and the
+// committed routing policy sends such names to the guard. The helper's health
+// does not decide it.
+function hnsGuardRoutingPublished(routed = networkManager.isHnsGuardRouting()) {
+  return hnsCapability.supported && routed === true;
+}
+
+function publishHnsGuardRouting(routed) {
+  updateService('hns', { guardRouting: hnsGuardRoutingPublished(routed) });
+}
+networkManager.setHnsGuardRoutingObserver(publishHnsGuardRouting);
+
+// A synchronous scan of the whole history table on the main thread, so once
+// per helper generation, once imported roots have arrived, and never in the
+// way of a refresh.
+function pruneHistoryOnce(generation, publicSuffixes) {
+  if (publicSuffixes.length <= 1 || hnsHistoryPrunedGeneration === generation) return;
+  hnsHistoryPrunedGeneration = generation;
+  try {
+    pruneUnknownSingleLabelHistory();
+  } catch (error) {
+    log.warn(`[HNS] Single-label history prune failed: ${error.message}`);
+  }
+}
+
+// Drops every root past its deadline, routes the rest, and republishes them:
+// the renderer classifies hosts from its own copy of the set.
+function routeHnsNamespaces() {
+  const now = performance.now();
+  for (const [root, deadline] of hnsNamespaceDeadlines) {
+    if (deadline <= now) hnsNamespaceDeadlines.delete(root);
+  }
+  if (hnsNamespaceExpiryTimer) clearTimeout(hnsNamespaceExpiryTimer);
+  hnsNamespaceExpiryTimer = null;
+  if (hnsNamespaceDeadlines.size > 0) {
+    // At most the 7-day lifetime cap away, well within setTimeout's range.
+    hnsNamespaceExpiryTimer = setTimeout(routeHnsNamespaces, Math.ceil(Math.min(...hnsNamespaceDeadlines.values()) - now));
+  }
+  const publicSuffixes = networkManager.setImportedHnsRoots([...hnsNamespaceDeadlines.keys()]);
+  updateService('hns', { publicSuffixes, discovery: getHnsDiscovery() });
+  return publicSuffixes;
+}
+
+function clearHnsDiscoveryTimer() {
+  if (hnsDiscoveryTimer) clearTimeout(hnsDiscoveryTimer);
+  hnsDiscoveryTimer = null;
+}
+
+function scheduleHnsDiscovery(delayMs, retryCancelled = true) {
+  clearHnsDiscoveryTimer();
+  const generation = helperGeneration;
+  hnsDiscoveryTimer = setTimeout(() => {
+    hnsDiscoveryTimer = null;
+    startHnsDiscovery(generation, retryCancelled);
+  }, delayMs);
+}
+
+function startHnsDiscovery(generation, retryCancelled = true) {
+  refreshHnsNamespaces(generation, retryCancelled)
+    .catch((error) => log.warn(`[HNS] Namespace discovery failed: ${error.message}`));
+}
+
+function failHnsDiscovery(error) {
+  hnsDiscoveryLastAttemptOk = false;
+  hnsDiscoveryFailures += 1;
+  log.warn(`[HNS] Namespace discovery unavailable: ${error.message}`);
+  updateService('hns', { discovery: getHnsDiscovery() });
+  const stepMs = Math.min(HNS_DISCOVERY_BACKOFF_BASE_MS * 2 ** (hnsDiscoveryFailures - 1), HNS_DISCOVERY_REFRESH_MS);
+  scheduleHnsDiscovery(Math.min(stepMs * (1 + Math.random() / 2), HNS_DISCOVERY_REFRESH_MS));
+}
+
+// One discovery attempt for the helper of `generation`. Its list is applied
+// only while that helper is still current, and only if it is no older than
+// the list applied last; a restart's own helper-ready fetches again.
+async function refreshHnsNamespaces(generation, retryCancelled = true) {
+  const policy = () => networkManager.getProxySessionPolicy(session.defaultSession);
+  const before = policy();
+  let list;
+  try {
+    list = await networkManager.fetchHnsNamespaces();
+  } catch (error) {
+    if (generation !== helperGeneration) return;
+    const after = policy();
+    // Activation withdraws every session shortly after helper-ready, which
+    // cancels a request in flight. Only that failure is retried at once.
+    if (retryCancelled && (!before.allowed || !after.allowed || before.generation !== after.generation)) {
+      scheduleHnsDiscovery(HNS_DISCOVERY_RETRY_MS, false);
+    } else {
+      failHnsDiscovery(error);
+    }
+    return;
+  }
+  if (generation !== helperGeneration) return;
+  if (list.generatedAt < hnsNamespaceGeneratedAt) {
+    failHnsDiscovery(new Error('namespace list is older than the one applied'));
+    return;
+  }
+  // Replaced in one step, so a renewed root is never absent in between.
+  hnsNamespaceGeneratedAt = list.generatedAt;
+  hnsNamespaceDeadlines.clear();
+  for (const [root, lifetimeMs] of list.roots) {
+    hnsNamespaceDeadlines.set(root, list.receivedAt + Math.min(lifetimeMs, HNS_NAMESPACE_MAX_LIFETIME_MS));
+  }
+  hnsDiscoveryListedCount = hnsNamespaceDeadlines.size;
+  hnsDiscoveryFailures = 0;
+  hnsDiscoveryLastAttemptOk = true;
+  hnsDiscoveryLastSuccessAt = new Date().toISOString();
+  hnsDiscoveryOrigin = list.origin ?? null;
+  const publicSuffixes = routeHnsNamespaces();
+  scheduleHnsDiscovery(HNS_DISCOVERY_REFRESH_MS);
+  pruneHistoryOnce(generation, publicSuffixes);
+}
+
 async function handleReady(event) {
   if (currentState !== STATUS.STARTING || !authority || readyTicket) return;
   readyTicket = {};
@@ -724,12 +883,11 @@ async function handleReady(event) {
   setStatusMessage('hns', 'Waiting for fresh local validation');
   scheduleHnsChainCheck(0);
   scheduleEncryptedProbe();
-  const generation = helperGeneration;
-  networkManager.refreshImportedHnsSuffixes().then((suffixes) => {
-    if (generation !== helperGeneration) return;
-    updateService('hns', { publicSuffixes: suffixes });
-    if (suffixes.length > 1) pruneUnknownSingleLabelHistory();
-  }).catch(() => log.warn('[HNS] Namespace discovery unavailable'));
+  // Discovery starts here, not at activation: on a cold start activation waits
+  // out the first chain sync, and it may never come. Until the list arrives,
+  // names under imported roots take the system-DNS path.
+  clearHnsDiscoveryTimer();
+  startHnsDiscovery(helperGeneration);
 }
 
 function parseStdoutLine(line) {
@@ -907,6 +1065,7 @@ async function awaitChildClosure(child) {
 }
 
 async function stopHns({ recovering = false } = {}) {
+  clearHnsDiscoveryTimer();
   let observerCleanup;
   if (!recovering) {
     runtimeWanted = false; restartCount = 0; permanentStartupError = null;
@@ -941,7 +1100,14 @@ async function stopHns({ recovering = false } = {}) {
   proxyAddr = null; caPemPath = null; rootAddr = null; recursiveAddr = null;
   synced = false; canaryReady = false; height = 0; lastHeightChangeAt = 0;
   resetHnsReadiness(); hnsStderrLogState.clear();
-  clearService('hns'); updateState(STATUS.STOPPED);
+  // The listed roots and the routing outlive the helper, so the renderer's copy
+  // keeps them through the reset, in one broadcast.
+  clearService('hns', {
+    publicSuffixes: getHnsPublicSuffixes(),
+    discovery: getHnsDiscovery(),
+    guardRouting: hnsGuardRoutingPublished(),
+  });
+  updateState(STATUS.STOPPED);
   if (pendingStart && runtimeWanted && (!networkMonitor || networkMonitor.allowed())) {
     pendingStart = false;
     const startPending = () => {

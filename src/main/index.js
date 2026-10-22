@@ -44,6 +44,11 @@ require('./linux-desktop-name').applyLinuxDesktopName(app);
 // Electron/ tokens (issue #471). Before any session exists: each one reads the
 // fallback when it is created.
 require('./web-user-agent').applyWebUserAgent(app);
+// No renderer prefetches DNS: a page's dns-prefetch hint would look a name up
+// in ordinary DNS without the session's proxy policy, Handshake names included
+// (blink-settings.js). Renderers read the switch when they start, so it must
+// be set before the app is ready.
+require('./blink-settings').applyBlinkSettings(app);
 
 // E2E test mode (Playwright). `FREEDOM_TEST_MODE=1` activates the
 // fixture-driven harness in src/main/test-harness.js (stubbed protocols,

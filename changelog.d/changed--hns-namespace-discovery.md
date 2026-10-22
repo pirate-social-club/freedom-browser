@@ -1,0 +1,2 @@
+- Handshake sites such as `app.8s28` go straight to Handshake instead of being looked up in ordinary DNS first ([#62](https://github.com/pirate-social-club/freedom-browser/pull/62))
+- A Handshake site that fails to load shows the Handshake error page ([#62](https://github.com/pirate-social-club/freedom-browser/pull/62))

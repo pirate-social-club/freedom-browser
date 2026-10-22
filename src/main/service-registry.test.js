@@ -168,6 +168,8 @@ describe('service-registry', () => {
       dohFallbackReady: true,
       height: 42000,
       publicSuffixes: ['.pirate', '.xn--pokmon-dva'],
+      discovery: { state: 'fresh', lastSuccessAt: '2026-10-22T07:00:00.000Z', origin: 'https://api-next.pirate.sc' },
+      guardRouting: true,
     });
 
     mod.clearService('hns');
@@ -188,7 +190,23 @@ describe('service-registry', () => {
       peerCount: 0,
       syncProgress: 0,
       publicSuffixes: ['.pirate'],
+      discovery: { state: 'unavailable', lastSuccessAt: null, origin: null },
+      guardRouting: false,
     });
+  });
+
+  test('clearService keeps retained fields in the same, single broadcast', () => {
+    const window = { webContents: { send: jest.fn() } };
+    const { mod } = loadServiceRegistry({ windows: [window] });
+    mod.updateService('hns', { api: 'http://127.0.0.1:5380', publicSuffixes: ['.pirate', '.8s28'], guardRouting: true });
+    const { send } = window.webContents;
+    send.mockClear();
+
+    mod.clearService('hns', { publicSuffixes: ['.pirate', '.8s28'], guardRouting: true });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const [, broadcast] = send.mock.calls[0];
+    expect(broadcast.hns).toMatchObject({ api: null, mode: mod.MODE.NONE, publicSuffixes: ['.pirate', '.8s28'], guardRouting: true });
   });
 
   test('clearService preserves dVPN-specific fields', () => {

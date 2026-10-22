@@ -43,9 +43,9 @@ const url = params.get('url');
 const explicitProtocol = params.get('protocol');
 const height = params.get('height');
 const syncStatus = params.get('syncStatus');
-function isSingleLabelHost(value) {
-  try { return !new URL(value).hostname.includes('.'); } catch { return false; }
-}
+// Navigation marks a failed http(s) load as a Handshake one: a single label or
+// a name under a listed root, while Handshake routing is in effect for it.
+const isHandshakeFailure = explicitProtocol === 'hns';
 
 // `retry` is an optional param carrying a URL that Chromium can
 // actually navigate to (bzz://, http(s)://, …). Needed when `url` is
@@ -168,7 +168,7 @@ async function displayError() {
     detailsEl.textContent = [url, syncStatus || (height ? `Current height: ${height}` : '')].filter(Boolean).join('\n\n');
     return;
   }
-  if (error === 'HNS_LOOKUP_FAILED' || (error === 'ERR_TUNNEL_CONNECTION_FAILED' && isSingleLabelHost(url))) {
+  if (error === 'HNS_LOOKUP_FAILED' || isHandshakeFailure) {
     setErrorTitle('Handshake site unavailable');
     descriptionEl.textContent =
       'Freedom could not resolve this Handshake site. The resolver may be degraded, or the name may not exist.';

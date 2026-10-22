@@ -20,13 +20,23 @@ describe('session proxy controller', () => {
     await controller.apply({ mode: 'direct' });
     for (const target of [main, privateSession]) {
       expect(target.setProxy).toHaveBeenCalledTimes(1);
-      expect(target.forceReloadProxyConfig).toHaveBeenCalledTimes(1);
+      expect(target.forceReloadProxyConfig).toHaveBeenCalledTimes(2);
       expect(target.closeAllConnections).toHaveBeenCalledTimes(1);
-      expect(target.setProxy.mock.invocationCallOrder[0])
-        .toBeLessThan(target.forceReloadProxyConfig.mock.invocationCallOrder[0]);
-      expect(target.forceReloadProxyConfig.mock.invocationCallOrder[0])
-        .toBeLessThan(target.closeAllConnections.mock.invocationCallOrder[0]);
+      const [firstReload, lastReload] = target.forceReloadProxyConfig.mock.invocationCallOrder;
+      expect(target.setProxy.mock.invocationCallOrder[0]).toBeLessThan(firstReload);
+      expect(firstReload).toBeLessThan(target.closeAllConnections.mock.invocationCallOrder[0]);
+      // The close aborts a PAC fetch still connecting, and Electron's PAC is
+      // mandatory, so the last reload comes after it and nothing follows.
+      expect(target.closeAllConnections.mock.invocationCallOrder[0]).toBeLessThan(lastReload);
     }
+  });
+
+  test('a failed drain is not followed by the last reload', async () => {
+    const main = makeSession();
+    main.closeAllConnections.mockRejectedValueOnce(new Error('close failed'));
+    const controller = createController(() => main);
+    await expect(controller.apply({ mode: 'pac_script', pacScript: 'url' })).rejects.toThrow('Session proxy update failed');
+    expect(main.forceReloadProxyConfig).toHaveBeenCalledTimes(1);
   });
 
   test('waits for earlier updates and closes their sockets before the next update', async () => {
@@ -92,7 +102,8 @@ describe('session proxy controller', () => {
     const config = { mode: 'pac_script', pacScript: 'same-url' };
     await controller.apply(config, 'first-content');
     await controller.apply(config, 'second-content');
-    expect(main.forceReloadProxyConfig).toHaveBeenCalledTimes(2);
+    // Two reloads per update: one with the new settings, one after the close.
+    expect(main.forceReloadProxyConfig).toHaveBeenCalledTimes(4);
   });
 
   test('a failed changed policy invalidates the previous successful receipt', async () => {

@@ -82,7 +82,9 @@ describe('session quarantine', () => {
     expect(f.fatal).not.toHaveBeenCalled();
     await f.routing.rebuild();
     expect(f.getter().allowed).toBe(true);
-    expect(f.main[method]).toHaveBeenCalledTimes(3);
+    // A completed update reloads twice, the second time after its close. The
+    // failing call stopped its own update before the second reload.
+    expect(f.main[method]).toHaveBeenCalledTimes(method === 'setProxy' ? 3 : 5);
   });
 
   test('partial global failure quarantines even sessions whose native configuration succeeded', async () => {
@@ -131,6 +133,136 @@ describe('session quarantine', () => {
     expect(f.getter().allowed).toBe(false);
     expect(() => f.routing.rebuild()).toThrow('terminal');
     expect(f.main.closeAllConnections).toHaveBeenCalledTimes(1);
+  });
+
+  // The reload after connection closure (session-proxy-controller.js) is part
+  // of the update: until it settles, nothing is published and every session
+  // stays blocked, never falling back to an empty or direct proxy.
+  describe('the PAC reload after connections close', () => {
+    // A fixture past its first rebuild whose next update's second reload, the
+    // one after the close, is `postClose`.
+    async function changedWith(postClose) {
+      const f = fixture();
+      await f.routing.rebuild();
+      f.hooks.publish.mockClear();
+      f.main.forceReloadProxyConfig.mockImplementationOnce(async () => {}).mockImplementationOnce(postClose);
+      f.change('changed');
+      return f;
+    }
+    const lastCall = (fn) => fn.mock.invocationCallOrder.at(-1);
+
+    test('keeps sessions blocked and unpublished while it is pending', async () => {
+      let finish;
+      let entered;
+      const reloading = new Promise((resolve) => { entered = resolve; });
+      const f = await changedWith(() => new Promise((resolve) => { finish = resolve; entered(); }));
+      const update = f.routing.rebuild();
+      await reloading;
+      expect(lastCall(f.main.closeAllConnections)).toBeLessThan(lastCall(f.main.forceReloadProxyConfig));
+      expect(f.getter()).toMatchObject({ allowed: false, state: 'updating' });
+      expect(f.hooks.publish).not.toHaveBeenCalled();
+      finish();
+      await update;
+      expect(f.getter()).toMatchObject({ allowed: true, state: 'ready' });
+      expect(f.hooks.publish).toHaveBeenCalledTimes(1);
+    });
+
+    test('a failure ends the update quarantined, and only a complete recovery reopens it', async () => {
+      const f = await changedWith(async () => { throw new Error('native failure'); });
+      const error = await f.routing.rebuild().catch((cause) => cause);
+      expect(codes(error)).toContain('forceReloadProxyConfig_failed');
+      expect(f.getter()).toMatchObject({ allowed: false, state: 'quarantined' });
+      expect(f.hooks.publish).not.toHaveBeenCalled();
+      expect(f.fatal).not.toHaveBeenCalled();
+      await f.routing.rebuild();
+      expect(f.getter().allowed).toBe(true);
+      expect(f.hooks.publish).toHaveBeenCalledTimes(1);
+    });
+
+    test('a timeout terminates once, and its late completion never reopens the session', async () => {
+      jest.useFakeTimers();
+      let finish;
+      const f = await changedWith(() => new Promise((resolve) => { finish = resolve; }));
+      const update = f.routing.rebuild().catch((error) => error);
+      await jest.advanceTimersByTimeAsync(21);
+      const error = await update;
+      expect(codes(error)).toContain('forceReloadProxyConfig_timeout');
+      expect(f.fatal).toHaveBeenCalledTimes(1);
+      expect(f.fatal).toHaveBeenCalledWith('forceReloadProxyConfig_timeout');
+      expect(f.getter()).toMatchObject({ allowed: false, state: 'retired' });
+      expect(f.hooks.publish).not.toHaveBeenCalled();
+      finish();
+      await jest.advanceTimersByTimeAsync(100);
+      expect(f.getter().allowed).toBe(false);
+      expect(() => f.routing.rebuild()).toThrow('terminal');
+    });
+
+    test('a routing generation retired during it ends the update blocked and unpublished', async () => {
+      let finish;
+      let entered;
+      const reloading = new Promise((resolve) => { entered = resolve; });
+      const f = await changedWith(() => new Promise((resolve) => { finish = resolve; entered(); }));
+      const update = f.routing.rebuild().catch((cause) => cause);
+      await reloading;
+      f.change('newer');
+      finish();
+      const error = await update;
+      expect(codes(error)).toEqual(expect.arrayContaining(['session_superseded']));
+      expect(f.getter().allowed).toBe(false);
+      expect(f.hooks.publish).not.toHaveBeenCalled();
+      // The newer generation is applied by its own update, not by the old one.
+      await f.routing.rebuild();
+      expect(f.getter().allowed).toBe(true);
+      expect(f.main.setProxy).toHaveBeenLastCalledWith({ mode: 'newer' });
+      expect(f.hooks.publish).toHaveBeenCalledTimes(1);
+    });
+
+    test('a session retired while its connections close gets no reload after the close', async () => {
+      let finish;
+      let entered;
+      const closing = new Promise((resolve) => { entered = resolve; });
+      const f = fixture();
+      const added = session();
+      await f.routing.rebuild();
+      await f.routing.enroll(added);
+      f.hooks.publish.mockClear();
+      added.forceReloadProxyConfig.mockClear();
+      added.closeAllConnections.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; entered(); }));
+      f.change('changed');
+      const update = f.routing.rebuild().catch((cause) => cause);
+      await closing;
+      const getter = f.controller.getPolicyGetter(added);
+      f.controller.unregister(added);
+      finish();
+      const error = await update;
+      expect(codes(error)).toEqual(expect.arrayContaining(['session_superseded']));
+      expect(added.forceReloadProxyConfig).toHaveBeenCalledTimes(1);
+      expect(getter()).toMatchObject({ allowed: false, state: 'retired' });
+      expect(f.hooks.publish).not.toHaveBeenCalled();
+    });
+
+    test('a session retired during it stays retired and the update publishes nothing', async () => {
+      let finish;
+      let entered;
+      const reloading = new Promise((resolve) => { entered = resolve; });
+      const f = fixture();
+      const added = session();
+      await f.routing.rebuild();
+      await f.routing.enroll(added);
+      f.hooks.publish.mockClear();
+      added.forceReloadProxyConfig.mockImplementationOnce(async () => {})
+        .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; entered(); }));
+      f.change('changed');
+      const update = f.routing.rebuild().catch((cause) => cause);
+      await reloading;
+      const getter = f.controller.getPolicyGetter(added);
+      f.controller.unregister(added);
+      finish();
+      const error = await update;
+      expect(codes(error)).toEqual(expect.arrayContaining(['session_superseded']));
+      expect(getter()).toMatchObject({ allowed: false, state: 'retired' });
+      expect(f.hooks.publish).not.toHaveBeenCalled();
+    });
   });
 
   test.each(['prepare', 'retire'])('shared %s timeout terminates after drainage and refuses late shared mutation', async (hook) => {
