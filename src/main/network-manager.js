@@ -659,6 +659,20 @@ async function prepareProxyPolicy(intent) {
 
 let torSocksEndpoint = null;
 let torRoutingConfigured = false;
+// Whether the committed policy sends Handshake names, single labels included,
+// to the guard. It follows routing, not the helper: a starting or recovering
+// helper is still behind the guard.
+let hnsGuardRouting = false;
+let hnsGuardRoutingObserver = null;
+
+function isHnsGuardRouting() {
+  return hnsGuardRouting;
+}
+
+function setHnsGuardRoutingObserver(observer) {
+  if (typeof observer !== 'function' || hnsGuardRoutingObserver) throw new TypeError('Invalid HNS guard routing observer');
+  hnsGuardRoutingObserver = observer;
+}
 
 const sessionDispatcherOptions = new WeakMap();
 
@@ -682,6 +696,10 @@ const routing = createSessionRoutingCoordinator(proxySessions, {
   publish: (policy) => {
     guardAllowed = policy.guardNeeded;
     if (guardAllowed) guardResources.publish();
+    if (hnsGuardRouting !== policy.guardNeeded) {
+      hnsGuardRouting = policy.guardNeeded;
+      try { hnsGuardRoutingObserver?.(hnsGuardRouting); } catch { /* Feedback has no routing authority. */ }
+    }
   },
   attach: (targetSession, getRequestPolicy) => attachWebRequestDispatcher(targetSession, { ...sessionDispatcherOptions.get(targetSession), getRequestPolicy }),
 });
@@ -903,6 +921,8 @@ module.exports = {
   unregisterProxySession,
   getHnsProxyAddr,
   getDvpnProxy,
+  isHnsGuardRouting,
+  setHnsGuardRoutingObserver,
   buildPacScript,
   getHnsDiscoveryUrl,
   fetchHnsNamespaces,

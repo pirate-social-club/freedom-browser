@@ -425,6 +425,30 @@ describe('network-manager', () => {
     );
   });
 
+  test('guard routing follows the committed policy, not the requested one or the helper', async () => {
+    const ctx = loadNetworkManagerModule();
+    const observed = jest.fn();
+    ctx.mod.setHnsGuardRoutingObserver(observed);
+    expect(() => ctx.mod.setHnsGuardRoutingObserver(jest.fn())).toThrow('Invalid HNS guard routing observer');
+    expect(ctx.mod.isHnsGuardRouting()).toBe(false);
+    // Requested but not yet committed: nothing changes until the rebuild.
+    ctx.mod.setHnsProtectionRequired(true);
+    expect(ctx.mod.isHnsGuardRouting()).toBe(false);
+    await ctx.mod.rebuild();
+    expect(ctx.mod.isHnsGuardRouting()).toBe(true);
+    expect(observed.mock.calls).toEqual([[true]]);
+    // The helper coming and going leaves names behind the guard.
+    ctx.mod.setHnsProxy('127.0.0.1:5380', { generation: 1, caFingerprint: 'ca' });
+    await ctx.mod.rebuild();
+    ctx.mod.clearHnsProxy();
+    await ctx.mod.rebuild();
+    expect(observed.mock.calls).toEqual([[true]]);
+    ctx.mod.setHnsProtectionRequired(false);
+    await ctx.mod.rebuild();
+    expect(ctx.mod.isHnsGuardRouting()).toBe(false);
+    expect(observed.mock.calls).toEqual([[true], [false]]);
+  });
+
   test('an unchanged root set withdraws no session and drains no guard connection', async () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380', { generation: 1, caFingerprint: 'ca' });

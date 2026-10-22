@@ -83,6 +83,8 @@ const registry = {
     // Namespace discovery (hns-manager.js): `fresh`, `stale` or `unavailable`,
     // when the list last arrived, and from which origin.
     discovery: { state: 'unavailable', lastSuccessAt: null, origin: null },
+    // Whether single labels route to the Handshake guard (hns-manager.js).
+    guardRouting: false,
   },
   dvpn: {
     api: null,

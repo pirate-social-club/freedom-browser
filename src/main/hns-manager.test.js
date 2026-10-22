@@ -84,6 +84,12 @@ function loadHnsManagerModule(options = {}) {
   // module registry is shared after loadMainModule's reset, so this is that set.
   const setImportedHnsRoots = jest.fn((roots) => require('../shared/hns-hosts').setDynamicHnsPublicSuffixes(roots));
   const getProxySessionPolicy = jest.fn(options.getProxySessionPolicy || (() => ({ allowed: true, generation: 1, state: 'ready' })));
+  let guardRouting = options.guardRouting ?? true;
+  let guardRoutingObserver = null;
+  const isHnsGuardRouting = jest.fn(() => guardRouting);
+  const setHnsGuardRoutingObserver = jest.fn((observer) => { guardRoutingObserver = observer; });
+  // Stands in for a routing policy commit that changes guard routing.
+  const commitGuardRouting = (value) => { guardRouting = value; guardRoutingObserver?.(value); };
   const canResolveHnsFallbackForHost = jest.fn(() => Promise.resolve(options.canResolveHnsFallbackForHost ?? false));
   const getHnsResolutionForHost = jest.fn(() => {
     if (Object.prototype.hasOwnProperty.call(options, 'hnsResolutionForHost')) {
@@ -198,6 +204,8 @@ function loadHnsManagerModule(options = {}) {
         fetchHnsNamespaces,
         setImportedHnsRoots,
         getProxySessionPolicy,
+        isHnsGuardRouting,
+        setHnsGuardRoutingObserver,
         getHnsResolutionForHost,
         canResolveHnsFallbackForHost,
         isHnsProxyHost,
@@ -262,6 +270,9 @@ function loadHnsManagerModule(options = {}) {
     fetchHnsNamespaces,
     setImportedHnsRoots,
     getProxySessionPolicy,
+    isHnsGuardRouting,
+    setHnsGuardRoutingObserver,
+    commitGuardRouting,
     getHnsResolutionForHost,
     canResolveHnsFallbackForHost,
     isHnsProxyHost,
@@ -1156,6 +1167,7 @@ describe('hns-manager namespace discovery', () => {
   const routed = (ctx) => ctx.setImportedHnsRoots.mock.calls.at(-1)?.[0];
   const discovery = (ctx) => updates(ctx, 'discovery').at(-1)?.[1].discovery;
   const published = (ctx) => updates(ctx, 'publicSuffixes').at(-1)?.[1].publicSuffixes;
+  const guardRouting = (ctx) => updates(ctx, 'guardRouting').at(-1)?.[1].guardRouting;
 
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => {
@@ -1425,11 +1437,13 @@ describe('hns-manager namespace discovery', () => {
     const ctx = load([listing(['8s28'], { lifetimeMs: 15 * MINUTE })]);
     await helperReady(ctx);
     await ctx.mod.stopHns();
-    // The cleared registry entry gets the live list and its state back.
+    // The cleared registry entry gets the live list, its state and the
+    // routing back.
     const clearedAt = ctx.clearService.mock.invocationCallOrder.at(-1);
     const afterClear = ctx.updateService.mock.calls.filter((_, i) => ctx.updateService.mock.invocationCallOrder[i] > clearedAt);
     expect(afterClear).toEqual([
       ['hns', { publicSuffixes: ['.pirate', '.8s28'], discovery: { state: 'fresh', lastSuccessAt: expect.any(String), origin: ORIGIN } }],
+      ['hns', { guardRouting: true }],
     ]);
 
     await jest.advanceTimersByTimeAsync(10 * MINUTE);
@@ -1461,6 +1475,40 @@ describe('hns-manager namespace discovery', () => {
     expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
     await jest.advanceTimersByTimeAsync(current + 10 * MINUTE - performance.now());
     expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(3);
+  });
+
+  // Contract v4 addendum 1: the renderer's single-label rule follows routing,
+  // on a platform that supports Handshake, and not the helper's health.
+  describe('guard routing for the renderer', () => {
+    test('follows each routing commit', () => {
+      const ctx = load();
+      expect(ctx.setHnsGuardRoutingObserver).toHaveBeenCalledTimes(1);
+      ctx.commitGuardRouting(true);
+      expect(guardRouting(ctx)).toBe(true);
+      ctx.commitGuardRouting(false);
+      expect(guardRouting(ctx)).toBe(false);
+    });
+
+    test('is never published where Handshake browsing is unsupported', () => {
+      const ctx = load([], { hnsSupported: false });
+      ctx.commitGuardRouting(true);
+      expect(guardRouting(ctx)).toBe(false);
+    });
+
+    test('stays on while the helper starts, fails and recovers', async () => {
+      const ctx = load([listing(['8s28'])]);
+      ctx.commitGuardRouting(true);
+      await ctx.mod.startHns();
+      expect(guardRouting(ctx)).toBe(true);
+      ctx.readlineHandlers.get('line')(JSON.stringify({ type: 'ready', proxyAddr: '127.0.0.1:44041', caPath: '/tmp/hns-ca.pem' }));
+      await flush();
+      // The helper reports an error and is torn down for a restart.
+      ctx.readlineHandlers.get('line')(JSON.stringify({ type: 'error' }));
+      await flush();
+      expect(ctx.clearService).toHaveBeenCalledWith('hns');
+      expect(guardRouting(ctx)).toBe(true);
+      expect(updates(ctx, 'guardRouting').every(([, update]) => update.guardRouting === true)).toBe(true);
+    });
   });
 });
 

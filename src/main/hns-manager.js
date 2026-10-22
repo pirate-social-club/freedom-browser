@@ -754,6 +754,15 @@ function getHnsDiscovery() {
   return { state, lastSuccessAt: hnsDiscoveryLastSuccessAt, origin: hnsDiscoveryOrigin };
 }
 
+// Whether a single label is a Handshake name for the renderer's error page
+// (contract v4 addendum 1): the platform supports Handshake browsing and the
+// committed routing policy sends such names to the guard. The helper's health
+// does not decide it.
+function publishHnsGuardRouting(routed = networkManager.isHnsGuardRouting()) {
+  updateService('hns', { guardRouting: hnsCapability.supported && routed === true });
+}
+networkManager.setHnsGuardRoutingObserver(publishHnsGuardRouting);
+
 // A synchronous scan of the whole history table on the main thread, so once
 // per helper generation, once imported roots have arrived, and never in the
 // way of a refresh.
@@ -1088,8 +1097,10 @@ async function stopHns({ recovering = false } = {}) {
   synced = false; canaryReady = false; height = 0; lastHeightChangeAt = 0;
   resetHnsReadiness(); hnsStderrLogState.clear();
   clearService('hns');
-  // The listed roots outlive the helper, so the renderer's copy does too.
+  // The listed roots and the routing outlive the helper, so the renderer's
+  // copy does too.
   updateService('hns', { publicSuffixes: getHnsPublicSuffixes(), discovery: getHnsDiscovery() });
+  publishHnsGuardRouting();
   updateState(STATUS.STOPPED);
   if (pendingStart && runtimeWanted && (!networkMonitor || networkMonitor.allowed())) {
     pendingStart = false;

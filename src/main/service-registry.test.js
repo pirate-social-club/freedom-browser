@@ -169,6 +169,7 @@ describe('service-registry', () => {
       height: 42000,
       publicSuffixes: ['.pirate', '.xn--pokmon-dva'],
       discovery: { state: 'fresh', lastSuccessAt: '2026-10-22T07:00:00.000Z', origin: 'https://api-next.pirate.sc' },
+      guardRouting: true,
     });
 
     mod.clearService('hns');
@@ -190,6 +191,7 @@ describe('service-registry', () => {
       syncProgress: 0,
       publicSuffixes: ['.pirate'],
       discovery: { state: 'unavailable', lastSuccessAt: null, origin: null },
+      guardRouting: false,
     });
   });
 

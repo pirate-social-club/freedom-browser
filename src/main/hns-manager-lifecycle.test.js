@@ -27,6 +27,8 @@ function fixture(options = {}) {
   network.fetchHnsNamespaces = async () => ({ generatedAt: 0, roots: new Map(), receivedAt: performance.now() });
   network.setImportedHnsRoots = (roots) => ['.pirate', ...roots.map((root) => `.${root}`)];
   network.getProxySessionPolicy = () => ({ allowed: true, generation: 1, state: 'ready' });
+  network.isHnsGuardRouting = () => true;
+  network.setHnsGuardRoutingObserver = () => {};
   const spawn = jest.fn(() => {
     const child = new EventEmitter(); child.pid = children.length + 100;
     child.stdout = new EventEmitter(); child.stderr = new EventEmitter();

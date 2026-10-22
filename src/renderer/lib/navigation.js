@@ -428,13 +428,14 @@ const buildErrorPageUrl = (errorCode, targetUrl, extras = {}) => {
 };
 
 // True when a failed load is a Handshake one, so it gets the Handshake error
-// page. Only http(s) loads qualify: ipfs:, ipns:, rad: and web3: hosts are
-// content identifiers, not names. A dotted host qualifies under any root the
-// shared rule (src/shared/hns-hosts.js) lists, `.pirate` included. A single
-// label is also an ordinary intranet name (`http://router/`), and goes
-// straight to system DNS where Handshake does not run or is off, so it
-// qualifies only when the Handshake guard refused its tunnel.
-const isHandshakeFailure = (value, errorDescription) => {
+// page (contract v4 addendum 1). Only http(s) loads qualify: other schemes
+// keep their own errors. A dotted host qualifies under any root the shared
+// rule (src/shared/hns-hosts.js) lists, `.pirate` included. A single label is
+// also an ordinary intranet name (`http://router/`), so it qualifies only
+// while Handshake routing is in effect: the main process publishes
+// `hns.guardRouting` when the platform supports Handshake and the committed
+// routing policy sends such names to the guard, whatever the helper's health.
+const isHandshakeFailure = (value) => {
   let url;
   try {
     url = new URL(value);
@@ -443,7 +444,7 @@ const isHandshakeFailure = (value, errorDescription) => {
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
   if (globalThis.FREEDOM_HNS_HOSTS?.isHnsHost?.(url.hostname) !== true) return false;
-  return url.hostname.includes('.') || errorDescription === 'ERR_TUNNEL_CONNECTION_FAILED';
+  return url.hostname.includes('.') || state.registry?.hns?.guardRouting === true;
 };
 
 // True when the IPFS node can't currently serve content — disabled for this
@@ -3344,7 +3345,7 @@ export const initNavigation = () => {
           const failedUrl = data.event.validatedURL || data.event.url || '';
           errorUrl.searchParams.set('error', data.event.errorDescription || data.event.errorCode);
           errorUrl.searchParams.set('url', failedUrl);
-          if (isHandshakeFailure(failedUrl, data.event.errorDescription)) errorUrl.searchParams.set('protocol', 'hns');
+          if (isHandshakeFailure(failedUrl)) errorUrl.searchParams.set('protocol', 'hns');
           webview.loadURL(errorUrl.toString());
         }
 
