@@ -19,6 +19,13 @@
 // and can change, in which case pass the current ones rather than loosening
 // the check. FREEDOM_E2E_HNS_UNCLAIMED names a host under a served root that
 // no community or member owns; the gateway must refuse it.
+//
+// The test profile reads the staging namespace list
+// (FREEDOM_TEST_HNS_DISCOVERY_ORIGIN, honoured for FREEDOM_TEST_USER_DATA
+// profiles only), and each launch must report that list `fresh`, with every
+// root the hosts above sit under on it, before anything is browsed. So this
+// gate cannot pass until staging serves /public/hns/namespaces/v1. Hosted CI
+// never runs it.
 
 const fs = require('fs');
 const os = require('os');
@@ -53,6 +60,13 @@ function configuredHosts() {
 
 const HOSTS = configuredHosts();
 const UNCLAIMED = (process.env.FREEDOM_E2E_HNS_UNCLAIMED || `nobody-${Date.now().toString(36)}.8s28`).toLowerCase();
+
+const STAGING_DISCOVERY_ORIGIN = 'https://api-next-staging.pirate.sc';
+// The imported roots this run browses; `pirate` is built in, never listed.
+const BROWSED_ROOTS = [...new Set([...HOSTS.map(([host]) => host), UNCLAIMED].map((host) => host.split('.').pop()))]
+  .filter((root) => root !== 'pirate');
+// Discovery starts at helper-ready, long before the first chain sync ends.
+const DISCOVERY_TIMEOUT_MS = 2 * 60_000;
 
 // The first navigation also waits out hnsd's initial chain sync from the
 // packaged checkpoint, which took about half a minute on the owner's machine.
@@ -108,6 +122,27 @@ async function expectRendered(window, host, titlePattern, timeout) {
   throw new Error(`${host} did not render a page titled /${titlePattern}/ within ${timeout} ms; last seen ${JSON.stringify(last)}`);
 }
 
+// The `discovery` field and root set the app published (service-registry.js):
+// the staging list must have arrived (`fresh`) and name every browsed root.
+async function expectStagingDiscovery(window, phase) {
+  const deadline = Date.now() + DISCOVERY_TIMEOUT_MS;
+  let seen = null;
+  while (Date.now() < deadline) {
+    seen = await window.evaluate(async () => {
+      const hns = (await window.serviceRegistry.getRegistry()).hns || {};
+      return { discovery: hns.discovery ?? null, publicSuffixes: hns.publicSuffixes ?? [] };
+    });
+    if (seen.discovery?.state === 'fresh' && BROWSED_ROOTS.every((root) => seen.publicSuffixes.includes(`.${root}`))) {
+      return seen;
+    }
+    await window.waitForTimeout(1_000);
+  }
+  throw new Error(
+    `staging discovery did not reach fresh listing ${BROWSED_ROOTS.join(', ')} within ${DISCOVERY_TIMEOUT_MS} ms ` +
+      `(${phase}); last seen ${JSON.stringify(seen)}`
+  );
+}
+
 async function launch(dirs) {
   const app = await launchApp({
     ...packagedLaunchTarget(),
@@ -115,6 +150,7 @@ async function launch(dirs) {
     env: {
       ...process.env,
       FREEDOM_TEST_USER_DATA: dirs.userData,
+      FREEDOM_TEST_HNS_DISCOVERY_ORIGIN: STAGING_DISCOVERY_ORIGIN,
       FREEDOM_ANT_DATA: dirs.ant,
       FREEDOM_IPFS_DATA: dirs.ipfs,
       FREEDOM_IDENTITY_DATA: dirs.identity,
@@ -218,6 +254,8 @@ test.describe('installed HNS browsing', () => {
       for (const phase of ['first launch', 'after full restart']) {
         session = await launch(dirs);
         const { window } = session;
+        const discovered = await expectStagingDiscovery(window, phase);
+        test.info().annotations.push({ type: phase, description: `discovery: ${JSON.stringify(discovered)}` });
         let first = true;
         for (const [host, title] of HOSTS) {
           const seen = await expectRendered(window, host, title, first ? FIRST_RENDER_TIMEOUT_MS : RENDER_TIMEOUT_MS);
