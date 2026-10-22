@@ -1,9 +1,11 @@
 const http = require('http');
+const path = require('path');
 const { expect } = require('@playwright/test');
 const { evalInActiveWebview, loadInActiveWebview } = require('./installed-acceptance');
+const { snapshotHttpCache } = require('./http-cache-snapshot');
 
-async function readHttpCache(window) {
-  return window.evaluate(async () => {
+async function readHttpCache(window, { evidence, phase } = {}) {
+  const state = await window.evaluate(async () => {
     const guest = document.querySelector('webview:not(.hidden)');
     if (!guest) throw new Error('No active webview for HTTP cache evidence');
     return {
@@ -11,6 +13,11 @@ async function readHttpCache(window) {
       ...(await window.electronAPI.getAcceptanceHttpCacheState()),
     };
   });
+  if (evidence) {
+    state.snapshots = state.caches.map((cache, index) =>
+      snapshotHttpCache(cache, path.join(evidence, 'http-cache', phase, `session-${index}`)));
+  }
+  return state;
 }
 
 function activeCache(state) {
@@ -19,18 +26,27 @@ function activeCache(state) {
   return state.caches[guest.sessionIndex];
 }
 
-function expectEmptyHttpCache(state, url, phase) {
+function expectHttpCacheMiss(state, url, phase) {
   activeCache(state);
   expect(state.caches.length, 'at least one actual browser session was measured').toBeGreaterThan(0);
-  for (const cache of state.caches) {
-    expect(cache.sizeBytes, `${url} must be absent from the entire HTTP cache ${phase}: ${JSON.stringify(cache)}`).toBe(0);
+  const reference = new URL(url).hostname.toLowerCase();
+  for (const [index, cache] of state.caches.entries()) {
+    if (!cache.persistent) {
+      expect(cache.sizeBytes, `an in-memory HTTP cache must be empty ${phase}`).toBe(0);
+    } else {
+      const snapshot = state.snapshots?.[index];
+      expect(snapshot, 'the persistent HTTP cache was copied and parsed').toBeTruthy();
+      if (!snapshot.exists) expect(cache.sizeBytes, 'a missing disk cache must also be empty natively').toBe(0);
+      const matches = snapshot.entries.filter((entry) => entry.key.toLowerCase().includes(reference));
+      expect(matches, `${url} must have no HTTP cache key ${phase}`).toEqual([]);
+    }
   }
 }
 
 // After B's control is complete, put a cacheable response into the SAME
 // guest session. Its native size must increase, and a cache-only read must
 // work with the server closed. Never clear or disable a cache to make B cold.
-async function verifyHttpCacheMeasurement(window, coldState) {
+async function verifyHttpCacheMeasurement(window, coldState, evidence) {
   const body = 'Freedom HTTP cache measurement positive control';
   let requests = 0;
   const server = http.createServer((req, res) => {
@@ -55,7 +71,8 @@ async function verifyHttpCacheMeasurement(window, coldState) {
     await expect.poll(async () => {
       state = await readHttpCache(window);
       return activeCache(state).sizeBytes;
-    }, { message: 'the native measurement detects a real cache entry in the tested session', timeout: 10_000 }).toBeGreaterThan(0);
+    }, { message: 'the native measurement detects added cached content in the tested session', timeout: 10_000 })
+      .toBeGreaterThan(activeCache(coldState).sizeBytes);
     expect(state.activeWebContentsId, 'the positive control uses the same webview').toBe(coldState.activeWebContentsId);
     expect(activeCache(state)).toMatchObject({
       persistent: activeCache(coldState).persistent,
@@ -67,6 +84,10 @@ async function verifyHttpCacheMeasurement(window, coldState) {
       '({ status: response.status, body: await response.text() }))');
     expect(cached).toEqual({ status: 200, body });
     expect(requests, 'the cache-only read did not contact the stopped server').toBe(1);
+    state = await readHttpCache(window, { evidence, phase: 'positive-control' });
+    const guest = state.contents.find((wc) => wc.id === state.activeWebContentsId);
+    expect(state.snapshots[guest.sessionIndex].entries.some((entry) => entry.key.endsWith(url)),
+      'the parser detects the known live HTTP cache key in the same session').toBe(true);
     return { url, requests, state, cacheOnlyRead: cached, serverClosed: true };
   } finally {
     if (server.listening) {
@@ -76,4 +97,4 @@ async function verifyHttpCacheMeasurement(window, coldState) {
   }
 }
 
-module.exports = { readHttpCache, expectEmptyHttpCache, verifyHttpCacheMeasurement };
+module.exports = { readHttpCache, expectHttpCacheMiss, verifyHttpCacheMeasurement };

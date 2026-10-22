@@ -68,7 +68,7 @@ const path = require('path');
 const { test, expect } = require('@playwright/test');
 const { closeApp } = require('../close-app');
 const { watchProcessExit } = require('../live-fixtures');
-const { readHttpCache, expectEmptyHttpCache, verifyHttpCacheMeasurement } = require('./http-cache-evidence');
+const { readHttpCache, expectHttpCacheMiss, verifyHttpCacheMeasurement } = require('./http-cache-evidence');
 const {
   NODES_OFF,
   installedResourcesDir,
@@ -317,9 +317,9 @@ test.describe('installed IPFS retrieval', () => {
 
       // Cold negative control: B through the address bar, then a direct load.
       const bUrl = `ipfs://${B.cid}`;
-      summary.httpCacheBeforeB = await readHttpCache(window);
+      summary.httpCacheBeforeB = await readHttpCache(window, { evidence, phase: 'before-B' });
       record();
-      expectEmptyHttpCache(summary.httpCacheBeforeB, bUrl, 'before the negative control');
+      expectHttpCacheMiss(summary.httpCacheBeforeB, bUrl, 'before the negative control');
       const bDocs = await watchDocuments(app, (url) => url.startsWith(bUrl));
       const reads = [];
       reads.push({ phase: 'before the address-bar request', ...(await readNodeState(window, 'ipfs')) });
@@ -340,9 +340,9 @@ test.describe('installed IPFS retrieval', () => {
       summary.directB = { ...describeDocument(direct), body: direct.body ? direct.body.toString('utf8') : null };
       summary.negativeControlReads = reads;
       summary.documentsB = bDocs.documents.map(describeDocument);
-      summary.httpCacheAfterB = await readHttpCache(window);
+      summary.httpCacheAfterB = await readHttpCache(window, { evidence, phase: 'after-B' });
       record();
-      expectEmptyHttpCache(summary.httpCacheAfterB, bUrl, 'after the negative control');
+      expectHttpCacheMiss(summary.httpCacheAfterB, bUrl, 'after the negative control');
 
       expect(summary.addressBarB.protocol, 'the error page is the IPFS node-down page').toBe('ipfs');
       expect(summary.addressBarDocumentsB, 'the address bar sent no request for B to the handler').toEqual([]);
@@ -355,7 +355,7 @@ test.describe('installed IPFS retrieval', () => {
         expect(read.status, `the node stays stopped ${read.phase}`).toBe('stopped');
       }
 
-      summary.httpCachePositiveControl = await verifyHttpCacheMeasurement(window, summary.httpCacheAfterB);
+      summary.httpCachePositiveControl = await verifyHttpCacheMeasurement(window, summary.httpCacheAfterB, evidence);
       record();
 
       // 5. Shutdown and orphans.
