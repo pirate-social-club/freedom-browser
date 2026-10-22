@@ -7,13 +7,18 @@
  * options on fakes; only a real main process shows what Chromium does with
  * them: which proxy its own PAC engine picks, which names its resolver is
  * actually asked for, and what `session.fetch` puts on the wire. This probe
- * drives the real fetch, list parser and session routing.
+ * drives the real fetch, list parser, session routing and startup Blink
+ * settings (`blink-settings.js`, applied here exactly as `src/main/index.js`
+ * applies it, before the app is ready). With
+ * FREEDOM_PROBE_WITHOUT_BLINK_SETTINGS=1 it leaves them out instead: that run
+ * is the control which shows the page's prefetch hints do reach the resolver
+ * when nothing stops them.
  *
  * Nothing leaves the machine:
  *   - Chromium's resolver runs in secure mode against one local
  *     DNS-over-HTTPS server (`app.configureHostResolver`), so every name it
- *     looks up, the PAC's `isResolvable` and any pre-resolution included,
- *     arrives there and is recorded. Secure mode never falls back to the
+ *     looks up, the PAC's `isResolvable` and any prefetch included, arrives
+ *     there and is recorded in order. Secure mode never falls back to the
  *     system resolver. The server's name, `doh.certprobe.test`, is mapped to
  *     127.0.0.1 by `--host-resolver-rules` and is the only name trusted, with
  *     the throwaway certificate in `test/fixtures/cert-verify-concurrency-tls/`.
@@ -22,14 +27,17 @@
  *     every name. Every address it gives is 127.0.0.1;
  *   - a fake discovery server on 127.0.0.1 serves api-next's list shape, plus
  *     a redirect, a stalled body and an oversized one;
- *   - a page server on 127.0.0.1 serves the page whose hints and subresources
- *     a hidden window loads;
+ *   - a page server on 127.0.0.1 serves a host page with two <webview>
+ *     guests, one on the default session and one on an in-memory
+ *     `private-<uuid>` partition like a private window's, and the page each
+ *     guest loads, with dns-prefetch hints in its HTML and in a `Link:`
+ *     response header;
  *   - the HNS guard runs with no helper behind it, so it refuses every name it
  *     is sent.
  *
  * Roots: `hnsprobe` is listed by the first refresh, `laterprobe` only by a
- * later one, and `unlistedprobe` never. None is an ICANN TLD or otherwise
- * reserved.
+ * later one, `extraprobe` by the routing loop, and `unlistedprobe` never.
+ * `pirate` is built in. None of them is an ICANN TLD or otherwise reserved.
  *
  * Results are printed as one JSON line prefixed with `PROBE-RESULT `.
  */
@@ -43,13 +51,20 @@ const net = require('net');
 const os = require('os');
 const path = require('path');
 
+const WITHOUT_BLINK_SETTINGS = process.env.FREEDOM_PROBE_WITHOUT_BLINK_SETTINGS === '1';
+if (!WITHOUT_BLINK_SETTINGS) require('../../blink-settings').applyBlinkSettings(app);
+
 const DOH_HOST = 'doh.certprobe.test';
 const LISTED = 'hnsprobe';
 const LATER = 'laterprobe';
+const EXTRA = 'extraprobe';
 const UNLISTED = 'unlistedprobe';
+const PIRATE = 'pirate';
 // The names that exist while the resolver answers as an ordinary one.
 const ORDINARY_NAMES = new Set([`www.${LISTED}`, `app.${LATER}`, `app.${LISTED}`, `www.${UNLISTED}`]);
 const DISCOVERY_PATH = '/public/hns/namespaces/v1';
+const GUESTS = ['default', 'private'];
+const ROUTING_ROUNDS = 20;
 
 app.commandLine.appendSwitch('host-resolver-rules', `MAP ${DOH_HOST} 127.0.0.1`);
 // The probe's one window closes half way through; the app must outlive it.
@@ -170,17 +185,43 @@ function startDiscovery() {
 
 // ---- The page server --------------------------------------------------------
 
-function startPages(closedPortNumber) {
+// The hinted names each guest's page carries, by hint form. `img` names are
+// fetched, after every hint: the unlisted one is the control that reaches the
+// resolver whether or not prefetching is on.
+function hintedNames(guest) {
+  return {
+    header: [LISTED, PIRATE, UNLISTED].map((root) => `header-${guest}.${root}`),
+    html: [LISTED, PIRATE, UNLISTED].map((root) => `html-${guest}.${root}`),
+    img: [LISTED, PIRATE, UNLISTED].map((root) => `img-${guest}.${root}`),
+  };
+}
+
+function startPages(closedPortNumber, privatePartition) {
   const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    const [, kind, guest] = req.url.split('/');
+    if (kind === 'host') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(
+        '<!doctype html><title>host</title>' +
+          `<webview id="default" src="/hints/default"></webview>` +
+          `<webview id="private" partition="${privatePartition}" src="/hints/private"></webview>`
+      );
+      return;
+    }
+    if (kind !== 'hints' || !GUESTS.includes(guest)) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+    const names = hintedNames(guest);
+    res.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      link: names.header.map((name) => `<//${name}>; rel=dns-prefetch`).join(', '),
+    });
     res.end(
-      '<!doctype html><title>hints</title>' +
-        `<link rel="dns-prefetch" href="//prefetch.${LISTED}">` +
-        `<link rel="dns-prefetch" href="//prefetch.${UNLISTED}">` +
-        `<link rel="preconnect" href="https://preconnect.${LISTED}">` +
-        `<img src="https://img.${LISTED}/x.png">` +
-        `<img src="https://img.${UNLISTED}:${closedPortNumber}/x.png">` +
-        `<a href="https://anchor.${LISTED}/">listed</a>`
+      `<!doctype html><title>hints ${guest}</title>` +
+        names.html.map((name) => `<link rel="dns-prefetch" href="//${name}">`).join('') +
+        names.img.map((name) => `<img src="https://${name}:${closedPortNumber}/x.png">`).join('')
     );
   });
   return listen(server);
@@ -208,16 +249,30 @@ function within(promise, ms) {
   ]);
 }
 
+// Resolves once `predicate()` holds, or after `ms`; reports which, and when.
+async function until(predicate, ms) {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started >= ms) return { met: false, ms: Date.now() - started };
+    await settle(25);
+  }
+  return { met: true, ms: Date.now() - started };
+}
+
 async function main() {
   const resolverPort = await startResolver();
   const discoveryPort = await startDiscovery();
   const closed = await closedPort();
-  const pagePort = await startPages(closed);
+  const privatePartition = `private-${crypto.randomUUID()}`;
+  const pagePort = await startPages(closed, privatePartition);
   const discoveryOrigin = `http://127.0.0.1:${discoveryPort}`;
 
   const ses = session.defaultSession;
-  ses.setSpellCheckerLanguages([]);
-  ses.setCertificateVerifyProc((request, callback) => callback(request.hostname === DOH_HOST ? 0 : -3));
+  const privateSession = session.fromPartition(privatePartition);
+  for (const target of [ses, privateSession]) {
+    target.setSpellCheckerLanguages([]);
+    target.setCertificateVerifyProc((request, callback) => callback(request.hostname === DOH_HOST ? 0 : -3));
+  }
   app.configureHostResolver({
     secureDnsMode: 'secure',
     secureDnsServers: [`https://${DOH_HOST}:${resolverPort}/dns-query`],
@@ -247,6 +302,7 @@ async function main() {
 
   const results = {
     electron: process.versions.electron,
+    blinkSettings: app.commandLine.getSwitchValue('blink-settings'),
     guard: `PROXY ${networkManager.getHnsProxyAddr()}`,
   };
 
@@ -270,22 +326,53 @@ async function main() {
   }));
   fabricate = false;
 
-  // ---- 4. Real traffic: is anything under a listed root looked up? -------
-  results.traffic = await observe(async () => {
-    const fetched = await within(ses.fetch(`https://fetch.${LISTED}/`), 10_000);
-    const unlistedFetched = await within(ses.fetch(`https://fetch.${UNLISTED}:${closed}/`), 10_000);
-    const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
-    try {
-      const page = await within(win.loadURL(`http://127.0.0.1:${pagePort}/hints`), 10_000);
-      await settle(1_500);
-      const navigated = await within(win.loadURL(`https://nav.${LISTED}/`), 10_000);
-      return { fetched, unlistedFetched, page, navigated };
-    } finally {
-      win.destroy();
-    }
-  });
+  // ---- 4. Fetches from the main process ------------------------------------
+  results.fetches = await observe(async () => ({
+    listed: await within(ses.fetch(`https://fetch.${LISTED}/`), 10_000),
+    pirate: await within(ses.fetch(`https://fetch.${PIRATE}/`), 10_000),
+    unlisted: await within(ses.fetch(`https://fetch.${UNLISTED}:${closed}/`), 10_000),
+  }));
 
-  // ---- 5. What the discovery request itself sends -------------------------
+  // ---- 5. Pages in a normal and a private-window <webview> ------------------
+  // The private guest's partition is enrolled in routing the way a private
+  // window's is, before anything loads on it.
+  await networkManager.registerProxySession(privateSession);
+  dnsQueries.length = 0;
+  const guests = new Map();
+  const host = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, webviewTag: true } });
+  host.webContents.on('did-attach-webview', (_event, guest) => {
+    guests.set(guest.session === privateSession ? 'private' : 'default', guest);
+  });
+  const hostLoad = await within(host.loadURL(`http://127.0.0.1:${pagePort}/host`), 10_000);
+  // Each page's hints come before its images, and the control run shows their
+  // lookups arriving first, so once the unlisted image has been looked up for
+  // both guests every hint has been acted on. The control run also waits for
+  // the default guest's unlisted hints themselves. An in-memory partition
+  // makes no prefetch lookup even with prefetching on (measured on Electron
+  // 44.9.3), so it waits for none from the private guest.
+  const awaited = [
+    ...GUESTS.map((guest) => `img-${guest}.${UNLISTED}`),
+    ...(WITHOUT_BLINK_SETTINGS ? [`html-default.${UNLISTED}`, `header-default.${UNLISTED}`] : []),
+  ];
+  const pagesSeen = await until(() => awaited.every((name) => dnsQueries.includes(name)), 15_000);
+  const navigated = {};
+  for (const guest of GUESTS) {
+    const contents = guests.get(guest);
+    navigated[guest] = contents
+      ? await within(contents.loadURL(`https://nav-${guest}.${LISTED}/`), 10_000)
+      : { missing: true };
+  }
+  await settle(200);
+  results.pages = {
+    hostLoad,
+    pagesSeen,
+    guestSessions: Object.fromEntries([...guests].map(([guest, contents]) => [guest, contents.session === privateSession ? 'private' : 'default'])),
+    navigated,
+    queriedInOrder: [...dnsQueries],
+  };
+  host.destroy();
+
+  // ---- 6. What the discovery request itself sends -------------------------
   await ses.cookies.set({ url: discoveryOrigin, name: 'probe-session', value: 'probe-cookie' });
   discoveryRequests.length = 0;
   // The control: the same session's default fetch does send the cookie.
@@ -300,27 +387,40 @@ async function main() {
     headerNames: discoveryRequests.map((entry) => Object.keys(entry.headers).sort()),
   };
   discoveryRequests.length = 0;
-  results.redirect = {
-    ...(await within(networkManager.fetchHnsNamespaces({ url: `${discoveryOrigin}/redirect` }), 10_000)),
-    paths: [],
-  };
+  results.redirect = await within(networkManager.fetchHnsNamespaces({ url: `${discoveryOrigin}/redirect` }), 10_000);
   results.redirect.paths = discoveryRequests.map((entry) => entry.path);
   const stallStarted = Date.now();
   results.stall = await within(networkManager.fetchHnsNamespaces({ url: `${discoveryOrigin}/stall` }), 10_000);
   results.stall.ms = Date.now() - stallStarted;
   results.oversized = await within(networkManager.fetchHnsNamespaces({ url: `${discoveryOrigin}/oversized` }), 10_000);
 
-  // ---- 6. A root added after the last refresh -----------------------------
-  const enrolled = session.fromPartition(`probe-private-${crypto.randomUUID()}`);
+  // ---- 7. A root added after the last refresh -----------------------------
+  // Read straight after the refresh, with no wait: once a rebuild resolves,
+  // every session's routing must already answer.
+  const enrolled = session.fromPartition(`probe-enrolled-${crypto.randomUUID()}`);
   enrolled.setSpellCheckerLanguages([]);
   await networkManager.registerProxySession(enrolled);
+  const sessions = { defaultSession: ses, enrolled, privateSession };
+  const routeAll = async (name) => Object.fromEntries(await Promise.all(
+    Object.entries(sessions).map(async ([label, target]) => [label, await route(name, target)])
+  ));
   results.addedRoot = { before: await route(`app.${LATER}`) };
   listedRoots = [LISTED, LATER];
   results.addedRoot.refresh = await refresh();
-  results.addedRoot.after = await observe(async () => ({
-    defaultSession: await route(`app.${LATER}`),
-    enrolled: await route(`app.${LATER}`, enrolled),
-  }));
+  results.addedRoot.after = await observe(async () => routeAll(`app.${LATER}`));
+
+  // ---- 8. Repeated root-set changes, read straight after each one ---------
+  // Each change rebuilds and reloads every session's PAC; a lookup that fails
+  // right after one is a session left without its routing.
+  const failures = [];
+  for (let round = 0; round < ROUTING_ROUNDS; round += 1) {
+    networkManager.setImportedHnsRoots(round % 2 ? [LISTED, LATER] : [LISTED, LATER, EXTRA]);
+    await networkManager.rebuild();
+    for (const [label, answer] of Object.entries(await routeAll(`app.${LISTED}`))) {
+      if (answer !== results.guard) failures.push({ round, session: label, answer });
+    }
+  }
+  results.routingRounds = { rounds: ROUTING_ROUNDS, sessions: Object.keys(sessions), failures };
 
   results.fatal = fatal;
   process.stdout.write(`PROBE-RESULT ${JSON.stringify(results)}\n`);

@@ -2,14 +2,19 @@
  * Integration test: namespace discovery decides, in Chromium itself, which
  * names go to the Handshake guard without an ordinary DNS lookup first
  * (`src/main/network-manager.js`, `fetchHnsNamespaces` and
- * `setImportedHnsRoots`), and its own request carries no cookie, takes no
- * redirect and keeps no cache.
+ * `setImportedHnsRoots`); no page can have such a name looked up through a
+ * prefetch hint (`src/main/blink-settings.js`); every session answers right
+ * after a root-set change (`src/main/session-proxy-controller.js`); and the
+ * discovery request carries no cookie, takes no redirect and keeps no cache.
  *
- * The unit suites pin the PAC text and the fetch options on fakes, and infer
- * from the PAC that a listed root is never looked up. This spawns Electron on
- * `hns-namespace-discovery-electron-probe.js`, which runs Chromium's resolver
- * against a local DNS-over-HTTPS server so every lookup is seen where it is
- * made, rather than inferred, and asserts the probe's report. Nothing it dials
+ * The unit suites pin the PAC text, the switch and the fetch options on
+ * fakes, and infer from the PAC that a listed root is never looked up. This
+ * spawns Electron on `hns-namespace-discovery-electron-probe.js`, which runs
+ * Chromium's resolver against a local DNS-over-HTTPS server so every lookup
+ * is seen where it is made, rather than inferred, and asserts the probe's
+ * report. It runs the probe twice: as Freedom starts, and once more without
+ * the startup Blink settings, the control that shows the page's prefetch
+ * hints do reach the resolver when nothing stops them. Nothing it dials
  * leaves the machine.
  *
  * Skipped when the Electron binary cannot be resolved; the `ipfs-gateway-proxy`
@@ -47,18 +52,21 @@ const describeWithElectron = ELECTRON_PATH ? describe : describe.skip;
 const PROBE = path.join(__dirname, 'hns-namespace-discovery-electron-probe.js');
 const PROBE_TIMEOUT_MS = 90_000;
 const LISTED = 'hnsprobe';
+const PIRATE = 'pirate';
 const UNLISTED = 'unlistedprobe';
+const GUESTS = ['default', 'private'];
 
 const under = (root) => (name) => name === root || name.endsWith(`.${root}`);
+const isHint = (name) => /^(header|html)-/.test(name);
 
-function runProbe() {
+function runProbe(env = {}) {
   return new Promise((resolve, reject) => {
     // Owned here, not by the probe: Electron's GPU and Crashpad children can
     // recreate it after the probe exits, and a SIGKILL runs no handler.
     const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-hns-discovery-probe-'));
     const child = spawn(ELECTRON_PATH, ['--no-sandbox', '--headless', PROBE], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '', FREEDOM_PROBE_USER_DATA: userData },
+      env: { ...process.env, ...env, ELECTRON_RUN_AS_NODE: '', FREEDOM_PROBE_USER_DATA: userData },
     });
     child.on('close', () => fs.rmSync(userData, { recursive: true, force: true }));
     let stdout = '';
@@ -91,15 +99,19 @@ function runProbe() {
 
 describeWithElectron('HNS namespace discovery in a real Electron process', () => {
   let results;
+  let control;
 
   beforeAll(async () => {
     results = await runProbe();
-  }, PROBE_TIMEOUT_MS);
+    control = await runProbe({ FREEDOM_PROBE_WITHOUT_BLINK_SETTINGS: '1' });
+  }, 2 * PROBE_TIMEOUT_MS);
 
-  test('runs on a live guard with no routing failure', () => {
+  test('runs on a live guard with no routing failure, and starts with prefetching off', () => {
     expect(results.guard).toMatch(/^PROXY 127\.0\.0\.1:\d+$/);
     expect(results.fatal).toBeNull();
     expect(results.firstRefresh).toEqual([LISTED]);
+    expect(results.blinkSettings).toBe('dnsPrefetchingEnabled=false');
+    expect(control.blinkSettings).toBe('');
   });
 
   // The baseline the list exists to change: with only `.pirate` built in, a
@@ -125,30 +137,53 @@ describeWithElectron('HNS namespace discovery in a real Electron process', () =>
   });
 
   // Observed at the resolver, so a lookup Chromium makes before or beside the
-  // PAC would show here: a fetch, a navigation, a subresource and a preconnect.
-  test('no traffic under a listed root is looked up at the resolver', () => {
-    const { traffic } = results;
-    expect(traffic.fetched.error).toMatch(/ERR_TUNNEL_CONNECTION_FAILED/);
-    expect(traffic.navigated.error).toMatch(/ERR_TUNNEL_CONNECTION_FAILED/);
-    expect(traffic.page).toEqual({});
-    expect(traffic.queried.filter(under(LISTED)).filter((name) => name !== `prefetch.${LISTED}`)).toEqual([]);
+  // PAC would show here. The unlisted fetch is the control that is seen.
+  test('a fetch under a listed root or .pirate is not looked up, and an unlisted one is', () => {
+    const { fetches } = results;
+    for (const leg of ['listed', 'pirate', 'unlisted']) {
+      expect(fetches[leg].error).toMatch(/ERR_TUNNEL_CONNECTION_FAILED/);
+    }
+    expect(fetches.queried).toEqual([`fetch.${UNLISTED}`]);
   });
 
-  // The control: the same traffic for an unlisted root is seen there, so the
-  // empty list above is an observation, not a blind spot.
-  test('the same traffic under an unlisted root is seen at the resolver', () => {
-    expect(results.traffic.queried).toEqual(expect.arrayContaining([
-      `fetch.${UNLISTED}`, `img.${UNLISTED}`, `prefetch.${UNLISTED}`,
-    ]));
+  test('both pages load, in a default-session webview and a private-window partition webview', () => {
+    for (const run of [results, control]) {
+      expect(run.pages.hostLoad).toEqual({});
+      expect(run.pages.pagesSeen.met).toBe(true);
+      expect(run.pages.guestSessions).toEqual({ default: 'default', private: 'private' });
+      for (const guest of GUESTS) {
+        expect(run.pages.navigated[guest].error).toMatch(/ERR_TUNNEL_CONNECTION_FAILED/);
+      }
+    }
   });
 
-  // Known gap, not closed by discovery: Chromium resolves a page's
-  // `<link rel="dns-prefetch">` hint without consulting the PAC, so a page can
-  // still have any name, listed or not, looked up in ordinary DNS. Measured on
-  // Electron 44.9.3 in a plain window. This fails once that is closed, and
-  // should then become an ordinary test.
-  test.failing('nor is a dns-prefetch hint for a name under a listed root', () => {
-    expect(results.traffic.queried).not.toContain(`prefetch.${LISTED}`);
+  // The control: without the startup settings, a page's dns-prefetch hints,
+  // in its HTML and in a `Link:` header, are looked up for every root, before
+  // the image the page fetches after them. That is what makes the waits and
+  // absences below observations. An in-memory partition prefetches nothing
+  // even then, so the private guest's hints are not part of this control.
+  test('without the startup settings, prefetch hints are looked up, before the page fetches anything', () => {
+    const queried = control.pages.queriedInOrder;
+    const image = queried.indexOf(`img-default.${UNLISTED}`);
+    expect(image).toBeGreaterThan(-1);
+    for (const form of ['header', 'html']) {
+      for (const root of [LISTED, PIRATE, UNLISTED]) {
+        const hint = queried.indexOf(`${form}-default.${root}`);
+        expect(hint).toBeGreaterThan(-1);
+        expect(hint).toBeLessThan(image);
+      }
+    }
+    expect(queried.filter((name) => isHint(name) && name.includes('-private.'))).toEqual([]);
+  });
+
+  test('as Freedom starts, no page has a name under a listed root or .pirate looked up, from a hint or a load', () => {
+    const queried = [...new Set(results.pages.queriedInOrder)];
+    expect(queried.filter(under(LISTED))).toEqual([]);
+    expect(queried.filter(under(PIRATE))).toEqual([]);
+    // Prefetching is off altogether, for unlisted names too.
+    expect(queried.filter(isHint)).toEqual([]);
+    // The controls: each guest's unlisted image, fetched after its hints, is seen.
+    expect(queried.sort()).toEqual(GUESTS.map((guest) => `img-${guest}.${UNLISTED}`).sort());
   });
 
   test('the request sends no cookie or header of its own and is never cached', () => {
@@ -178,13 +213,28 @@ describeWithElectron('HNS namespace discovery in a real Electron process', () =>
   });
 
   // hns-manager.test.js pins the next refresh to 10 minutes after the last;
-  // this shows that refresh is all a new root needs, on every session.
+  // this shows that refresh is all a new root needs, on every session, read
+  // straight after it with no wait.
   test('a root added after the last refresh goes to the guard at the next one', () => {
     const { addedRoot } = results;
     expect(addedRoot.before).toBe('DIRECT');
     expect(addedRoot.refresh).toEqual([LISTED, 'laterprobe']);
-    expect(addedRoot.after.defaultSession).toBe(results.guard);
-    expect(addedRoot.after.enrolled).toBe(results.guard);
-    expect(addedRoot.after.queried).toEqual([]);
+    expect(addedRoot.after).toEqual({
+      defaultSession: results.guard,
+      enrolled: results.guard,
+      privateSession: results.guard,
+      queried: [],
+    });
+  });
+
+  // Each change reloads every session's PAC and closes its connections; a
+  // close that aborted the PAC fetch used to leave a session failing every
+  // lookup for about 8 seconds.
+  test('every session answers straight after each of a run of root-set changes', () => {
+    for (const run of [results, control]) {
+      expect(run.routingRounds.rounds).toBe(20);
+      expect(run.routingRounds.sessions).toEqual(['defaultSession', 'enrolled', 'privateSession']);
+      expect(run.routingRounds.failures).toEqual([]);
+    }
   });
 });
