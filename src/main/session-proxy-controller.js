@@ -231,8 +231,11 @@ function createSessionProxyController(getDefaultSession, options = {}) {
       // connecting. Electron makes a PAC configuration mandatory, so an
       // aborted fetch fails every proxy lookup on the session until Chromium
       // polls the PAC again, 8 seconds later on Electron 44.9.3. Reloading
-      // once more, with nothing left to close, fetches it whole.
-      if (!errors.length) {
+      // once more, with nothing left to close, fetches it whole. A session
+      // superseded during the drain gets no further native call; the check
+      // below then refuses it.
+      if (!errors.length && !terminal && record.generation === generation &&
+          sessions.get(targetSession) === registration) {
         try {
           await runRoutingOperation(() => targetSession.forceReloadProxyConfig(), 'forceReloadProxyConfig', timeoutMs);
         } catch (error) {

@@ -217,6 +217,30 @@ describe('session quarantine', () => {
       expect(f.hooks.publish).toHaveBeenCalledTimes(1);
     });
 
+    test('a session retired while its connections close gets no reload after the close', async () => {
+      let finish;
+      let entered;
+      const closing = new Promise((resolve) => { entered = resolve; });
+      const f = fixture();
+      const added = session();
+      await f.routing.rebuild();
+      await f.routing.enroll(added);
+      f.hooks.publish.mockClear();
+      added.forceReloadProxyConfig.mockClear();
+      added.closeAllConnections.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; entered(); }));
+      f.change('changed');
+      const update = f.routing.rebuild().catch((cause) => cause);
+      await closing;
+      const getter = f.controller.getPolicyGetter(added);
+      f.controller.unregister(added);
+      finish();
+      const error = await update;
+      expect(codes(error)).toEqual(expect.arrayContaining(['session_superseded']));
+      expect(added.forceReloadProxyConfig).toHaveBeenCalledTimes(1);
+      expect(getter()).toMatchObject({ allowed: false, state: 'retired' });
+      expect(f.hooks.publish).not.toHaveBeenCalled();
+    });
+
     test('a session retired during it stays retired and the update publishes nothing', async () => {
       let finish;
       let entered;
