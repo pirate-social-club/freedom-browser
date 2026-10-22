@@ -43,8 +43,8 @@ const url = params.get('url');
 const explicitProtocol = params.get('protocol');
 const height = params.get('height');
 const syncStatus = params.get('syncStatus');
-// Navigation marks a failed load whose host the shared Handshake rule routes
-// to Handshake: a single label, or any name under a listed root.
+// Navigation marks a failed http(s) load as a Handshake one: any name under a
+// listed root, or a single label whose tunnel the Handshake guard refused.
 const isHandshakeFailure = explicitProtocol === 'hns';
 
 // `retry` is an optional param carrying a URL that Chromium can

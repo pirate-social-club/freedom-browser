@@ -664,38 +664,97 @@ describe('navigation', () => {
     expect(ctx.activeRef.tab.webview.loadURL).not.toHaveBeenCalled();
   });
 
-  test('a failed load on any name the shared rule routes to Handshake is marked for its error page', async () => {
-    const previous = globalThis.FREEDOM_HNS_HOSTS;
-    const hnsHosts = jest.requireActual('../../shared/hns-hosts.js');
-    hnsHosts.setDynamicHnsPublicSuffixes(['8s28']);
-    globalThis.FREEDOM_HNS_HOSTS = hnsHosts;
-    try {
-      const ctx = await loadNavigationModule();
+  describe('Handshake error-page marking', () => {
+    let previous;
+    let hnsHosts;
+
+    beforeEach(() => {
+      previous = globalThis.FREEDOM_HNS_HOSTS;
+      hnsHosts = jest.requireActual('../../shared/hns-hosts.js');
+      hnsHosts.setDynamicHnsPublicSuffixes(['8s28']);
+      globalThis.FREEDOM_HNS_HOSTS = hnsHosts;
+    });
+
+    afterEach(() => {
+      hnsHosts.setDynamicHnsPublicSuffixes([]);
+      globalThis.FREEDOM_HNS_HOSTS = previous;
+    });
+
+    // The error page a failed main-frame load of `validatedURL` gets.
+    const failLoad = async (options = {}) => {
+      const ctx = await loadNavigationModule(options);
       await ctx.mod.initNavigation();
-      const errorPage = (validatedURL) => {
+      return (validatedURL, errorDescription, errorCode = -101) => {
         ctx.activeRef.tab.webview.loadURL.mockClear();
         ctx.tabsMocks.webviewEventHandler('did-fail-load', {
           tabId: ctx.activeRef.tab.id,
-          event: { errorCode: -101, errorDescription: 'ERR_CONNECTION_RESET', isMainFrame: true, validatedURL },
+          event: { errorCode, errorDescription, isMainFrame: true, validatedURL },
         });
         return new URL(ctx.activeRef.tab.webview.loadURL.mock.calls[0][0]);
       };
+    };
+
+    test('every failure on a name under a listed root, or under .pirate, is marked', async () => {
+      const errorPage = await failLoad({ enableHnsIntegration: true });
       for (const url of [
-        'https://app.8s28/', 'https://membertest.8s28/path?q=1', 'https://a.b.8s28/', 'https://8s28/',
-        'https://app.pirate/', 'https://fixture-root/',
+        'https://app.8s28/', 'http://app.8s28/', 'https://membertest.8s28/path?q=1', 'https://a.b.8s28/',
+        'https://app.pirate/',
       ]) {
-        const page = errorPage(url);
-        expect(page.searchParams.get('protocol')).toBe('hns');
-        expect(page.searchParams.get('url')).toBe(url);
-        expect(page.searchParams.get('error')).toBe('ERR_CONNECTION_RESET');
+        for (const error of ['ERR_CONNECTION_RESET', 'ERR_TUNNEL_CONNECTION_FAILED', 'ERR_CERT_AUTHORITY_INVALID']) {
+          const page = errorPage(url, error);
+          expect(page.searchParams.get('protocol')).toBe('hns');
+          expect(page.searchParams.get('url')).toBe(url);
+          expect(page.searchParams.get('error')).toBe(error);
+        }
       }
+    });
+
+    test('a single label is marked only when the Handshake guard refused its tunnel', async () => {
+      const errorPage = await failLoad({ enableHnsIntegration: true });
+      for (const url of ['https://fixture-root/', 'https://8s28/', 'http://router/']) {
+        expect(errorPage(url, 'ERR_TUNNEL_CONNECTION_FAILED', -111).searchParams.get('protocol')).toBe('hns');
+        for (const error of ['ERR_NAME_NOT_RESOLVED', 'ERR_CONNECTION_REFUSED', 'ERR_CONNECTION_TIMED_OUT']) {
+          expect(errorPage(url, error).searchParams.get('protocol')).toBeNull();
+        }
+      }
+    });
+
+    // Where Handshake does not run (every platform but linux-x64) or is turned
+    // off, a single label goes DIRECT to system DNS, so its failures are
+    // ordinary ones and keep the generic page.
+    test.each([
+      ['with Handshake off', { enableHnsIntegration: false, registry: { hns: { mode: 'none', api: null } } }],
+      ['where Handshake is unsupported', { enableHnsIntegration: true, registry: { hns: { mode: 'none', api: null } } }],
+    ])('an intranet name that fails %s keeps the generic page', async (_label, options) => {
+      const errorPage = await failLoad(options);
+      for (const url of ['http://router/', 'http://nas/share', 'https://intranet/']) {
+        for (const error of ['ERR_NAME_NOT_RESOLVED', 'ERR_CONNECTION_REFUSED', 'ERR_ADDRESS_UNREACHABLE']) {
+          expect(errorPage(url, error).searchParams.get('protocol')).toBeNull();
+        }
+      }
+    });
+
+    test('a failed ipfs, ipns, rad or web3 page is never marked, whatever its host', async () => {
+      const errorPage = await failLoad({ enableHnsIntegration: true });
+      for (const url of [
+        'ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi/',
+        'ipns://k51qzi5uqu5dlvj2baxnqndepeb86cbk3ng7n3i46uzyxzyqj2xjonzllnv0v8/',
+        'rad://z3gqcJUoA1n9HaHKufZs5FCSGazv5/',
+        'web3://0x5FbDB2315678afecb367f032d93F642f64180aa3/',
+        'ipfs://app.8s28/',
+      ]) {
+        for (const error of ['ERR_FAILED', 'ERR_TUNNEL_CONNECTION_FAILED']) {
+          expect(errorPage(url, error).searchParams.get('protocol')).toBeNull();
+        }
+      }
+    });
+
+    test('ordinary names, loopback and addresses are never marked', async () => {
+      const errorPage = await failLoad({ enableHnsIntegration: true });
       for (const url of ['https://example.com/', 'https://app.unlisted/', 'http://127.0.0.1:8080/', 'https://localhost/']) {
-        expect(errorPage(url).searchParams.get('protocol')).toBeNull();
+        expect(errorPage(url, 'ERR_TUNNEL_CONNECTION_FAILED', -111).searchParams.get('protocol')).toBeNull();
       }
-    } finally {
-      hnsHosts.setDynamicHnsPublicSuffixes([]);
-      globalThis.FREEDOM_HNS_HOSTS = previous;
-    }
+    });
   });
 
   afterEach(() => {
