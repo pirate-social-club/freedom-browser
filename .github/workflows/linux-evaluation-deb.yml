@@ -81,6 +81,28 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      # Device acceptance must not install packages locally. Preserve the
+      # exact-lock pure-JS Playwright driver already installed by this job.
+      - name: Preserve the installed acceptance driver
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/freedom-acceptance-driver"
+          mkdir "$output"
+          tar -czf "$output/playwright-driver.tar.gz" \
+            node_modules/@playwright/test node_modules/playwright node_modules/playwright-core
+          sha256sum package-lock.json > "$output/package-lock.sha256"
+          printf 'source %s\n' "$SOURCE_SHA" > "$output/source.txt"
+          cd "$output"
+          sha256sum playwright-driver.tar.gz > SHA256SUMS.txt
+      - name: Upload the installed acceptance driver
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: freedom-acceptance-driver-${{ env.SOURCE_SHA }}
+          path: ${{ runner.temp }}/freedom-acceptance-driver/
+          if-no-files-found: error
+          retention-days: 14
+
   # The Linux packaging gate (scripts/linux-packaging-gate.js) on the deb the
   # job above built: the ELF scan of the unpacked deb against
   # scripts/linux-native-inventory.json and the deb's own libc6 floor; apt

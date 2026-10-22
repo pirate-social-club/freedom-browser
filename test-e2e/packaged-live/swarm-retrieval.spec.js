@@ -75,6 +75,7 @@ const path = require('path');
 const { test, expect } = require('@playwright/test');
 const { closeApp } = require('../close-app');
 const { watchProcessExit } = require('../live-fixtures');
+const { readHttpCache, expectHttpCacheMiss, verifyHttpCacheMeasurement } = require('./http-cache-evidence');
 const {
   NODES_OFF,
   installedResourcesDir,
@@ -312,6 +313,9 @@ test.describe('installed Swarm retrieval', () => {
 
       // Cold negative control: B through the address bar, then a direct load.
       const bUrl = `bzz://${B.reference}`;
+      summary.httpCacheBeforeB = await readHttpCache(window, { evidence, phase: 'before-B' });
+      record();
+      expectHttpCacheMiss(summary.httpCacheBeforeB, bUrl, 'before the negative control');
       const bDocs = await watchDocuments(app, (url) => url.startsWith(bUrl));
       const reads = [];
       reads.push({ phase: 'before the address-bar request', ...(await readNodeState(window, 'ant')) });
@@ -332,7 +336,9 @@ test.describe('installed Swarm retrieval', () => {
       summary.directB = { ...describeDocument(direct), body: direct.body ? direct.body.toString('utf8') : null };
       summary.negativeControlReads = reads;
       summary.documentsB = bDocs.documents.map(describeDocument);
+      summary.httpCacheAfterB = await readHttpCache(window, { evidence, phase: 'after-B' });
       record();
+      expectHttpCacheMiss(summary.httpCacheAfterB, bUrl, 'after the negative control');
 
       expect(summary.addressBarB.protocol, 'the error page is the Swarm node-down page').toBe('swarm');
       expect(summary.addressBarDocumentsB, 'the address bar sent no request for B to the handler').toEqual([]);
@@ -343,6 +349,9 @@ test.describe('installed Swarm retrieval', () => {
         expect(isClearedState(read), `the registry stays cleared ${read.phase}: ${JSON.stringify(read)}`).toBe(true);
         expect(['external', 'reused'], `no external or reused node ${read.phase}`).not.toContain(read.mode);
       }
+
+      summary.httpCachePositiveControl = await verifyHttpCacheMeasurement(window, summary.httpCacheAfterB, evidence);
+      record();
 
       // 5. Shutdown and orphans, with antd running. The control is complete,
       // so Ant is started again for the quit to have to stop it.

@@ -55,6 +55,7 @@ exposeGuardedBridge('internalPages', internalPages);
 exposeGuardedBridge('electronAPI', {
   resolveSpace: (handle) => ipcRenderer.invoke('spaces:resolve', { handle }),
   getRoutingStatus: () => ipcRenderer.invoke('routing:get-status'),
+  getAcceptanceHttpCacheState: () => ipcRenderer.invoke('acceptance:http-cache-state'),
   onRoutingStatusUpdate: (callback) => {
     if (typeof callback !== 'function') return () => {};
     const handler = (_event, value) => callback(value);
