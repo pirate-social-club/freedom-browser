@@ -1,6 +1,14 @@
 name: HNS current Linux package acceptance
 on:
   workflow_dispatch:
+    inputs:
+      journey:
+        description: Controlled security fixtures or real public a18n pages
+        type: choice
+        default: fixtures
+        options:
+          - fixtures
+          - a18n
 permissions:
   contents: read
 concurrency:
@@ -32,6 +40,7 @@ jobs:
           FREEDOM_SOURCE_SHA: ${{ github.sha }}
           FREEDOM_JOB_ROOT: /var/tmp/freedom-package-${{ github.run_id }}-${{ github.run_attempt }}
           FREEDOM_COLD_ROOT: /var/tmp/freedom-package-${{ github.run_id }}-${{ github.run_attempt }}/cold
+          FREEDOM_ACCEPTANCE_JOURNEY: ${{ inputs.journey }}
         run: |
           set -euo pipefail
           test ! -e "$FREEDOM_JOB_ROOT" && test ! -L "$FREEDOM_JOB_ROOT"
@@ -52,6 +61,7 @@ jobs:
           FREEDOM_SOURCE_SHA: ${{ github.sha }}
           FREEDOM_PYTHON_PREFIX: /var/tmp/freedom-package-${{ github.run_id }}-${{ github.run_attempt }}/cold/python
           FREEDOM_BROWSER_PREFIX: /var/tmp/freedom-package-${{ github.run_id }}-${{ github.run_attempt }}/cold/browser
+          FREEDOM_ACCEPTANCE_JOURNEY: ${{ inputs.journey }}
           FREEDOM_HOSTED_PRIVATE: /var/tmp/freedom-package-${{ github.run_id }}-${{ github.run_attempt }}/private
           FREEDOM_HOSTED_PUBLIC: ${{ runner.temp }}/freedom-package-public
         run: |
@@ -61,7 +71,7 @@ jobs:
           mkdir -m 700 "$FREEDOM_HOSTED_PRIVATE"
           mkdir -m 755 "$FREEDOM_HOSTED_PUBLIC"
           cp "${FREEDOM_PYTHON_PREFIX%/python}/cold-setup.json" "$FREEDOM_HOSTED_PUBLIC/cold-setup.json"
-          sudo --preserve-env=FREEDOM_BROWSER_UID,FREEDOM_BROWSER_GID,PATH,FREEDOM_REPOSITORY,FREEDOM_SOURCE_SHA,FREEDOM_PYTHON_PREFIX,FREEDOM_BROWSER_PREFIX,FREEDOM_HOSTED_PRIVATE,FREEDOM_HOSTED_PUBLIC python3 "$FREEDOM_REPOSITORY/ops/hns-package-acceptance/launch.py"
+          sudo --preserve-env=FREEDOM_BROWSER_UID,FREEDOM_BROWSER_GID,PATH,FREEDOM_REPOSITORY,FREEDOM_SOURCE_SHA,FREEDOM_PYTHON_PREFIX,FREEDOM_BROWSER_PREFIX,FREEDOM_HOSTED_PRIVATE,FREEDOM_HOSTED_PUBLIC,FREEDOM_ACCEPTANCE_JOURNEY python3 "$FREEDOM_REPOSITORY/ops/hns-package-acceptance/launch.py"
       - name: Upload only explicitly sanitized receipts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
