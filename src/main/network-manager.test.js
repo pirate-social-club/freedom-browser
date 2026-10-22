@@ -22,7 +22,10 @@ function loadNetworkManagerModule(options = {}) {
 
   const setProxy = jest.fn(() => Promise.resolve());
   const webRequest = makeProxySession().webRequest;
-  const defaultSession = { ...makeProxySession(), setProxy, webRequest };
+  const sessionFetch = jest.fn(options.sessionFetch || (async () => {
+    throw new Error('unexpected default-session fetch');
+  }));
+  const defaultSession = { ...makeProxySession(), setProxy, webRequest, fetch: sessionFetch };
   const session = { defaultSession };
 
   let pacServerPort = options.pacServerPort || 9999;
@@ -116,6 +119,9 @@ function loadNetworkManagerModule(options = {}) {
       [require.resolve('./hns-local-resolver')]: () => ({
         resolveHnsLocalAddresses,
       }),
+      [require.resolve('./profile-resolver')]: () => ({
+        getActiveProfile: () => options.activeProfile ?? null,
+      }),
       [require.resolve('./logger')]: () => log,
     },
   });
@@ -130,6 +136,7 @@ function loadNetworkManagerModule(options = {}) {
     log,
     setProxy,
     session,
+    sessionFetch,
     webRequest,
     httpMock,
     createServerCalls,
@@ -389,32 +396,71 @@ describe('network-manager', () => {
     expect(evaluatePac(pac, 'unknown-single-label')).toBe('PROXY 127.0.0.1:9999');
   });
 
-  test('imported namespace suffixes are routed to the HNS proxy after refresh', async () => {
+  test('imported roots route every name under them to the HNS proxy, even names ordinary DNS resolves', async () => {
     const ctx = loadNetworkManagerModule();
     ctx.mod.setHnsProxy('127.0.0.1:5380');
+    await ctx.mod.rebuild();
 
-    await ctx.mod.refreshImportedHnsSuffixes(async () => Response.json({
-      namespaces: [
-        { root_label: 'xn--pokmon-dva' },
-      ],
-    }));
+    expect(ctx.mod.setImportedHnsRoots(['xn--pokmon-dva', '8s28'])).toEqual(['.pirate', '.xn--pokmon-dva', '.8s28']);
+    await ctx.mod.rebuild();
 
     const pac = ctx.mod.buildPacScript();
     expect(pac).toContain('"xn--pokmon-dva":1');
-    expect(evaluatePac(pac, 'xn--pokmon-dva')).toBe('PROXY 127.0.0.1:9999');
-    expect(evaluatePac(pac, 'v.xn--pokmon-dva')).toBe('PROXY 127.0.0.1:9999');
+    // evaluatePac resolves every name but `missing.*`, so these are names that
+    // also exist in ordinary DNS: the listed root still wins.
+    for (const host of ['xn--pokmon-dva', 'v.xn--pokmon-dva', 'app.8s28', 'a.b.8s28', 'APP.8S28']) {
+      expect(evaluatePac(pac, host)).toBe('PROXY 127.0.0.1:9999');
+    }
     expect(evaluatePac(pac, 'not-imported')).toBe('PROXY 127.0.0.1:9999');
+    expect(evaluatePac(pac, 'app.not-imported')).toBe('DIRECT');
+    expect(evaluatePac(pac, 'missing.not-imported')).toBe('PROXY 127.0.0.1:9999');
   });
 
-  test('imported namespace suffix log is summarized for large lists', async () => {
+  test('imported namespace suffix log is summarized for large lists', () => {
     const ctx = loadNetworkManagerModule();
-    const namespaces = Array.from({ length: 12 }, (_, index) => ({ root_label: `name${index}` }));
-
-    await ctx.mod.refreshImportedHnsSuffixes(async () => Response.json({ namespaces }));
+    ctx.mod.setImportedHnsRoots(Array.from({ length: 12 }, (_, index) => `name${index}`));
 
     expect(ctx.log.info).toHaveBeenCalledWith(
       '[Network] Imported HNS suffixes loaded: 13 suffixes (.pirate, .name0, .name1, .name2, .name3, .name4, .name5, .name6, +5 more)'
     );
+  });
+
+  test('an unchanged root set withdraws no session and drains no guard connection', async () => {
+    const ctx = loadNetworkManagerModule();
+    ctx.mod.setHnsProxy('127.0.0.1:5380', { generation: 1, caFingerprint: 'ca' });
+    await ctx.mod.rebuild();
+    const enrolled = makeProxySession();
+    await ctx.mod.registerProxySession(enrolled);
+    ctx.mod.setImportedHnsRoots(['8s28']);
+    await ctx.mod.rebuild();
+    const client = new EventEmitter();
+    client.destroyed = false;
+    client.destroy = jest.fn(() => { client.destroyed = true; client.emit('close'); });
+    client.write = jest.fn(); client.pipe = jest.fn();
+    ctx.createServerCalls[0].handlers.get('connect')({ url: 'app.8s28:443', httpVersion: '1.1', headers: {} }, client);
+    ctx.netSockets[0].emit('data', Buffer.from('HTTP/1.1 200 OK\r\n\r\n'));
+    const policies = () => [ctx.session.defaultSession, enrolled].map((target) => ctx.mod.getProxySessionPolicy(target));
+    const before = policies();
+    const calls = (target) => [target.setProxy, target.forceReloadProxyConfig, target.closeAllConnections]
+      .map((fn) => fn.mock.calls.length);
+    const callsBefore = [ctx.session.defaultSession, enrolled].map(calls);
+
+    // A refresh, or an expiry, that leaves the same roots.
+    ctx.mod.setImportedHnsRoots(['8s28']);
+    await ctx.mod.rebuild();
+
+    expect(policies()).toEqual(before);
+    expect(before.every((policy) => policy.allowed)).toBe(true);
+    expect([ctx.session.defaultSession, enrolled].map(calls)).toEqual(callsBefore);
+    expect(client.destroy).not.toHaveBeenCalled();
+    expect(ctx.netSockets[0].destroy).not.toHaveBeenCalled();
+
+    // The control: a changed set withdraws and drains both.
+    ctx.mod.setImportedHnsRoots(['8s28', 'a18n']);
+    expect(ctx.mod.getProxySessionPolicy(enrolled).allowed).toBe(false);
+    await ctx.mod.rebuild();
+    expect(client.destroy).toHaveBeenCalled();
+    expect(enrolled.closeAllConnections.mock.calls.length).toBeGreaterThan(callsBefore[1][2]);
   });
   test('clearDvpnProxy removes dVPN proxy settings', () => {
     const ctx = loadNetworkManagerModule();
@@ -1103,4 +1149,167 @@ describe('network-manager', () => {
     expect(ctx.log.warn.mock.calls[0][0]).not.toMatch(/secret|private/);
   });
 
+});
+
+describe('HNS namespace discovery fetch', () => {
+  const PRODUCTION_URL = 'https://api-next.pirate.sc/public/hns/namespaces/v1';
+  const STAGING_ORIGIN = 'https://api-next-staging.pirate.sc';
+  const GENERATED_AT = '2026-10-22T07:00:00.000Z';
+  const list = (roots, overrides = {}) => ({ version: 1, generated_at: GENERATED_AT, roots, ...overrides });
+  const entry = (root, expires_at = '2026-10-27T07:00:00.000Z') => ({ root, expires_at });
+  const answer = (body, init) => async () => Response.json(body, init);
+  // A body that sends `chunks` and then never ends.
+  const stalledBody = (...chunks) => async () => new Response(new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+    },
+  }), { status: 200 });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  test('asks the default session, with no credentials, cache, redirect or headers of its own', async () => {
+    const ctx = loadNetworkManagerModule({ sessionFetch: answer(list([entry('8s28')])) });
+    const injected = jest.fn(answer(list([entry('8s28')])));
+
+    const fromSession = await ctx.mod.fetchHnsNamespaces();
+    await ctx.mod.fetchHnsNamespaces({ fetchImpl: injected });
+
+    const expected = { credentials: 'omit', cache: 'no-store', redirect: 'error', signal: expect.any(AbortSignal) };
+    expect(ctx.sessionFetch).toHaveBeenCalledTimes(1);
+    expect(ctx.sessionFetch).toHaveBeenCalledWith(PRODUCTION_URL, expected);
+    expect(injected).toHaveBeenCalledWith(PRODUCTION_URL, expected);
+    // No `headers` at all, so no Cookie and nothing that identifies the browser.
+    for (const [, init] of [...ctx.sessionFetch.mock.calls, ...injected.mock.calls]) {
+      expect(Object.keys(init).sort()).toEqual(['cache', 'credentials', 'redirect', 'signal']);
+    }
+    expect(fromSession.generatedAt).toBe(Date.parse(GENERATED_AT));
+    expect([...fromSession.roots]).toEqual([['8s28', 5 * 24 * 60 * 60 * 1000]]);
+    expect(typeof fromSession.receivedAt).toBe('number');
+  });
+
+  test('never falls back to Node fetch when the default session is withdrawn', async () => {
+    const nodeFetch = jest.spyOn(globalThis, 'fetch');
+    const ctx = loadNetworkManagerModule({
+      sessionFetch: async () => { throw new Error('net::ERR_ABORTED'); },
+    });
+    ctx.mod.setHnsProtectionRequired(true);
+    expect(ctx.mod.getProxySessionPolicy(ctx.session.defaultSession).allowed).toBe(false);
+
+    await expect(ctx.mod.fetchHnsNamespaces()).rejects.toThrow('net::ERR_ABORTED');
+
+    expect(ctx.sessionFetch).toHaveBeenCalledTimes(1);
+    expect(nodeFetch).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['a test profile naming staging', { source: 'test-user-data' }, STAGING_ORIGIN, STAGING_ORIGIN],
+    ['a catalog profile naming staging', { source: 'catalog', metadata: { nodes: {} } }, STAGING_ORIGIN, 'https://api-next.pirate.sc'],
+    ['a --profile-dir profile naming staging', { source: 'profile-dir' }, STAGING_ORIGIN, 'https://api-next.pirate.sc'],
+    ['no resolved profile naming staging', null, STAGING_ORIGIN, 'https://api-next.pirate.sc'],
+    ['a test profile naming another host', { source: 'test-user-data' }, 'https://api.pirate.sc', 'https://api-next.pirate.sc'],
+    ['a test profile naming staging with a path', { source: 'test-user-data' }, `${STAGING_ORIGIN}/`, 'https://api-next.pirate.sc'],
+    ['a test profile naming production', { source: 'test-user-data' }, 'https://api-next.pirate.sc', 'https://api-next.pirate.sc'],
+  ])('%s reads %s', async (_label, activeProfile, value, origin) => {
+    const previous = process.env.FREEDOM_TEST_HNS_DISCOVERY_ORIGIN;
+    process.env.FREEDOM_TEST_HNS_DISCOVERY_ORIGIN = value;
+    try {
+      const ctx = loadNetworkManagerModule({ activeProfile, sessionFetch: answer(list([])) });
+      expect(ctx.mod.getHnsDiscoveryUrl()).toBe(`${origin}/public/hns/namespaces/v1`);
+      await ctx.mod.fetchHnsNamespaces();
+      expect(ctx.sessionFetch.mock.calls[0][0]).toBe(`${origin}/public/hns/namespaces/v1`);
+    } finally {
+      if (previous === undefined) delete process.env.FREEDOM_TEST_HNS_DISCOVERY_ORIGIN;
+      else process.env.FREEDOM_TEST_HNS_DISCOVERY_ORIGIN = previous;
+    }
+  });
+
+  test('one 3-second deadline covers the whole body, not just the headers', async () => {
+    jest.useFakeTimers();
+    const ctx = loadNetworkManagerModule();
+    let signal;
+    let cancelled = false;
+    // Headers at once, then a chunk every second and never the end: no
+    // single read is slow, but the body as a whole is.
+    const trickle = jest.fn(async (_url, init) => {
+      signal = init.signal;
+      let ticks = 0;
+      return new Response(new ReadableStream({
+        pull: (controller) => new Promise((resolve) => setTimeout(() => {
+          if (!cancelled) controller.enqueue(new TextEncoder().encode(ticks++ ? ' ' : '{"version":1'));
+          resolve();
+        }, 1000)),
+        cancel: () => { cancelled = true; },
+      }), { status: 200 });
+    });
+    const pending = ctx.mod.fetchHnsNamespaces({ fetchImpl: trickle });
+    const outcome = pending.then(() => 'resolved', (error) => error.message);
+    await jest.advanceTimersByTimeAsync(2999);
+    expect(signal.aborted).toBe(false);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(await outcome).toBe('namespace list deadline exceeded');
+    // The request is aborted and the body released, not left reading.
+    expect(signal.aborted).toBe(true);
+    expect(cancelled).toBe(true);
+  });
+
+  test.each([
+    ['headers that never arrive', () => new Promise(() => {})],
+    ['a body that stalls', stalledBody('{"version":1,')],
+  ])('%s are unavailable after 3 seconds', async (_label, fetchImpl) => {
+    jest.useFakeTimers();
+    const ctx = loadNetworkManagerModule();
+    const outcome = ctx.mod.fetchHnsNamespaces({ fetchImpl }).then(() => 'resolved', (error) => error.message);
+    await jest.advanceTimersByTimeAsync(3000);
+    expect(await outcome).toBe('namespace list deadline exceeded');
+  });
+
+  test('a body over 64 KiB is refused, and one of exactly 64 KiB is read', async () => {
+    const ctx = loadNetworkManagerModule();
+    const json = JSON.stringify(list([entry('8s28')]));
+    const padded = (size) => async () => new Response(json.padEnd(size, ' '), { status: 200 });
+
+    await expect(ctx.mod.fetchHnsNamespaces({ fetchImpl: padded(64 * 1024 + 1) }))
+      .rejects.toThrow('namespace list exceeds 64 KiB');
+    const read = await ctx.mod.fetchHnsNamespaces({ fetchImpl: padded(64 * 1024) });
+    expect([...read.roots.keys()]).toEqual(['8s28']);
+  });
+
+  test.each([
+    ['a 503', answer(list([entry('8s28')]), { status: 503 })],
+    ['a 201', answer(list([entry('8s28')]), { status: 201 })],
+    ['a 204', async () => new Response(null, { status: 204 })],
+    ['a body that is not JSON', async () => new Response('<html>', { status: 200 })],
+    ['an unknown version', answer(list([entry('8s28')], { version: 2 }))],
+    ['a version given as text', answer(list([entry('8s28')], { version: '1' }))],
+    ['no version', answer({ generated_at: GENERATED_AT, roots: [] })],
+    ['no roots', answer({ version: 1, generated_at: GENERATED_AT })],
+    ['an uppercase root', answer(list([entry('8S28')]))],
+    ['a root with an underscore', answer(list([entry('under_score')]))],
+    ['a root with an edge hyphen', answer(list([entry('-8s28')]))],
+    ['a 64-octet root', answer(list([entry('a'.repeat(64))]))],
+    ['a dotted root', answer(list([entry('app.8s28')]))],
+    ['an empty root', answer(list([entry('')]))],
+    ['a root that is not text', answer(list([{ root: 8, expires_at: '2026-10-27T07:00:00.000Z' }]))],
+    ['an entry that expires when generated', answer(list([entry('8s28', GENERATED_AT)]))],
+    ['an entry that expired before', answer(list([entry('8s28', '2026-10-22T06:59:59.999Z')]))],
+    ['an expiry without milliseconds', answer(list([entry('8s28', '2026-10-27T07:00:00Z')]))],
+    ['a generation time that is not one', answer(list([entry('8s28')], { generated_at: 'yesterday' }))],
+  ])('%s is unavailable, never a partial list', async (_label, fetchImpl) => {
+    const ctx = loadNetworkManagerModule();
+    await expect(ctx.mod.fetchHnsNamespaces({ fetchImpl })).rejects.toThrow();
+  });
+
+  test('reserved roots are dropped on receipt and the rest kept', async () => {
+    const ctx = loadNetworkManagerModule();
+    const reserved = ['com', 'box', 'eth', 'onion', 'localhost', 'alt', 'corp', 'xn--p1ai', 'zw'];
+
+    const read = await ctx.mod.fetchHnsNamespaces({
+      fetchImpl: answer(list([entry('8s28'), ...reserved.map((root) => entry(root)), entry('a18n', '2026-10-23T07:00:00.000Z')])),
+    });
+
+    expect([...read.roots]).toEqual([['8s28', 5 * 24 * 60 * 60 * 1000], ['a18n', 24 * 60 * 60 * 1000]]);
+  });
 });

@@ -77,7 +77,13 @@ function loadHnsManagerModule(options = {}) {
   const unregisterProxySession = jest.fn();
   const rebuild = jest.fn(() => Promise.resolve());
   const getHnsProxyAddr = jest.fn(() => options.effectiveHnsProxyAddr ?? '127.0.0.1:55000');
-  const refreshImportedHnsSuffixes = jest.fn(() => Promise.resolve(['.pirate']));
+  const fetchHnsNamespaces = jest.fn(options.fetchHnsNamespaces || (async () => ({
+    generatedAt: Date.parse('2026-10-22T07:00:00.000Z'), roots: new Map(), receivedAt: performance.now(),
+  })));
+  // The real routing call sets the shared set that hns-manager also reads; the
+  // module registry is shared after loadMainModule's reset, so this is that set.
+  const setImportedHnsRoots = jest.fn((roots) => require('../shared/hns-hosts').setDynamicHnsPublicSuffixes(roots));
+  const getProxySessionPolicy = jest.fn(options.getProxySessionPolicy || (() => ({ allowed: true, generation: 1, state: 'ready' })));
   const canResolveHnsFallbackForHost = jest.fn(() => Promise.resolve(options.canResolveHnsFallbackForHost ?? false));
   const getHnsResolutionForHost = jest.fn(() => {
     if (Object.prototype.hasOwnProperty.call(options, 'hnsResolutionForHost')) {
@@ -189,7 +195,9 @@ function loadHnsManagerModule(options = {}) {
         unregisterProxySession,
         rebuild,
         getHnsProxyAddr,
-        refreshImportedHnsSuffixes,
+        fetchHnsNamespaces,
+        setImportedHnsRoots,
+        getProxySessionPolicy,
         getHnsResolutionForHost,
         canResolveHnsFallbackForHost,
         isHnsProxyHost,
@@ -251,7 +259,9 @@ function loadHnsManagerModule(options = {}) {
     unregisterProxySession,
     rebuild,
     getHnsProxyAddr,
-    refreshImportedHnsSuffixes,
+    fetchHnsNamespaces,
+    setImportedHnsRoots,
+    getProxySessionPolicy,
     getHnsResolutionForHost,
     canResolveHnsFallbackForHost,
     isHnsProxyHost,
@@ -1098,6 +1108,297 @@ describe('hns-manager', () => {
     ctx.mod.registerHnsIpc();
     const result = await ctx.ipcMain.invoke(IPC.HNS_GET_STATUS);
     expect(result.status).toBe('stopped');
+  });
+});
+
+describe('hns-manager namespace discovery', () => {
+  const GENERATED_AT = Date.parse('2026-10-22T07:00:00.000Z');
+  const SECOND = 1000;
+  const MINUTE = 60 * SECOND;
+  const flush = async () => { for (let i = 0; i < 30; i += 1) await Promise.resolve(); };
+
+  // What networkManager.fetchHnsNamespaces resolves with: each root's
+  // lifetime on the server's clock, and the monotonic receipt time.
+  const listing = (roots, { generatedAt = GENERATED_AT, lifetimeMs = 5 * 24 * 60 * MINUTE } = {}) => () => ({
+    generatedAt,
+    roots: new Map(roots.map((root) => (Array.isArray(root) ? root : [root, lifetimeMs]))),
+    receivedAt: performance.now(),
+  });
+  const offline = () => { throw new Error('net::ERR_INTERNET_DISCONNECTED'); };
+
+  // Answers each fetch with the next of `answers`, then fails as if offline.
+  function load(answers = [], options = {}) {
+    const queue = [...answers];
+    const fetchedAt = [];
+    const ctx = loadHnsManagerModule({
+      cryptoMock: { X509Certificate: class { raw = Buffer.from('test certificate'); } },
+      readFileSync: () => 'test certificate',
+      fetchHnsNamespaces: async () => {
+        fetchedAt.push(performance.now());
+        return (queue.shift() || offline)();
+      },
+      ...options,
+    });
+    return { ...ctx, fetchedAt };
+  }
+
+  async function helperReady(ctx) {
+    await ctx.mod.startHns();
+    ctx.readlineHandlers.get('line')(JSON.stringify({ type: 'ready', proxyAddr: '127.0.0.1:44041', caPath: '/tmp/hns-ca.pem' }));
+    await flush();
+  }
+
+  const routed = (ctx) => ctx.setImportedHnsRoots.mock.calls.at(-1)?.[0];
+  const discovery = (ctx) => ctx.updateService.mock.calls.filter(([, update]) => update.discovery).at(-1)?.[1].discovery;
+  const published = (ctx) => ctx.updateService.mock.calls.filter(([, update]) => update.publicSuffixes).at(-1)?.[1].publicSuffixes;
+
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => {
+    jest.clearAllTimers();
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  test('the first fetch starts at helper-ready, before activation, and routes and publishes the list', async () => {
+    const ctx = load([listing(['8s28', 'a18n'])]);
+    await ctx.mod.startHns();
+    expect(ctx.fetchHnsNamespaces).not.toHaveBeenCalled();
+
+    ctx.readlineHandlers.get('line')(JSON.stringify({ type: 'ready', proxyAddr: '127.0.0.1:44041', caPath: '/tmp/hns-ca.pem' }));
+    await flush();
+
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(1);
+    expect(ctx.beginHnsCertificateUpdate).not.toHaveBeenCalled();
+    expect(ctx.setHnsProxy).not.toHaveBeenCalled();
+    expect(routed(ctx)).toEqual(['8s28', 'a18n']);
+    expect(published(ctx)).toEqual(['.pirate', '.8s28', '.a18n']);
+    expect(discovery(ctx)).toEqual({ state: 'fresh', lastSuccessAt: new Date(Date.now()).toISOString() });
+    expect(ctx.pruneUnknownSingleLabelHistory).toHaveBeenCalledTimes(1);
+
+    // Activation follows on its own schedule and fetches nothing more.
+    await jest.advanceTimersByTimeAsync(6 * SECOND);
+    expect(ctx.setHnsProxy).toHaveBeenCalledTimes(1);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(1);
+  });
+
+  test('after a success it refreshes every 10 minutes', async () => {
+    const ctx = load([listing(['8s28']), listing(['8s28']), listing(['8s28', 'a18n'])]);
+    await helperReady(ctx);
+    await jest.advanceTimersByTimeAsync(10 * MINUTE - 1);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
+    await jest.advanceTimersByTimeAsync(10 * MINUTE);
+    expect(ctx.fetchedAt).toEqual([0, 10 * MINUTE, 20 * MINUTE].map((at) => ctx.fetchedAt[0] + at));
+    // A root added since the last refresh is routed at the next one.
+    expect(routed(ctx)).toEqual(['8s28', 'a18n']);
+  });
+
+  test.each([
+    ['its routing generation changed', (policy) => { policy.generation += 1; }],
+    ['routing was withdrawn', (policy) => { policy.allowed = false; }],
+  ])('a fetch failing while %s is retried once, after 2 seconds, before backoff', async (_label, transition) => {
+    jest.spyOn(Math, 'random').mockReturnValue(0);
+    const policy = { allowed: true, generation: 1, state: 'ready' };
+    const cancelled = () => {
+      transition(policy);
+      throw new Error('net::ERR_ABORTED');
+    };
+    const ctx = load([cancelled, cancelled], { getProxySessionPolicy: () => ({ ...policy }) });
+    await helperReady(ctx);
+    expect(ctx.getProxySessionPolicy).toHaveBeenCalledWith(ctx.session.defaultSession);
+
+    await jest.advanceTimersByTimeAsync(2 * SECOND - 1);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
+    // The retry was cancelled too: no second retry, the first backoff instead.
+    await jest.advanceTimersByTimeAsync(15 * SECOND - 1);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(3);
+  });
+
+  test('any other failure goes straight to backoff', async () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0);
+    const ctx = load([() => { throw new Error('namespace list answered 503'); }]);
+    await helperReady(ctx);
+    await jest.advanceTimersByTimeAsync(15 * SECOND - 1);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
+  });
+
+  test.each([
+    ['at the bottom of its jitter', 0, [15, 30, 60, 120, 240, 300, 300]],
+    ['at the top of its jitter', 1 - Number.EPSILON, [30, 60, 120, 240, 480, 600, 600]],
+  ])('backoff doubles from 30 seconds to a 10-minute cap, %s, and a success resets it', async (_label, random, seconds) => {
+    jest.spyOn(Math, 'random').mockReturnValue(random);
+    const failures = Array.from({ length: seconds.length }, () => offline);
+    const ctx = load([...failures, listing(['8s28'])]);
+    await helperReady(ctx);
+    for (let i = 0; i <= seconds.length; i += 1) await jest.advanceTimersByTimeAsync(10 * MINUTE);
+    const gaps = ctx.fetchedAt.slice(1).map((at, i) => Math.round((at - ctx.fetchedAt[i]) / SECOND));
+    // Seven failures back off; the success after them refreshes 10 minutes later.
+    expect(gaps.slice(0, seconds.length)).toEqual(seconds);
+    expect(gaps[seconds.length]).toBe(600);
+    expect(gaps[seconds.length + 1]).toBe(Math.round(seconds[0]));
+  });
+
+  test('a result fetched for a helper that has since restarted is discarded', async () => {
+    let answerFirst;
+    const ctx = load([
+      () => new Promise((resolve) => { answerFirst = resolve; }),
+      listing(['a18n'], { generatedAt: GENERATED_AT + 1 }),
+    ]);
+    await helperReady(ctx);
+    await ctx.mod.stopHns();
+    await helperReady(ctx);
+    expect(routed(ctx)).toEqual(['a18n']);
+
+    answerFirst(listing(['8s28'], { generatedAt: GENERATED_AT + 2 })());
+    await flush();
+
+    expect(ctx.setImportedHnsRoots.mock.calls.map(([roots]) => roots)).not.toContainEqual(['8s28']);
+    expect(routed(ctx)).toEqual(['a18n']);
+    // Nor does it schedule a refresh of its own.
+    await jest.advanceTimersByTimeAsync(10 * MINUTE);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(3);
+  });
+
+  test('a list generated before the one applied is rejected', async () => {
+    const ctx = load([
+      listing(['8s28'], { generatedAt: GENERATED_AT + MINUTE }),
+      listing(['a18n'], { generatedAt: GENERATED_AT }),
+      listing(['a18n'], { generatedAt: GENERATED_AT + MINUTE }),
+    ]);
+    await helperReady(ctx);
+    await jest.advanceTimersByTimeAsync(10 * MINUTE);
+
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
+    expect(routed(ctx)).toEqual(['8s28']);
+    expect(discovery(ctx).state).toBe('stale');
+
+    // One generated at the same instant as the applied list is not older.
+    await jest.advanceTimersByTimeAsync(30 * SECOND);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(3);
+    expect(routed(ctx)).toEqual(['a18n']);
+  });
+
+  test('a renewal moves the deadline later with no moment the root is unrouted', async () => {
+    const ctx = load([
+      listing(['8s28'], { lifetimeMs: 15 * MINUTE }),
+      listing(['8s28'], { generatedAt: GENERATED_AT + 10 * MINUTE, lifetimeMs: 15 * MINUTE }),
+    ]);
+    await helperReady(ctx);
+    await jest.advanceTimersByTimeAsync(10 * MINUTE);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
+
+    // Past the first list's deadline, with every refresh since failing.
+    await jest.advanceTimersByTimeAsync(15 * MINUTE - 1);
+    expect(ctx.setImportedHnsRoots.mock.calls.every(([roots]) => roots.includes('8s28'))).toBe(true);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(routed(ctx)).toEqual([]);
+  });
+
+  test('a root expires at its deadline with no refresh, whatever the wall clock says, while the helper restarts', async () => {
+    // The server's clock is years ahead of this machine's; only the lifetime counts.
+    const ctx = load([listing(['8s28'], { generatedAt: Date.parse('2031-01-01T00:00:00.000Z'), lifetimeMs: 20 * MINUTE })]);
+    await helperReady(ctx);
+    const receivedAt = ctx.fetchedAt[0];
+
+    await jest.advanceTimersByTimeAsync(5 * MINUTE);
+    await ctx.mod.stopHns();
+    jest.setSystemTime(Date.now() - 400 * 24 * 60 * MINUTE);
+    await jest.advanceTimersByTimeAsync(receivedAt + 20 * MINUTE - 1 - performance.now());
+    jest.setSystemTime(Date.now() + 800 * 24 * 60 * MINUTE);
+    expect(routed(ctx)).toEqual(['8s28']);
+    expect(published(ctx)).toEqual(['.pirate', '.8s28']);
+
+    await jest.advanceTimersByTimeAsync(1);
+    expect(routed(ctx)).toEqual([]);
+    // The renderer's copy loses it too.
+    expect(published(ctx)).toEqual(['.pirate']);
+    expect(discovery(ctx).state).toBe('fresh');
+
+    // The restart's own fetch fails, and brings nothing back.
+    await helperReady(ctx);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
+    expect(routed(ctx)).toEqual([]);
+    expect(discovery(ctx).state).toBe('unavailable');
+  });
+
+  test('an outage keeps unexpired roots, then drops each at its deadline', async () => {
+    const ctx = load([listing([['8s28', 5 * MINUTE], ['a18n', 20 * MINUTE]])]);
+    await helperReady(ctx);
+    const { lastSuccessAt } = discovery(ctx);
+    expect(discovery(ctx)).toEqual({ state: 'fresh', lastSuccessAt });
+
+    await jest.advanceTimersByTimeAsync(5 * MINUTE);
+    expect(routed(ctx)).toEqual(['a18n']);
+    expect(published(ctx)).toEqual(['.pirate', '.a18n']);
+    expect(discovery(ctx).state).toBe('fresh');
+
+    await jest.advanceTimersByTimeAsync(5 * MINUTE);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
+    expect(routed(ctx)).toEqual(['a18n']);
+    expect(discovery(ctx)).toEqual({ state: 'stale', lastSuccessAt });
+
+    await jest.advanceTimersByTimeAsync(10 * MINUTE);
+    expect(routed(ctx)).toEqual([]);
+    expect(discovery(ctx)).toEqual({ state: 'unavailable', lastSuccessAt });
+  });
+
+  test('a list never received is unavailable, and an empty one is fresh', async () => {
+    const ctx = load([offline, listing([])]);
+    await helperReady(ctx);
+    expect(discovery(ctx)).toEqual({ state: 'unavailable', lastSuccessAt: null });
+    await jest.advanceTimersByTimeAsync(30 * SECOND);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
+    expect(discovery(ctx)).toEqual({ state: 'fresh', lastSuccessAt: expect.any(String) });
+    expect(routed(ctx)).toEqual([]);
+  });
+
+  test('stopping HNS cancels the refresh and nothing else', async () => {
+    const ctx = load([listing(['8s28'], { lifetimeMs: 15 * MINUTE })]);
+    await helperReady(ctx);
+    await ctx.mod.stopHns();
+    // The cleared registry entry gets the live list and its state back.
+    const clearedAt = ctx.clearService.mock.invocationCallOrder.at(-1);
+    const afterClear = ctx.updateService.mock.calls.filter((_, i) => ctx.updateService.mock.invocationCallOrder[i] > clearedAt);
+    expect(afterClear).toEqual([
+      ['hns', { publicSuffixes: ['.pirate', '.8s28'], discovery: { state: 'fresh', lastSuccessAt: expect.any(String) } }],
+    ]);
+
+    await jest.advanceTimersByTimeAsync(10 * MINUTE);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(1);
+    expect(routed(ctx)).toEqual(['8s28']);
+    await jest.advanceTimersByTimeAsync(5 * MINUTE);
+    expect(routed(ctx)).toEqual([]);
+  });
+
+  test('a retired generation cancels the refresh, and its restart fetches again at helper-ready', async () => {
+    const ctx = load([listing(['8s28']), listing(['8s28', 'a18n'])]);
+    await helperReady(ctx);
+    ctx.readlineHandlers.get('line')(JSON.stringify({ type: 'error' }));
+    await flush();
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(1);
+    expect(routed(ctx)).toEqual(['8s28']);
+
+    // The restart reaches helper-ready on its own backoff, well inside the
+    // 10 minutes the cancelled refresh would have waited.
+    await jest.advanceTimersByTimeAsync(SECOND);
+    ctx.readlineHandlers.get('line')(JSON.stringify({ type: 'ready', proxyAddr: '127.0.0.1:44041', caPath: '/tmp/hns-ca.pem' }));
+    await flush();
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
+    expect(routed(ctx)).toEqual(['8s28', 'a18n']);
+
+    // The retired helper's refresh never fires; the new one's does.
+    const [retired, current] = ctx.fetchedAt;
+    await jest.advanceTimersByTimeAsync(retired + 10 * MINUTE - performance.now());
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
+    await jest.advanceTimersByTimeAsync(current + 10 * MINUTE - performance.now());
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(3);
   });
 });
 

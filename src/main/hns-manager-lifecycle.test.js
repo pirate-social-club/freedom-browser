@@ -24,7 +24,9 @@ function fixture(options = {}) {
     'setHnsResolverAddrs', 'registerProxySession', 'unregisterProxySession', 'beginHnsCertificateUpdate',
     'rebuild'].map((name) => [name, jest.fn(async () => {})]));
   network.getHnsProxyAddr = () => '127.0.0.1:44000';
-  network.refreshImportedHnsSuffixes = async () => ['.pirate'];
+  network.fetchHnsNamespaces = async () => ({ generatedAt: 0, roots: new Map(), receivedAt: performance.now() });
+  network.setImportedHnsRoots = (roots) => ['.pirate', ...roots.map((root) => `.${root}`)];
+  network.getProxySessionPolicy = () => ({ allowed: true, generation: 1, state: 'ready' });
   const spawn = jest.fn(() => {
     const child = new EventEmitter(); child.pid = children.length + 100;
     child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
