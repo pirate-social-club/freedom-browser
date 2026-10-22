@@ -664,6 +664,12 @@ describe('navigation', () => {
     expect(ctx.activeRef.tab.webview.loadURL).not.toHaveBeenCalled();
   });
 
+  // Contract v4 addenda 1 and 2: a failed http(s) load gets the Handshake page
+  // only for a host the shared rule routes to Handshake (a single label, or a
+  // name under a listed root or `.pirate`), and only while Handshake routing is
+  // in effect, which the main process publishes as hns.guardRouting from the
+  // platform's support and the committed policy. The helper's health does not
+  // decide it.
   describe('Handshake error-page marking', () => {
     let previous;
     let hnsHosts;
@@ -694,13 +700,34 @@ describe('navigation', () => {
       };
     };
 
-    test('every failure on a name under a listed root, or under .pirate, is marked', async () => {
-      const errorPage = await failLoad({ enableHnsIntegration: true });
-      for (const url of [
-        'https://app.8s28/', 'http://app.8s28/', 'https://membertest.8s28/path?q=1', 'https://a.b.8s28/',
-        'https://app.pirate/',
-      ]) {
-        for (const error of ['ERR_CONNECTION_RESET', 'ERR_TUNNEL_CONNECTION_FAILED', 'ERR_CERT_AUTHORITY_INVALID']) {
+    const ROUTED = { enableHnsIntegration: true, registry: { hns: { mode: 'bundled', synced: true, guardRouting: true } } };
+    const STARTING = {
+      enableHnsIntegration: true,
+      registry: { hns: { mode: 'none', api: null, synced: false, localResolverReady: false, guardRouting: true } },
+    };
+    const RECOVERING = {
+      enableHnsIntegration: true,
+      registry: { hns: { mode: 'bundled', api: null, synced: false, errorState: true, guardRouting: true } },
+    };
+    const HNS_OFF = { enableHnsIntegration: false, registry: { hns: { mode: 'none', api: null, guardRouting: false } } };
+    const UNSUPPORTED = {
+      enableHnsIntegration: true,
+      registry: { hns: { mode: 'none', api: null, statusMessage: 'Handshake browsing is unavailable on this platform.', guardRouting: false } },
+    };
+    const UNKNOWN = { enableHnsIntegration: true, registry: { ipfs: { mode: 'bundled' } } };
+    const PIRATE_AND_DISCOVERED = ['https://app.pirate/', 'http://app.pirate/x', 'https://app.8s28/', 'https://a.b.8s28/'];
+    const SINGLE_LABELS = ['https://fixture-root/', 'https://8s28/', 'http://router/'];
+    const ERRORS = ['ERR_TUNNEL_CONNECTION_FAILED', 'ERR_CONNECTION_RESET', 'ERR_NAME_NOT_RESOLVED', 'ERR_CERT_AUTHORITY_INVALID'];
+    const marks = (errorPage, url, error) => errorPage(url, error).searchParams.get('protocol');
+
+    test.each([
+      ['with Handshake routing in effect', ROUTED],
+      ['while the helper is starting', STARTING],
+      ['while the helper is recovering', RECOVERING],
+    ])('.pirate names, discovered roots and single labels are marked on any failure %s', async (_label, options) => {
+      const errorPage = await failLoad(options);
+      for (const url of [...PIRATE_AND_DISCOVERED, ...SINGLE_LABELS, 'https://membertest.8s28/path?q=1']) {
+        for (const error of ERRORS) {
           const page = errorPage(url, error);
           expect(page.searchParams.get('protocol')).toBe('hns');
           expect(page.searchParams.get('url')).toBe(url);
@@ -709,54 +736,30 @@ describe('navigation', () => {
       }
     });
 
-    // Contract v4 addendum 1: a single label is a Handshake name only while the
-    // main process reports Handshake routing in effect (hns.guardRouting), and
-    // the helper's health does not decide it.
-    const ROUTED = { hns: { mode: 'bundled', synced: true, guardRouting: true } };
-    const STARTING = { hns: { mode: 'none', api: null, synced: false, localResolverReady: false, guardRouting: true } };
-    const HNS_OFF = { hns: { mode: 'none', api: null, guardRouting: false } };
-    const UNSUPPORTED = { hns: { mode: 'none', api: null, statusMessage: 'Handshake browsing is unavailable on this platform.', guardRouting: false } };
-
     test.each([
-      ['with Handshake routing in effect', ROUTED],
-      ['while the helper is still starting or recovering', STARTING],
-    ])('a single label is marked on any failure %s', async (_label, registry) => {
-      const errorPage = await failLoad({ enableHnsIntegration: true, registry });
-      for (const url of ['https://fixture-root/', 'https://8s28/', 'http://router/']) {
-        for (const error of ['ERR_TUNNEL_CONNECTION_FAILED', 'ERR_CONNECTION_RESET', 'ERR_NAME_NOT_RESOLVED']) {
-          expect(errorPage(url, error).searchParams.get('protocol')).toBe('hns');
-        }
+      ['with Handshake disabled', HNS_OFF],
+      ['on a platform without Handshake browsing', UNSUPPORTED],
+      ['before routing is known', UNKNOWN],
+    ])('.pirate names, discovered roots and intranet single labels keep the generic page %s', async (_label, options) => {
+      const errorPage = await failLoad(options);
+      for (const url of [...PIRATE_AND_DISCOVERED, ...SINGLE_LABELS, 'http://nas/share', 'https://intranet/']) {
+        for (const error of ERRORS) expect(marks(errorPage, url, error)).toBeNull();
       }
     });
 
-    // Where Handshake does not run (every platform but linux-x64) or is turned
-    // off, a single label goes DIRECT to system DNS, so its failures are
-    // ordinary ones and keep the generic page.
-    test.each([
-      ['with Handshake off', { enableHnsIntegration: false, registry: HNS_OFF }],
-      ['on a platform without Handshake browsing', { enableHnsIntegration: true, registry: UNSUPPORTED }],
-      ['before routing is known', { enableHnsIntegration: true, registry: { ipfs: { mode: 'bundled' } } }],
-    ])('an intranet name that fails %s keeps the generic page', async (_label, options) => {
-      const errorPage = await failLoad(options);
-      for (const url of ['http://router/', 'http://nas/share', 'https://intranet/']) {
-        for (const error of ['ERR_NAME_NOT_RESOLVED', 'ERR_CONNECTION_REFUSED', 'ERR_TUNNEL_CONNECTION_FAILED']) {
-          expect(errorPage(url, error).searchParams.get('protocol')).toBeNull();
-        }
-      }
-    });
-
-    test.each([
-      ['with Handshake off', { enableHnsIntegration: false, registry: HNS_OFF }],
-      ['on a platform without Handshake browsing', { enableHnsIntegration: true, registry: UNSUPPORTED }],
-    ])('a name under a listed root is still marked %s', async (_label, options) => {
-      const errorPage = await failLoad(options);
-      for (const url of ['https://app.8s28/', 'https://app.pirate/']) {
-        expect(errorPage(url, 'ERR_NAME_NOT_RESOLVED').searchParams.get('protocol')).toBe('hns');
-      }
+    // A discovered root's deadline outlives the helper, so it can still be on
+    // the shared rule's list after Handshake is stopped and turned off.
+    test('a discovered root still listed after the helper stopped with Handshake off keeps the generic page', async () => {
+      expect(hnsHosts.isHnsHost('app.8s28')).toBe(true);
+      const errorPage = await failLoad({
+        enableHnsIntegration: false,
+        registry: { hns: { mode: 'none', api: null, proxy: null, publicSuffixes: ['.pirate', '.8s28'], guardRouting: false } },
+      });
+      for (const error of ERRORS) expect(marks(errorPage, 'https://app.8s28/', error)).toBeNull();
     });
 
     test('a failed ipfs, ipns, rad, web3 or bzz page is never marked, whatever its host or routing', async () => {
-      const errorPage = await failLoad({ enableHnsIntegration: true, registry: ROUTED });
+      const errorPage = await failLoad(ROUTED);
       for (const url of [
         'ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi/',
         'ipns://k51qzi5uqu5dlvj2baxnqndepeb86cbk3ng7n3i46uzyxzyqj2xjonzllnv0v8/',
@@ -765,16 +768,14 @@ describe('navigation', () => {
         'ipfs://app.8s28/',
         'bzz://0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/',
       ]) {
-        for (const error of ['ERR_FAILED', 'ERR_TUNNEL_CONNECTION_FAILED']) {
-          expect(errorPage(url, error).searchParams.get('protocol')).toBeNull();
-        }
+        for (const error of ['ERR_FAILED', 'ERR_TUNNEL_CONNECTION_FAILED']) expect(marks(errorPage, url, error)).toBeNull();
       }
     });
 
-    test('ordinary names, loopback and addresses are never marked', async () => {
-      const errorPage = await failLoad({ enableHnsIntegration: true, registry: ROUTED });
+    test('ordinary names, loopback and addresses are never marked, even with Handshake routing in effect', async () => {
+      const errorPage = await failLoad(ROUTED);
       for (const url of ['https://example.com/', 'https://app.unlisted/', 'http://127.0.0.1:8080/', 'https://localhost/']) {
-        expect(errorPage(url, 'ERR_TUNNEL_CONNECTION_FAILED', -111).searchParams.get('protocol')).toBeNull();
+        expect(marks(errorPage, url, 'ERR_TUNNEL_CONNECTION_FAILED')).toBeNull();
       }
     });
   });

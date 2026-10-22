@@ -1495,6 +1495,18 @@ describe('hns-manager namespace discovery', () => {
       expect(guardRouting(ctx)).toBe(false);
     });
 
+    // Contract v4 addendum 2: a discovered root's deadline outlives the
+    // helper, so the renderer needs routing beside the root set.
+    test('a root still listed after the helper stops is published beside routing turned off', async () => {
+      const ctx = load([listing(['8s28'])]);
+      ctx.commitGuardRouting(true);
+      await helperReady(ctx);
+      await ctx.mod.stopHns();
+      ctx.commitGuardRouting(false);
+      expect(published(ctx)).toEqual(['.pirate', '.8s28']);
+      expect(guardRouting(ctx)).toBe(false);
+    });
+
     test('stays on while the helper starts, fails and recovers', async () => {
       const ctx = load([listing(['8s28'])]);
       ctx.commitGuardRouting(true);

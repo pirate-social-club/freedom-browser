@@ -428,13 +428,15 @@ const buildErrorPageUrl = (errorCode, targetUrl, extras = {}) => {
 };
 
 // True when a failed load is a Handshake one, so it gets the Handshake error
-// page (contract v4 addendum 1). Only http(s) loads qualify: other schemes
-// keep their own errors. A dotted host qualifies under any root the shared
-// rule (src/shared/hns-hosts.js) lists, `.pirate` included. A single label is
-// also an ordinary intranet name (`http://router/`), so it qualifies only
-// while Handshake routing is in effect: the main process publishes
-// `hns.guardRouting` when the platform supports Handshake and the committed
-// routing policy sends such names to the guard, whatever the helper's health.
+// page (contract v4 addenda 1 and 2). Only http(s) loads qualify: other
+// schemes keep their own errors. The host must be one the shared rule
+// (src/shared/hns-hosts.js) routes to Handshake, a single label or a name
+// under a listed root or `.pirate`, and Handshake routing must be in effect:
+// the main process publishes `hns.guardRouting` when the platform supports
+// Handshake and the committed routing policy sends those hosts to the guard,
+// whatever the helper's health. A listed root alone is not enough, since its
+// deadline outlives the helper, and `http://router/` is an ordinary intranet
+// name where Handshake is off or unsupported.
 const isHandshakeFailure = (value) => {
   let url;
   try {
@@ -443,8 +445,8 @@ const isHandshakeFailure = (value) => {
     return false;
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
-  if (globalThis.FREEDOM_HNS_HOSTS?.isHnsHost?.(url.hostname) !== true) return false;
-  return url.hostname.includes('.') || state.registry?.hns?.guardRouting === true;
+  if (state.registry?.hns?.guardRouting !== true) return false;
+  return globalThis.FREEDOM_HNS_HOSTS?.isHnsHost?.(url.hostname) === true;
 };
 
 // True when the IPFS node can't currently serve content — disabled for this
