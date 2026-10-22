@@ -811,7 +811,11 @@ describe('hns-manager', () => {
     const ctx = loadHnsManagerModule();
     await ctx.mod.stopHns();
     expect(ctx.clearHnsProxy).toHaveBeenCalled();
-    expect(ctx.clearService).toHaveBeenCalledWith('hns');
+    expect(ctx.clearService).toHaveBeenCalledWith('hns', {
+      publicSuffixes: ['.pirate'],
+      discovery: { state: 'unavailable', lastSuccessAt: null, origin: null },
+      guardRouting: true,
+    });
     expect(ctx.rebuild).toHaveBeenCalled();
     expect(ctx.mod.getHnsStatus().status).toBe('stopped');
   });
@@ -1437,14 +1441,15 @@ describe('hns-manager namespace discovery', () => {
     const ctx = load([listing(['8s28'], { lifetimeMs: 15 * MINUTE })]);
     await helperReady(ctx);
     await ctx.mod.stopHns();
-    // The cleared registry entry gets the live list, its state and the
-    // routing back.
+    // The registry entry is reset with the live list, its state and the
+    // routing kept, in that one broadcast and with nothing after it.
+    expect(ctx.clearService).toHaveBeenLastCalledWith('hns', {
+      publicSuffixes: ['.pirate', '.8s28'],
+      discovery: { state: 'fresh', lastSuccessAt: expect.any(String), origin: ORIGIN },
+      guardRouting: true,
+    });
     const clearedAt = ctx.clearService.mock.invocationCallOrder.at(-1);
-    const afterClear = ctx.updateService.mock.calls.filter((_, i) => ctx.updateService.mock.invocationCallOrder[i] > clearedAt);
-    expect(afterClear).toEqual([
-      ['hns', { publicSuffixes: ['.pirate', '.8s28'], discovery: { state: 'fresh', lastSuccessAt: expect.any(String), origin: ORIGIN } }],
-      ['hns', { guardRouting: true }],
-    ]);
+    expect(ctx.updateService.mock.invocationCallOrder.filter((order) => order > clearedAt)).toEqual([]);
 
     await jest.advanceTimersByTimeAsync(10 * MINUTE);
     expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(1);
@@ -1502,6 +1507,9 @@ describe('hns-manager namespace discovery', () => {
       ctx.commitGuardRouting(true);
       await helperReady(ctx);
       await ctx.mod.stopHns();
+      expect(ctx.clearService).toHaveBeenLastCalledWith('hns', expect.objectContaining({
+        publicSuffixes: ['.pirate', '.8s28'], guardRouting: true,
+      }));
       ctx.commitGuardRouting(false);
       expect(published(ctx)).toEqual(['.pirate', '.8s28']);
       expect(guardRouting(ctx)).toBe(false);
@@ -1517,7 +1525,7 @@ describe('hns-manager namespace discovery', () => {
       // The helper reports an error and is torn down for a restart.
       ctx.readlineHandlers.get('line')(JSON.stringify({ type: 'error' }));
       await flush();
-      expect(ctx.clearService).toHaveBeenCalledWith('hns');
+      expect(ctx.clearService).toHaveBeenLastCalledWith('hns', expect.objectContaining({ guardRouting: true }));
       expect(guardRouting(ctx)).toBe(true);
       expect(updates(ctx, 'guardRouting').every(([, update]) => update.guardRouting === true)).toBe(true);
     });

@@ -758,8 +758,12 @@ function getHnsDiscovery() {
 // (contract v4 addendum 1): the platform supports Handshake browsing and the
 // committed routing policy sends such names to the guard. The helper's health
 // does not decide it.
-function publishHnsGuardRouting(routed = networkManager.isHnsGuardRouting()) {
-  updateService('hns', { guardRouting: hnsCapability.supported && routed === true });
+function hnsGuardRoutingPublished(routed = networkManager.isHnsGuardRouting()) {
+  return hnsCapability.supported && routed === true;
+}
+
+function publishHnsGuardRouting(routed) {
+  updateService('hns', { guardRouting: hnsGuardRoutingPublished(routed) });
 }
 networkManager.setHnsGuardRoutingObserver(publishHnsGuardRouting);
 
@@ -1096,11 +1100,13 @@ async function stopHns({ recovering = false } = {}) {
   proxyAddr = null; caPemPath = null; rootAddr = null; recursiveAddr = null;
   synced = false; canaryReady = false; height = 0; lastHeightChangeAt = 0;
   resetHnsReadiness(); hnsStderrLogState.clear();
-  clearService('hns');
-  // The listed roots and the routing outlive the helper, so the renderer's
-  // copy does too.
-  updateService('hns', { publicSuffixes: getHnsPublicSuffixes(), discovery: getHnsDiscovery() });
-  publishHnsGuardRouting();
+  // The listed roots and the routing outlive the helper, so the renderer's copy
+  // keeps them through the reset, in one broadcast.
+  clearService('hns', {
+    publicSuffixes: getHnsPublicSuffixes(),
+    discovery: getHnsDiscovery(),
+    guardRouting: hnsGuardRoutingPublished(),
+  });
   updateState(STATUS.STOPPED);
   if (pendingStart && runtimeWanted && (!networkMonitor || networkMonitor.allowed())) {
     pendingStart = false;

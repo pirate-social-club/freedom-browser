@@ -273,16 +273,18 @@ const SERVICE_DEFAULTS = Object.fromEntries(
 );
 
 /**
- * Clear service state (when stopped)
+ * Clear service state (when stopped). `retained` holds fields that outlive the
+ * stop; they land in the same broadcast as the reset, so no window ever sees
+ * them cleared.
  */
-function clearService(service) {
+function clearService(service, retained = {}) {
   if (!registry[service]) return;
 
   if (registry[service].tempMessageTimeout) {
     clearTimeout(registry[service].tempMessageTimeout);
   }
 
-  registry[service] = createEmptyServiceState(service);
+  registry[service] = { ...createEmptyServiceState(service), ...retained };
 
   broadcastRegistryUpdate();
 }
