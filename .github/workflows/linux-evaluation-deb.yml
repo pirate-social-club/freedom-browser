@@ -135,3 +135,11 @@ jobs:
           actual="$(dpkg-deb -f deb/*.deb Depends)"
           printf 'expected: %s\nactual:   %s\n' "$expected" "$actual"
           test "$actual" = "$expected"
+      - name: Confirm the control file's version carries package.json's epoch and version
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          expected="$(node -p "const p = require('./package.json'); const f = p.build.deb.fpm || []; const i = f.indexOf('--epoch'); (i >= 0 ? f[i + 1] + ':' : '') + p.version")"
+          actual="$(dpkg-deb -f deb/*.deb Version)"
+          printf 'expected: %s\nactual:   %s\n' "$expected" "$actual"
+          test "$actual" = "$expected"

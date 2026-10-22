@@ -4,7 +4,7 @@ Licence of this fork: AGPL-3.0-or-later. Upstream code inside it remains MPL-2.0
 
 Audit date: 2026-10-15
 
-Baseline: `0.7.15`
+Baseline: `0.7.16`
 
 Method: re-derived from the installed dependency tree, the committed artifacts and `package.json`'s `build` configuration, then checked by `licenses-audit.test.js`.
 
@@ -12,7 +12,7 @@ This is a practical engineering audit, not legal advice. Final licensing decisio
 
 This revision replaces the short AGPL posture note (2026-05-08) that the upstream v0.8.7 merge left in place of upstream's component audit. It starts from upstream's 0.8.7 audit (`git show 3a8c75e6:LICENSE_AUDIT.md`), re-reads each of its records against this tree, and adds the fork's own components: the committed Handshake helpers in `hns-bin/`, the committed V2Ray runtime in `dvpn-bin/`, the Agora Web SDK bundle, the dVPN SDK npm packages, and the fork's own `assets/hns/` and `scripts/jacktrip/` files. The upstream pins are unchanged from 0.8.7 and still match the recorded versions. The production npm tree grew from 273 to 299 unique packages, all of the 26 additions through the dVPN SDK and all permissive, and then to 300 when verified Spaces browsing added `@spacesprotocol/libveritas`.
 
-`package.json` names version 0.7.15, the fork's next release number (no v0.7.15 tag exists yet), so the audit is baselined there rather than at upstream's 0.8.7.
+`package.json` names version 0.7.16, the fork's next release number, so the audit is baselined there rather than at upstream's 0.8.7. The baseline moved from 0.7.15 on 2026-10-22, with the version bump and nothing else. The last full manual re-reading of this audit was on 2026-10-15, against 0.7.15. Each version move since then was recorded here as it landed: Electron 44.7.0 to 44.9.3, freedom-ipfs 0.4.5 to 0.4.6, and Ant 0.5.61 to 0.5.71. The inspection of the security-set candidate dd0e913a, against the accepted 2f7920f3 package, found no third-party component added or removed. The Linux deb also carries the Debian epoch 1 (`build.deb.fpm`), so its package version is `1:0.7.16`.
 
 ---
 
@@ -374,4 +374,4 @@ Two recommended items are not blockers. Agora should be asked for a licence file
 
 ---
 
-Re-derived from the installed tree on 2026-10-15 against `0.7.15`. Kept honest by `licenses-audit.test.js`.
+Re-derived from the installed tree on 2026-10-22 against `0.7.16`. That re-derivation is `licenses-audit.test.js`, which walks the installed production dependency tree and every bundled component and compares them with this audit. The last full manual re-reading was on 2026-10-15 against 0.7.15. Kept honest by `licenses-audit.test.js`.

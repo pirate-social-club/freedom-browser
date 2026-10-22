@@ -1,6 +1,6 @@
 {
   "name": "freedom-browser",
-  "version": "0.7.15",
+  "version": "0.7.16",
   "license": "AGPL-3.0-or-later",
   "description": "Freedom – A browser for the decentralized web, with Swarm, IPFS, onchain apps, and ENS as first-class protocols.",
   "author": {
@@ -194,6 +194,10 @@
       ]
     },
     "deb": {
+      "fpm": [
+        "--epoch",
+        "1"
+      ],
       "depends": [
         "libgtk-3-0",
         "libnotify4",
