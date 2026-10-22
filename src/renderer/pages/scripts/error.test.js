@@ -61,11 +61,14 @@ describe('error page address refusal and Handshake state', () => {
     expect(page.window.location.href).toBe(address);
   });
 
-  test.each(['HNS_LOOKUP_FAILED', 'ERR_TUNNEL_CONNECTION_FAILED'])(
+  test.each([
+    ['HNS_LOOKUP_FAILED', {}],
+    ['ERR_TUNNEL_CONNECTION_FAILED', { protocol: 'hns' }],
+  ])(
     '%s retains Handshake failure text and retry',
-    async (error) => {
+    async (error, mark) => {
       const address = 'https://fixture-root/';
-      const page = await loadErrorPage({ error, url: address });
+      const page = await loadErrorPage({ error, url: address, ...mark });
       expect(page.document.title).toBe('Handshake site unavailable');
       expect(page.elements.details.textContent).toContain(address);
       expect(page.elements['retry-btn'].hidden).toBe(false);
@@ -73,6 +76,28 @@ describe('error page address refusal and Handshake state', () => {
       expect(page.window.location.href).toBe(address);
     }
   );
+
+  // Navigation marks every failure on a host the shared rule routes to
+  // Handshake, whatever the error, and the page follows the mark.
+  test.each([
+    ['https://app.8s28/', 'ERR_TUNNEL_CONNECTION_FAILED'],
+    ['https://membertest.8s28/path?q=1', 'ERR_CONNECTION_RESET'],
+    ['https://a.b.8s28/', 'ERR_CERT_AUTHORITY_INVALID'],
+    ['https://fixture-root/', 'ERR_HTTP_RESPONSE_CODE_FAILURE'],
+  ])('a marked failure on %s (%s) gets the Handshake page', async (address, error) => {
+    const page = await loadErrorPage({ error, url: address, protocol: 'hns' });
+    expect(page.document.title).toBe('Handshake site unavailable');
+    expect(page.elements.details.textContent).toBe(`${address}\n\n${error}`);
+    page.elements['retry-btn'].onclick();
+    expect(page.window.location.href).toBe(address);
+  });
+
+  test('an unmarked failure keeps the generic page, even on a single label', async () => {
+    for (const url of ['https://app.8s28/', 'https://fixture-root/']) {
+      const page = await loadErrorPage({ error: 'ERR_TUNNEL_CONNECTION_FAILED', url });
+      expect(page.document.title).toBe("Couldn't load this page");
+    }
+  });
 
   test.each(['ERR_CONNECTION_RESET', 'constructor', '__proto__'])(
     '%s follows the generic error path',

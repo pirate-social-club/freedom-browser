@@ -427,6 +427,17 @@ const buildErrorPageUrl = (errorCode, targetUrl, extras = {}) => {
   return errorUrl.toString();
 };
 
+// True when the shared Handshake rule (src/shared/hns-hosts.js) routes this
+// URL's host to Handshake: a single label, or any name under a listed root.
+// A load that fails there gets the Handshake error page.
+const isHandshakeUrl = (value) => {
+  try {
+    return globalThis.FREEDOM_HNS_HOSTS?.isHnsHost?.(new URL(value).hostname) === true;
+  } catch {
+    return false;
+  }
+};
+
 // True when the IPFS node can't currently serve content — disabled for this
 // profile, or stopped/errored. Used to route ipfs:// / ipns:// navigations to
 // the friendly error page instead of letting the ipfs: protocol handler return
@@ -3322,8 +3333,10 @@ export const initNavigation = () => {
         if (data.event?.errorCode === -20) refreshSessionRoutingNotice(webview);
         if (data.event && ![-3, -20].includes(data.event.errorCode) && !isSessionRoutingBlocked(webview) && webview) {
           const errorUrl = new URL('pages/error.html', window.location.href);
+          const failedUrl = data.event.validatedURL || data.event.url || '';
           errorUrl.searchParams.set('error', data.event.errorDescription || data.event.errorCode);
-          errorUrl.searchParams.set('url', data.event.validatedURL || data.event.url || '');
+          errorUrl.searchParams.set('url', failedUrl);
+          if (isHandshakeUrl(failedUrl)) errorUrl.searchParams.set('protocol', 'hns');
           webview.loadURL(errorUrl.toString());
         }
 

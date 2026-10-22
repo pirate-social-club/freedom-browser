@@ -664,6 +664,40 @@ describe('navigation', () => {
     expect(ctx.activeRef.tab.webview.loadURL).not.toHaveBeenCalled();
   });
 
+  test('a failed load on any name the shared rule routes to Handshake is marked for its error page', async () => {
+    const previous = globalThis.FREEDOM_HNS_HOSTS;
+    const hnsHosts = jest.requireActual('../../shared/hns-hosts.js');
+    hnsHosts.setDynamicHnsPublicSuffixes(['8s28']);
+    globalThis.FREEDOM_HNS_HOSTS = hnsHosts;
+    try {
+      const ctx = await loadNavigationModule();
+      await ctx.mod.initNavigation();
+      const errorPage = (validatedURL) => {
+        ctx.activeRef.tab.webview.loadURL.mockClear();
+        ctx.tabsMocks.webviewEventHandler('did-fail-load', {
+          tabId: ctx.activeRef.tab.id,
+          event: { errorCode: -101, errorDescription: 'ERR_CONNECTION_RESET', isMainFrame: true, validatedURL },
+        });
+        return new URL(ctx.activeRef.tab.webview.loadURL.mock.calls[0][0]);
+      };
+      for (const url of [
+        'https://app.8s28/', 'https://membertest.8s28/path?q=1', 'https://a.b.8s28/', 'https://8s28/',
+        'https://app.pirate/', 'https://fixture-root/',
+      ]) {
+        const page = errorPage(url);
+        expect(page.searchParams.get('protocol')).toBe('hns');
+        expect(page.searchParams.get('url')).toBe(url);
+        expect(page.searchParams.get('error')).toBe('ERR_CONNECTION_RESET');
+      }
+      for (const url of ['https://example.com/', 'https://app.unlisted/', 'http://127.0.0.1:8080/', 'https://localhost/']) {
+        expect(errorPage(url).searchParams.get('protocol')).toBeNull();
+      }
+    } finally {
+      hnsHosts.setDynamicHnsPublicSuffixes([]);
+      globalThis.FREEDOM_HNS_HOSTS = previous;
+    }
+  });
+
   afterEach(() => {
     global.window = originalWindow;
     global.document = originalDocument;

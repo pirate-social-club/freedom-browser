@@ -1,0 +1,1 @@
+- Handshake names under imported roots, such as `app.8s28`, go straight to Handshake, and get the Handshake error page when they fail to load
