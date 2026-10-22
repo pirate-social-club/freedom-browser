@@ -41,3 +41,20 @@ cp freedom_spaces_fixture.rs <libveritas>/testutil/examples/
 cd <libveritas>
 cargo run --locked -p libveritas_testutil --example freedom_spaces_fixture > generated-chain.json
 ```
+
+## Member proofs
+
+`freedom_spaces_member_fixture.rs` generates deterministic member proofs at a
+first commitment, both before and after finality, and a temporary member. It
+uses the published 0.4.5 package's exact source commit
+`d2cb558830adfdfcc44613591d2c0329160fcd3b`, rather than relying on a mutable tag.
+Every variant is checked using production verifier options. First commitments
+need no ZK receipt, so no fake receipt or dev mode is used. Owner-record variants
+cover valid HTTPS websites, newer sequences, invalid websites and signatures
+under another key or name. The parent also has a signed website to test that it
+cannot substitute for the member's records.
+
+The hosted `Spaces member proof fixtures` workflow runs the generator using
+Rust 1.91.0 and retains the JSON, build log, exact source identities and input
+digests. It is fixture generation only; it does not build or replace a browser
+dependency and does not establish live member acceptance.

@@ -1,0 +1,59 @@
+name: Spaces member proof fixtures
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/spaces-member-fixtures.yml'
+      - 'test/fixtures/spaces/freedom_spaces_member_fixture.rs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spaces-member-fixtures-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fixtures:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: spacesprotocol/libveritas
+          ref: d2cb558830adfdfcc44613591d2c0329160fcd3b
+          path: .fixture-veritas
+          persist-credentials: false
+      - name: Generate with the pinned production verifier
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/spaces-member-fixtures-target
+          RUSTUP_TOOLCHAIN: 1.91.0
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.91.0 --profile minimal
+          evidence="$RUNNER_TEMP/spaces-member-fixtures"
+          mkdir -p "$evidence"
+          generator=test/fixtures/spaces/freedom_spaces_member_fixture.rs
+          cp "$generator" .fixture-veritas/testutil/examples/
+          sha256sum "$generator" .fixture-veritas/Cargo.lock > "$evidence/source.sha256"
+          git rev-parse HEAD > "$evidence/freedom-head.txt"
+          git -C .fixture-veritas rev-parse HEAD > "$evidence/veritas-head.txt"
+          test "$(cat "$evidence/veritas-head.txt")" = d2cb558830adfdfcc44613591d2c0329160fcd3b
+          (
+            cd .fixture-veritas
+            cargo run --locked -p libveritas_testutil --example freedom_spaces_member_fixture
+          ) > "$evidence/generated-members.json" 2> "$evidence/generation.log"
+          python3 -m json.tool "$evidence/generated-members.json" > /dev/null
+      - name: Upload fixture provenance
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: spaces-member-fixtures-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/spaces-member-fixtures/
+          if-no-files-found: error
+          retention-days: 14
