@@ -1,0 +1,1 @@
+- Pages no longer fail to load for several seconds after the dVPN connects or Handshake starts

@@ -22,8 +22,9 @@
 //
 // The test profile reads the staging namespace list
 // (FREEDOM_TEST_HNS_DISCOVERY_ORIGIN, honoured for FREEDOM_TEST_USER_DATA
-// profiles only), and each launch must report that list `fresh`, with every
-// root the hosts above sit under on it, before anything is browsed. So this
+// profiles only), and each launch must report that list `fresh`, answered by
+// the staging origin, with every root the hosts above sit under on it, before
+// anything is browsed. So this
 // gate cannot pass until staging serves /public/hns/namespaces/v1. Hosted CI
 // never runs it.
 
@@ -123,7 +124,8 @@ async function expectRendered(window, host, titlePattern, timeout) {
 }
 
 // The `discovery` field and root set the app published (service-registry.js):
-// the staging list must have arrived (`fresh`) and name every browsed root.
+// the staging list must have arrived (`fresh`) from the staging origin, not
+// production's, and name every browsed root.
 async function expectStagingDiscovery(window, phase) {
   const deadline = Date.now() + DISCOVERY_TIMEOUT_MS;
   let seen = null;
@@ -132,13 +134,18 @@ async function expectStagingDiscovery(window, phase) {
       const hns = (await window.serviceRegistry.getRegistry()).hns || {};
       return { discovery: hns.discovery ?? null, publicSuffixes: hns.publicSuffixes ?? [] };
     });
-    if (seen.discovery?.state === 'fresh' && BROWSED_ROOTS.every((root) => seen.publicSuffixes.includes(`.${root}`))) {
+    if (
+      seen.discovery?.state === 'fresh' &&
+      seen.discovery.origin === STAGING_DISCOVERY_ORIGIN &&
+      BROWSED_ROOTS.every((root) => seen.publicSuffixes.includes(`.${root}`))
+    ) {
       return seen;
     }
     await window.waitForTimeout(1_000);
   }
   throw new Error(
-    `staging discovery did not reach fresh listing ${BROWSED_ROOTS.join(', ')} within ${DISCOVERY_TIMEOUT_MS} ms ` +
+    `discovery did not reach fresh from ${STAGING_DISCOVERY_ORIGIN} listing ${BROWSED_ROOTS.join(', ')} ` +
+      `within ${DISCOVERY_TIMEOUT_MS} ms ` +
       `(${phase}); last seen ${JSON.stringify(seen)}`
   );
 }

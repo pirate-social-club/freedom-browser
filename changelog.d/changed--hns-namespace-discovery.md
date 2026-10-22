@@ -1,1 +1,2 @@
-- Handshake names under imported roots, such as `app.8s28`, go straight to Handshake, and get the Handshake error page when they fail to load
+- Handshake sites such as `app.8s28` go straight to Handshake instead of being looked up in ordinary DNS first
+- A Handshake site that fails to load shows the Handshake error page

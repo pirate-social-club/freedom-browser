@@ -1,0 +1,1 @@
+- Pages can no longer trigger DNS lookups through prefetch hints

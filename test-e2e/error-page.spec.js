@@ -247,3 +247,16 @@ test.describe('the error page reads node state from the registry', () => {
     expect(await descriptionFor(window, 'ipfs')).not.toMatch(/node is not running/);
   });
 });
+
+// The Handshake error page rests on the shared host rule loading in the chrome
+// window itself (src/renderer/index.html): under its CSP, from its file://
+// path, and ahead of the module that marks failures. The unit suites stub it.
+test('the chrome window loads the shared Handshake host rule and its IANA snapshot', async ({ window }) => {
+  const loaded = await window.evaluate(() => ({
+    rule: typeof window.FREEDOM_HNS_HOSTS?.isHnsHost === 'function',
+    snapshot: typeof window.FREEDOM_HNS_IANA_TLD_SNAPSHOT?.IANA_TLD_SNAPSHOT === 'string',
+    pirate: window.FREEDOM_HNS_HOSTS?.isHnsHost?.('app.pirate'),
+    icannRefused: window.FREEDOM_HNS_HOSTS?.isReservedHnsRoot?.('com'),
+  }));
+  expect(loaded).toEqual({ rule: true, snapshot: true, pirate: true, icannRefused: true });
+});
