@@ -558,7 +558,8 @@ describe('network-manager', () => {
     const response = { writeHead: jest.fn(), end: jest.fn() };
     pacServer.handler({}, response);
     expect(response.end.mock.calls[0][0]).toContain('SOCKS5 127.0.0.1:10809');
-    expect(ctx.session.defaultSession.forceReloadProxyConfig).toHaveBeenCalledTimes(2);
+    // Two reloads per update, the second after the connection close.
+    expect(ctx.session.defaultSession.forceReloadProxyConfig).toHaveBeenCalledTimes(4);
   });
 
   test('shared route preparation waits for an old guard socket close while retaining the old PAC body and denied permission', async () => {
@@ -602,13 +603,13 @@ describe('network-manager', () => {
     await ctx.mod.registerProxySession(second);
     for (const target of [ctx.session.defaultSession, first, second]) {
       expect(target.setProxy).toHaveBeenCalledTimes(1);
-      expect(target.forceReloadProxyConfig).toHaveBeenCalledTimes(1);
+      expect(target.forceReloadProxyConfig).toHaveBeenCalledTimes(2);
       expect(target.closeAllConnections).toHaveBeenCalledTimes(1);
     }
     ctx.mod.setDvpnProxy('127.0.0.1', 10809);
     await ctx.mod.rebuild();
     for (const target of [ctx.session.defaultSession, first, second]) {
-      expect(target.forceReloadProxyConfig).toHaveBeenCalledTimes(2);
+      expect(target.forceReloadProxyConfig).toHaveBeenCalledTimes(4);
       expect(target.closeAllConnections).toHaveBeenCalledTimes(2);
     }
   });

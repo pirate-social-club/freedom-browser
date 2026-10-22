@@ -82,7 +82,9 @@ describe('session quarantine', () => {
     expect(f.fatal).not.toHaveBeenCalled();
     await f.routing.rebuild();
     expect(f.getter().allowed).toBe(true);
-    expect(f.main[method]).toHaveBeenCalledTimes(3);
+    // A completed update reloads twice, the second time after its close. The
+    // failing call stopped its own update before the second reload.
+    expect(f.main[method]).toHaveBeenCalledTimes(method === 'setProxy' ? 3 : 5);
   });
 
   test('partial global failure quarantines even sessions whose native configuration succeeded', async () => {
