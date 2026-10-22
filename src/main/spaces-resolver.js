@@ -13,7 +13,7 @@ const { websiteFromZone } = require('./spaces/website');
 /**
  * Verified Spaces browsing.
  *
- * `@space` resolves to the https website its owner signed, and nothing else:
+ * `@space` and finalized `name@space` resolve only to an owner-signed https website:
  *  1. anchors come from src/main/spaces/anchors.js (relay quorum plus a fresh,
  *     proof-of-work-checked Bitcoin header), refreshed every TRUST_TTL_MS;
  *  2. every agreeing relay is asked for a proof of the name, and libveritas
@@ -25,7 +25,10 @@ const { websiteFromZone } = require('./spaces/website');
  *     transfer. libveritas's ordering (commitment, then delegate records, then
  *     the owner record set's sequence, then anchor height) picks among the
  *     zones under that key;
- *  4. src/main/spaces/website.js reads the owner-signed `website` record.
+ *  4. member names additionally need PROOF_AGREEMENT sovereign proofs of that
+ *     owner key. Temporary and unfinalized certificates are refused. A parent
+ *     zone cannot substitute for the exact member's verified zone;
+ *  5. src/main/spaces/website.js reads only that zone's owner-signed `website`.
  *
  * What this cannot rule out: a proof verifies at any of the trusted anchors,
  * which span about 15 days, and owner record sets carry a sequence number but
@@ -37,9 +40,8 @@ const { websiteFromZone } = require('./spaces/website');
  *
  * "Not found" is only an absence from the relays' proofs, not a proof of
  * absence, so it needs PROOF_AGREEMENT relays and is never cached.
- * `name@space` is refused until member proofs can be verified. Requests go
- * through the session the requesting window browses in (a private window's
- * partition, not the default session its chrome runs on), so they follow that
+ * Requests go through the session the requesting window browses in (a private
+ * window's partition, not the default session its chrome runs on), so they follow that
  * session's routing, and each session gets its own resolver and caches, so a
  * private window neither reuses nor reveals another window's lookups.
  * Verification runs on the main thread. libveritas verifies every bundle in a
@@ -125,7 +127,8 @@ function createSpacesResolver({
     }
   }
 
-  async function attempt(veritasLib, handle, refresh) {
+  async function attempt(veritasLib, name, refresh) {
+    const { handle, member } = name;
     let anchors;
     try {
       anchors = await trustedAnchors(veritasLib, refresh);
@@ -157,7 +160,7 @@ function createSpacesResolver({
         )
         .join('; ');
     if (proved.length) {
-      const zone = chooseZone(
+      let zone = chooseZone(
         proved.map((outcome) => outcome.zone),
         (a, b) => veritasLib.zoneIsBetterThan(a, b)
       );
@@ -173,6 +176,22 @@ function createSpacesResolver({
             `${agreeing.length} of ${outcomes.length} relays proved the current owner key, ` +
             `${PROOF_AGREEMENT} needed (${detail(outcomes.filter((outcome) => !agreeing.includes(outcome)))})`,
         };
+      }
+      if (member) {
+        const finalized = agreeing.filter((outcome) => outcome.zone.sovereignty === 'sovereign');
+        if (finalized.length < PROOF_AGREEMENT) {
+          return {
+            type: 'refused',
+            handle,
+            reason: 'MEMBER_NOT_FINAL',
+            anchorHeight: zone.anchor,
+            trustRoot: anchors.root,
+          };
+        }
+        zone = chooseZone(
+          finalized.map((outcome) => outcome.zone),
+          (a, b) => veritasLib.zoneIsBetterThan(a, b)
+        );
       }
       const website = websiteFromZone(zone);
       const verifiedAt = { anchorHeight: zone.anchor, trustRoot: anchors.root };
@@ -191,18 +210,15 @@ function createSpacesResolver({
     if (!name) {
       return { type: 'refused', handle: String(input ?? '').trim(), reason: 'INVALID_HANDLE' };
     }
-    if (name.member) {
-      return { type: 'refused', handle: name.handle, reason: 'MEMBER_NAMES_UNSUPPORTED' };
-    }
     const cached = results.get(name.handle);
     if (cached && now() - cached.at < RESULT_TTL_MS) return cached.result;
 
     // Loading the verifier is not a relay failure: if it throws, so does this.
     const veritasLib = lib();
-    let result = await attempt(veritasLib, name.handle, false);
+    let result = await attempt(veritasLib, name, false);
     // Proofs may sit at an anchor newer than a cached set; retry once fresh.
     if (['PROOF_UNVERIFIED', 'PROOF_UNCONFIRMED'].includes(result.reason)) {
-      result = await attempt(veritasLib, name.handle, true);
+      result = await attempt(veritasLib, name, true);
     }
     if (result.type !== 'error' && result.reason !== 'SPACE_NOT_FOUND') {
       results.set(name.handle, { result, at: now() });

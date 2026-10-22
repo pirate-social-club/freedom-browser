@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/spaces-member-fixtures.yml'
       - 'test/fixtures/spaces/freedom_spaces_member_fixture.rs'
+      - 'test/fixtures/spaces/generated-members.json'
   workflow_dispatch:
 
 permissions:
@@ -49,6 +50,9 @@ jobs:
             cargo run --locked -p libveritas_testutil --example freedom_spaces_member_fixture
           ) > "$evidence/generated-members.json" 2> "$evidence/generation.log"
           python3 -m json.tool "$evidence/generated-members.json" > /dev/null
+          if [ -f test/fixtures/spaces/generated-members.json ]; then
+            cmp test/fixtures/spaces/generated-members.json "$evidence/generated-members.json"
+          fi
       - name: Upload fixture provenance
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

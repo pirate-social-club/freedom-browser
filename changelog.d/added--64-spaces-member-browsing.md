@@ -1,0 +1,2 @@
+- Spaces member browsing ([#64](https://github.com/pirate-social-club/freedom-browser/pull/64))
+  - `name@space` opens the finalized member owner's signed HTTPS website, verified locally against the agreed Spaces anchors
