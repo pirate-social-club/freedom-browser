@@ -81,8 +81,8 @@ const registry = {
     syncProgress: 0,
     publicSuffixes: ['.pirate'],
     // Namespace discovery (hns-manager.js): `fresh`, `stale` or `unavailable`,
-    // and when the list last arrived.
-    discovery: { state: 'unavailable', lastSuccessAt: null },
+    // when the list last arrived, and from which origin.
+    discovery: { state: 'unavailable', lastSuccessAt: null, origin: null },
   },
   dvpn: {
     api: null,

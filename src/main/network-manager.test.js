@@ -1186,6 +1186,7 @@ describe('HNS namespace discovery fetch', () => {
     for (const [, init] of [...ctx.sessionFetch.mock.calls, ...injected.mock.calls]) {
       expect(Object.keys(init).sort()).toEqual(['cache', 'credentials', 'redirect', 'signal']);
     }
+    expect(fromSession.origin).toBe('https://api-next.pirate.sc');
     expect(fromSession.generatedAt).toBe(Date.parse(GENERATED_AT));
     expect([...fromSession.roots]).toEqual([['8s28', 5 * 24 * 60 * 60 * 1000]]);
     expect(typeof fromSession.receivedAt).toBe('number');

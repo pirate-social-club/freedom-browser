@@ -168,7 +168,7 @@ describe('service-registry', () => {
       dohFallbackReady: true,
       height: 42000,
       publicSuffixes: ['.pirate', '.xn--pokmon-dva'],
-      discovery: { state: 'fresh', lastSuccessAt: '2026-10-22T07:00:00.000Z' },
+      discovery: { state: 'fresh', lastSuccessAt: '2026-10-22T07:00:00.000Z', origin: 'https://api-next.pirate.sc' },
     });
 
     mod.clearService('hns');
@@ -189,7 +189,7 @@ describe('service-registry', () => {
       peerCount: 0,
       syncProgress: 0,
       publicSuffixes: ['.pirate'],
-      discovery: { state: 'unavailable', lastSuccessAt: null },
+      discovery: { state: 'unavailable', lastSuccessAt: null, origin: null },
     });
   });
 

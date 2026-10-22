@@ -1113,15 +1113,19 @@ describe('hns-manager', () => {
 
 describe('hns-manager namespace discovery', () => {
   const GENERATED_AT = Date.parse('2026-10-22T07:00:00.000Z');
+  const ORIGIN = 'https://api-next.pirate.sc';
   const SECOND = 1000;
   const MINUTE = 60 * SECOND;
+  const DAY = 24 * 60 * MINUTE;
   const flush = async () => { for (let i = 0; i < 30; i += 1) await Promise.resolve(); };
 
   // What networkManager.fetchHnsNamespaces resolves with: each root's
-  // lifetime on the server's clock, and the monotonic receipt time.
-  const listing = (roots, { generatedAt = GENERATED_AT, lifetimeMs = 5 * 24 * 60 * MINUTE } = {}) => () => ({
+  // lifetime on the server's clock, the origin that answered, and the
+  // monotonic receipt time.
+  const listing = (roots, { generatedAt = GENERATED_AT, lifetimeMs = 5 * DAY, origin = ORIGIN } = {}) => () => ({
     generatedAt,
     roots: new Map(roots.map((root) => (Array.isArray(root) ? root : [root, lifetimeMs]))),
+    origin,
     receivedAt: performance.now(),
   });
   const offline = () => { throw new Error('net::ERR_INTERNET_DISCONNECTED'); };
@@ -1148,9 +1152,10 @@ describe('hns-manager namespace discovery', () => {
     await flush();
   }
 
+  const updates = (ctx, field) => ctx.updateService.mock.calls.filter(([, update]) => field in update);
   const routed = (ctx) => ctx.setImportedHnsRoots.mock.calls.at(-1)?.[0];
-  const discovery = (ctx) => ctx.updateService.mock.calls.filter(([, update]) => update.discovery).at(-1)?.[1].discovery;
-  const published = (ctx) => ctx.updateService.mock.calls.filter(([, update]) => update.publicSuffixes).at(-1)?.[1].publicSuffixes;
+  const discovery = (ctx) => updates(ctx, 'discovery').at(-1)?.[1].discovery;
+  const published = (ctx) => updates(ctx, 'publicSuffixes').at(-1)?.[1].publicSuffixes;
 
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => {
@@ -1172,8 +1177,7 @@ describe('hns-manager namespace discovery', () => {
     expect(ctx.setHnsProxy).not.toHaveBeenCalled();
     expect(routed(ctx)).toEqual(['8s28', 'a18n']);
     expect(published(ctx)).toEqual(['.pirate', '.8s28', '.a18n']);
-    expect(discovery(ctx)).toEqual({ state: 'fresh', lastSuccessAt: new Date(Date.now()).toISOString() });
-    expect(ctx.pruneUnknownSingleLabelHistory).toHaveBeenCalledTimes(1);
+    expect(discovery(ctx)).toEqual({ state: 'fresh', lastSuccessAt: new Date(Date.now()).toISOString(), origin: ORIGIN });
 
     // Activation follows on its own schedule and fetches nothing more.
     await jest.advanceTimersByTimeAsync(6 * SECOND);
@@ -1213,7 +1217,7 @@ describe('hns-manager namespace discovery', () => {
     await jest.advanceTimersByTimeAsync(1);
     expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
     // The retry was cancelled too: no second retry, the first backoff instead.
-    await jest.advanceTimersByTimeAsync(15 * SECOND - 1);
+    await jest.advanceTimersByTimeAsync(30 * SECOND - 1);
     expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
     await jest.advanceTimersByTimeAsync(1);
     expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(3);
@@ -1223,26 +1227,28 @@ describe('hns-manager namespace discovery', () => {
     jest.spyOn(Math, 'random').mockReturnValue(0);
     const ctx = load([() => { throw new Error('namespace list answered 503'); }]);
     await helperReady(ctx);
-    await jest.advanceTimersByTimeAsync(15 * SECOND - 1);
+    await jest.advanceTimersByTimeAsync(30 * SECOND - 1);
     expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(1);
     await jest.advanceTimersByTimeAsync(1);
     expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
   });
 
+  // Each step's jitter lands in [step, 1.5 x step), and no delay passes 10 minutes.
   test.each([
-    ['at the bottom of its jitter', 0, [15, 30, 60, 120, 240, 300, 300]],
-    ['at the top of its jitter', 1 - Number.EPSILON, [30, 60, 120, 240, 480, 600, 600]],
-  ])('backoff doubles from 30 seconds to a 10-minute cap, %s, and a success resets it', async (_label, random, seconds) => {
+    ['at the bottom of its jitter', 0, [30, 60, 120, 240, 480, 600, 600]],
+    ['at the top of its jitter', 1 - Number.EPSILON, [45, 90, 180, 360, 600, 600, 600]],
+  ])('backoff starts at 30 seconds and doubles to a 10-minute cap, %s, and a success resets it', async (_label, random, seconds) => {
     jest.spyOn(Math, 'random').mockReturnValue(random);
     const failures = Array.from({ length: seconds.length }, () => offline);
     const ctx = load([...failures, listing(['8s28'])]);
     await helperReady(ctx);
-    for (let i = 0; i <= seconds.length; i += 1) await jest.advanceTimersByTimeAsync(10 * MINUTE);
+    for (let i = 0; i <= seconds.length + 1; i += 1) await jest.advanceTimersByTimeAsync(10 * MINUTE);
     const gaps = ctx.fetchedAt.slice(1).map((at, i) => Math.round((at - ctx.fetchedAt[i]) / SECOND));
-    // Seven failures back off; the success after them refreshes 10 minutes later.
+    // Seven failures back off; the success after them refreshes 10 minutes
+    // later, and the failure after that starts again from 30 seconds.
     expect(gaps.slice(0, seconds.length)).toEqual(seconds);
     expect(gaps[seconds.length]).toBe(600);
-    expect(gaps[seconds.length + 1]).toBe(Math.round(seconds[0]));
+    expect(gaps[seconds.length + 1]).toBe(seconds[0]);
   });
 
   test('a result fetched for a helper that has since restarted is discarded', async () => {
@@ -1280,7 +1286,7 @@ describe('hns-manager namespace discovery', () => {
     expect(discovery(ctx).state).toBe('stale');
 
     // One generated at the same instant as the applied list is not older.
-    await jest.advanceTimersByTimeAsync(30 * SECOND);
+    await jest.advanceTimersByTimeAsync(45 * SECOND);
     expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(3);
     expect(routed(ctx)).toEqual(['a18n']);
   });
@@ -1309,17 +1315,19 @@ describe('hns-manager namespace discovery', () => {
 
     await jest.advanceTimersByTimeAsync(5 * MINUTE);
     await ctx.mod.stopHns();
-    jest.setSystemTime(Date.now() - 400 * 24 * 60 * MINUTE);
+    jest.setSystemTime(Date.now() - 400 * DAY);
     await jest.advanceTimersByTimeAsync(receivedAt + 20 * MINUTE - 1 - performance.now());
-    jest.setSystemTime(Date.now() + 800 * 24 * 60 * MINUTE);
+    jest.setSystemTime(Date.now() + 800 * DAY);
     expect(routed(ctx)).toEqual(['8s28']);
     expect(published(ctx)).toEqual(['.pirate', '.8s28']);
+    expect(discovery(ctx).state).toBe('fresh');
 
     await jest.advanceTimersByTimeAsync(1);
     expect(routed(ctx)).toEqual([]);
     // The renderer's copy loses it too.
     expect(published(ctx)).toEqual(['.pirate']);
-    expect(discovery(ctx).state).toBe('fresh');
+    // A populated list whose every root has expired is not fresh.
+    expect(discovery(ctx).state).toBe('unavailable');
 
     // The restart's own fetch fails, and brings nothing back.
     await helperReady(ctx);
@@ -1328,35 +1336,89 @@ describe('hns-manager namespace discovery', () => {
     expect(discovery(ctx).state).toBe('unavailable');
   });
 
+  // Contract v4 addendum 1: fresh while every listed root is live; stale while
+  // any is; unavailable once none is, however the last attempt went.
   test('an outage keeps unexpired roots, then drops each at its deadline', async () => {
     const ctx = load([listing([['8s28', 5 * MINUTE], ['a18n', 20 * MINUTE]])]);
     await helperReady(ctx);
     const { lastSuccessAt } = discovery(ctx);
-    expect(discovery(ctx)).toEqual({ state: 'fresh', lastSuccessAt });
+    expect(discovery(ctx)).toEqual({ state: 'fresh', lastSuccessAt, origin: ORIGIN });
 
+    // One listed root expired: no longer fresh, though the last attempt succeeded.
     await jest.advanceTimersByTimeAsync(5 * MINUTE);
     expect(routed(ctx)).toEqual(['a18n']);
     expect(published(ctx)).toEqual(['.pirate', '.a18n']);
-    expect(discovery(ctx).state).toBe('fresh');
+    expect(discovery(ctx)).toEqual({ state: 'stale', lastSuccessAt, origin: ORIGIN });
 
     await jest.advanceTimersByTimeAsync(5 * MINUTE);
     expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
     expect(routed(ctx)).toEqual(['a18n']);
-    expect(discovery(ctx)).toEqual({ state: 'stale', lastSuccessAt });
+    expect(discovery(ctx)).toEqual({ state: 'stale', lastSuccessAt, origin: ORIGIN });
 
     await jest.advanceTimersByTimeAsync(10 * MINUTE);
     expect(routed(ctx)).toEqual([]);
-    expect(discovery(ctx)).toEqual({ state: 'unavailable', lastSuccessAt });
+    expect(discovery(ctx)).toEqual({ state: 'unavailable', lastSuccessAt, origin: ORIGIN });
   });
 
-  test('a list never received is unavailable, and an empty one is fresh', async () => {
+  test('a list never received is unavailable, and a successful empty one is fresh', async () => {
     const ctx = load([offline, listing([])]);
     await helperReady(ctx);
-    expect(discovery(ctx)).toEqual({ state: 'unavailable', lastSuccessAt: null });
-    await jest.advanceTimersByTimeAsync(30 * SECOND);
+    expect(discovery(ctx)).toEqual({ state: 'unavailable', lastSuccessAt: null, origin: null });
+    await jest.advanceTimersByTimeAsync(45 * SECOND);
     expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
-    expect(discovery(ctx)).toEqual({ state: 'fresh', lastSuccessAt: expect.any(String) });
+    expect(discovery(ctx)).toEqual({ state: 'fresh', lastSuccessAt: expect.any(String), origin: ORIGIN });
     expect(routed(ctx)).toEqual([]);
+  });
+
+  test('a populated list that fully expired is unavailable, and an empty success after it is fresh', async () => {
+    const ctx = load([listing(['8s28'], { lifetimeMs: 5 * MINUTE }), listing([], { generatedAt: GENERATED_AT + 10 * MINUTE })]);
+    await helperReady(ctx);
+    expect(discovery(ctx).state).toBe('fresh');
+    await jest.advanceTimersByTimeAsync(5 * MINUTE);
+    expect(routed(ctx)).toEqual([]);
+    expect(discovery(ctx).state).toBe('unavailable');
+    await jest.advanceTimersByTimeAsync(5 * MINUTE);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(2);
+    expect(routed(ctx)).toEqual([]);
+    expect(discovery(ctx).state).toBe('fresh');
+  });
+
+  test('the answering origin is published with the state', async () => {
+    const staging = 'https://api-next-staging.pirate.sc';
+    const ctx = load([listing(['8s28'], { origin: staging })]);
+    await helperReady(ctx);
+    expect(discovery(ctx)).toEqual({ state: 'fresh', lastSuccessAt: expect.any(String), origin: staging });
+  });
+
+  // Contract v4 addendum 1: never longer than the server's evidence window.
+  test('a root routes for at most 7 days from receipt, however far ahead its expiry is', async () => {
+    const ctx = load([listing(['8s28', ['a18n', 2 * DAY]], { lifetimeMs: 30 * DAY })]);
+    await helperReady(ctx);
+    const receivedAt = ctx.fetchedAt[0];
+    // Stopped, so only the expiry timer runs through the days that follow.
+    await ctx.mod.stopHns();
+    await jest.advanceTimersByTimeAsync(receivedAt + 2 * DAY - performance.now());
+    expect(routed(ctx)).toEqual(['8s28']);
+    await jest.advanceTimersByTimeAsync(receivedAt + 7 * DAY - 1 - performance.now());
+    expect(routed(ctx)).toEqual(['8s28']);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(routed(ctx)).toEqual([]);
+  });
+
+  test('history is pruned once per helper generation, after the refresh is armed, and a failed prune stops nothing', async () => {
+    const ctx = load([listing(['8s28']), listing(['8s28', 'a18n']), listing(['8s28']), listing(['8s28'])]);
+    ctx.pruneUnknownSingleLabelHistory.mockImplementation(() => { throw new Error('database is locked'); });
+    await helperReady(ctx);
+    expect(ctx.pruneUnknownSingleLabelHistory).toHaveBeenCalledTimes(1);
+    expect(ctx.log.warn).toHaveBeenCalledWith('[HNS] Single-label history prune failed: database is locked');
+    await jest.advanceTimersByTimeAsync(20 * MINUTE);
+    expect(ctx.fetchHnsNamespaces).toHaveBeenCalledTimes(3);
+    expect(discovery(ctx).state).toBe('fresh');
+    expect(ctx.pruneUnknownSingleLabelHistory).toHaveBeenCalledTimes(1);
+    // A new helper generation prunes once more.
+    await ctx.mod.stopHns();
+    await helperReady(ctx);
+    expect(ctx.pruneUnknownSingleLabelHistory).toHaveBeenCalledTimes(2);
   });
 
   test('stopping HNS cancels the refresh and nothing else', async () => {
@@ -1367,7 +1429,7 @@ describe('hns-manager namespace discovery', () => {
     const clearedAt = ctx.clearService.mock.invocationCallOrder.at(-1);
     const afterClear = ctx.updateService.mock.calls.filter((_, i) => ctx.updateService.mock.invocationCallOrder[i] > clearedAt);
     expect(afterClear).toEqual([
-      ['hns', { publicSuffixes: ['.pirate', '.8s28'], discovery: { state: 'fresh', lastSuccessAt: expect.any(String) } }],
+      ['hns', { publicSuffixes: ['.pirate', '.8s28'], discovery: { state: 'fresh', lastSuccessAt: expect.any(String), origin: ORIGIN } }],
     ]);
 
     await jest.advanceTimersByTimeAsync(10 * MINUTE);

@@ -848,7 +848,7 @@ async function fetchHnsNamespaces({ fetchImpl = fetchOnDefaultSession, url = get
     });
     if (response.status !== 200) throw new Error(`namespace list answered ${response.status}`);
     const list = parseHnsNamespaceList(JSON.parse(await readHnsDiscoveryBody(response, controller.signal)));
-    return { ...list, receivedAt: performance.now() };
+    return { ...list, origin: new URL(url).origin, receivedAt: performance.now() };
   })();
   try {
     return await Promise.race([read, deadline]);
