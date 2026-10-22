@@ -29,9 +29,9 @@
  *     a redirect, a stalled body and an oversized one;
  *   - a page server on 127.0.0.1 serves a host page with two <webview>
  *     guests, one on the default session and one on an in-memory
- *     `private-<uuid>` partition like a private window's, and the page each
- *     guest loads, with dns-prefetch hints in its HTML and in a `Link:`
- *     response header;
+ *     `private-<uuid>` partition like a private window's, and the pages each
+ *     guest loads, before and after a theme change, with dns-prefetch hints
+ *     in their HTML and in a `Link:` response header;
  *   - the HNS guard runs with no helper behind it, so it refuses every name it
  *     is sent.
  *
@@ -42,7 +42,7 @@
  * Results are printed as one JSON line prefixed with `PROBE-RESULT `.
  */
 
-const { app, session, BrowserWindow } = require('electron');
+const { app, session, BrowserWindow, nativeTheme } = require('electron');
 const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
@@ -88,6 +88,8 @@ process.on('exit', () => {
 });
 
 const { record, response } = require('../../../../test/helpers/hns-dns-fixtures');
+// Lookups may arrive with a search suffix appended (see this module).
+const { expectedNameOf } = require('./hns-discovery-probe-names');
 
 // ---- The resolver -----------------------------------------------------------
 
@@ -191,18 +193,19 @@ function startDiscovery() {
 
 // The hinted names each guest's page carries, by hint form. `img` names are
 // fetched, after every hint: the unlisted one is the control that reaches the
-// resolver whether or not prefetching is on.
-function hintedNames(guest) {
+// resolver whether or not prefetching is on. `round` tells the first page
+// from the second, loaded after a web preferences update.
+function hintedNames(guest, round = '') {
   return {
-    header: [LISTED, PIRATE, UNLISTED].map((root) => `header-${guest}.${root}`),
-    html: [LISTED, PIRATE, UNLISTED].map((root) => `html-${guest}.${root}`),
-    img: [LISTED, PIRATE, UNLISTED].map((root) => `img-${guest}.${root}`),
+    header: [LISTED, PIRATE, UNLISTED].map((root) => `header-${guest}${round}.${root}`),
+    html: [LISTED, PIRATE, UNLISTED].map((root) => `html-${guest}${round}.${root}`),
+    img: [LISTED, PIRATE, UNLISTED].map((root) => `img-${guest}${round}.${root}`),
   };
 }
 
 function startPages(closedPortNumber, privatePartition) {
   const server = http.createServer((req, res) => {
-    const [, kind, guest] = req.url.split('/');
+    const [, kind, guest, round = ''] = req.url.split('/');
     if (kind === 'host') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(
@@ -212,12 +215,12 @@ function startPages(closedPortNumber, privatePartition) {
       );
       return;
     }
-    if (kind !== 'hints' || !GUESTS.includes(guest)) {
+    if (kind !== 'hints' || !GUESTS.includes(guest) || !['', 'r2'].includes(round)) {
       res.writeHead(404);
       res.end();
       return;
     }
-    const names = hintedNames(guest);
+    const names = hintedNames(guest, round && `-${round}`);
     res.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
       link: names.header.map((name) => `<//${name}>; rel=dns-prefetch`).join(', '),
@@ -254,13 +257,15 @@ function within(promise, ms) {
 }
 
 // Resolves once `predicate()` holds, or after `ms`; reports which, and when.
-async function until(predicate, ms) {
-  const started = Date.now();
-  while (!predicate()) {
-    if (Date.now() - started >= ms) return { met: false, ms: Date.now() - started };
+// `refresh` updates what the predicate reads, before each check.
+async function until(predicate, ms, refresh = async () => {}) {
+  const since = Date.now();
+  for (;;) {
+    await refresh();
+    if (predicate()) return { met: true, ms: Date.now() - since };
+    if (Date.now() - since >= ms) return { met: false, ms: Date.now() - since };
     await settle(25);
   }
-  return { met: true, ms: Date.now() - started };
 }
 
 async function main() {
@@ -348,19 +353,51 @@ async function main() {
     guests.set(guest.session === privateSession ? 'private' : 'default', guest);
   });
   const hostLoad = await within(host.loadURL(`http://127.0.0.1:${pagePort}/host`), 10_000);
-  // Each page's hints come before its images. In the control run every hint
-  // lookup arrives before both guests' unlisted images have been looked up,
-  // and none arrives in the seconds after, so that moment is when the hints
-  // have been acted on. The control run also waits for the default guest's
-  // unlisted hints themselves. The private guest's prefetching is
-  // intermittent even with prefetching on (all of its hints or none, about
-  // half the runs each, on Electron 44.9.3), so it waits for none of those.
-  const awaited = [
-    ...GUESTS.map((guest) => `img-${guest}.${UNLISTED}`),
-    ...(WITHOUT_BLINK_SETTINGS ? [`html-default.${UNLISTED}`, `header-default.${UNLISTED}`] : []),
-  ];
-  const pagesSeen = await until(() => awaited.every((name) => dnsQueries.includes(name)), 15_000);
+  const seen = (name) => dnsQueries.some((queried) => expectedNameOf(queried, [name]) !== null);
+  // Each round is read once both guests' unlisted images, fetched after the
+  // page's hints, have been looked up. The control run also waits for every
+  // hint of the default guest, which it requires. The private guest's
+  // prefetching is intermittent even with prefetching on (all of its hints or
+  // none, about half the runs each, on Electron 44.9.3), so nothing waits for
+  // those.
+  const awaitRound = (round) => until(() => [
+    ...GUESTS.map((guest) => hintedNames(guest, round).img[2]),
+    ...(WITHOUT_BLINK_SETTINGS ? [...hintedNames('default', round).header, ...hintedNames('default', round).html] : []),
+  ].every(seen), 15_000);
+  const pagesSeen = await awaitRound('');
+
+  // A theme change sends every renderer a web preferences update, so this
+  // shows whether the startup prefetch setting survives one: each guest must
+  // first report the new colour scheme, then load a second page of hints.
+  const prefersDark = async (contents) => {
+    try {
+      return await contents.executeJavaScript("matchMedia('(prefers-color-scheme: dark)').matches");
+    } catch {
+      return null;
+    }
+  };
+  // Light first, then dark, each observed in both guests, so at least one
+  // update is seen to change what the pages report.
+  const themeTo = async (source) => {
+    nativeTheme.themeSource = source;
+    let reported = [];
+    return until(() => reported.length === GUESTS.length && reported.every((dark) => dark === (source === 'dark')), 10_000,
+      async () => {
+        reported = await Promise.all(GUESTS.map((guest) => (guests.get(guest) ? prefersDark(guests.get(guest)) : null)));
+      });
+  };
+  const themeApplied = { light: await themeTo('light'), dark: await themeTo('dark') };
+  const secondLoads = {};
+  for (const guest of GUESTS) {
+    const contents = guests.get(guest);
+    secondLoads[guest] = contents
+      ? await within(contents.loadURL(`http://127.0.0.1:${pagePort}/hints/${guest}/r2`), 10_000)
+      : { missing: true };
+  }
+  const secondPagesSeen = await awaitRound('-r2');
+  nativeTheme.themeSource = 'system';
   const loadedAtMs = Date.now() - started;
+
   const navigated = {};
   for (const guest of GUESTS) {
     const contents = guests.get(guest);
@@ -372,6 +409,9 @@ async function main() {
   results.pages = {
     hostLoad,
     pagesSeen,
+    themeApplied,
+    secondLoads,
+    secondPagesSeen,
     loadedAtMs,
     guestSessions: Object.fromEntries([...guests].map(([guest, contents]) => [guest, contents.session === privateSession ? 'private' : 'default'])),
     navigated,

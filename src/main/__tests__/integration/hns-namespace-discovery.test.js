@@ -26,6 +26,9 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+// Hosted runners append a DNS search suffix to names that do not exist; see
+// this module, which the unit job tests on its own.
+const { under, namesSeen } = require('./hns-discovery-probe-names');
 
 const REQUIRED = process.env.FREEDOM_ELECTRON_NET_TEST === '1';
 
@@ -56,8 +59,12 @@ const PIRATE = 'pirate';
 const UNLISTED = 'unlistedprobe';
 const GUESTS = ['default', 'private'];
 
-const under = (root) => (name) => name === root || name.endsWith(`.${root}`);
+const ROUNDS = ['', '-r2'];
 const isHint = (name) => /^(header|html)-/.test(name);
+// The hinted names one guest's page carries in one round, as the probe builds them.
+const hintNames = (guest, round) => ['header', 'html'].flatMap((form) =>
+  [LISTED, PIRATE, UNLISTED].map((root) => `${form}-${guest}${round}.${root}`));
+const imageNames = (round) => GUESTS.map((guest) => `img-${guest}${round}.${UNLISTED}`);
 
 function runProbe(env = {}) {
   return new Promise((resolve, reject) => {
@@ -118,13 +125,13 @@ describeWithElectron('HNS namespace discovery in a real Electron process', () =>
   // dotted name is first asked of ordinary DNS and goes DIRECT when it exists.
   test('before any list, a name under the root is looked up in ordinary DNS and goes DIRECT', () => {
     expect(results.beforeDiscovery.existing).toBe('DIRECT');
-    expect(results.beforeDiscovery.queried).toEqual([`app.${LISTED}`]);
+    expect(namesSeen(results.beforeDiscovery.queried, [`app.${LISTED}`])).toEqual([`app.${LISTED}`]);
   });
 
   test('a listed root goes to the guard even for a name that also resolves in ordinary DNS', () => {
     expect(results.ordinaryDns.listed).toBe(results.guard);
     expect(results.ordinaryDns.unlisted).toBe('DIRECT');
-    expect(results.ordinaryDns.queried).toEqual([`www.${UNLISTED}`]);
+    expect(namesSeen(results.ordinaryDns.queried, [`www.${UNLISTED}`])).toEqual([`www.${UNLISTED}`]);
   });
 
   // A resolver that answers every name would send an unlisted Handshake name
@@ -133,7 +140,10 @@ describeWithElectron('HNS namespace discovery in a real Electron process', () =>
     expect(results.honestResolver.unlistedMissing).toBe(results.guard);
     expect(results.fabricatingResolver.unlistedMissing).toBe('DIRECT');
     expect(results.fabricatingResolver.listedMissing).toBe(results.guard);
-    expect(results.fabricatingResolver.queried).toEqual([`missing.${UNLISTED}`]);
+    expect(results.honestResolver.queried.filter(under(LISTED))).toEqual([]);
+    expect(namesSeen(results.honestResolver.queried, [`gone.${UNLISTED}`])).toEqual([`gone.${UNLISTED}`]);
+    expect(results.fabricatingResolver.queried.filter(under(LISTED))).toEqual([]);
+    expect(namesSeen(results.fabricatingResolver.queried, [`missing.${UNLISTED}`])).toEqual([`missing.${UNLISTED}`]);
   });
 
   // Observed at the resolver, so a lookup Chromium makes before or beside the
@@ -143,13 +153,20 @@ describeWithElectron('HNS namespace discovery in a real Electron process', () =>
     for (const leg of ['listed', 'pirate', 'unlisted']) {
       expect(fetches[leg].error).toMatch(/ERR_TUNNEL_CONNECTION_FAILED/);
     }
-    expect(fetches.queried).toEqual([`fetch.${UNLISTED}`]);
+    expect(fetches.queried.filter(under(LISTED))).toEqual([]);
+    expect(fetches.queried.filter(under(PIRATE))).toEqual([]);
+    expect(namesSeen(fetches.queried, [`fetch.${UNLISTED}`])).toEqual([`fetch.${UNLISTED}`]);
   });
 
-  test('both pages load, in a default-session webview and a private-window partition webview', () => {
+  test('both pages load, in a default-session webview and a private-window partition webview, before and after a theme change', () => {
     for (const run of [results, control]) {
       expect(run.pages.hostLoad).toEqual({});
       expect(run.pages.pagesSeen.met).toBe(true);
+      // The web preferences update reached both guests before their second pages.
+      expect(run.pages.themeApplied.light.met).toBe(true);
+      expect(run.pages.themeApplied.dark.met).toBe(true);
+      expect(run.pages.secondLoads).toEqual({ default: {}, private: {} });
+      expect(run.pages.secondPagesSeen.met).toBe(true);
       expect(run.pages.guestSessions).toEqual({ default: 'default', private: 'private' });
       for (const guest of GUESTS) {
         expect(run.pages.navigated[guest].error).toMatch(/ERR_TUNNEL_CONNECTION_FAILED/);
@@ -158,38 +175,37 @@ describeWithElectron('HNS namespace discovery in a real Electron process', () =>
   });
 
   // The control: without the startup settings, a page's dns-prefetch hints,
-  // in its HTML and in a `Link:` header, are looked up for every root, and
-  // each such lookup arrives before the moment the probe reads, when both
-  // guests' images have been looked up. That is what makes the absences below
-  // observations. The private guest prefetches all of its hints or none of
-  // them, about half the runs each, so only the default guest is required to.
-  test('without the startup settings, prefetch hints are looked up, before the probe reads', () => {
-    const queried = control.pages.queriedInOrder;
-    const image = queried.indexOf(`img-default.${UNLISTED}`);
-    expect(image).toBeGreaterThan(-1);
-    for (const form of ['header', 'html']) {
-      for (const root of [LISTED, PIRATE, UNLISTED]) {
-        const hint = queried.indexOf(`${form}-default.${root}`);
-        expect(hint).toBeGreaterThan(-1);
-        expect(hint).toBeLessThan(image);
-      }
+  // in its HTML and in a `Link:` header, are looked up for every root, on the
+  // first page and on the second, after the theme change. The probe waited
+  // for exactly these lookups before reading, so nothing here depends on how
+  // fast the runner is. That is what makes the absences below observations.
+  // The private guest prefetches all of a page's hints or none of them, about
+  // half the runs each, so only the default guest is required to.
+  test('without the startup settings, prefetch hints are looked up, before and after a theme change', () => {
+    const lookups = control.hintLookups.map(({ name }) => name);
+    for (const round of ROUNDS) {
+      const expected = hintNames('default', round);
+      expect(namesSeen(lookups, expected).filter((name) => expected.includes(name))).toEqual([...expected].sort());
+      const privateSeen = namesSeen(lookups, hintNames('private', round)).filter((name) => hintNames('private', round).includes(name));
+      expect([0, 6]).toContain(privateSeen.length);
     }
-    for (const { afterPagesMs } of control.hintLookups) expect(afterPagesMs).toBeLessThanOrEqual(0);
-    const privateHints = new Set(control.hintLookups.map(({ name }) => name).filter((name) => name.includes('-private.')));
-    expect([0, 6]).toContain(privateHints.size);
   });
 
   test('as Freedom starts, no page has a name under a listed root or .pirate looked up, from a hint or a load', () => {
     const queried = [...new Set(results.pages.queriedInOrder)];
+    // A suffixed lookup under either root would count too.
     expect(queried.filter(under(LISTED))).toEqual([]);
     expect(queried.filter(under(PIRATE))).toEqual([]);
-    // Prefetching is off altogether, for unlisted names too, for the whole
-    // run: several more seconds pass after the pages before it ends.
+    // Prefetching is off altogether, for unlisted names too, before and after
+    // the theme change and for the whole run: several more seconds pass after
+    // the pages before it ends.
     expect(queried.filter(isHint)).toEqual([]);
     expect(results.hintLookups).toEqual([]);
     expect(results.runMs - results.pages.loadedAtMs).toBeGreaterThan(3_000);
-    // The controls: each guest's unlisted image, fetched after its hints, is seen.
-    expect(queried.sort()).toEqual(GUESTS.map((guest) => `img-${guest}.${UNLISTED}`).sort());
+    // The controls: each guest's unlisted image on both pages, fetched after
+    // the hints, is seen, bare or with a search suffix, and nothing else is.
+    const expected = ROUNDS.flatMap(imageNames);
+    expect(namesSeen(queried, expected)).toEqual([...expected].sort());
   });
 
   test('the request sends no cookie or header of its own and is never cached', () => {
