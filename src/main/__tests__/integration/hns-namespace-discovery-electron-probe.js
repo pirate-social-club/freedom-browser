@@ -92,6 +92,9 @@ const { record, response } = require('../../../../test/helpers/hns-dns-fixtures'
 // ---- The resolver -----------------------------------------------------------
 
 const dnsQueries = [];
+// Every lookup of the whole run, never reset, with its time since start.
+const allDnsQueries = [];
+const started = Date.now();
 let fabricate = false;
 
 function questionOf(message) {
@@ -107,6 +110,7 @@ function questionOf(message) {
 function answerDns(message) {
   const { name, type } = questionOf(message);
   dnsQueries.push(name);
+  allDnsQueries.push({ name, ms: Date.now() - started });
   if (!fabricate && !ORDINARY_NAMES.has(name)) return response(message, [[], [], []], 0x8183);
   const answers = type === 1 ? [record(name, 1, Buffer.from([127, 0, 0, 1]))] : [];
   return response(message, [answers, [], []], 0x8180);
@@ -344,17 +348,19 @@ async function main() {
     guests.set(guest.session === privateSession ? 'private' : 'default', guest);
   });
   const hostLoad = await within(host.loadURL(`http://127.0.0.1:${pagePort}/host`), 10_000);
-  // Each page's hints come before its images, and the control run shows their
-  // lookups arriving first, so once the unlisted image has been looked up for
-  // both guests every hint has been acted on. The control run also waits for
-  // the default guest's unlisted hints themselves. An in-memory partition
-  // makes no prefetch lookup even with prefetching on (measured on Electron
-  // 44.9.3), so it waits for none from the private guest.
+  // Each page's hints come before its images. In the control run every hint
+  // lookup arrives before both guests' unlisted images have been looked up,
+  // and none arrives in the seconds after, so that moment is when the hints
+  // have been acted on. The control run also waits for the default guest's
+  // unlisted hints themselves. The private guest's prefetching is
+  // intermittent even with prefetching on (all of its hints or none, about
+  // half the runs each, on Electron 44.9.3), so it waits for none of those.
   const awaited = [
     ...GUESTS.map((guest) => `img-${guest}.${UNLISTED}`),
     ...(WITHOUT_BLINK_SETTINGS ? [`html-default.${UNLISTED}`, `header-default.${UNLISTED}`] : []),
   ];
   const pagesSeen = await until(() => awaited.every((name) => dnsQueries.includes(name)), 15_000);
+  const loadedAtMs = Date.now() - started;
   const navigated = {};
   for (const guest of GUESTS) {
     const contents = guests.get(guest);
@@ -366,6 +372,7 @@ async function main() {
   results.pages = {
     hostLoad,
     pagesSeen,
+    loadedAtMs,
     guestSessions: Object.fromEntries([...guests].map(([guest, contents]) => [guest, contents.session === privateSession ? 'private' : 'default'])),
     navigated,
     queriedInOrder: [...dnsQueries],
@@ -422,6 +429,13 @@ async function main() {
   }
   results.routingRounds = { rounds: ROUTING_ROUNDS, sessions: Object.keys(sessions), failures };
 
+  // Prefetch hint lookups over the whole run. The sections after the pages
+  // keep the run going for several more seconds, so a hint acted on late is
+  // still seen here; the control run shows how late that can be.
+  results.hintLookups = allDnsQueries
+    .filter(({ name }) => /^(header|html)-/.test(name))
+    .map(({ name, ms }) => ({ name, afterPagesMs: ms - results.pages.loadedAtMs }));
+  results.runMs = Date.now() - started;
   results.fatal = fatal;
   process.stdout.write(`PROBE-RESULT ${JSON.stringify(results)}\n`);
   app.exit(0);

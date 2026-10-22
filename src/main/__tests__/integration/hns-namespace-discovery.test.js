@@ -158,11 +158,12 @@ describeWithElectron('HNS namespace discovery in a real Electron process', () =>
   });
 
   // The control: without the startup settings, a page's dns-prefetch hints,
-  // in its HTML and in a `Link:` header, are looked up for every root, before
-  // the image the page fetches after them. That is what makes the waits and
-  // absences below observations. An in-memory partition prefetches nothing
-  // even then, so the private guest's hints are not part of this control.
-  test('without the startup settings, prefetch hints are looked up, before the page fetches anything', () => {
+  // in its HTML and in a `Link:` header, are looked up for every root, and
+  // each such lookup arrives before the moment the probe reads, when both
+  // guests' images have been looked up. That is what makes the absences below
+  // observations. The private guest prefetches all of its hints or none of
+  // them, about half the runs each, so only the default guest is required to.
+  test('without the startup settings, prefetch hints are looked up, before the probe reads', () => {
     const queried = control.pages.queriedInOrder;
     const image = queried.indexOf(`img-default.${UNLISTED}`);
     expect(image).toBeGreaterThan(-1);
@@ -173,15 +174,20 @@ describeWithElectron('HNS namespace discovery in a real Electron process', () =>
         expect(hint).toBeLessThan(image);
       }
     }
-    expect(queried.filter((name) => isHint(name) && name.includes('-private.'))).toEqual([]);
+    for (const { afterPagesMs } of control.hintLookups) expect(afterPagesMs).toBeLessThanOrEqual(0);
+    const privateHints = new Set(control.hintLookups.map(({ name }) => name).filter((name) => name.includes('-private.')));
+    expect([0, 6]).toContain(privateHints.size);
   });
 
   test('as Freedom starts, no page has a name under a listed root or .pirate looked up, from a hint or a load', () => {
     const queried = [...new Set(results.pages.queriedInOrder)];
     expect(queried.filter(under(LISTED))).toEqual([]);
     expect(queried.filter(under(PIRATE))).toEqual([]);
-    // Prefetching is off altogether, for unlisted names too.
+    // Prefetching is off altogether, for unlisted names too, for the whole
+    // run: several more seconds pass after the pages before it ends.
     expect(queried.filter(isHint)).toEqual([]);
+    expect(results.hintLookups).toEqual([]);
+    expect(results.runMs - results.pages.loadedAtMs).toBeGreaterThan(3_000);
     // The controls: each guest's unlisted image, fetched after its hints, is seen.
     expect(queried.sort()).toEqual(GUESTS.map((guest) => `img-${guest}.${UNLISTED}`).sort());
   });
