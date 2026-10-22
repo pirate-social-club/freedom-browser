@@ -1,1 +1,1 @@
-- Pages can no longer trigger DNS lookups through prefetch hints
+- Pages can no longer trigger DNS lookups through prefetch hints ([#62](https://github.com/pirate-social-club/freedom-browser/pull/62))
