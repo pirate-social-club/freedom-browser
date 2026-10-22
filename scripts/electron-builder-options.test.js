@@ -13,6 +13,14 @@ function parseWithNode(expression) {
   return JSON.parse(output.trim());
 }
 
+describe('Linux deb version', () => {
+  test('carries Debian epoch 1, so it orders above upstream 0.8.x debs of the same package name', () => {
+    const { build } = require('../package.json');
+    const fpm = build.deb.fpm;
+    expect(fpm.slice(fpm.indexOf('--epoch'), fpm.indexOf('--epoch') + 2)).toEqual(['--epoch', '1']);
+  });
+});
+
 describe('locked electron-builder deb argument parser', () => {
   test('accepts the actual offline Linux deb target without invoking build', () => {
     const parsed = parseWithNode(`

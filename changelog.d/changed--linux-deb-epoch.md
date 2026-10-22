@@ -1,0 +1,1 @@
+- The Linux deb's version is 1:0.7.16: the Debian epoch puts it above upstream Freedom's 0.8.x debs, which share the package name, so installing it replaces an upstream install ([#60](https://github.com/pirate-social-club/freedom-browser/pull/60))
