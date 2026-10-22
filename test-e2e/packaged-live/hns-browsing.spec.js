@@ -140,6 +140,7 @@ async function launch(dirs) {
 async function watchDocumentStatus(app, host) {
   const statuses = [];
   const servers = [];
+  const vias = [];
   const sessions = [];
   for (const page of app.context().pages()) {
     if (/\/renderer\/index\.html(?:[?#]|$)/.test(page.url())) continue;
@@ -148,8 +149,12 @@ async function watchDocumentStatus(app, host) {
       try {
         if (type === 'Document' && new URL(response.url).host === host) {
           statuses.push(response.status);
-          const server = Object.entries(response.headers || {}).find(([name]) => name.toLowerCase() === 'server');
-          servers.push(server ? server[1] : null);
+          const header = (wanted) => {
+            const found = Object.entries(response.headers || {}).find(([name]) => name.toLowerCase() === wanted);
+            return found ? found[1] : null;
+          };
+          servers.push(header('server'));
+          vias.push(header('via'));
         }
       } catch {
         // Not a URL with a host.
@@ -161,6 +166,16 @@ async function watchDocumentStatus(app, host) {
   return {
     statuses,
     servers,
+    vias,
+    // Which gateway answered: the HNS host's Caddy, either serving the
+    // response itself (`Server: Caddy`) or proxying it from the gateway behind
+    // it (`Via: 1.1 Caddy`, the staging host since the 2026-10-22 relocation
+    // to .209). A response the local DANE proxy made up carries neither.
+    get origins() {
+      return statuses.map((_, i) =>
+        servers[i] === 'Caddy' || /(^|[\s,])(?:[A-Za-z]+\/)?[\d.]+\s+Caddy\b/.test(vias[i] || '') ? 'Caddy' : null
+      );
+    },
     guests: sessions.length,
     stop: () => Promise.all(sessions.map((cdp) => cdp.detach().catch(() => {}))),
   };
@@ -235,10 +250,10 @@ test.describe('installed HNS browsing', () => {
         expect(documentStatus.guests, `no tab webview was watched for ${UNCLAIMED} (${phase})`).toBeGreaterThan(0);
         expect(documentStatus.statuses, `${UNCLAIMED} main-frame response status (${phase})`).toEqual([421]);
         // The refusal comes from the HNS gateway itself, not the local DANE proxy.
-        expect(documentStatus.servers, `${UNCLAIMED} response origin (${phase})`).toEqual(['Caddy']);
+        expect(documentStatus.origins, `${UNCLAIMED} response origin (${phase})`).toEqual(['Caddy']);
         test.info().annotations.push({
           type: phase,
-          description: `${UNCLAIMED}: ${JSON.stringify({ ...unclaimed, responseStatuses: documentStatus.statuses, responseServers: documentStatus.servers })}`,
+          description: `${UNCLAIMED}: ${JSON.stringify({ ...unclaimed, responseStatuses: documentStatus.statuses, responseServers: documentStatus.servers, responseVias: documentStatus.vias })}`,
         });
         const quit = await quitCleanly(session.app, resourcesDir, phase, {
           requiredHelpers: ['hnsd', 'fingertipd'],
