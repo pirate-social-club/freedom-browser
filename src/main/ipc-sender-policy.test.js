@@ -35,6 +35,7 @@ describe('isSenderAllowed', () => {
       'wallet:send-transaction',
       'identity:export-mnemonic',
       'settings:save',
+      'acceptance:http-cache-state',
     ]) {
       expect(isSenderAllowed(channel, chrome())).toBe(true);
     }
@@ -55,6 +56,7 @@ describe('isSenderAllowed', () => {
       'dapp:grant-permission',
       'permissions:prompt-response',
       'swarm:provider-execute',
+      'acceptance:http-cache-state',
     ]) {
       expect(isSenderAllowed(channel, web())).toBe(false);
       expect(isSenderAllowed(channel, web('bzz://abcd/'))).toBe(false);

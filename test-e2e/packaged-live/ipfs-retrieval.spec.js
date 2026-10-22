@@ -68,6 +68,7 @@ const path = require('path');
 const { test, expect } = require('@playwright/test');
 const { closeApp } = require('../close-app');
 const { watchProcessExit } = require('../live-fixtures');
+const { readHttpCache, expectEmptyHttpCache, verifyHttpCacheMeasurement } = require('./http-cache-evidence');
 const {
   NODES_OFF,
   installedResourcesDir,
@@ -316,6 +317,9 @@ test.describe('installed IPFS retrieval', () => {
 
       // Cold negative control: B through the address bar, then a direct load.
       const bUrl = `ipfs://${B.cid}`;
+      summary.httpCacheBeforeB = await readHttpCache(window);
+      record();
+      expectEmptyHttpCache(summary.httpCacheBeforeB, bUrl, 'before the negative control');
       const bDocs = await watchDocuments(app, (url) => url.startsWith(bUrl));
       const reads = [];
       reads.push({ phase: 'before the address-bar request', ...(await readNodeState(window, 'ipfs')) });
@@ -336,7 +340,9 @@ test.describe('installed IPFS retrieval', () => {
       summary.directB = { ...describeDocument(direct), body: direct.body ? direct.body.toString('utf8') : null };
       summary.negativeControlReads = reads;
       summary.documentsB = bDocs.documents.map(describeDocument);
+      summary.httpCacheAfterB = await readHttpCache(window);
       record();
+      expectEmptyHttpCache(summary.httpCacheAfterB, bUrl, 'after the negative control');
 
       expect(summary.addressBarB.protocol, 'the error page is the IPFS node-down page').toBe('ipfs');
       expect(summary.addressBarDocumentsB, 'the address bar sent no request for B to the handler').toEqual([]);
@@ -348,6 +354,9 @@ test.describe('installed IPFS retrieval', () => {
         expect(['external', 'reused'], `no external node ${read.phase}`).not.toContain(read.mode);
         expect(read.status, `the node stays stopped ${read.phase}`).toBe('stopped');
       }
+
+      summary.httpCachePositiveControl = await verifyHttpCacheMeasurement(window, summary.httpCacheAfterB);
+      record();
 
       // 5. Shutdown and orphans.
       summary.helpersBeforeQuit = packagedHelpers(mainPid, resourcesDir).map((proc) => ({ pid: proc.pid, exe: proc.exe }));

@@ -142,6 +142,7 @@ describe('preload', () => {
       [exposures.electronAPI, 'awaitSwarmProbe', ['probe-1'], IPC.BZZ_AWAIT_PROBE, [{ id: 'probe-1' }]],
       [exposures.electronAPI, 'cancelSwarmProbe', ['probe-1'], IPC.BZZ_CANCEL_PROBE, [{ id: 'probe-1' }]],
       [exposures.electronAPI, 'getPlatform', [], IPC.WINDOW_GET_PLATFORM, []],
+      [exposures.electronAPI, 'getAcceptanceHttpCacheState', [], 'acceptance:http-cache-state', []],
       [exposures.electronAPI, 'getActiveProfile', [], IPC.PROFILE_GET_ACTIVE, []],
       [exposures.electronAPI, 'listProfiles', [], IPC.PROFILE_LIST, []],
       [exposures.electronAPI, 'createProfile', [{ displayName: 'Work' }], IPC.PROFILE_CREATE, [{ displayName: 'Work' }]],

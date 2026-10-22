@@ -428,6 +428,9 @@ async function bootstrap() {
 
   const defaultSession = session.defaultSession;
   await defaultSession.clearCache();
+  require('./acceptance-http-cache').registerAcceptanceHttpCache({
+    app, ipcMain, webContents: require('electron').webContents, profile: activeProfile,
+  });
   registerBaseIpcHandlers({
     onSetTitle: setWindowTitle,
     onNewWindow: createMainWindow,
