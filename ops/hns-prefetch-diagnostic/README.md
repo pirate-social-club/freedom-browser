@@ -39,12 +39,15 @@ This distinguishes the first navigation from later navigation but does not
 identify the cause. All outcomes remain preserved without a selective rerun.
 
 The next fixed six-pair experiment adds network observation only. Each probe
-captures Chromium network metadata with netLog in default mode, capped at eight
-MiB, and native completion messages from simple_network_hints_handler_impl at
+captures Chromium network metadata with netLog in default mode, with an eight
+MiB stop threshold, and native completion messages from simple_network_hints_handler_impl at
 verbosity2. This distinguishes missing requests from browser/resolver rejection
 or cancellation before the DoH observer. Logging stops and flushes before the
 result is emitted; missing, malformed, empty, unflushed or size-capped evidence
-fails the diagnostic. Twelve logs have a combined declared limit of96MiB.
+fails the diagnostic. Electron stops after exceeding its threshold, so this is
+not a strict physical file-size cap. The assessor refuses every log at or above
+eight MiB; twelve accepted logs therefore total less than96MiB. Raw rejected
+files remain evidence and may exceed that total.
 Native completion messages remain in the existing stderr evidence. Normal CI
 does not enable this optional logging. All assertions, page contents, guest
 creation/order, settings and runtime bounds remain unchanged. Instrumentation
