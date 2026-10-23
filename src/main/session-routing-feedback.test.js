@@ -125,6 +125,20 @@ describe('read-only routing feedback', () => {
     expect(f.dialog.showMessageBox).toHaveBeenCalledTimes(3);
   });
 
+  test('a planned pause stays silent before UI readiness but a failed drain still warns', async () => {
+    const f = fixture();
+    await f.controller.pauseAll();
+    await flush();
+    expect(f.controller.policyFor(f.main)).toMatchObject({ allowed: false, state: 'updating' });
+    expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
+    await f.controller.apply({ mode: 'direct' });
+    f.main.closeAllConnections.mockRejectedValueOnce(new Error('native failure'));
+    await expect(f.controller.pauseAll()).rejects.toThrow('Session update drainage failed');
+    await flush();
+    expect(f.controller.policyFor(f.main)).toMatchObject({ allowed: false, state: 'retired' });
+    expect(f.dialog.showMessageBox).toHaveBeenCalledTimes(1);
+  });
+
   test('never sends feedback to a host that navigated away or a destroyed guest', async () => {
     const f = fixture();
     f.read();

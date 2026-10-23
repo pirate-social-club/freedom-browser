@@ -34,6 +34,29 @@ function codes(error) {
 describe('session quarantine', () => {
   afterEach(() => jest.useRealTimers());
 
+  test.each(['pauseAll', 'quarantineAll'])('%s drain timeout terminates and cannot reopen after late completion', async (operation) => {
+    jest.useFakeTimers();
+    const f = fixture();
+    await f.routing.rebuild();
+    const guest = session();
+    await f.routing.enroll(guest);
+    let finish;
+    f.main.closeAllConnections.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const update = f.controller[operation]().catch((error) => error);
+    expect(f.getter().allowed).toBe(false);
+    expect(f.controller.policyFor(guest).allowed).toBe(false);
+    await jest.advanceTimersByTimeAsync(21);
+    expect(codes(await update)).toContain('closeAllConnections_timeout');
+    expect(f.fatal).toHaveBeenCalledTimes(1);
+    expect(f.getter()).toMatchObject({ allowed: false, state: 'retired' });
+    expect(f.controller.policyFor(guest)).toMatchObject({ allowed: false, state: 'retired' });
+    expect(guest.closeAllConnections).toHaveBeenCalledTimes(2);
+    finish();
+    await jest.advanceTimersByTimeAsync(100);
+    expect(f.getter().allowed).toBe(false);
+    expect(() => f.routing.rebuild()).toThrow('terminal');
+  });
+
   test('withdraws synchronously and holds readiness through shared resource retirement', async () => {
     const f = fixture();
     expect(f.getter()).toMatchObject({ allowed: true, state: 'initial', generation: 0 });

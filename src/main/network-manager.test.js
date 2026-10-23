@@ -3,6 +3,7 @@ const {
   loadMainModule,
 } = require('../../test/helpers/main-process-test-utils');
 const { setDynamicHnsPublicSuffixes } = require('../shared/hns-hosts');
+const { registerSessionRoutingFeedback } = require('./session-routing-feedback');
 
 function makeProxySession() {
   return {
@@ -773,6 +774,28 @@ describe('network-manager', () => {
     expect(ctx.session.defaultSession.closeAllConnections).toHaveBeenCalledTimes(2);
   });
 
+  test('successful certificate transitions do not report a protection failure before UI readiness', async () => {
+    const ctx = loadNetworkManagerModule();
+    const dialog = { showMessageBox: jest.fn(async () => ({ response: 0 })) };
+    registerSessionRoutingFeedback({
+      app: new EventEmitter(), ipcMain: { handle: jest.fn() }, dialog,
+      webContents: { getAllWebContents: () => [] }, getMainWindows: () => [],
+      getDefaultSession: () => ctx.session.defaultSession,
+      getPolicy: ctx.mod.getProxySessionPolicy,
+      setPolicyObserver: ctx.mod.setProxySessionPolicyObserver,
+    });
+    await ctx.mod.rebuild();
+    await ctx.mod.beginHnsCertificateUpdate();
+    expect(ctx.mod.getProxySessionPolicy(ctx.session.defaultSession).allowed).toBe(false);
+    expect(ctx.session.defaultSession.closeAllConnections).toHaveBeenCalled();
+    expect(dialog.showMessageBox).not.toHaveBeenCalled();
+    ctx.mod.setHnsProxy('127.0.0.1:5380', { generation: 1, caFingerprint: 'new-ca' });
+    await ctx.mod.rebuild();
+    expect(ctx.mod.getProxySessionPolicy(ctx.session.defaultSession).allowed).toBe(true);
+    expect(ctx.onFatal).not.toHaveBeenCalled();
+    expect(dialog.showMessageBox).not.toHaveBeenCalled();
+  });
+
   test('certificate transitions withdraw all sessions and wait for old connections', async () => {
     const ctx = loadNetworkManagerModule();
     const guest = makeProxySession();
@@ -790,9 +813,10 @@ describe('network-manager', () => {
     transition.then(() => { settled = true; });
     await Promise.resolve();
     expect(settled).toBe(false);
+    expect(ctx.mod.getProxySessionPolicy(guest)).toMatchObject({ allowed: false, state: 'updating' });
     release();
     await transition;
-    expect(ctx.mod.getProxySessionPolicy(guest).state).toBe('quarantined');
+    expect(ctx.mod.getProxySessionPolicy(guest)).toMatchObject({ allowed: false, state: 'updating' });
     await expect(ctx.mod.rebuild()).rejects.toThrow('prepare_failed');
     expect(ctx.mod.getProxySessionPolicy(guest).allowed).toBe(false);
     ctx.mod.setHnsProxy('127.0.0.1:5380', { generation: 1, caFingerprint: 'new-ca' });
@@ -827,7 +851,7 @@ describe('network-manager', () => {
     const ctx = loadNetworkManagerModule();
     await ctx.mod.rebuild();
     ctx.session.defaultSession.closeAllConnections.mockRejectedValueOnce(new Error('drain failed'));
-    await expect(ctx.mod.beginHnsCertificateUpdate()).rejects.toThrow('Session quarantine drainage failed');
+    await expect(ctx.mod.beginHnsCertificateUpdate()).rejects.toThrow('Session update drainage failed');
     expect(ctx.onFatal).toHaveBeenCalledTimes(1);
     expect(ctx.mod.getProxySessionPolicy(ctx.session.defaultSession).allowed).toBe(false);
   });

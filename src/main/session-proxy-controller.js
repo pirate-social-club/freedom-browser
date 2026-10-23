@@ -180,16 +180,22 @@ function createSessionProxyController(getDefaultSession, options = {}) {
     }
   }
 
-  async function quarantineAll() {
+  async function drainAll(quarantine) {
     withdrawAll();
     const results = await Promise.allSettled([...activeTargets()].map(async (targetSession) => {
       const record = recordFor(targetSession);
-      if (record.state !== 'retired') transition(record, 'quarantined');
+      if (quarantine && record.state !== 'retired') transition(record, 'quarantined');
       await drain(targetSession, record);
     }));
     const errors = results.filter((result) => result.status === 'rejected').map((result) => result.reason);
-    if (errors.length) throw new AggregateError(errors, 'Session quarantine drainage failed');
+    if (errors.length) throw new AggregateError(errors,
+      quarantine ? 'Session quarantine drainage failed' : 'Session update drainage failed');
   }
+
+  // Planned trust changes deny requests and drain old connections without
+  // reporting a failed protection update. A drain failure still terminates.
+  function pauseAll() { return drainAll(false); }
+  function quarantineAll() { return drainAll(true); }
 
   async function applyTargets(targets, configuration, policyKey, deferReady = false) {
     assertLive();
@@ -287,7 +293,7 @@ function createSessionProxyController(getDefaultSession, options = {}) {
 
   return { enqueue, register, isRegistered, unregister, cancelEnrollment, apply, applyTo,
     adoptDefault, getPolicyGetter, policyFor, setFatalHandler, setPolicyObserver,
-    withdrawAll, quarantineAll, retireAll, terminate, commit };
+    withdrawAll, pauseAll, quarantineAll, retireAll, terminate, commit };
 }
 
 module.exports = { createSessionProxyController };
