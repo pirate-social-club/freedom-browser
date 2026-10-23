@@ -10,9 +10,9 @@
  * drives the real fetch, list parser, session routing and startup Blink
  * settings (`blink-settings.js`, applied here exactly as `src/main/index.js`
  * applies it, before the app is ready). With
- * FREEDOM_PROBE_WITHOUT_BLINK_SETTINGS=1 it leaves them out instead: that run
- * is the control which shows the page's prefetch hints do reach the resolver
- * when nothing stops them.
+ * FREEDOM_PROBE_WITHOUT_BLINK_SETTINGS=1 it omits Freedom's settings and
+ * explicitly enables DNS prefetching for the positive control. This tests
+ * whether the missing first-page hints depend on implicit startup defaults.
  *
  * Nothing leaves the machine:
  *   - Chromium's resolver runs in secure mode against one local
@@ -54,7 +54,11 @@ const path = require('path');
 const WITHOUT_BLINK_SETTINGS = process.env.FREEDOM_PROBE_WITHOUT_BLINK_SETTINGS === '1';
 const NET_LOG_PATH = process.env.FREEDOM_HNS_PROBE_NET_LOG_PATH;
 const NET_LOG_MAX_BYTES = 8 * 1024 * 1024;
-if (!WITHOUT_BLINK_SETTINGS) require('../../blink-settings').applyBlinkSettings(app);
+if (WITHOUT_BLINK_SETTINGS) {
+  app.commandLine.appendSwitch('blink-settings', 'dnsPrefetchingEnabled=true');
+} else {
+  require('../../blink-settings').applyBlinkSettings(app);
+}
 
 const DOH_HOST = 'doh.certprobe.test';
 const LISTED = 'hnsprobe';

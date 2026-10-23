@@ -2,9 +2,11 @@
 
 The recurring CI failure loses the probe result after Jest reports its first
 failed assertion. This experiment preserves the complete synthetic probe output,
-exit status, runtime versions, lookup timing and phase timing. The original
-assertions, guest order, fifteen-second round bounds and ninety-second child
-timeout remain unchanged. The process helper belongs beside the integration
+exit status, runtime versions, lookup timing and phase timing. The first two
+observations preserved all original assertions and settings. The third changes
+only the positive control setting and its launch-value assertion, as described
+below; guest order, fifteen-second round bounds and ninety-second child timeout
+remain unchanged. The process helper belongs beside the integration
 test because it owns only that test's children and temporary profiles.
 
 The HNS prefetch diagnostic workflow runs six serial protected/control pairs on
@@ -58,3 +60,37 @@ https://www.electronjs.org/docs/latest/api/net-log and the native logging flags
 at https://www.electronjs.org/docs/latest/api/command-line-switches.
 The completion log source for the packaged Chromium version is
 https://github.com/chromium/chromium/blob/152.0.7977.167/components/network_hints/browser/simple_network_hints_handler_impl.cc.
+
+The second fixed experiment, run39994603094 at65c58b01, passed pairs1 through5
+and failed pair6. The failed first default-page hints have neither resolver
+request events nor native completions, though their response headers arrive.
+All protected probes pass; private first-page and both second-page requests
+appear in the failed control. Cleanup passed and nothing was retried. This
+places the missing observation before resolver handling, without identifying
+its renderer, settings or IPC cause.
+
+The third fixed six-pair experiment changes one control input: explicitly set
+dnsPrefetchingEnabled=true before app readiness, instead of relying on the
+unconfigured default. The protected probe still calls Freedom's real startup
+settings and requires dnsPrefetchingEnabled=false. All twelve required default
+control hints, image controls, private all-or-none qualification, page content,
+guest order, theme changes, timeouts, resources and cleanup stay unchanged.
+The launch-setting assertion now verifies the explicit positive-control value.
+Network observation remains enabled for the diagnostic and off for ordinary CI.
+
+Chromium152.0.7977.167 starts the underlying Blink setting as false, supplies
+true in WebPreferences, and reapplies command-line settings after preferences.
+Its explicit link-hint path checks that setting before requesting networking.
+This makes implicit preference initialization a testable hypothesis; it does
+not prove that it caused either captured failure. If the same absence recurs,
+explicit enablement is insufficient. If all six pass, the result only supports
+the hypothesis and does not establish a repair. Do not retry failed samples or
+merge a repair claim from this one fixed sample. A correction still needs
+independent review, a meaningful negative control and a predeclared repeated
+verification plan.
+
+The pinned primary sources for this hypothesis are
+https://github.com/chromium/chromium/blob/152.0.7977.167/third_party/blink/renderer/core/frame/settings.json5,
+https://github.com/chromium/chromium/blob/152.0.7977.167/third_party/blink/public/common/web_preferences/web_preferences.h,
+https://github.com/chromium/chromium/blob/152.0.7977.167/third_party/blink/renderer/core/exported/web_view_impl.cc,
+and https://github.com/chromium/chromium/blob/152.0.7977.167/third_party/blink/renderer/core/loader/preload_helper.cc.
