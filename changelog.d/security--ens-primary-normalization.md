@@ -1,0 +1,1 @@
+- Unnormalized ENS primary names appear as untrusted claims on the send review screen ([upstream #756](https://github.com/solardev-xyz/freedom-browser/pull/756))

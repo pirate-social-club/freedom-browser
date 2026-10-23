@@ -1,14 +1,20 @@
 jest.mock('electron', () => ({
   ipcMain: { handle: jest.fn() },
+  webContents: { fromId: jest.fn(() => null) },
 }));
 
 jest.mock('qrcode', () => ({}));
 // Handlers here are called with bare `{}` events; they stand for a live
 // window's sender. A sender marked `closing` has no session any more.
 const mockLiveSession = { id: 'live-window' };
+const mockPrivateSession = { id: 'private-window' };
 jest.mock('../browsing-transport', () => ({
   ...jest.requireActual('../browsing-transport'),
-  browsingSessionFor: jest.fn((sender) => (sender?.closing ? null : mockLiveSession)),
+  browsingSessionFor: jest.fn((sender) => (sender?.closing ? null : sender?.private ? mockPrivateSession : mockLiveSession)),
+}));
+jest.mock('../private/private-windows', () => ({
+  ...jest.requireActual('../private/private-windows'),
+  isPrivateWebContents: jest.fn((sender) => Boolean(sender?.private)),
 }));
 jest.mock('./balance-service', () => ({ getBalancesWithCache: jest.fn(async () => ({ balances: null, fromCache: false })) }));
 jest.mock('./chains', () => ({}));
@@ -30,12 +36,13 @@ jest.mock('./dapp-permissions', () => ({
 jest.mock('./safe/safe-transactions', () => ({
   startSafeSend: jest.fn(async () => ({ safeTxHash: '0xsafetx' })),
 }));
+jest.mock('../ens-resolver', () => ({ resolveEnsContent: jest.fn() }));
 jest.mock('./safe/safe-messages', () => ({
   startSafeMessage: jest.fn(async () => ({ token: 'session' })),
 }));
 
 const { buildTxRecordContext, registerWalletIpc } = require('./wallet-ipc');
-const { ipcMain } = require('electron');
+const { ipcMain, webContents } = require('electron');
 const { getBalancesWithCache } = require('./balance-service');
 
 describe('wallet-ipc', () => {
@@ -71,6 +78,20 @@ describe('signing handlers require a main-side confirmation', () => {
   const confirmations = require('./signing-confirmation');
 
   const SITE = 'https://app.example';
+  // The chrome window that sends every wallet IPC, and its tab guests by
+  // webContents id (#764: an auto-approve claim is checked against the
+  // requesting guest's own page).
+  const CHROME = { id: 1 };
+  const AUTO = { sender: CHROME };
+  let guests;
+  const guest = (id, url, { host = CHROME, destroyed = false } = {}) => {
+    guests.set(id, {
+      id,
+      hostWebContents: host,
+      getURL: () => url,
+      isDestroyed: () => destroyed,
+    });
+  };
   const TX = {
     to: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
     value: '0',
@@ -102,6 +123,10 @@ describe('signing handlers require a main-side confirmation', () => {
     dappPermissions.addTransactionAutoApprove.mockReset().mockReturnValue(true);
     startSafeSend.mockClear();
     startSafeMessage.mockClear();
+    guests = new Map();
+    webContents.fromId.mockReset().mockImplementation((id) => guests.get(id) ?? null);
+    // The requesting page (guest 12) is on SITE unless a test says otherwise.
+    guest(12, `${SITE}/swap#/route`);
   });
 
   afterEach(() => {
@@ -186,7 +211,7 @@ describe('signing handlers require a main-side confirmation', () => {
       dappPermissions.getPermission.mockReturnValue({ walletIndex: 2 });
       dappPermissions.isTransactionAutoApproved.mockReturnValue(true);
       const result = await handlers['wallet:dapp-send-transaction'](
-        {}, TX, 2, { origin: SITE }, { autoApprove: SITE });
+        AUTO, TX, 2, { origin: SITE }, { autoApprove: SITE, webContentsId: 12 });
       expect(result).toMatchObject({ success: true, hash: '0xhash' });
       // Main derives the rule key from the transaction it is signing.
       expect(dappPermissions.isTransactionAutoApproved).toHaveBeenCalledWith(
@@ -196,16 +221,27 @@ describe('signing handlers require a main-side confirmation', () => {
     test('auto-approve claimed without a stored rule is refused', async () => {
       dappPermissions.getPermission.mockReturnValue({ walletIndex: 2 });
       const result = await handlers['wallet:dapp-send-transaction'](
-        {}, TX, 2, { origin: SITE }, { autoApprove: SITE });
+        AUTO, TX, 2, { origin: SITE }, { autoApprove: SITE, webContentsId: 12 });
       expect(result).toMatchObject({ success: false, code: 'SIGNING_NOT_CONFIRMED' });
       expect(signAndRecord).not.toHaveBeenCalled();
+    });
+
+    test('#764: a stored rule is never applied for a guest on another site', async () => {
+      dappPermissions.getPermission.mockReturnValue({ walletIndex: 2 });
+      dappPermissions.isTransactionAutoApproved.mockReturnValue(true);
+      guest(77, 'https://attacker.example/');
+      const result = await handlers['wallet:dapp-send-transaction'](
+        AUTO, TX, 2, { origin: SITE }, { autoApprove: SITE, webContentsId: 77 });
+      expect(result).toMatchObject({ success: false, code: 'SIGNING_NOT_CONFIRMED' });
+      expect(signAndRecord).not.toHaveBeenCalled();
+      expect(dappPermissions.isTransactionAutoApproved).not.toHaveBeenCalled();
     });
 
     test('a stored rule never authorises another account than the grant exposes', async () => {
       dappPermissions.getPermission.mockReturnValue({ walletIndex: 2 });
       dappPermissions.isTransactionAutoApproved.mockReturnValue(true);
       const result = await handlers['wallet:dapp-send-transaction'](
-        {}, TX, 0, { origin: SITE }, { autoApprove: SITE });
+        AUTO, TX, 0, { origin: SITE }, { autoApprove: SITE, webContentsId: 12 });
       expect(result).toMatchObject({ success: false, error: 'Unauthorized dApp wallet access' });
       expect(signAndRecord).not.toHaveBeenCalled();
     });
@@ -214,7 +250,7 @@ describe('signing handlers require a main-side confirmation', () => {
       dappPermissions.getPermission.mockReturnValue({ walletIndex: 2 });
       dappPermissions.isTransactionAutoApproved.mockReturnValue(true);
       const result = await handlers['wallet:dapp-send-transaction'](
-        {}, { ...TX, data: '0x' }, 2, { origin: SITE }, { autoApprove: SITE });
+        AUTO, { ...TX, data: '0x' }, 2, { origin: SITE }, { autoApprove: SITE, webContentsId: 12 });
       expect(result).toMatchObject({ success: false, code: 'SIGNING_NOT_CONFIRMED' });
     });
 
@@ -232,7 +268,7 @@ describe('signing handlers require a main-side confirmation', () => {
       dappPermissions.getPermission.mockReturnValue({ walletIndex: 2 });
       dappPermissions.isTransactionAutoApproved.mockReturnValue(true);
       await handlers['wallet:dapp-send-transaction'](
-        {}, TX, 2, { origin: SITE }, { autoApprove: SITE, rememberAutoApprove: 'https://other.example' });
+        AUTO, TX, 2, { origin: SITE }, { autoApprove: SITE, webContentsId: 12, rememberAutoApprove: 'https://other.example' });
       expect(dappPermissions.addTransactionAutoApprove).not.toHaveBeenCalled();
     });
 
@@ -294,24 +330,193 @@ describe('signing handlers require a main-side confirmation', () => {
 
     test('auto-approve is evaluated in main', async () => {
       dappPermissions.getPermission.mockReturnValue({ walletIndex: 0 });
-      const refused = await handlers[channel]({}, payload, 0, SITE, { autoApprove: SITE });
+      const refused = await handlers[channel](AUTO, payload, 0, SITE, { autoApprove: SITE, webContentsId: 12 });
       expect(refused).toMatchObject({ success: false, code: 'SIGNING_NOT_CONFIRMED' });
 
       dappPermissions.getSigningAutoApprove.mockReturnValue(true);
-      const signed = await handlers[channel]({}, payload, 0, SITE, { autoApprove: SITE });
+      const signed = await handlers[channel](AUTO, payload, 0, SITE, { autoApprove: SITE, webContentsId: 12 });
       expect(signed.success).toBe(true);
       expect(dappPermissions.getSigningAutoApprove).toHaveBeenCalledWith(SITE);
 
       // ...and only for the account the site is connected with.
-      const other = await handlers[channel]({}, payload, 1, SITE, { autoApprove: SITE });
+      const other = await handlers[channel](AUTO, payload, 1, SITE, { autoApprove: SITE, webContentsId: 12 });
       expect(other).toMatchObject({ success: false, error: 'Unauthorized dApp wallet access' });
     });
 
     test('another granted site cannot supply its auto-approval for this request', async () => {
       dappPermissions.getSigningAutoApprove.mockReturnValue(true);
-      const result = await handlers[channel]({}, payload, 0, SITE, { autoApprove: 'https://other.example' });
+      const result = await handlers[channel](AUTO, payload, 0, SITE, { autoApprove: 'https://other.example', webContentsId: 12 });
       expect(result).toMatchObject({ success: false, code: 'SIGNING_NOT_CONFIRMED' });
       expect(signer[method]).not.toHaveBeenCalled();
+    });
+
+    // #764: the renderer names the site; main checks the guest that asked.
+    describe('the auto-approve key must belong to the requesting page', () => {
+      beforeEach(() => {
+        dappPermissions.getPermission.mockReturnValue({ walletIndex: 0 });
+        dappPermissions.getSigningAutoApprove.mockReturnValue(true);
+      });
+
+      const refusedWith = async (event, authorization) => {
+        const result = await handlers[channel](event, payload, 0, authorization.autoApprove, authorization);
+        expect(result).toMatchObject({ success: false, code: 'SIGNING_NOT_CONFIRMED' });
+        expect(signer[method]).not.toHaveBeenCalled();
+        expect(dappPermissions.getSigningAutoApprove).not.toHaveBeenCalled();
+      };
+
+      test('a background tab claiming the visible site’s key is refused', async () => {
+        guest(77, 'https://attacker.example/');
+        await refusedWith(AUTO, { autoApprove: SITE, webContentsId: 77 });
+      });
+
+      test('a claim with no requesting guest is refused', async () => {
+        await refusedWith(AUTO, { autoApprove: SITE });
+      });
+
+      test('an unknown or destroyed guest is refused', async () => {
+        await refusedWith(AUTO, { autoApprove: SITE, webContentsId: 99 });
+        guest(13, SITE, { destroyed: true });
+        await refusedWith(AUTO, { autoApprove: SITE, webContentsId: 13 });
+      });
+
+      test('another window’s guest is refused', async () => {
+        guest(14, SITE, { host: { id: 2 } });
+        await refusedWith(AUTO, { autoApprove: SITE, webContentsId: 14 });
+      });
+
+      test('a claim from an IPC with no sender is refused', async () => {
+        await refusedWith({}, { autoApprove: SITE, webContentsId: 12 });
+      });
+
+      test('a guest that navigated to another site since the request is refused', async () => {
+        guest(12, 'https://elsewhere.example/');
+        await refusedWith(AUTO, { autoApprove: SITE, webContentsId: 12 });
+      });
+
+      test.each([
+        ['an ENS site over Swarm', 'bzz://myapp.eth/page?x=1', 'myapp.eth'],
+        ['a content-addressed IPFS root', 'ipfs://QmRootCid/docs/', 'ipfs://QmRootCid'],
+        ['an onchain app (internal origin form)',
+          'web3://0x1111111111111111111111111111111111111111.eip155-100/index.html',
+          'web3://0x1111111111111111111111111111111111111111:100'],
+      ])('%s: the guest’s own page key is honoured', async (_label, url, key) => {
+        guest(20, url);
+        const result = await handlers[channel](AUTO, payload, 0, key, { autoApprove: key, webContentsId: 20 });
+        expect(result.success).toBe(true);
+        expect(dappPermissions.getSigningAutoApprove).toHaveBeenCalledWith(key);
+      });
+
+      test.each([
+        ['a Spaces member display alias', 'member@yahoo'],
+        ['a Spaces root display alias', '@yahoo'],
+        ['another HTTPS origin', 'https://elsewhere.example'],
+      ])('%s cannot substitute for a signed website origin', async (_label, key) => {
+        guest(21, 'https://website.example/member');
+        await refusedWith(AUTO, { autoApprove: key, webContentsId: 21 });
+      });
+
+      test('an HNS HTTPS origin keeps its own grant', async () => {
+        const key = 'https://app.pirate';
+        guest(21, key + '/page');
+        const result = await handlers[channel](AUTO, payload, 0, key, { autoApprove: key, webContentsId: 21 });
+        expect(result.success).toBe(true);
+      });
+
+      // A DNS-named ENS site (`ens://example.com`) loads as ipns://<key>;
+      // the renderer keys it on the name, and main accepts that only when
+      // its own resolution of the name answers the guest's exact key.
+      describe('a DNS-named ENS site over IPNS', () => {
+        const { resolveEnsContent } = require('../ens-resolver');
+        const B58 = '12D3KooWAsDaZWCkCEUN3myg49NoCMmrYYivmJVwjg7DVJBvWdaX';
+        const B36 = 'k51qzi5uqu5dgkkr5wjh0m796f9u3tou74wn2q2u3shgh6yn52ce4hitig3if4';
+        const NAME = 'example.com';
+        const resolvesTo = (decoded) => ({ type: 'ok', protocol: 'ipns', uri: `ipns://${decoded}`, decoded });
+
+        beforeEach(() => {
+          resolveEnsContent.mockReset().mockResolvedValue(resolvesTo(B58));
+        });
+
+        test.each([
+          ['the base36 key navigation loads', B36],
+          ['the resolver’s own base58 key', B58],
+        ])('is honoured on %s', async (_label, host) => {
+          guest(30, `ipns://${host}/app/`);
+          const result = await handlers[channel](AUTO, payload, 0, NAME, { autoApprove: NAME, webContentsId: 30 });
+          expect(result.success).toBe(true);
+          expect(resolveEnsContent).toHaveBeenCalledWith(NAME);
+          expect(dappPermissions.getSigningAutoApprove).toHaveBeenCalledWith(NAME);
+        });
+
+        test.each([false, true])('resolves inside the requesting browsing and log context (private=%s)', async (isPrivate) => {
+          const { currentBrowsingSession } = jest.requireActual('../browsing-transport');
+          const { isPrivateLogContext } = jest.requireActual('../private/private-log-context');
+          let seen;
+          resolveEnsContent.mockImplementationOnce(async () => {
+            await Promise.resolve();
+            seen = { session: currentBrowsingSession(), privateLog: isPrivateLogContext() };
+            return resolvesTo(B58);
+          });
+          guest(30, `ipns://${B36}/`);
+          const event = { sender: { id: AUTO.sender.id, private: isPrivate } };
+          const result = await handlers[channel](event, payload, 0, NAME, { autoApprove: NAME, webContentsId: 30 });
+          expect(result.success).toBe(true);
+          expect(seen).toEqual({ session: isPrivate ? mockPrivateSession : mockLiveSession, privateLog: isPrivate });
+        });
+
+        test('a requesting window closed during ENS resolution is refused', async () => {
+          guest(30, `ipns://${B36}/`);
+          const event = { sender: { id: AUTO.sender.id } };
+          resolveEnsContent.mockImplementationOnce(async () => {
+            event.sender.closing = true;
+            return resolvesTo(B58);
+          });
+          await refusedWith(event, { autoApprove: NAME, webContentsId: 30 });
+        });
+
+        test('a closing requesting window cannot start ENS resolution', async () => {
+          guest(30, `ipns://${B36}/`);
+          await refusedWith({ sender: { id: AUTO.sender.id, closing: true } }, { autoApprove: NAME, webContentsId: 30 });
+          expect(resolveEnsContent).not.toHaveBeenCalled();
+        });
+
+        test('is refused when the name resolves to another key', async () => {
+          guest(30, 'ipns://k51otherkey/');
+          await refusedWith(AUTO, { autoApprove: NAME, webContentsId: 30 });
+        });
+
+        test('is refused on a case-folded base58 host', async () => {
+          guest(30, `ipns://${B58.toLowerCase()}/`);
+          await refusedWith(AUTO, { autoApprove: NAME, webContentsId: 30 });
+        });
+
+        test('is refused when the name does not resolve to IPNS, or resolution fails', async () => {
+          guest(30, `ipns://${B36}/`);
+          resolveEnsContent.mockResolvedValueOnce({ type: 'ok', protocol: 'ipfs', decoded: B36 });
+          await refusedWith(AUTO, { autoApprove: NAME, webContentsId: 30 });
+          resolveEnsContent.mockResolvedValueOnce({ type: 'not_found' });
+          await refusedWith(AUTO, { autoApprove: NAME, webContentsId: 30 });
+          resolveEnsContent.mockRejectedValueOnce(new Error('rpc down'));
+          await refusedWith(AUTO, { autoApprove: NAME, webContentsId: 30 });
+        });
+
+        test('is refused when the guest navigates away while the name resolves', async () => {
+          guest(30, `ipns://${B36}/`);
+          resolveEnsContent.mockImplementationOnce(async () => {
+            guests.get(30).getURL = () => 'https://attacker.example/';
+            return resolvesTo(B58);
+          });
+          await refusedWith(AUTO, { autoApprove: NAME, webContentsId: 30 });
+        });
+
+        test('never applies to a non-IPNS guest, or to an ENS-host or scheme key', async () => {
+          guest(31, 'https://attacker.example/');
+          await refusedWith(AUTO, { autoApprove: NAME, webContentsId: 31 });
+          guest(30, `ipns://${B36}/`);
+          await refusedWith(AUTO, { autoApprove: 'myapp.eth', webContentsId: 30 });
+          await refusedWith(AUTO, { autoApprove: 'https://example.com', webContentsId: 30 });
+          expect(resolveEnsContent).not.toHaveBeenCalled();
+        });
+      });
     });
   });
 
@@ -339,7 +544,7 @@ describe('signing handlers require a main-side confirmation', () => {
     test('wallet:safe-send has no auto-approve', async () => {
       dappPermissions.getPermission.mockReturnValue({ walletIndex: 7 });
       dappPermissions.getSigningAutoApprove.mockReturnValue(true);
-      const result = await handlers['wallet:safe-send']({}, 7, SAFE_TX, {}, 100, { autoApprove: SITE });
+      const result = await handlers['wallet:safe-send'](AUTO, 7, SAFE_TX, {}, 100, { autoApprove: SITE, webContentsId: 12 });
       expect(result).toMatchObject({ success: false, code: 'SIGNING_NOT_CONFIRMED' });
       expect(startSafeSend).not.toHaveBeenCalled();
     });
@@ -366,13 +571,30 @@ describe('signing handlers require a main-side confirmation', () => {
       dappPermissions.getSigningAutoApprove.mockReturnValue(true);
 
       const otherSite = await handlers['wallet:safe-message-start'](
-        {}, 7, REQUEST, {}, REQUESTER, { autoApprove: 'https://other.example' });
+        AUTO, 7, REQUEST, {}, REQUESTER, { autoApprove: 'https://other.example', webContentsId: 12 });
       expect(otherSite).toMatchObject({ success: false, code: 'SIGNING_NOT_CONFIRMED' });
 
       const ok = await handlers['wallet:safe-message-start'](
-        {}, 7, REQUEST, {}, REQUESTER, { autoApprove: SITE });
+        AUTO, 7, REQUEST, {}, REQUESTER, { autoApprove: SITE, webContentsId: 12 });
       expect(ok).toMatchObject({ success: true });
       expect(startSafeMessage).toHaveBeenCalledTimes(1);
+    });
+
+    test('#764: wallet:safe-message-start refuses a key the requesting guest does not hold', async () => {
+      dappPermissions.getPermission.mockReturnValue({ walletIndex: 7 });
+      dappPermissions.getSigningAutoApprove.mockReturnValue(true);
+      guest(77, 'https://attacker.example/');
+
+      // Guest 77 is on another site, even though requester and claim agree.
+      const borrowed = await handlers['wallet:safe-message-start'](
+        AUTO, 7, REQUEST, {}, { origin: SITE, webContentsId: 77 }, { autoApprove: SITE, webContentsId: 77 });
+      expect(borrowed).toMatchObject({ success: false, code: 'SIGNING_NOT_CONFIRMED' });
+
+      // The claim names another guest than the session is bound to.
+      const mismatched = await handlers['wallet:safe-message-start'](
+        AUTO, 7, REQUEST, {}, { origin: SITE, webContentsId: 77 }, { autoApprove: SITE, webContentsId: 12 });
+      expect(mismatched).toMatchObject({ success: false, code: 'SIGNING_NOT_CONFIRMED' });
+      expect(startSafeMessage).not.toHaveBeenCalled();
     });
   });
 

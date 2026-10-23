@@ -1,19 +1,19 @@
 {
   "name": "freedom-browser",
-  "version": "0.7.16",
+  "version": "0.7.17",
   "license": "AGPL-3.0-or-later",
   "description": "Freedom – A browser for the decentralized web, with Swarm, IPFS, onchain apps, and ENS as first-class protocols.",
   "author": {
-    "name": "Freedom Team",
-    "email": "browser@freedom.baby"
+    "name": "Pirate Social Club",
+    "url": "https://github.com/pirate-social-club/freedom-browser"
   },
-  "homepage": "https://freedombrowser.eth.limo/",
+  "homepage": "https://github.com/pirate-social-club/freedom-browser",
   "repository": {
     "type": "git",
-    "url": "https://github.com/solardev-xyz/freedom-browser"
+    "url": "https://github.com/pirate-social-club/freedom-browser"
   },
   "bugs": {
-    "url": "https://github.com/solardev-xyz/freedom-browser/issues"
+    "url": "https://github.com/pirate-social-club/freedom-browser/issues"
   },
   "main": "src/main/index.js",
   "desktopName": "freedom.desktop",
@@ -191,7 +191,8 @@
             "libradicle.node"
           ]
         }
-      ]
+      ],
+      "maintainer": "Pirate Social Club"
     },
     "deb": {
       "fpm": [

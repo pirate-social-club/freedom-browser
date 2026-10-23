@@ -1,7 +1,7 @@
 {
   "project_license": "AGPL-3.0-or-later",
   "generated_at": "2026-10-15T00:00:00.000Z",
-  "audit_baseline": "0.7.16",
+  "audit_baseline": "0.7.17",
   "notes": "Re-derived on 2026-10-15 for the Pirate fork of Freedom Browser (AGPL-3.0-or-later) after it merged upstream v0.8.7 (tag commit 3a8c75e6). Upstream's component records were re-read against this tree and kept where they still hold; the fork's additions are recorded beside them: the committed Handshake helpers (hns-bin/), the committed V2Ray runtime (dvpn-bin/; its GeoIP/GeoSite data files were removed as unused), the Agora Web SDK vendor bundle, the dVPN SDK npm packages, and the fork's own assets/hns/ and scripts/jacktrip/ files. The inventory is derived from package.json build.extraResources, the committed per-target helper directories, src/renderer/vendor/ and the rest of src/; licenses-audit.test.js fails if this file drifts from any of them or from the committed helper bytes. Upstream's own audit (0.8.7, MPL-2.0 posture) is at 3a8c75e6:licenses-audit.json.",
   "distribution_model": {
     "packaging": "electron-builder",

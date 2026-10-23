@@ -212,13 +212,28 @@ test.describe('installed Radicle node and viewer', () => {
     const probe = await startProbePage();
     let session = null;
     try {
-      session = await launchInstalled(dirs, { settings: { ...NODES_OFF, startRadicleAtLaunch: true } });
+      session = await launchInstalled(dirs, { settings: { ...NODES_OFF, enableIdentityWallet: true } });
       const { app, window } = session;
       const mainPid = app.process().pid;
       const expectCleanExit = watchProcessExit(app, { timeout: 100_000 });
 
+      // A five-byte alias leaves the OpenSSH private section aligned. The
+      // native Radicle parser must load the packaged encoder's output, which
+      // used to contain an invalid extra block of padding (upstream #755).
+      // Generate only a scratch vault and never return its mnemonic to the driver.
+      summary.injectedIdentity = await window.evaluate(async () => {
+        const created = await window.identity.createVault('Installed-Radicle-padding-test-2026!');
+        if (!created.success) return { success: false, error: created.error };
+        const result = await window.identity.injectAll('gate5');
+        return { success: result.success, did: result.radicle?.did };
+      });
+      expect(summary.injectedIdentity.success).toBe(true);
+      expect(summary.injectedIdentity.did).toMatch(/^did:key:z6Mk/);
+
       // 1. The node starts, and returns its identity.
       const startedAt = Date.now();
+      const started = await window.evaluate(() => window.radicle.start());
+      expect(started.status).toBe('running');
       await expectNodeRunning(window, 'radicle', { label: 'Radicle', timeout: NODE_START_TIMEOUT_MS });
       summary.startMs = Date.now() - startedAt;
       summary.registry = await registryEntry(window, 'radicle');
@@ -244,7 +259,8 @@ test.describe('installed Radicle node and viewer', () => {
       expect(identity?.did, 'the identity is a did:key').toMatch(/^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]+$/);
       expect(identity.did, 'the DID names the NID').toBe(`did:key:${identity.nid}`);
       expect(identity.did, 'and equals the DID the node reported when it started').toBe(summary.loggedDid);
-      expect(typeof identity.alias === 'string' && identity.alias.length > 0, 'the node has an alias').toBe(true);
+      expect(identity.did, 'the native parser loaded the injected key').toBe(summary.injectedIdentity.did);
+      expect(identity.alias, 'the aligned alias is preserved').toBe('gate5');
 
       // 2. The viewer: local and public-seed lists, then a public-seed repository.
       let connections = null;
