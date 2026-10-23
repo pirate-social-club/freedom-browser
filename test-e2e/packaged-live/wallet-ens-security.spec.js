@@ -137,7 +137,7 @@ test.describe('installed wallet and ENS security corrections', () => {
   test('normal and private windows bind auto-approval to their own requesting tab', async () => {
     test.setTimeout(5 * 60000);
     const evidence = evidenceDir('freedom-wallet-attribution-');
-    const dirs = makeScratchRoot('f-wa-');
+    const dirs = makeScratchRoot('freedom-wallet-attribution-');
     const resources = installedResourcesDir();
     expect(anyPackagedHelpers(resources)).toEqual([]);
     const trusted = await startSecurityFixture();
@@ -181,7 +181,7 @@ test.describe('installed wallet and ENS security corrections', () => {
   test('unnormalized ENS claims stay unverified through the installed send review in both themes', async () => {
     test.setTimeout(5 * 60000);
     const evidence = evidenceDir('freedom-ens-primary-');
-    const dirs = makeScratchRoot('f-en-');
+    const dirs = makeScratchRoot('freedom-ens-primary-');
     const resources = installedResourcesDir();
     expect(anyPackagedHelpers(resources)).toEqual([]);
     const rpc = await startSecurityFixture();

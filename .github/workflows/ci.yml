@@ -85,7 +85,7 @@ jobs:
 
 
   dependency-audit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Check out repository
@@ -137,7 +137,8 @@ jobs:
           retention-days: 7
 
   test:
-    runs-on: ubuntu-latest
+    # Keep the unit/audit toolchain on the Linux packaging baseline.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
@@ -213,7 +214,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             label: Linux x64
             args: --linux --x64
           - os: macos-14

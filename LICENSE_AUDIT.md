@@ -4,7 +4,7 @@ Licence of this fork: AGPL-3.0-or-later. Upstream code inside it remains MPL-2.0
 
 Audit date: 2026-10-15
 
-Baseline: `0.7.16`
+Baseline: `0.7.17`
 
 Method: re-derived from the installed dependency tree, the committed artifacts and `package.json`'s `build` configuration, then checked by `licenses-audit.test.js`.
 
@@ -12,7 +12,9 @@ This is a practical engineering audit, not legal advice. Final licensing decisio
 
 This revision replaces the short AGPL posture note (2026-05-08) that the upstream v0.8.7 merge left in place of upstream's component audit. It starts from upstream's 0.8.7 audit (`git show 3a8c75e6:LICENSE_AUDIT.md`), re-reads each of its records against this tree, and adds the fork's own components: the committed Handshake helpers in `hns-bin/`, the committed V2Ray runtime in `dvpn-bin/`, the Agora Web SDK bundle, the dVPN SDK npm packages, and the fork's own `assets/hns/` and `scripts/jacktrip/` files. The upstream pins are unchanged from 0.8.7 and still match the recorded versions. The production npm tree grew from 273 to 299 unique packages, all of the 26 additions through the dVPN SDK and all permissive, and then to 300 when verified Spaces browsing added `@spacesprotocol/libveritas`.
 
-`package.json` names version 0.7.16, the fork's next release number, so the audit is baselined there rather than at upstream's 0.8.7. The baseline moved from 0.7.15 on 2026-10-22, with the version bump and nothing else. The last full manual re-reading of this audit was on 2026-10-15, against 0.7.15. Each version move since then was recorded here as it landed: Electron 44.7.0 to 44.9.3, freedom-ipfs 0.4.5 to 0.4.6, and Ant 0.5.61 to 0.5.71. The inspection of the security-set candidate dd0e913a, against the accepted 2f7920f3 package, found no third-party component added or removed. The Linux deb also carries the Debian epoch 1 (`build.deb.fpm`), so its package version is `1:0.7.16`.
+`package.json` names version 0.7.17, the fork's next release number, so the audit is baselined there rather than at upstream's 0.8.7. The baseline moved from 0.7.15 to 0.7.16 on 2026-10-22. The last full manual re-reading of this audit was on 2026-10-15, against 0.7.15. Each dependency move since then was recorded here as it landed: Electron 44.7.0 to 44.9.3, freedom-ipfs 0.4.5 to 0.4.6, and Ant 0.5.61 to 0.5.71. The inspection of the security-set candidate dd0e913a, against the accepted 2f7920f3 package, found no third-party component added or removed. The Linux deb carries Debian epoch 1 (`build.deb.fpm`), so the next package version is `1:0.7.17`.
+
+The 0.7.17 baseline update on 2026-10-23 retains the production dependency inventory and native pins. Hosted exact-lock CI for candidate 9faeecf1 passed the component inventory checks but caught the stale baseline version. Static inspection of its deb, SHA-256 `44acb4b4037ced402fb5f20465780823e725fc84cd9b258ae3b45db712d49d17`, verified all 734 package checksums and 444 packaged source files. Compared with accepted 6c968a49, no package path, native binary or third-party module was added, removed or changed. The build refreshed the five filter-list snapshots; their manifest digests and sizes and the unchanged scriptlet resources verified. The audit's original generation date remains the date of the full manual reading. This baseline reconciliation does not approve public release or replace installed acceptance.
 
 ---
 
@@ -374,4 +376,4 @@ Two recommended items are not blockers. Agora should be asked for a licence file
 
 ---
 
-Re-derived from the installed tree on 2026-10-22 against `0.7.16`. That re-derivation is `licenses-audit.test.js`, which walks the installed production dependency tree and every bundled component and compares them with this audit. The last full manual re-reading was on 2026-10-15 against 0.7.15. Kept honest by `licenses-audit.test.js`.
+Re-derived from the installed tree on 2026-10-23 against `0.7.17`. That re-derivation is `licenses-audit.test.js`, which walks the installed production dependency tree and every bundled component and compares them with this audit. The hosted component checks and package inspection above support the unchanged inventory; the baseline-version correction requires the successor CI run. The last full manual re-reading was on 2026-10-15 against 0.7.15. Kept honest by `licenses-audit.test.js`.
