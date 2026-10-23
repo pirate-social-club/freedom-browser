@@ -1,1 +1,1 @@
-- Routine HNS certificate updates no longer display a network protection failure warning while the browser window is loading
+- Routine HNS certificate updates no longer display a network protection failure warning while the browser window is loading ([#65](https://github.com/pirate-social-club/freedom-browser/pull/65))
