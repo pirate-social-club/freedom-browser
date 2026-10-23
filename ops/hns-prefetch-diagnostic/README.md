@@ -4,13 +4,15 @@ The recurring CI failure loses the probe result after Jest reports its first
 failed assertion. This experiment preserves the complete synthetic probe output,
 exit status, runtime versions, lookup timing and phase timing. The first two
 observations preserved all original assertions and settings. The third tested
-explicit control enablement and still failed. The fourth restores the original
-control and adds optional renderer observation, as described below; guest order,
-fifteen-second round bounds and ninety-second child timeout remain unchanged.
+explicit control enablement and still failed. The fourth restored the original
+control and added renderer observation. The fifth varies guest attachment as
+described below; fifteen-second round bounds and ninety-second child timeout
+remain unchanged.
 The process helper belongs beside the integration
 test because it owns only that test's children and temporary profiles.
 
-The HNS prefetch diagnostic workflow runs six serial protected/control pairs on
+The HNS prefetch diagnostic workflow now runs two serial batches, each of six
+serial protected/control pairs, on
 Ubuntu 24.04 with locked Node 24.14.0 and Electron 44.9.3. Each pair has fresh
 profiles and a separate evidence directory. Jest and all Electron descendants
 share one CPU on CPU0, nice19, three GiB of memory and zero swap. The experiment
@@ -49,7 +51,8 @@ or cancellation before the DoH observer. Logging stops and flushes before the
 result is emitted; missing, malformed, empty, unflushed or size-capped evidence
 fails the diagnostic. Electron stops after exceeding its threshold, so this is
 not a strict physical file-size cap. The assessor refuses every log at or above
-eight MiB; twelve accepted logs therefore total less than96MiB. Raw rejected
+eight MiB; twelve accepted logs per batch therefore total less than96MiB, and
+the two batches less than192MiB. Raw rejected
 files remain evidence and may exceed that total.
 Native completion messages remain in the existing stderr evidence. Normal CI
 does not enable this optional logging. All assertions, page contents, guest
@@ -125,3 +128,35 @@ remain fixed. No sample is retried and no passing sample alone closes the task.
 
 The console event interface is documented at
 https://www.electronjs.org/docs/latest/api/web-contents#event-console-message.
+
+The fourth fixed experiment, run40001567731 atc11cc800, failed pairs1,2,6.
+Every control emitted all24 renderer trigger messages, including missing first
+default-page hints; those names still had no resolver request or completion.
+All protected probes and cleanup passed. The loss is after the renderer gate,
+without identifying a specific IPC or guest-initialization cause.
+
+The fifth experiment changes guest startup only in the dedicated diagnostic.
+Both guests start at about:blank; after both did-attach-webview events arrive,
+their first actual hint pages are loaded once in the existing default/private
+order. There is no warm-up network request, arbitrary delay or hint retry.
+The first and second hint documents, required DNS observations, theme updates,
+private all-or-none rule, protected startup setting, original control setting,
+round/child bounds, evidence caps and cleanup remain required. Ordinary CI
+retains its original eager startup, so this is an experiment, not a repair.
+
+Two predeclared serial batches of six pairs run, even if the first batch fails;
+neither batch may be selectively retried or omitted. Each fresh hosted job has
+the existing oneCPU/threeGiB/zero-swap and22minute experiment/35minute job bounds.
+Attachment readiness and both first navigations must be proved in each probe;
+a green Jest report cannot replace missing or failed startup evidence. Any
+missing first default hint falsifies attachment alone as a sufficient repair.
+All12 passing pairs would support this startup hypothesis, not establish the
+underlying engine cause or clear a change to ordinary CI without review.
+
+Electron44.9.3 constructs WebPrescientNetworkingImpl for the frame, and the
+pinned Chromium implementation binds its handler through the frame's browser
+interface broker. Those facts motivate testing attachment; they do not prove
+that the earlier messages were lost there. Sources:
+https://github.com/electron/electron/blob/v44.9.3/shell/renderer/renderer_client_base.cc,
+https://github.com/chromium/chromium/blob/152.0.7977.167/components/network_hints/renderer/web_prescient_networking_impl.cc,
+https://github.com/chromium/chromium/blob/152.0.7977.167/components/network_hints/browser/simple_network_hints_handler_impl.cc.

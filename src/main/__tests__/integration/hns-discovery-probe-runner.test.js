@@ -94,6 +94,21 @@ describe('HNS probe process evidence', () => {
     expect(spawnImpl).not.toHaveBeenCalled();
   });
 
+  test('refuses the attachment experiment outside the retained network diagnostic', () => {
+    expect(() => start({ env: { FREEDOM_HNS_GUEST_AFTER_ATTACH: '1', FREEDOM_HNS_NETWORK_DIAGNOSTIC: '0' } }))
+      .toThrow('requires network diagnostic');
+    expect(spawnImpl).not.toHaveBeenCalled();
+  });
+
+  test('retains explicit attachment mode without changing launch arguments or timeout', async () => {
+    const pending = start({ env: { FREEDOM_HNS_GUEST_AFTER_ATTACH: '1', FREEDOM_HNS_NETWORK_DIAGNOSTIC: '1' } });
+    child.stdout.emit('data', Buffer.from('PROBE-RESULT {}\n'));
+    child.emit('close', 0, null);
+    await pending;
+    expect(spawnImpl.mock.calls[0][2].env.FREEDOM_HNS_GUEST_AFTER_ATTACH).toBe('1');
+    expect(read().process).toMatchObject({ guestAfterAttach: true, networkLogging: true, timeoutMs: 90_000 });
+  });
+
   test.each([
     ['missing', 'PROBE-FAILED synthetic failure\n', 'no result'],
     ['malformed', 'PROBE-RESULT {broken}\n', 'invalid JSON'],

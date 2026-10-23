@@ -9,6 +9,8 @@ function runProbe({ electronPath, probePath, timeoutMs, env = {}, spawnImpl = sp
   const childEnv = { ...process.env, ...env, ELECTRON_RUN_AS_NODE: '' };
   const mode = childEnv.FREEDOM_PROBE_WITHOUT_BLINK_SETTINGS === '1' ? 'control' : 'protected';
   const networkLogging = childEnv.FREEDOM_HNS_NETWORK_DIAGNOSTIC === '1';
+  const guestAfterAttach = childEnv.FREEDOM_HNS_GUEST_AFTER_ATTACH === '1';
+  if (guestAfterAttach && !networkLogging) throw new Error('Guest attachment experiment requires network diagnostic');
   if (networkLogging && !evidenceRoot) throw new Error('Network diagnostic requires retained probe evidence');
   let evidenceDirectory;
   if (evidenceRoot) {
@@ -19,7 +21,7 @@ function runProbe({ electronPath, probePath, timeoutMs, env = {}, spawnImpl = sp
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-hns-discovery-probe-'));
   const started = Date.now();
   const receipt = {
-    mode, networkLogging, startedAt: new Date(started).toISOString(), timeoutMs,
+    mode, networkLogging, guestAfterAttach, startedAt: new Date(started).toISOString(), timeoutMs,
     wrapperVersions: { ...process.versions }, pid: null,
     closed: false, exitCode: null, signal: null, timedOut: false,
     spawnError: null, parseError: null, resultFound: false,

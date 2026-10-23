@@ -53,6 +53,8 @@ const path = require('path');
 
 const WITHOUT_BLINK_SETTINGS = process.env.FREEDOM_PROBE_WITHOUT_BLINK_SETTINGS === '1';
 const NET_LOG_PATH = process.env.FREEDOM_HNS_PROBE_NET_LOG_PATH;
+const GUEST_AFTER_ATTACH = process.env.FREEDOM_HNS_GUEST_AFTER_ATTACH === '1';
+if (GUEST_AFTER_ATTACH && !NET_LOG_PATH) throw new Error('Guest attachment experiment requires retained network observation');
 const NET_LOG_MAX_BYTES = 8 * 1024 * 1024;
 if (!WITHOUT_BLINK_SETTINGS) require('../../blink-settings').applyBlinkSettings(app);
 
@@ -222,8 +224,8 @@ function startPages(closedPortNumber, privatePartition) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(
         '<!doctype html><title>host</title>' +
-          `<webview id="default" src="/hints/default"></webview>` +
-          `<webview id="private" partition="${privatePartition}" src="/hints/private"></webview>`
+          `<webview id="default" src="${GUEST_AFTER_ATTACH ? 'about:blank' : '/hints/default'}"></webview>` +
+          `<webview id="private" partition="${privatePartition}" src="${GUEST_AFTER_ATTACH ? 'about:blank' : '/hints/private'}"></webview>`
       );
       return;
     }
@@ -372,6 +374,18 @@ async function main() {
     guests.set(guest.session === privateSession ? 'private' : 'default', guest);
   });
   const hostLoad = await within(host.loadURL(`http://127.0.0.1:${pagePort}/host`), 10_000);
+  const guestStartup = { mode: GUEST_AFTER_ATTACH ? 'after-attachment' : 'eager', attached: null, firstLoads: null };
+  if (GUEST_AFTER_ATTACH) {
+    // One changed startup input: load the first real hint pages only after
+    // both guests exist. No sleep, hint retry or warm-up network request.
+    guestStartup.attached = await until(() => guests.size === GUESTS.length, 10_000);
+    if (!guestStartup.attached.met) throw new Error('Guest attachment did not complete');
+    phase('guests-attached');
+    const firstLoads = await Promise.all(GUESTS.map((guest) => within(guests.get(guest)
+        .loadURL(`http://127.0.0.1:${pagePort}/hints/${guest}`)
+        .then(() => ({ complete: true })), 10_000)));
+    guestStartup.firstLoads = Object.fromEntries(GUESTS.map((guest, index) => [guest, firstLoads[index]]));
+  }
   const seen = (name) => dnsQueries.some((queried) => expectedNameOf(queried, [name]) !== null);
   // Each round is read once both guests' unlisted images, fetched after the
   // page's hints, have been looked up. The control run also waits for every
@@ -430,6 +444,7 @@ async function main() {
   await settle(200);
   results.pages = {
     hostLoad,
+    guestStartup,
     pagesSeen,
     themeApplied,
     secondLoads,

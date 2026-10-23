@@ -31,6 +31,8 @@ class PairEvidenceTest(unittest.TestCase):
                 "messages": ([{"contentsId": 2, "ms": 1, "name": f"{kind}-default-r2.{root}"}
                               for kind in ("header", "html") for root in ("hnsprobe", "pirate", "unlistedprobe")]
                              if mode == "control" else [])}
+            result["pages"] = {"guestStartup": {"mode": "after-attachment", "attached": {"met": True, "ms": 1},
+                "firstLoads": {guest: {"value": {"complete": True}} for guest in ("default", "private")}}}
             stdout = ("PROBE-RESULT " + json.dumps(result) + "\n").encode()
             module.write_json(directory / "net-log.json", {"constants": {"logEventTypes": {"fixture": 1}},
                                                           "events": [{"type": 1}]})
@@ -38,13 +40,43 @@ class PairEvidenceTest(unittest.TestCase):
             (directory / "stderr.log").write_bytes(b"")
             module.write_json(directory / "process.json", {"closed": True, "exitCode": 0, "signal": None,
                 "timedOut": False, "spawnError": None, "parseError": None, "resultFound": True,
-                "stdoutBytes": len(stdout), "stderrBytes": 0, "networkLogging": True})
+                "stdoutBytes": len(stdout), "stderrBytes": 0, "networkLogging": True, "guestAfterAttach": True})
 
     def tearDown(self):
         self.temporary.cleanup()
 
     def test_complete_evidence_passes(self):
         self.assertEqual(module.assess_pair(self.root, 0), [])
+
+    def test_guest_startup_refuses_eager_missing_attachment_or_failed_navigation(self):
+        good = {"mode": "after-attachment", "attached": {"met": True, "ms": 1},
+                "firstLoads": {guest: {"value": {"complete": True}} for guest in ("default", "private")}}
+        self.assertTrue(module.valid_guest_startup(good))
+        for value in [None, {}, {**good, "mode": "eager"}, {**good, "attached": {"met": False, "ms": 1}},
+                      {**good, "attached": {"met": True, "ms": 10_001}}, {**good, "firstLoads": {}},
+                      {**good, "firstLoads": {"default": {"value": {"complete": True}}, "private": {"timedOut": True}}}]:
+            with self.subTest(value=value):
+                self.assertFalse(module.valid_guest_startup(value))
+
+    def test_green_jest_does_not_hide_unproven_attachment_mode(self):
+        path = self.root / "probes/control-fixture/process.json"
+        record = json.loads(path.read_text())
+        record["guestAfterAttach"] = False
+        module.write_json(path, record)
+        self.assertIn("control_guest_attachment_mode_missing", module.assess_pair(self.root, 0))
+
+    def test_green_jest_does_not_hide_missing_or_malformed_guest_startup(self):
+        directory = self.root / "probes/control-fixture"
+        result = json.loads((directory / "stdout.log").read_text().removeprefix("PROBE-RESULT "))
+        for pages in [None, [], {}, {"guestStartup": None}]:
+            with self.subTest(pages=pages):
+                result["pages"] = pages
+                stdout = ("PROBE-RESULT " + json.dumps(result) + "\n").encode()
+                (directory / "stdout.log").write_bytes(stdout)
+                record = json.loads((directory / "process.json").read_text())
+                record["stdoutBytes"] = len(stdout)
+                module.write_json(directory / "process.json", record)
+                self.assertIn("control_guest_startup_invalid", module.assess_pair(self.root, 0))
 
     def test_renderer_observation_refuses_absent_overflow_and_wrong_shapes(self):
         for value in [None, [], {}, {"enabled": True, "overflow": True, "contentsIds": [1, 2, 3], "messages": []},

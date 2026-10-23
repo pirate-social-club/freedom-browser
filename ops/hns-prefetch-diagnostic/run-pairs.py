@@ -47,6 +47,18 @@ def valid_renderer_observation(value, mode):
     return required.issubset({message["name"] for message in messages})
 
 
+def valid_guest_startup(value):
+    if not isinstance(value, dict) or value.get("mode") != "after-attachment":
+        return False
+    attached, loads = value.get("attached"), value.get("firstLoads")
+    return (isinstance(attached, dict) and attached.get("met") is True
+            and type(attached.get("ms")) is int and 0 <= attached["ms"] <= 10_000
+            and isinstance(loads, dict) and set(loads) == {"default", "private"}
+            and all(isinstance(load, dict) and set(load) == {"value"}
+                    and isinstance(load["value"], dict) and set(load["value"]) == {"complete"}
+                    and load["value"]["complete"] is True for load in loads.values()))
+
+
 def assess_pair(directory, exit_code):
     failures = []
     if exit_code != 0:
@@ -86,6 +98,8 @@ def assess_pair(directory, exit_code):
                 failures.append(f"{mode}_runtime_or_result_mismatch")
             if record.get("networkLogging") is not True:
                 failures.append(f"{mode}_network_logging_missing")
+            if record.get("guestAfterAttach") is not True:
+                failures.append(f"{mode}_guest_attachment_mode_missing")
             network_log = records[0].with_name("net-log.json")
             if network_log.stat().st_size >= NET_LOG_MAX_BYTES:
                 failures.append(f"{mode}_net_log_limit_reached")
@@ -101,6 +115,10 @@ def assess_pair(directory, exit_code):
             if len(results) == 1 and not valid_renderer_observation(
                     json.loads(results[0]).get("rendererHintObservation"), mode):
                 failures.append(f"{mode}_renderer_observation_invalid")
+            if len(results) == 1:
+                pages = json.loads(results[0]).get("pages")
+                if not isinstance(pages, dict) or not valid_guest_startup(pages.get("guestStartup")):
+                    failures.append(f"{mode}_guest_startup_invalid")
         except (OSError, ValueError, UnicodeError):
             failures.append(f"{mode}_evidence_invalid")
     return failures
@@ -122,6 +140,7 @@ def run_pair(directory):
                              "--runTestsByPath", SPEC, "--json", "--outputFile", str(directory / "jest.json")],
                             env={**os.environ, "FREEDOM_ELECTRON_NET_TEST": "1",
                                  "FREEDOM_HNS_NETWORK_DIAGNOSTIC": "1",
+                                 "FREEDOM_HNS_GUEST_AFTER_ATTACH": "1",
                                  "FREEDOM_HNS_PROBE_EVIDENCE_DIR": str(directory / "probes")})
     write_json(directory / "resource-outcome.json", {name: (cgroup / name).read_text().strip()
                for name in ("cpu.stat", "memory.events", "memory.peak", "memory.swap.peak")})
@@ -149,6 +168,7 @@ def run_samples(output, verifier):
         "verifierSha256": verifier_digest, "startedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "setupSeconds": setup_seconds, "fullExperimentBudgetAvailable": setup_budget_ok,
         "retries": 0, "cleanSamplesWithoutRecurrenceDoNotResolveFlake": True,
+        "guestStartup": "after-attachment", "batch": os.environ.get("FREEDOM_HNS_DIAGNOSTIC_BATCH"),
         "networkObservation": {"captureMode": "default", "maxFileSizePerProbe": NET_LOG_MAX_BYTES,
                                "nativeVmodule": "simple_network_hints_handler_impl=2",
                                "rendererHintMessages": True, "maxMessages": 64, "maxContents": 16},

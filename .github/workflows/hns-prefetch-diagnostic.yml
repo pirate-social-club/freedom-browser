@@ -18,8 +18,16 @@ concurrency:
 
 jobs:
   diagnose:
+    name: Diagnostic batch ${{ matrix.batch }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        batch: [1, 2]
     runs-on: ubuntu-24.04
     timeout-minutes: 35
+    env:
+      FREEDOM_HNS_DIAGNOSTIC_BATCH: ${{ matrix.batch }}
     steps:
       - name: Record job time budget
         run: echo "FREEDOM_HNS_JOB_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
@@ -81,7 +89,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: hns-prefetch-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          name: hns-prefetch-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-batch-${{ matrix.batch }}
           path: ${{ runner.temp }}/hns-prefetch-diagnostic/
           if-no-files-found: error
           retention-days: 14
