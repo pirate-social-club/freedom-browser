@@ -18,6 +18,7 @@ EXPERIMENT_SECONDS = 22 * 60
 PAIR_SECONDS = 195
 SPEC = "src/main/__tests__/integration/hns-namespace-discovery.test.js"
 RESOURCES = {"cpu.max": "100000 100000", "memory.max": "3221225472", "memory.swap.max": "0"}
+NET_LOG_MAX_BYTES = 8 * 1024 * 1024
 
 
 def write_json(path, value):
@@ -61,6 +62,18 @@ def assess_pair(directory, exit_code):
                        if line.startswith("PROBE-RESULT ")]
             if len(results) != 1 or json.loads(results[0]).get("versions", {}).get("electron") != "44.9.3":
                 failures.append(f"{mode}_runtime_or_result_mismatch")
+            if record.get("networkLogging") is not True:
+                failures.append(f"{mode}_network_logging_missing")
+            network_log = records[0].with_name("net-log.json")
+            if network_log.stat().st_size >= NET_LOG_MAX_BYTES:
+                failures.append(f"{mode}_net_log_limit_reached")
+            else:
+                capture = json.loads(network_log.read_text())
+                if not capture.get("constants") or not capture.get("events"):
+                    failures.append(f"{mode}_net_log_empty")
+            if len(results) == 1 and json.loads(results[0]).get("networkLog") != {
+                    "stopped": True, "captureMode": "default", "maxFileSize": NET_LOG_MAX_BYTES}:
+                failures.append(f"{mode}_net_log_not_flushed")
         except (OSError, ValueError, UnicodeError):
             failures.append(f"{mode}_evidence_invalid")
     return failures
@@ -81,6 +94,7 @@ def run_pair(directory):
     result = subprocess.run([node, str(ROOT / "node_modules/jest/bin/jest.js"), "--runInBand",
                              "--runTestsByPath", SPEC, "--json", "--outputFile", str(directory / "jest.json")],
                             env={**os.environ, "FREEDOM_ELECTRON_NET_TEST": "1",
+                                 "FREEDOM_HNS_NETWORK_DIAGNOSTIC": "1",
                                  "FREEDOM_HNS_PROBE_EVIDENCE_DIR": str(directory / "probes")})
     write_json(directory / "resource-outcome.json", {name: (cgroup / name).read_text().strip()
                for name in ("cpu.stat", "memory.events", "memory.peak", "memory.swap.peak")})
@@ -108,6 +122,8 @@ def run_samples(output, verifier):
         "verifierSha256": verifier_digest, "startedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "setupSeconds": setup_seconds, "fullExperimentBudgetAvailable": setup_budget_ok,
         "retries": 0, "cleanSamplesWithoutRecurrenceDoNotResolveFlake": True,
+        "networkObservation": {"captureMode": "default", "maxFileSizePerProbe": NET_LOG_MAX_BYTES,
+                               "nativeVmodule": "simple_network_hints_handler_impl=2"},
     })
     return collect_pairs(output, verifier, verifier_digest, unit, deadline, setup_budget_ok)
 

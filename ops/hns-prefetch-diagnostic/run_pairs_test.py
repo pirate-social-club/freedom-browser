@@ -25,12 +25,16 @@ class PairEvidenceTest(unittest.TestCase):
         for mode in ("protected", "control"):
             directory = self.root / "probes" / f"{mode}-fixture"
             directory.mkdir(parents=True)
-            stdout = b'PROBE-RESULT {"versions":{"electron":"44.9.3"}}\n'
+            result = {"versions": {"electron": "44.9.3"}, "networkLog": {
+                "stopped": True, "captureMode": "default", "maxFileSize": module.NET_LOG_MAX_BYTES}}
+            stdout = ("PROBE-RESULT " + json.dumps(result) + "\n").encode()
+            module.write_json(directory / "net-log.json", {"constants": {"logEventTypes": {"fixture": 1}},
+                                                          "events": [{"type": 1}]})
             (directory / "stdout.log").write_bytes(stdout)
             (directory / "stderr.log").write_bytes(b"")
             module.write_json(directory / "process.json", {"closed": True, "exitCode": 0, "signal": None,
                 "timedOut": False, "spawnError": None, "parseError": None, "resultFound": True,
-                "stdoutBytes": len(stdout), "stderrBytes": 0})
+                "stdoutBytes": len(stdout), "stderrBytes": 0, "networkLogging": True})
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -57,6 +61,38 @@ class PairEvidenceTest(unittest.TestCase):
     def test_missing_control_fails(self):
         (self.root / "probes/control-fixture/process.json").unlink()
         self.assertIn("control_process_count", module.assess_pair(self.root, 0))
+
+    def test_missing_or_truncated_network_log_cannot_pass(self):
+        path = self.root / "probes/control-fixture/net-log.json"
+        path.unlink()
+        self.assertIn("control_evidence_invalid", module.assess_pair(self.root, 0))
+        path.write_text('{"events":[')
+        self.assertIn("control_evidence_invalid", module.assess_pair(self.root, 0))
+
+    def test_network_log_at_size_limit_is_not_complete_evidence(self):
+        path = self.root / "probes/control-fixture/net-log.json"
+        with path.open("wb") as output:
+            output.truncate(module.NET_LOG_MAX_BYTES)
+        self.assertIn("control_net_log_limit_reached", module.assess_pair(self.root, 0))
+
+    def test_empty_network_log_and_disabled_logging_fail(self):
+        directory = self.root / "probes/control-fixture"
+        module.write_json(directory / "net-log.json", {"constants": {}, "events": []})
+        record = json.loads((directory / "process.json").read_text())
+        record["networkLogging"] = False
+        module.write_json(directory / "process.json", record)
+        failures = module.assess_pair(self.root, 0)
+        self.assertIn("control_net_log_empty", failures)
+        self.assertIn("control_network_logging_missing", failures)
+
+    def test_unflushed_network_log_fails_despite_valid_json(self):
+        directory = self.root / "probes/control-fixture"
+        stdout = (directory / "stdout.log").read_bytes().replace(b'"stopped": true', b'"stopped":false')
+        (directory / "stdout.log").write_bytes(stdout)
+        record = json.loads((directory / "process.json").read_text())
+        record["stdoutBytes"] = len(stdout)
+        module.write_json(directory / "process.json", record)
+        self.assertIn("control_net_log_not_flushed", module.assess_pair(self.root, 0))
 
     def test_skipped_or_failed_assertions_fail(self):
         module.write_json(self.root / "jest.json", {"success": True, "numFailedTests": 0,

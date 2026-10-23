@@ -42,7 +42,7 @@
  * Results are printed as one JSON line prefixed with `PROBE-RESULT `.
  */
 
-const { app, session, BrowserWindow, nativeTheme } = require('electron');
+const { app, session, BrowserWindow, nativeTheme, netLog } = require('electron');
 const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
@@ -52,6 +52,8 @@ const os = require('os');
 const path = require('path');
 
 const WITHOUT_BLINK_SETTINGS = process.env.FREEDOM_PROBE_WITHOUT_BLINK_SETTINGS === '1';
+const NET_LOG_PATH = process.env.FREEDOM_HNS_PROBE_NET_LOG_PATH;
+const NET_LOG_MAX_BYTES = 8 * 1024 * 1024;
 if (!WITHOUT_BLINK_SETTINGS) require('../../blink-settings').applyBlinkSettings(app);
 
 const DOH_HOST = 'doh.certprobe.test';
@@ -278,6 +280,10 @@ async function until(predicate, ms, refresh = async () => {}) {
 
 async function main() {
   phase('ready');
+  if (NET_LOG_PATH) {
+    if (!path.isAbsolute(NET_LOG_PATH)) throw new Error('Network log path must be absolute');
+    await netLog.startLogging(NET_LOG_PATH, { captureMode: 'default', maxFileSize: NET_LOG_MAX_BYTES });
+  }
   const resolverPort = await startResolver();
   const discoveryPort = await startDiscovery();
   const closed = await closedPort();
@@ -494,12 +500,21 @@ async function main() {
   phase('complete');
   results.phaseTimings = phaseTimings;
   results.fatal = fatal;
+  if (NET_LOG_PATH) {
+    await netLog.stopLogging();
+    results.networkLog = { stopped: true, captureMode: 'default', maxFileSize: NET_LOG_MAX_BYTES };
+  }
   process.stdout.write(`PROBE-RESULT ${JSON.stringify(results)}\n`);
   app.exit(0);
 }
 
 app.whenReady().then(() =>
-  main().catch((err) => {
+  main().catch(async (err) => {
+    if (NET_LOG_PATH && netLog.currentlyLogging) {
+      try { await netLog.stopLogging(); } catch (error) {
+        process.stderr.write(`PROBE-NET-LOG-FAILED ${error.message}\n`);
+      }
+    }
     process.stdout.write(`PROBE-FAILED ${err && err.stack}\n`);
     app.exit(1);
   })

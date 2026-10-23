@@ -66,6 +66,34 @@ describe('HNS probe process evidence', () => {
     expect(spawnImpl.mock.calls[0][2].env.ELECTRON_RUN_AS_NODE).toBe('');
   });
 
+  test('network observation is opt-in and never trusts an inherited output path', async () => {
+    const pending = start({ env: { FREEDOM_HNS_NETWORK_DIAGNOSTIC: '0', FREEDOM_HNS_PROBE_NET_LOG_PATH: '/unowned/path' } });
+    child.stdout.emit('data', Buffer.from('PROBE-RESULT {}\n'));
+    child.emit('close', 0, null);
+    await pending;
+    expect(spawnImpl.mock.calls[0][1]).toEqual(['--no-sandbox', '--headless', '/fixture/probe.js']);
+    expect(spawnImpl.mock.calls[0][2].env.FREEDOM_HNS_PROBE_NET_LOG_PATH).toBe('');
+    expect(read().process.networkLogging).toBe(false);
+  });
+
+  test('network observation logs to its unique evidence directory and preserves the timeout', async () => {
+    const pending = start({ env: { FREEDOM_HNS_NETWORK_DIAGNOSTIC: '1' } });
+    child.stdout.emit('data', Buffer.from('PROBE-RESULT {}\n'));
+    child.emit('close', 0, null);
+    await pending;
+    const [, args, options] = spawnImpl.mock.calls[0];
+    expect(args).toEqual(['--no-sandbox', '--headless', '--enable-logging',
+      '--vmodule=simple_network_hints_handler_impl=2', '/fixture/probe.js']);
+    expect(options.env.FREEDOM_HNS_PROBE_NET_LOG_PATH).toBe(path.join(root, fs.readdirSync(root)[0], 'net-log.json'));
+    expect(read().process).toMatchObject({ networkLogging: true, timeoutMs: 90_000 });
+  });
+
+  test('refuses network observation before spawning when evidence cannot be retained', () => {
+    expect(() => start({ evidenceRoot: '', env: { FREEDOM_HNS_NETWORK_DIAGNOSTIC: '1' } }))
+      .toThrow('requires retained probe evidence');
+    expect(spawnImpl).not.toHaveBeenCalled();
+  });
+
   test.each([
     ['missing', 'PROBE-FAILED synthetic failure\n', 'no result'],
     ['malformed', 'PROBE-RESULT {broken}\n', 'invalid JSON'],

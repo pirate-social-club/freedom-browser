@@ -8,6 +8,8 @@ function runProbe({ electronPath, probePath, timeoutMs, env = {}, spawnImpl = sp
   evidenceRoot = process.env.FREEDOM_HNS_PROBE_EVIDENCE_DIR }) {
   const childEnv = { ...process.env, ...env, ELECTRON_RUN_AS_NODE: '' };
   const mode = childEnv.FREEDOM_PROBE_WITHOUT_BLINK_SETTINGS === '1' ? 'control' : 'protected';
+  const networkLogging = childEnv.FREEDOM_HNS_NETWORK_DIAGNOSTIC === '1';
+  if (networkLogging && !evidenceRoot) throw new Error('Network diagnostic requires retained probe evidence');
   let evidenceDirectory;
   if (evidenceRoot) {
     if (!path.isAbsolute(evidenceRoot)) throw new Error('HNS probe evidence directory must be absolute');
@@ -17,7 +19,7 @@ function runProbe({ electronPath, probePath, timeoutMs, env = {}, spawnImpl = sp
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-hns-discovery-probe-'));
   const started = Date.now();
   const receipt = {
-    mode, startedAt: new Date(started).toISOString(), timeoutMs,
+    mode, networkLogging, startedAt: new Date(started).toISOString(), timeoutMs,
     wrapperVersions: { ...process.versions }, pid: null,
     closed: false, exitCode: null, signal: null, timedOut: false,
     spawnError: null, parseError: null, resultFound: false,
@@ -49,9 +51,12 @@ function runProbe({ electronPath, probePath, timeoutMs, env = {}, spawnImpl = sp
       reject(error);
     };
     try {
-      child = spawnImpl(electronPath, ['--no-sandbox', '--headless', probePath], {
+      const loggingArgs = networkLogging
+        ? ['--enable-logging', '--vmodule=simple_network_hints_handler_impl=2'] : [];
+      child = spawnImpl(electronPath, ['--no-sandbox', '--headless', ...loggingArgs, probePath], {
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...childEnv, FREEDOM_PROBE_USER_DATA: userData },
+        env: { ...childEnv, FREEDOM_PROBE_USER_DATA: userData,
+          FREEDOM_HNS_PROBE_NET_LOG_PATH: networkLogging ? path.join(evidenceDirectory, 'net-log.json') : '' },
       });
       receipt.pid = child.pid ?? null;
     } catch (error) {
