@@ -394,6 +394,7 @@
     "sentinel-ai-connect": "https://codeload.github.com/Sentinel-Autonomybuilder/blue-ai-connect/tar.gz/924d472cb8be47b11f2432515f23bd5ea20d297c"
   },
   "overrides": {
+    "zod": "4.6.6",
     "@ledgerhq/domain-service": {
       "axios": "^1.20.0"
     },

@@ -1,0 +1,1 @@
+- Updated schema and IPv6 address validation dependencies to reject oversized constrained collections before validating their elements and avoid excessive work on oversized IPv6 zone identifiers ([advisory](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5), [#67](https://github.com/pirate-social-club/freedom-browser/pull/67)).
