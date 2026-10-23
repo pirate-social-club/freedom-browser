@@ -763,7 +763,7 @@ function beginHnsCertificateUpdate() {
   routing.intentChanged();
   return proxySessions.enqueue(async () => {
     try {
-      await Promise.all([proxySessions.quarantineAll(), drainGuardResources()]);
+      await Promise.all([proxySessions.pauseAll(), drainGuardResources()]);
     } catch (error) {
       proxySessions.terminate('hns_trust_transition_failed');
       throw error;
