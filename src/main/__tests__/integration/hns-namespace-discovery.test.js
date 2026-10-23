@@ -12,10 +12,9 @@
  * spawns Electron on `hns-namespace-discovery-electron-probe.js`, which runs
  * Chromium's resolver against a local DNS-over-HTTPS server so every lookup
  * is seen where it is made, rather than inferred, and asserts the probe's
- * report. It runs the probe twice: as Freedom starts, and once more with
- * DNS prefetching explicitly enabled, the positive control that requires
- * the page's prefetch hints to reach the resolver. Nothing it dials leaves
- * the machine.
+ * report. It runs the probe twice: as Freedom starts, and once more without
+ * Freedom's startup setting, the positive control that requires the page's
+ * prefetch hints to reach the resolver. Nothing it dials leaves the machine.
  *
  * Skipped when the Electron binary cannot be resolved; the `ipfs-gateway-proxy`
  * CI job sets `FREEDOM_ELECTRON_NET_TEST=1`, which turns a missing binary into
@@ -83,8 +82,10 @@ describeWithElectron('HNS namespace discovery in a real Electron process', () =>
     expect(results.guard).toMatch(/^PROXY 127\.0\.0\.1:\d+$/);
     expect(results.fatal).toBeNull();
     expect(results.firstRefresh).toEqual([LISTED]);
-    expect(results.blinkSettings).toBe('dnsPrefetchingEnabled=false');
-    expect(control.blinkSettings).toBe('dnsPrefetchingEnabled=true');
+    const rendererLogging = process.env.FREEDOM_HNS_NETWORK_DIAGNOSTIC === '1';
+    expect(results.blinkSettings).toBe('dnsPrefetchingEnabled=false' +
+      (rendererLogging ? ',logDnsPrefetchAndPreconnect=true' : ''));
+    expect(control.blinkSettings).toBe(rendererLogging ? 'logDnsPrefetchAndPreconnect=true' : '');
   });
 
   // The baseline the list exists to change: with only `.pirate` built in, a
@@ -140,14 +141,14 @@ describeWithElectron('HNS namespace discovery in a real Electron process', () =>
     }
   });
 
-  // The control: with prefetching explicitly enabled, a page's dns-prefetch hints,
+  // The control: without Freedom's startup setting, a page's dns-prefetch hints,
   // in its HTML and in a `Link:` header, are looked up for every root, on the
   // first page and on the second, after the theme change. The probe waited
   // for exactly these lookups before reading. Missing requests still fail;
   // the readiness timeout must not turn them into an optional observation.
   // The private guest prefetches all of a page's hints or none of them, about
   // half the runs each, so only the default guest is required to.
-  test('with prefetching enabled, hints are looked up, before and after a theme change', () => {
+  test('without the startup setting, hints are looked up, before and after a theme change', () => {
     const lookups = control.hintLookups.map(({ name }) => name);
     for (const round of ROUNDS) {
       const expected = hintNames('default', round);

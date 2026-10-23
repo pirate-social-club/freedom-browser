@@ -25,6 +25,28 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n")
 
 
+def valid_renderer_observation(value, mode):
+    if not isinstance(value, dict) or value.get("enabled") is not True or value.get("overflow") is not False:
+        return False
+    ids, messages = value.get("contentsIds"), value.get("messages")
+    if (not isinstance(ids, list) or not 3 <= len(ids) <= 16
+            or any(type(identifier) is not int or identifier <= 0 for identifier in ids)
+            or len(set(ids)) != len(ids) or not isinstance(messages, list) or len(messages) > 64):
+        return False
+    for message in messages:
+        if (not isinstance(message, dict) or set(message) != {"contentsId", "name", "ms"}
+                or type(message["contentsId"]) is not int or message["contentsId"] not in ids
+                or type(message["ms"]) is not int or message["ms"] < 0
+                or not isinstance(message["name"], str)
+                or not re.fullmatch(r"(header|html)-(default|private)(-r2)?\.(hnsprobe|pirate|unlistedprobe)", message["name"])):
+            return False
+    if mode == "protected":
+        return not messages
+    required = {f"{kind}-default-r2.{root}" for kind in ("header", "html")
+                for root in ("hnsprobe", "pirate", "unlistedprobe")}
+    return required.issubset({message["name"] for message in messages})
+
+
 def assess_pair(directory, exit_code):
     failures = []
     if exit_code != 0:
@@ -76,6 +98,9 @@ def assess_pair(directory, exit_code):
             if len(results) == 1 and json.loads(results[0]).get("networkLog") != {
                     "stopped": True, "captureMode": "default", "maxFileSize": NET_LOG_MAX_BYTES}:
                 failures.append(f"{mode}_net_log_not_flushed")
+            if len(results) == 1 and not valid_renderer_observation(
+                    json.loads(results[0]).get("rendererHintObservation"), mode):
+                failures.append(f"{mode}_renderer_observation_invalid")
         except (OSError, ValueError, UnicodeError):
             failures.append(f"{mode}_evidence_invalid")
     return failures
@@ -125,7 +150,8 @@ def run_samples(output, verifier):
         "setupSeconds": setup_seconds, "fullExperimentBudgetAvailable": setup_budget_ok,
         "retries": 0, "cleanSamplesWithoutRecurrenceDoNotResolveFlake": True,
         "networkObservation": {"captureMode": "default", "maxFileSizePerProbe": NET_LOG_MAX_BYTES,
-                               "nativeVmodule": "simple_network_hints_handler_impl=2"},
+                               "nativeVmodule": "simple_network_hints_handler_impl=2",
+                               "rendererHintMessages": True, "maxMessages": 64, "maxContents": 16},
     })
     return collect_pairs(output, verifier, verifier_digest, unit, deadline, setup_budget_ok)
 

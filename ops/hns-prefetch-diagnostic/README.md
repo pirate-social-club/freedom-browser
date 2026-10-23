@@ -3,10 +3,11 @@
 The recurring CI failure loses the probe result after Jest reports its first
 failed assertion. This experiment preserves the complete synthetic probe output,
 exit status, runtime versions, lookup timing and phase timing. The first two
-observations preserved all original assertions and settings. The third changes
-only the positive control setting and its launch-value assertion, as described
-below; guest order, fifteen-second round bounds and ninety-second child timeout
-remain unchanged. The process helper belongs beside the integration
+observations preserved all original assertions and settings. The third tested
+explicit control enablement and still failed. The fourth restores the original
+control and adds optional renderer observation, as described below; guest order,
+fifteen-second round bounds and ninety-second child timeout remain unchanged.
+The process helper belongs beside the integration
 test because it owns only that test's children and temporary profiles.
 
 The HNS prefetch diagnostic workflow runs six serial protected/control pairs on
@@ -94,3 +95,33 @@ https://github.com/chromium/chromium/blob/152.0.7977.167/third_party/blink/rende
 https://github.com/chromium/chromium/blob/152.0.7977.167/third_party/blink/public/common/web_preferences/web_preferences.h,
 https://github.com/chromium/chromium/blob/152.0.7977.167/third_party/blink/renderer/core/exported/web_view_impl.cc,
 and https://github.com/chromium/chromium/blob/152.0.7977.167/third_party/blink/renderer/core/loader/preload_helper.cc.
+
+The third fixed experiment, run39998846007 at262508ff, failed pairs1 and6
+and passed pairs2 through5. Every control confirmed explicit enablement, but
+the failed first-default hints again had no resolver requests or native
+completions. All protected probes and cleanup passed. Explicit enablement is
+therefore insufficient; this result does not establish the renderer's actual
+setting or prove an initialization cause.
+
+The fourth fixed six-pair experiment restores the original unconfigured
+control from65c58b01 and adds renderer-side native hint-trigger observation.
+Only the dedicated network diagnostic appends logDnsPrefetchAndPreconnect=true
+to both startup cases; Freedom's protected setting remains false. A probe-only
+helper beside the process helper attaches before web contents can navigate.
+It collects only the pinned synthetic hint names, with contents identity and
+elapsed time, at most64 messages and16 contents. Overflow, invalid/absent
+capture, a protected trigger or missing second-default-page control triggers
+fails diagnostic evidence qualification. Ordinary CI attaches no observer and
+again uses the original unconfigured positive control.
+
+Chromium's preload helper emits the native console message after its setting
+and URL checks, before asking PrescientNetworking to send a request. Messages
+for missing first-page hints would place the loss after that gate and before
+browser resolver observation. No first-page messages with valid later capture
+would place it before that trigger; they would not alone prove which check
+failed. This is observation, not a repair. Six pairs, all mandatory DNS
+assertions, pages, guest order, theme changes, timeouts, resources and cleanup
+remain fixed. No sample is retried and no passing sample alone closes the task.
+
+The console event interface is documented at
+https://www.electronjs.org/docs/latest/api/web-contents#event-console-message.

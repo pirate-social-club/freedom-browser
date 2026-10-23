@@ -27,6 +27,10 @@ class PairEvidenceTest(unittest.TestCase):
             directory.mkdir(parents=True)
             result = {"versions": {"electron": "44.9.3"}, "networkLog": {
                 "stopped": True, "captureMode": "default", "maxFileSize": module.NET_LOG_MAX_BYTES}}
+            result["rendererHintObservation"] = {"enabled": True, "overflow": False, "contentsIds": [1, 2, 3],
+                "messages": ([{"contentsId": 2, "ms": 1, "name": f"{kind}-default-r2.{root}"}
+                              for kind in ("header", "html") for root in ("hnsprobe", "pirate", "unlistedprobe")]
+                             if mode == "control" else [])}
             stdout = ("PROBE-RESULT " + json.dumps(result) + "\n").encode()
             module.write_json(directory / "net-log.json", {"constants": {"logEventTypes": {"fixture": 1}},
                                                           "events": [{"type": 1}]})
@@ -41,6 +45,31 @@ class PairEvidenceTest(unittest.TestCase):
 
     def test_complete_evidence_passes(self):
         self.assertEqual(module.assess_pair(self.root, 0), [])
+
+    def test_renderer_observation_refuses_absent_overflow_and_wrong_shapes(self):
+        for value in [None, [], {}, {"enabled": True, "overflow": True, "contentsIds": [1, 2, 3], "messages": []},
+                      {"enabled": True, "overflow": False, "contentsIds": [1, 1, 2], "messages": []},
+                      {"enabled": True, "overflow": False, "contentsIds": [1, 2, 3], "messages": [None]}]:
+            with self.subTest(value=value):
+                self.assertFalse(module.valid_renderer_observation(value, "control"))
+
+    def test_renderer_observation_requires_later_control_triggers_and_protected_silence(self):
+        value = {"enabled": True, "overflow": False, "contentsIds": [1, 2, 3], "messages": []}
+        self.assertTrue(module.valid_renderer_observation(value, "protected"))
+        self.assertFalse(module.valid_renderer_observation(value, "control"))
+        value["messages"] = [{"contentsId": 2, "ms": 1, "name": "html-default.pirate"}]
+        self.assertFalse(module.valid_renderer_observation(value, "protected"))
+
+    def test_green_jest_does_not_hide_missing_renderer_capture(self):
+        directory = self.root / "probes/control-fixture"
+        result = json.loads((directory / "stdout.log").read_text().removeprefix("PROBE-RESULT "))
+        del result["rendererHintObservation"]
+        stdout = ("PROBE-RESULT " + json.dumps(result) + "\n").encode()
+        (directory / "stdout.log").write_bytes(stdout)
+        record = json.loads((directory / "process.json").read_text())
+        record["stdoutBytes"] = len(stdout)
+        module.write_json(directory / "process.json", record)
+        self.assertIn("control_renderer_observation_invalid", module.assess_pair(self.root, 0))
 
     def test_green_jest_does_not_hide_nonzero_probe_exit(self):
         path = self.root / "probes/control-fixture/process.json"
