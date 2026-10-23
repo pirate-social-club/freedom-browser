@@ -8,6 +8,8 @@ Freedom is a browser for the decentralized web, with Swarm, IPFS, onchain applic
 
 This fork adds Handshake DNSSEC/DANE browsing on Linux x64 and evaluates Spaces integration. Evaluation packages disable upstream updating and require a reviewed package for manual replacement. The Linux evaluation is deb-only and omits bundled Myotis and Arti. HNS and dVPN remain unavailable on the other platform targets, as enforced by `src/shared/platform-capabilities.json`. Secure Spaces browsing is unfinished.
 
+The [Spaces browsing guide](docs/spaces-browsing.md) describes owner-signed websites, member finality, trust limits and installed acceptance.
+
 ## Download
 
 Download the latest build for macOS, Linux, or Windows from the official download page at [freedom.baby](https://freedom.baby).

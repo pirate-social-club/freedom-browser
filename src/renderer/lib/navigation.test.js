@@ -5978,10 +5978,19 @@ describe('Spaces navigation', () => {
     expect(ctx.elements.addressInput.value).toBe('@example');
   });
 
-  test('a member name goes to the resolver, which refuses it', async () => {
-    const ctx = await navigateTo('member@example', { type: 'refused', handle: 'member@example', reason: 'MEMBER_NAMES_UNSUPPORTED' });
+  test('an unfinalized member goes to the resolver and shows its refusal', async () => {
+    const ctx = await navigateTo('member@example', { type: 'refused', handle: 'member@example', reason: 'MEMBER_NOT_FINAL' });
     expect(ctx.electronAPI.resolveSpace).toHaveBeenCalledWith('member@example');
-    expect(resultPageParams(ctx)).toMatchObject({ reason: 'MEMBER_NAMES_UNSUPPORTED' });
+    expect(resultPageParams(ctx)).toMatchObject({ reason: 'MEMBER_NOT_FINAL' });
+  });
+
+  test('a verified member website keeps the normalized full name in the address bar', async () => {
+    const ctx = await navigateTo(' Member@Example ', {
+      type: 'ok', handle: 'member@example', url: 'https://example.com/member', anchorHeight: 145,
+    });
+    expect(ctx.electronAPI.resolveSpace).toHaveBeenCalledWith('member@example');
+    expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenLastCalledWith('https://example.com/member');
+    expect(ctx.elements.addressInput.value).toBe('member@example');
   });
 
   test('an "ok" without an https website is not followed', async () => {

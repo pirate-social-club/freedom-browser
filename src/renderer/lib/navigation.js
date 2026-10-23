@@ -1580,7 +1580,7 @@ export const loadTarget = (value, displayOverride = null, targetWebview = null, 
     }
     return;
   }
-  // `@space` resolves in the main process (src/main/spaces-resolver.js) to the
+  // `@space` and `name@space` resolve in the main process (spaces-resolver.js) to the
   // https website the space's owner signed, verified against relay-agreed
   // anchors. That URL loads like any other, with the handle kept in the
   // address bar; anything else lands on the result page, which says why.

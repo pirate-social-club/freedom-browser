@@ -23,13 +23,25 @@ describe('Spaces result page', () => {
     });
     expect(elements.status.textContent).toBe('Website not published');
     expect(elements.description.textContent).toBe(
-      'The owner of this Space has not signed a website for it.'
+      'The owner has not signed a website for this name.'
     );
     expect(rows).toEqual([
       ['Space', '@yahoo'],
       ['Verified at Bitcoin block', '970596'],
     ]);
     expect(elements.hint.textContent).toBe('');
+    expect(document.htmlWrites).toEqual([]);
+  });
+
+  test('a member whose finality quorum is missing is refused without asserting nonexistence', async () => {
+    const { elements, rows, document } = await openResult({
+      handle: 'member@example', type: 'refused', reason: 'MEMBER_NOT_FINAL', anchorHeight: '145',
+    });
+    expect(elements.status.textContent).toBe('Finality not confirmed');
+    expect(elements.description.textContent).toBe(
+      'Freedom could not confirm that this name is finalized on Bitcoin. Try again later.'
+    );
+    expect(rows).toEqual([['Space', 'member@example'], ['Verified at Bitcoin block', '145']]);
     expect(document.htmlWrites).toEqual([]);
   });
 

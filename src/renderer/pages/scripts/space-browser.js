@@ -11,14 +11,17 @@ const anchorHeight = params.get('anchorHeight') || '';
 const REASONS = {
   NO_WEBSITE_RECORD: [
     'Website not published',
-    'The owner of this Space has not signed a website for it.',
+    'The owner has not signed a website for this name.',
   ],
   INVALID_WEBSITE_RECORD: [
     'Website not usable',
     "The owner's signed website record does not name exactly one https address.",
   ],
-  SPACE_NOT_FOUND: ['Not found', 'The relays have no Space by this name.'],
-  MEMBER_NAMES_UNSUPPORTED: ['Not supported yet', 'Names inside a Space cannot be verified yet.'],
+  SPACE_NOT_FOUND: ['Not found', 'The relays returned no verified record for this name.'],
+  MEMBER_NOT_FINAL: [
+    'Finality not confirmed',
+    'Freedom could not confirm that this name is finalized on Bitcoin. Try again later.',
+  ],
   INVALID_HANDLE: ['Not a Space name', 'This is not a valid Space name.'],
   ANCHORS_UNAVAILABLE: [
     'Cannot verify',
@@ -30,7 +33,7 @@ const REASONS = {
   ],
   PROOF_UNCONFIRMED: [
     'Cannot verify',
-    'Too few relays returned a proof of who owns this Space to trust it.',
+    'Too few relays returned a proof of who owns this name to trust it.',
   ],
   SESSION_UNAVAILABLE: ['Cannot verify', 'This window is closing.'],
 };

@@ -239,13 +239,8 @@ describe('verified Spaces resolution', () => {
     expect(trust).not.toHaveBeenCalled();
   });
 
-  test('member names and malformed names are refused without a request', async () => {
+  test('malformed names are refused without a request', async () => {
     const { fetch, trust, resolver } = exampleResolver({});
-    await expect(resolver.resolve('member@example')).resolves.toEqual({
-      type: 'refused',
-      handle: 'member@example',
-      reason: 'MEMBER_NAMES_UNSUPPORTED',
-    });
     for (const input of [
       '@',
       '@-x',

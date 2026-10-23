@@ -362,14 +362,19 @@ test('live room and the Spaces result page run their scripts without a violation
   await liveRoom.waitForLoadState('load');
   expect(await liveRoom.evaluate(() => typeof window.AgoraRTC)).not.toBe('undefined');
 
-  // A Spaces member name is refused before any network request, so this lands
-  // on the result page without depending on the live relays; its script fills
-  // the status line in every branch. Loading the verifier itself is proved by
-  // the installed acceptance (test-e2e/packaged-live/spaces-browsing.spec.js).
-  await navigate(window, 'csp@probe');
+  // Load a fixed result directly. This checks the page's CSP and text rendering
+  // without a relay dependency; real verification belongs to installed gates.
+  await window.evaluate(() => {
+    const webview = document.querySelector('webview.active, webview:not(.hidden)');
+    const page = new URL('pages/space-browser.html', window.location.href);
+    page.search = new URLSearchParams({
+      handle: 'member@example', type: 'refused', reason: 'MEMBER_NOT_FINAL',
+    }).toString();
+    webview.loadURL(page.href);
+  });
   const space = await pageFor(electronApp, '/pages/space-browser.html');
   await space.waitForLoadState('load');
-  await expect(space.locator('#status')).not.toBeEmpty();
+  await expect(space.locator('#status')).toHaveText('Finality not confirmed');
 
   expect(await cspViolations(electronApp)).toEqual([]);
 });
