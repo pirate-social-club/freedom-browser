@@ -1014,6 +1014,25 @@ describe('ens-resolver', () => {
       expect(mockUrReverse).toHaveBeenCalledTimes(3);
     });
 
+    test.each(['portaI.eth', 'bad\u200b.eth', 'é'.repeat(513) + '.eth'])('an unnormalized primary name is UNVERIFIED, never shown as the name: %s', async (claimedName) => {
+      const input = addr('1015');
+      mockUrReverse.mockResolvedValue([claimedName, RESOLVER, RESOLVER]);
+
+      const result = await resolveEnsReverse(input);
+
+      expect(result).toMatchObject({
+        success: false,
+        address: input.toLowerCase(),
+        system: 'ens',
+        reason: 'UNVERIFIED',
+        claimedName: claimedName,
+        unverifiedCause: 'unnormalized',
+        error: `Reverse record for ${input.toLowerCase()} claims a name that isn't normalized`,
+        trust: { level: 'verified', system: 'ens' },
+      });
+      expect(result.name).toBeUndefined();
+    });
+
     test('surfaces conflicting reverse names when the RPC quorum disagrees', async () => {
       const input = addr('1014');
       mockUrReverse
@@ -1537,6 +1556,30 @@ describe('ens-resolver', () => {
         coinType: 60n,
       });
       expect(mockUrResolve).not.toHaveBeenCalled();
+    });
+
+    test.each(['portaI.eth', 'bad\u200b.eth', 'é'.repeat(513) + '.eth'])('an unnormalized Myotis primary name is UNVERIFIED: %s', async (claimedName) => {
+      myotisUp();
+      const address = '0x0000000000000000000000000000000000001202';
+      mockMyotisResolveEnsRecord.mockResolvedValue({
+        status: 'ok',
+        verified: true,
+        blockNumber: 23456789,
+        name: claimedName,
+      });
+
+      const result = await resolveEnsReverse(address);
+
+      expect(result).toMatchObject({
+        success: false,
+        address,
+        system: 'ens',
+        reason: 'UNVERIFIED',
+        claimedName: claimedName,
+        unverifiedCause: 'unnormalized',
+        trust: { method: 'myotis' },
+      });
+      expect(result.name).toBeUndefined();
     });
 
     test('serves forward-verified ENS reverse records through Myotis', async () => {
@@ -3145,6 +3188,23 @@ describe('ens-resolver', () => {
         trust: { level: 'verified', method: 'colibri', prover: 'test-prover.example' },
       });
       expect(mockUrReverse).not.toHaveBeenCalled();
+    });
+
+    test.each(['portaI.eth', 'bad\u200b.eth', 'é'.repeat(513) + '.eth'])('an unnormalized Colibri primary name is UNVERIFIED: %s', async (claimedName) => {
+      withColibri({ ensResolutionOrder: ['colibri'] });
+      mockResolveReverseViaColibri.mockResolvedValue({ name: claimedName });
+
+      const result = await resolveEnsReverse(ADDR);
+
+      expect(result).toMatchObject({
+        success: false,
+        address: ADDR,
+        reason: 'UNVERIFIED',
+        claimedName: claimedName,
+        unverifiedCause: 'unnormalized',
+        trust: { method: 'colibri' },
+      });
+      expect(result.name).toBeUndefined();
     });
 
     test('no primary set surfaces as NO_REVERSE with trust attached', async () => {

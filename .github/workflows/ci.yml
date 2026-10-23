@@ -571,6 +571,7 @@ jobs:
         if: matrix.group == 'wallet'
         run: |
           xvfb-run -a npm run test:e2e -- \
+            test-e2e/dapp-background-tab.spec.js \
             test-e2e/dapp-tx-ledger-confirm.spec.js \
             test-e2e/send-ledger-confirm.spec.js \
             test-e2e/x402-payment-in-flight.spec.js \

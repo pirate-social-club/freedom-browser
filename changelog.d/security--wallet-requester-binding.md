@@ -1,0 +1,1 @@
+- Wallet auto-approval checks the requesting tab independently; connection banners follow the visible page ([upstream #765](https://github.com/solardev-xyz/freedom-browser/pull/765))

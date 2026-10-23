@@ -1,0 +1,1 @@
+- Radicle identities remain loadable when their alias leaves the private key section aligned ([upstream #755](https://github.com/solardev-xyz/freedom-browser/pull/755))
