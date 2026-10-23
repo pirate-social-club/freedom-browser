@@ -10,9 +10,9 @@
  * drives the real fetch, list parser, session routing and startup Blink
  * settings (`blink-settings.js`, applied here exactly as `src/main/index.js`
  * applies it, before the app is ready). With
- * FREEDOM_PROBE_WITHOUT_BLINK_SETTINGS=1 it leaves them out instead: that run
- * is the control which shows the page's prefetch hints do reach the resolver
- * when nothing stops them.
+ * FREEDOM_PROBE_WITHOUT_BLINK_SETTINGS=1 it omits Freedom's settings for the
+ * positive control. Optional diagnostics also record native renderer hint
+ * triggers without enabling prefetching or changing the pages.
  *
  * Nothing leaves the machine:
  *   - Chromium's resolver runs in secure mode against one local
@@ -42,7 +42,7 @@
  * Results are printed as one JSON line prefixed with `PROBE-RESULT `.
  */
 
-const { app, session, BrowserWindow, nativeTheme } = require('electron');
+const { app, session, BrowserWindow, nativeTheme, netLog } = require('electron');
 const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
@@ -52,6 +52,10 @@ const os = require('os');
 const path = require('path');
 
 const WITHOUT_BLINK_SETTINGS = process.env.FREEDOM_PROBE_WITHOUT_BLINK_SETTINGS === '1';
+const NET_LOG_PATH = process.env.FREEDOM_HNS_PROBE_NET_LOG_PATH;
+const GUEST_AFTER_ATTACH = process.env.FREEDOM_HNS_GUEST_AFTER_ATTACH === '1';
+if (GUEST_AFTER_ATTACH && !NET_LOG_PATH) throw new Error('Guest attachment experiment requires retained network observation');
+const NET_LOG_MAX_BYTES = 8 * 1024 * 1024;
 if (!WITHOUT_BLINK_SETTINGS) require('../../blink-settings').applyBlinkSettings(app);
 
 const DOH_HOST = 'doh.certprobe.test';
@@ -97,6 +101,16 @@ const dnsQueries = [];
 // Every lookup of the whole run, never reset, with its time since start.
 const allDnsQueries = [];
 const started = Date.now();
+const rendererHints = require('./hns-renderer-hint-observer').observeRendererHints(app,
+  { enabled: Boolean(NET_LOG_PATH), clock: () => Date.now() });
+const phaseTimings = [];
+const phase = (name) => {
+  const entry = { name, ms: Date.now() - started };
+  phaseTimings.push(entry);
+  process.stdout.write(`PROBE-PHASE ${JSON.stringify(entry)}\n`);
+};
+process.stdout.write(`PROBE-START ${JSON.stringify({ versions: process.versions, platform: process.platform,
+  arch: process.arch, withoutBlinkSettings: WITHOUT_BLINK_SETTINGS })}\n`);
 let fabricate = false;
 
 function questionOf(message) {
@@ -210,8 +224,8 @@ function startPages(closedPortNumber, privatePartition) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(
         '<!doctype html><title>host</title>' +
-          `<webview id="default" src="/hints/default"></webview>` +
-          `<webview id="private" partition="${privatePartition}" src="/hints/private"></webview>`
+          `<webview id="default" src="${GUEST_AFTER_ATTACH ? 'about:blank' : '/hints/default'}"></webview>` +
+          `<webview id="private" partition="${privatePartition}" src="${GUEST_AFTER_ATTACH ? 'about:blank' : '/hints/private'}"></webview>`
       );
       return;
     }
@@ -269,6 +283,11 @@ async function until(predicate, ms, refresh = async () => {}) {
 }
 
 async function main() {
+  phase('ready');
+  if (NET_LOG_PATH) {
+    if (!path.isAbsolute(NET_LOG_PATH)) throw new Error('Network log path must be absolute');
+    await netLog.startLogging(NET_LOG_PATH, { captureMode: 'default', maxFileSize: NET_LOG_MAX_BYTES });
+  }
   const resolverPort = await startResolver();
   const discoveryPort = await startDiscovery();
   const closed = await closedPort();
@@ -311,6 +330,7 @@ async function main() {
 
   const results = {
     electron: process.versions.electron,
+    versions: { ...process.versions },
     blinkSettings: app.commandLine.getSwitchValue('blink-settings'),
     guard: `PROXY ${networkManager.getHnsProxyAddr()}`,
   };
@@ -343,6 +363,7 @@ async function main() {
   }));
 
   // ---- 5. Pages in a normal and a private-window <webview> ------------------
+  phase('pages-start');
   // The private guest's partition is enrolled in routing the way a private
   // window's is, before anything loads on it.
   await networkManager.registerProxySession(privateSession);
@@ -353,6 +374,18 @@ async function main() {
     guests.set(guest.session === privateSession ? 'private' : 'default', guest);
   });
   const hostLoad = await within(host.loadURL(`http://127.0.0.1:${pagePort}/host`), 10_000);
+  const guestStartup = { mode: GUEST_AFTER_ATTACH ? 'after-attachment' : 'eager', attached: null, firstLoads: null };
+  if (GUEST_AFTER_ATTACH) {
+    // One changed startup input: load the first real hint pages only after
+    // both guests exist. No sleep, hint retry or warm-up network request.
+    guestStartup.attached = await until(() => guests.size === GUESTS.length, 10_000);
+    if (!guestStartup.attached.met) throw new Error('Guest attachment did not complete');
+    phase('guests-attached');
+    const firstLoads = await Promise.all(GUESTS.map((guest) => within(guests.get(guest)
+        .loadURL(`http://127.0.0.1:${pagePort}/hints/${guest}`)
+        .then(() => ({ complete: true })), 10_000)));
+    guestStartup.firstLoads = Object.fromEntries(GUESTS.map((guest, index) => [guest, firstLoads[index]]));
+  }
   const seen = (name) => dnsQueries.some((queried) => expectedNameOf(queried, [name]) !== null);
   // Each round is read once both guests' unlisted images, fetched after the
   // page's hints, have been looked up. The control run also waits for every
@@ -365,6 +398,7 @@ async function main() {
     ...(WITHOUT_BLINK_SETTINGS ? [...hintedNames('default', round).header, ...hintedNames('default', round).html] : []),
   ].every(seen), 15_000);
   const pagesSeen = await awaitRound('');
+  phase('first-round-observed');
 
   // A theme change sends every renderer a web preferences update, so this
   // shows whether the startup prefetch setting survives one: each guest must
@@ -387,6 +421,7 @@ async function main() {
       });
   };
   const themeApplied = { light: await themeTo('light'), dark: await themeTo('dark') };
+  phase('theme-observed');
   const secondLoads = {};
   for (const guest of GUESTS) {
     const contents = guests.get(guest);
@@ -395,6 +430,7 @@ async function main() {
       : { missing: true };
   }
   const secondPagesSeen = await awaitRound('-r2');
+  phase('second-round-observed');
   nativeTheme.themeSource = 'system';
   const loadedAtMs = Date.now() - started;
 
@@ -408,6 +444,7 @@ async function main() {
   await settle(200);
   results.pages = {
     hostLoad,
+    guestStartup,
     pagesSeen,
     themeApplied,
     secondLoads,
@@ -475,14 +512,27 @@ async function main() {
   results.hintLookups = allDnsQueries
     .filter(({ name }) => /^(header|html)-/.test(name))
     .map(({ name, ms }) => ({ name, afterPagesMs: ms - results.pages.loadedAtMs }));
+  results.dnsLookups = allDnsQueries;
   results.runMs = Date.now() - started;
+  phase('complete');
+  results.phaseTimings = phaseTimings;
   results.fatal = fatal;
+  results.rendererHintObservation = rendererHints.snapshot();
+  if (NET_LOG_PATH) {
+    await netLog.stopLogging();
+    results.networkLog = { stopped: true, captureMode: 'default', maxFileSize: NET_LOG_MAX_BYTES };
+  }
   process.stdout.write(`PROBE-RESULT ${JSON.stringify(results)}\n`);
   app.exit(0);
 }
 
 app.whenReady().then(() =>
-  main().catch((err) => {
+  main().catch(async (err) => {
+    if (NET_LOG_PATH && netLog.currentlyLogging) {
+      try { await netLog.stopLogging(); } catch (error) {
+        process.stderr.write(`PROBE-NET-LOG-FAILED ${error.message}\n`);
+      }
+    }
     process.stdout.write(`PROBE-FAILED ${err && err.stack}\n`);
     app.exit(1);
   })

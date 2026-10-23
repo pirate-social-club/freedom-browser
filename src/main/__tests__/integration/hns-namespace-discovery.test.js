@@ -13,19 +13,16 @@
  * Chromium's resolver against a local DNS-over-HTTPS server so every lookup
  * is seen where it is made, rather than inferred, and asserts the probe's
  * report. It runs the probe twice: as Freedom starts, and once more without
- * the startup Blink settings, the control that shows the page's prefetch
- * hints do reach the resolver when nothing stops them. Nothing it dials
- * leaves the machine.
+ * Freedom's startup setting, the positive control that requires the page's
+ * prefetch hints to reach the resolver. Nothing it dials leaves the machine.
  *
  * Skipped when the Electron binary cannot be resolved; the `ipfs-gateway-proxy`
  * CI job sets `FREEDOM_ELECTRON_NET_TEST=1`, which turns a missing binary into
  * a failure instead (see `ipfs-gateway-proxy.test.js` for the details).
  */
 
-const { spawn } = require('child_process');
-const fs = require('fs');
-const os = require('os');
 const path = require('path');
+const { runProbe: runProbeProcess } = require('./hns-discovery-probe-runner');
 // Hosted runners append a DNS search suffix to names that do not exist; see
 // this module, which the unit job tests on its own.
 const { under, namesSeen } = require('./hns-discovery-probe-names');
@@ -67,40 +64,8 @@ const hintNames = (guest, round) => ['header', 'html'].flatMap((form) =>
 const imageNames = (round) => GUESTS.map((guest) => `img-${guest}${round}.${UNLISTED}`);
 
 function runProbe(env = {}) {
-  return new Promise((resolve, reject) => {
-    // Owned here, not by the probe: Electron's GPU and Crashpad children can
-    // recreate it after the probe exits, and a SIGKILL runs no handler.
-    const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-hns-discovery-probe-'));
-    const child = spawn(ELECTRON_PATH, ['--no-sandbox', '--headless', PROBE], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ...env, ELECTRON_RUN_AS_NODE: '', FREEDOM_PROBE_USER_DATA: userData },
-    });
-    child.on('close', () => fs.rmSync(userData, { recursive: true, force: true }));
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(`probe timed out after ${PROBE_TIMEOUT_MS}ms\n${stdout}\n${stderr}`));
-    }, PROBE_TIMEOUT_MS);
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk;
-    });
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    child.on('close', () => {
-      clearTimeout(timer);
-      const line = stdout.split('\n').find((entry) => entry.startsWith('PROBE-RESULT '));
-      if (!line) {
-        reject(new Error(`probe produced no result\nstdout:\n${stdout}\nstderr:\n${stderr}`));
-        return;
-      }
-      resolve(JSON.parse(line.slice('PROBE-RESULT '.length)));
-    });
+  return runProbeProcess({
+    electronPath: ELECTRON_PATH, probePath: PROBE, timeoutMs: PROBE_TIMEOUT_MS, env,
   });
 }
 
@@ -117,8 +82,10 @@ describeWithElectron('HNS namespace discovery in a real Electron process', () =>
     expect(results.guard).toMatch(/^PROXY 127\.0\.0\.1:\d+$/);
     expect(results.fatal).toBeNull();
     expect(results.firstRefresh).toEqual([LISTED]);
-    expect(results.blinkSettings).toBe('dnsPrefetchingEnabled=false');
-    expect(control.blinkSettings).toBe('');
+    const rendererLogging = process.env.FREEDOM_HNS_NETWORK_DIAGNOSTIC === '1';
+    expect(results.blinkSettings).toBe('dnsPrefetchingEnabled=false' +
+      (rendererLogging ? ',logDnsPrefetchAndPreconnect=true' : ''));
+    expect(control.blinkSettings).toBe(rendererLogging ? 'logDnsPrefetchAndPreconnect=true' : '');
   });
 
   // The baseline the list exists to change: with only `.pirate` built in, a
@@ -174,14 +141,14 @@ describeWithElectron('HNS namespace discovery in a real Electron process', () =>
     }
   });
 
-  // The control: without the startup settings, a page's dns-prefetch hints,
+  // The control: without Freedom's startup setting, a page's dns-prefetch hints,
   // in its HTML and in a `Link:` header, are looked up for every root, on the
   // first page and on the second, after the theme change. The probe waited
-  // for exactly these lookups before reading, so nothing here depends on how
-  // fast the runner is. That is what makes the absences below observations.
+  // for exactly these lookups before reading. Missing requests still fail;
+  // the readiness timeout must not turn them into an optional observation.
   // The private guest prefetches all of a page's hints or none of them, about
   // half the runs each, so only the default guest is required to.
-  test('without the startup settings, prefetch hints are looked up, before and after a theme change', () => {
+  test('without the startup setting, hints are looked up, before and after a theme change', () => {
     const lookups = control.hintLookups.map(({ name }) => name);
     for (const round of ROUNDS) {
       const expected = hintNames('default', round);

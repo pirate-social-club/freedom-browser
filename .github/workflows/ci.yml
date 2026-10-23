@@ -317,6 +317,7 @@ jobs:
         # The bounded shell sets FREEDOM_ELECTRON_NET_TEST=1 inside its unit.
         shell: /usr/local/bin/freedom-ci-bounded-shell {0}
         run: >-
+          FREEDOM_HNS_PROBE_EVIDENCE_DIR="${{ runner.temp }}/ipfs-gateway-proxy/hns"
           npx jest --runInBand src/main/__tests__/integration/ipfs-gateway-proxy.test.js
           src/main/__tests__/integration/ens-ccip-proxy.test.js
           src/main/__tests__/integration/cert-verify-concurrency.test.js
