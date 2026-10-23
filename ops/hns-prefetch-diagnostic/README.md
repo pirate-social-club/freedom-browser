@@ -149,9 +149,11 @@ neither batch may be selectively retried or omitted. Each fresh hosted job has
 the existing oneCPU/threeGiB/zero-swap and22minute experiment/35minute job bounds.
 Attachment readiness and both first navigations must be proved in each probe;
 a green Jest report cannot replace missing or failed startup evidence. Any
-missing first default hint falsifies attachment alone as a sufficient repair.
-All12 passing pairs would support this startup hypothesis, not establish the
+missing first default hint shows that this startup procedure is insufficient.
+All12 passing pairs would support controlled guest startup, not establish the
 underlying engine cause or clear a change to ordinary CI without review.
+The experiment changes the first navigation's initiation as well as its
+attachment boundary; success cannot isolate those two effects.
 
 Electron44.9.3 constructs WebPrescientNetworkingImpl for the frame, and the
 pinned Chromium implementation binds its handler through the frame's browser
