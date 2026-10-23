@@ -69,7 +69,9 @@ def assess_pair(directory, exit_code):
                 failures.append(f"{mode}_net_log_limit_reached")
             else:
                 capture = json.loads(network_log.read_text())
-                if not capture.get("constants") or not capture.get("events"):
+                if (not isinstance(capture, dict) or not isinstance(capture.get("constants"), dict)
+                        or not capture["constants"] or not isinstance(capture.get("events"), list)
+                        or not capture["events"]):
                     failures.append(f"{mode}_net_log_empty")
             if len(results) == 1 and json.loads(results[0]).get("networkLog") != {
                     "stopped": True, "captureMode": "default", "maxFileSize": NET_LOG_MAX_BYTES}:

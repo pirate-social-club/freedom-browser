@@ -75,6 +75,13 @@ class PairEvidenceTest(unittest.TestCase):
             output.truncate(module.NET_LOG_MAX_BYTES)
         self.assertIn("control_net_log_limit_reached", module.assess_pair(self.root, 0))
 
+    def test_wrong_network_log_shape_is_recorded_without_aborting_sample_collection(self):
+        path = self.root / "probes/control-fixture/net-log.json"
+        for value in ([], None, {"constants": [1], "events": [1]}, {"constants": {"a": 1}, "events": "bad"}):
+            with self.subTest(value=value):
+                module.write_json(path, value)
+                self.assertIn("control_net_log_empty", module.assess_pair(self.root, 0))
+
     def test_empty_network_log_and_disabled_logging_fail(self):
         directory = self.root / "probes/control-fixture"
         module.write_json(directory / "net-log.json", {"constants": {}, "events": []})
