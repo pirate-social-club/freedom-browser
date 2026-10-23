@@ -22,10 +22,8 @@
  * a failure instead (see `ipfs-gateway-proxy.test.js` for the details).
  */
 
-const { spawn } = require('child_process');
-const fs = require('fs');
-const os = require('os');
 const path = require('path');
+const { runProbe: runProbeProcess } = require('./hns-discovery-probe-runner');
 // Hosted runners append a DNS search suffix to names that do not exist; see
 // this module, which the unit job tests on its own.
 const { under, namesSeen } = require('./hns-discovery-probe-names');
@@ -67,40 +65,8 @@ const hintNames = (guest, round) => ['header', 'html'].flatMap((form) =>
 const imageNames = (round) => GUESTS.map((guest) => `img-${guest}${round}.${UNLISTED}`);
 
 function runProbe(env = {}) {
-  return new Promise((resolve, reject) => {
-    // Owned here, not by the probe: Electron's GPU and Crashpad children can
-    // recreate it after the probe exits, and a SIGKILL runs no handler.
-    const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-hns-discovery-probe-'));
-    const child = spawn(ELECTRON_PATH, ['--no-sandbox', '--headless', PROBE], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ...env, ELECTRON_RUN_AS_NODE: '', FREEDOM_PROBE_USER_DATA: userData },
-    });
-    child.on('close', () => fs.rmSync(userData, { recursive: true, force: true }));
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(`probe timed out after ${PROBE_TIMEOUT_MS}ms\n${stdout}\n${stderr}`));
-    }, PROBE_TIMEOUT_MS);
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk;
-    });
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    child.on('close', () => {
-      clearTimeout(timer);
-      const line = stdout.split('\n').find((entry) => entry.startsWith('PROBE-RESULT '));
-      if (!line) {
-        reject(new Error(`probe produced no result\nstdout:\n${stdout}\nstderr:\n${stderr}`));
-        return;
-      }
-      resolve(JSON.parse(line.slice('PROBE-RESULT '.length)));
-    });
+  return runProbeProcess({
+    electronPath: ELECTRON_PATH, probePath: PROBE, timeoutMs: PROBE_TIMEOUT_MS, env,
   });
 }
 

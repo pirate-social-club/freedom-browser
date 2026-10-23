@@ -1,0 +1,87 @@
+name: HNS prefetch diagnostic
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/hns-prefetch-diagnostic.yml'
+      - 'ops/hns-prefetch-diagnostic/**'
+      - 'src/main/__tests__/integration/hns-discovery-probe-runner*'
+      - 'src/main/__tests__/integration/hns-namespace-discovery*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hns-prefetch-diagnostic-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Record job time budget
+        run: echo "FREEDOM_HNS_JOB_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+      - name: Check out exact candidate
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Check diagnostic evidence refusal cases
+        run: python3 -B -m unittest discover -s ops/hns-prefetch-diagnostic -p '*_test.py'
+      - name: Set up pinned Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24.14.0
+          cache: npm
+      - name: Install Linux native dependencies
+        uses: ./.github/actions/install-linux-native-deps
+      - name: Install dependencies
+        uses: ./.github/actions/install-node-deps
+      - name: Install Electron system dependencies
+        uses: ./.github/actions/install-playwright-deps
+      - name: Warm pinned Electron download
+        run: node -e "require('electron')"
+      - name: Prepare protected cleanup verifier
+        run: |
+          set -euo pipefail
+          output="${{ runner.temp }}/hns-prefetch-diagnostic"
+          mkdir -m 700 "$output"
+          verifier="/run/freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service.verifier.py"
+          sudo install -m 0644 ops/dependency-repair/verify-refresh-cleanup.py "$verifier"
+          sha256sum "$verifier" > "$output/verifier.sha256"
+          cat /etc/os-release > "$output/os-release.txt"
+          uname -m > "$output/architecture.txt"
+      - name: Run all six serial samples without retries
+        run: >-
+          python3 -B ops/hns-prefetch-diagnostic/run-pairs.py
+          --output "${{ runner.temp }}/hns-prefetch-diagnostic"
+          --verifier "/run/freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service.verifier.py"
+      - name: Confirm final cleanup
+        if: always()
+        run: |
+          set -euo pipefail
+          output="${{ runner.temp }}/hns-prefetch-diagnostic"
+          mkdir -p "$output"
+          unit="freedom-upstream-validation-${{ github.run_id }}-${{ github.run_attempt }}.service"
+          verifier="/run/$unit.verifier.py"
+          if [ ! -f "$verifier" ]; then
+            echo 'Diagnostic setup did not reach runtime preparation.' > "$output/setup-incomplete.txt"
+            exit 1
+          fi
+          if timeout --kill-after=2s 10s sudo systemctl stop "$unit"; then stop_code=0; else stop_code=$?; fi
+          active_state=$(timeout --kill-after=2s 10s systemctl show "$unit" -p ActiveState --value) || active_state=unknown
+          if [ "$stop_code" -eq 0 ] && [ "$active_state" = failed ]; then
+            timeout --kill-after=2s 10s sudo systemctl reset-failed "$unit"
+          fi
+          sha256sum --check "$output/verifier.sha256"
+          python3 "$verifier" "$unit" "$output" "$stop_code"
+      - name: Retain every sample and cleanup result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: hns-prefetch-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/hns-prefetch-diagnostic/
+          if-no-files-found: error
+          retention-days: 14
