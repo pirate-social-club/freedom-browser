@@ -41,6 +41,15 @@ function removeOwned(kind, name, owner) {
   return true;
 }
 
+function caseContainerArguments({ name, owner, binaryHash, image, context, representation }) {
+  return ['run', '--rm', '--name', name, '--label', 'sc.pirate.freedom.diagnostic=' + owner,
+    '--network', 'none', '--read-only', '--tmpfs', '/tmp:rw,nosuid,size=128m',
+    '--tmpfs', '/home/diagnostic:rw,nosuid,size=32m,uid=10001,gid=10001,mode=0700', '--cpu-quota', '100000',
+    '--cpu-period', '100000', '--cpuset-cpus', '0', '--memory', '2g', '--memory-swap', '2g', '--pids-limit', '256',
+    '--env', 'UV_THREADPOOL_SIZE=1', '--env', 'PROBE_BINARY_SHA256=' + binaryHash,
+    image, context, representation];
+}
+
 async function execute(root, deb) {
   assert.equal(process.env.GITHUB_ACTIONS, 'true', 'Hosted execution only');
   assert.equal(process.env.CI, 'true');
@@ -104,12 +113,7 @@ async function execute(root, deb) {
     save();
     for (const [index, sample] of CASES.entries()) {
       ownedContainer = 'freedom-runtime-fetch-' + process.env.GITHUB_RUN_ID + '-' + index;
-      const args = ['run', '--rm', '--name', ownedContainer, '--label', 'sc.pirate.freedom.diagnostic=' + owner,
-        '--network', 'none', '--read-only', '--tmpfs', '/tmp:rw,nosuid,size=128m',
-        '--tmpfs', '/home/diagnostic:rw,nosuid,size=32m,uid=10001,gid=10001,mode=0700', '--cpus', '1',
-        '--cpu-period', '100000', '--cpuset-cpus', '0', '--memory', '2g', '--memory-swap', '2g', '--pids-limit', '256',
-        '--env', 'UV_THREADPOOL_SIZE=1', '--env', 'PROBE_BINARY_SHA256=' + binaryHash,
-        image, sample.context, sample.representation];
+      const args = caseContainerArguments({ name: ownedContainer, owner, binaryHash, image, ...sample });
       const run = spawnSync('docker', args, { encoding: 'utf8', timeout: 90000, maxBuffer: 2 * 1024 ** 2 });
       fs.writeFileSync(path.join(results, `case-${index}.stdout`), run.stdout || '');
       fs.writeFileSync(path.join(results, `case-${index}.stderr`), run.stderr || '');
@@ -156,4 +160,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { inventory, execute };
+module.exports = { inventory, execute, caseContainerArguments };

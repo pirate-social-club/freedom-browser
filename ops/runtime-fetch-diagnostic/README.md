@@ -29,6 +29,13 @@ CI-only no-sandbox flag is declared; fuses are not changed. No Actions credentia
 is passed into the container. Cleanup verifies ownership and affects only
 resources created by that run. Complete and partial results are always retained.
 
+Run 40066016271 stopped before Electron or its first JSON control started:
+Docker refused the combined NanoCPUs and CFS period options. Its failed result
+and verified cleanup remain evidence, with no runtime conclusion. The corrected
+launcher uses CFS quota 100000 and period 100000, preserving the one-CPU limit.
+The argument regression fails on the original conflict. A new source review
+and separate one-shot disposition are required before another activation.
+
 The default driver invocation is read-only. Actual execution additionally
 requires the hosted environment and reviewed workflow activation. No local
 Electron, Docker, installer, staging or production operation is part of this tool.
