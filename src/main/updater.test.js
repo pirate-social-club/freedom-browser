@@ -7,10 +7,11 @@ function loadUpdater() {
   });
   const dialog = { showMessageBox: jest.fn().mockResolvedValue({ response: 0 }) };
   const log = { info: jest.fn(), warn: jest.fn() };
+  // This forbidden dependency is deliberately absent from the package.
+  jest.doMock('electron-updater', updaterFactory, { virtual: true });
   const loaded = loadMainModule(require.resolve('./updater'), {
     dialog,
     extraMocks: {
-      'electron-updater': updaterFactory,
       [require.resolve('./logger')]: () => log,
     },
   });

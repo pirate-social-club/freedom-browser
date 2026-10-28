@@ -1,6 +1,6 @@
 // Hamburger-menu update item and the dot on the hamburger button (#87).
 //
-// Both render from the main process's update state (src/main/update-state.js,
+// Both render from the main process's update state (src/main/updater.js,
 // broadcast on `update:state`, read once through `getUpdateState()` for the
 // first paint). Settings → About Freedom → Updates renders the same snapshot; the long-form
 // status sentence (`state.message`) is main's copy and goes in the row's

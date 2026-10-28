@@ -4,9 +4,12 @@
 const { Arch } = require('builder-util');
 const removeLocales = require('./remove-locales').default;
 const { bundleVcRuntime, findRedistDir } = require('./win-vcruntime');
+const { normalizeLinuxPermissions } = require('./linux-package-permissions');
 
 exports.default = async function afterPack(context) {
   await removeLocales(context);
+
+  if (context.electronPlatformName === 'linux') normalizeLinuxPermissions(context.appOutDir);
 
   if (context.electronPlatformName === 'win32') {
     const arch = Arch[context.arch];

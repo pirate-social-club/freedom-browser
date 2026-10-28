@@ -204,6 +204,45 @@ describe('dapp-provider document binding', () => {
     jest.restoreAllMocks();
   });
 
+  test.each([
+    ['navigation', 'did-navigate', 'https://replacement.example'],
+    ['same-origin reload', 'did-navigate', 'https://app.example'],
+    ['destruction', 'destroyed', ''],
+  ])('a permission lookup completing after %s opens no stale connection prompt', async (_label, event, url) => {
+    const permission = deferred();
+    const { webview, sendRequest, dappPermissions, walletUi } = await loadProvider();
+    dappPermissions.getPermission.mockReturnValueOnce(permission.promise);
+    sendRequest({ id: 1, method: 'eth_requestAccounts', params: [] });
+    await flushMicrotasks();
+    expect(dappPermissions.getPermission).toHaveBeenCalledTimes(1);
+    webview.dispatch(event, { url });
+    permission.resolve(null);
+    await flushMicrotasks();
+    expect(walletUi.showDappConnect).not.toHaveBeenCalled();
+    expect(webview.send).not.toHaveBeenCalled();
+  });
+
+  test('a permission lookup for the same document still opens and answers its connection prompt', async () => {
+    const permission = deferred();
+    const { webview, sendRequest, dappPermissions, walletUi } = await loadProvider();
+    dappPermissions.getPermission.mockReturnValueOnce(permission.promise);
+    sendRequest({ id: 2, method: 'eth_requestAccounts', params: [] });
+    await flushMicrotasks();
+    expect(walletUi.showDappConnect).not.toHaveBeenCalled();
+    permission.resolve(null);
+    await flushMicrotasks();
+    expect(walletUi.showDappConnect).toHaveBeenCalledTimes(1);
+    const [displayUrl, key, resolve, , requester] = walletUi.showDappConnect.mock.calls[0];
+    expect(displayUrl).toBe('https://app.example');
+    expect(key).toBe(displayUrl);
+    expect(requester).toBe(webview);
+    resolve(['0xconnected']);
+    await flushMicrotasks();
+    expect(webview.send).toHaveBeenCalledWith('dapp:provider-response', {
+      id: 2, result: ['0xconnected'], error: null,
+    });
+  });
+
   test('delivers a Safe signature to the document that requested it', async () => {
     const { webview, sendRequest, walletMocks } = await loadProvider({
       permission: safePermission(),

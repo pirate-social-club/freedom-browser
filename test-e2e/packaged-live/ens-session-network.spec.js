@@ -329,7 +329,7 @@ test.describe('installed ENS network attribution', () => {
     // sync alone, or a quorum-RPC answer), and a call on a session the normal
     // window used could be the normal window's.
     const normalSessions = new Set(normalRequests.map((request) => request.session).filter((id) => id !== undefined));
-    const privateOnlyVerified = privateOnlyRequests.filter(
+    const answeredProverRequests = privateOnlyRequests.filter(
       (request) =>
         provers.has(request.host) &&
         request.netError === 0 &&
@@ -359,7 +359,7 @@ test.describe('installed ENS network attribution', () => {
       private: privateRequests.length,
       privateOnSeparateSession: separateContext.length,
       privateOnly: privateOnlyRequests.length,
-      privateOnlyVerified: privateOnlyVerified.length,
+      answeredProverRequests: answeredProverRequests.length,
       storeEntriesBeforePrivate: Object.keys(stores.beforePrivate || {}).length,
       storeUnchangedByPrivate: JSON.stringify(stores.afterPrivate) === JSON.stringify(stores.beforePrivate),
       privateOnlyNameTraces: traces,
@@ -373,7 +373,7 @@ test.describe('installed ENS network attribution', () => {
     expect(normalRequests.length, 'the normal window resolves through Chromium').toBeGreaterThan(0);
     expect(privateRequests.length, 'the private window resolves afresh, through Chromium').toBeGreaterThan(0);
     expect(separateContext.length, 'the private window dials in a network context of its own').toBeGreaterThan(0);
-    expect(privateOnlyVerified.length, "the private window's own lookup is answered by the Colibri prover")
+    expect(answeredProverRequests.length, "the private window's own lookup is answered by the Colibri prover")
       .toBeGreaterThan(0);
     expect(summary.storeEntriesBeforePrivate, "the normal window's lookup fills the default session's verifier store")
       .toBeGreaterThan(0);
