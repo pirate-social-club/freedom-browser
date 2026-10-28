@@ -33,7 +33,7 @@ const {
   promptForDefaultExternalCandidateProtocol,
 } = require('./profile-external-candidates');
 const { probeSocks5Endpoint, probeTcpEndpoint } = require('./socks-probe');
-const { applyOnionProxy, clearOnionProxy } = require('./tor-proxy');
+const { applyOnionProxy, clearOnionProxy, reassertOnionProxy } = require('./tor-proxy');
 const {
   MODE,
   DEFAULTS,
@@ -365,9 +365,11 @@ async function applyTorProxy(mode, statusMessage, superseded = () => false) {
   }
 
   if (superseded()) {
-    // Stopped while the proxy was being applied: undo it instead of reporting
-    // RUNNING for a service the user just turned off.
-    clearOnionRouting().catch(() => {});
+    // A newer start or deliberate stop owns routing now. Reapply that shared
+    // policy; clearing Tor here would withdraw the newer run's endpoint.
+    await reassertOnionProxy().catch((err) => {
+      log.warn('[Tor] Failed to reassert current routing:', err.message);
+    });
     return false;
   }
 

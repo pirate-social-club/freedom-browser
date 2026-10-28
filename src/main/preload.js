@@ -362,7 +362,7 @@ exposeGuardedBridge('electronAPI', {
   restartAndInstallUpdate: () => ipcRenderer.send('update:restart-and-install'),
   checkForUpdates: () => ipcRenderer.send('update:check'),
   // Update state (#87): `getUpdateState` for the first paint, `onUpdateState`
-  // for every change after it (update-state.js documents the snapshot).
+  // for every change after it (updater.js defines the snapshot).
   getUpdateState: () => ipcRenderer.invoke('update:get-state'),
   onUpdateState: (callback) => {
     const handler = (_event, state) => callback(state);

@@ -22,9 +22,9 @@
  * resolves DIRECT, leaking the name to the system resolver), and it reads and
  * writes Chromium's on-disk HTTP cache.
  *
- * The PAC's scope is `.onion`-only (see `buildOnionPacScript`): a clearnet
- * gateway resolves DIRECT with Tor on or off, so the everyday remote gateway
- * is a consistency gap rather than a live leak. A gateway *on* a `.onion`
+ * Tor's shared PAC route covers `.onion` only; clearnet gateways retain the
+ * current HNS/dVPN policy or connect directly. The everyday remote gateway
+ * was a consistency gap rather than a Tor DNS leak. A gateway *on* a `.onion`
  * host is the case that actually breaks today: undici hands the onion name to
  * the system resolver (a DNS leak of the endpoint the user configured) and the
  * load then fails, because only Tor can resolve it. Routing through Chromium

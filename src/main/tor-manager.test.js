@@ -55,6 +55,7 @@ function loadTorManager(options = {}) {
   const enableTorIntegration = options.enableTorIntegration === true;
   const applyOnionProxy = jest.fn().mockResolvedValue(undefined);
   const clearOnionProxy = jest.fn().mockResolvedValue(undefined);
+  const reassertOnionProxy = jest.fn().mockResolvedValue(undefined);
   const updateActiveProfileNodeConfig = options.updateActiveProfileNodeConfig || jest.fn();
   const promptForDefaultExternalCandidateProtocol =
     options.promptForDefaultExternalCandidateProtocol || jest.fn().mockResolvedValue([]);
@@ -77,7 +78,7 @@ function loadTorManager(options = {}) {
           })),
         }),
       } : {
-        [require.resolve('./tor-proxy')]: () => ({ applyOnionProxy, clearOnionProxy }),
+        [require.resolve('./tor-proxy')]: () => ({ applyOnionProxy, clearOnionProxy, reassertOnionProxy }),
       }),
       [require.resolve('./logger')]: () => ({
         info: jest.fn(),
@@ -563,6 +564,82 @@ describe('tor-manager .onion routing across sessions', () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  test.each([false, true])('a late apply preserves current routing after a stop (restart=%s)', async (restart) => {
+    const servers = new Map();
+    const http = {
+      createServer: jest.fn((handler) => {
+        const port = 20000 + servers.size;
+        const server = {
+          listen: jest.fn((_port, _host, ready) => ready()),
+          address: jest.fn(() => ({ port })),
+          on: jest.fn(),
+          close: jest.fn((done) => done()),
+        };
+        servers.set(port, handler);
+        return server;
+      }),
+    };
+    let releaseOld;
+    let appliedOld;
+    const oldApplied = new Promise((resolve) => { appliedOld = resolve; });
+    const oldResolution = new Promise((resolve) => { releaseOld = resolve; });
+    const targetSession = createSessionMock();
+    targetSession.resolveProxy = jest.fn()
+      .mockImplementationOnce(() => { appliedOld(); return oldResolution; })
+      .mockResolvedValue('SOCKS5 127.0.0.1:9250');
+    const privateSession = createSessionMock();
+    const tor = { mode: 'external', externalSocks: '127.0.0.1:9150' };
+    const { mod, networkManager } = loadTorManager({
+      realRouting: true, enableTorIntegration: true, socksProbeResult: true,
+      defaultSession: targetSession, activeProfile: { metadata: { nodes: { tor } } },
+      extraMocks: { http: () => http },
+    });
+    // Read the PAC actually served at each session's configured URL. Merely
+    // asserting pac_script mode would miss a withdrawn Tor route under HNS/dVPN.
+    const route = (target, host) => {
+      const config = target.setProxy.mock.calls.at(-1)[0];
+      expect(config.mode).toBe('pac_script');
+      let pac;
+      servers.get(Number(new URL(config.pacScript).port))({}, {
+        writeHead: jest.fn(), end: (body) => { pac = body; },
+      });
+      return new Function('host', 'dnsDomainLevels', 'isResolvable', 'shExpMatch',
+        `${pac}; return FindProxyForURL('https://' + host + '/', host);`)(
+        host, (value) => value.split('.').length - 1, () => true,
+        (value, pattern) => pattern === value || (pattern === '*.onion' && value.endsWith('.onion')));
+    };
+    let starting;
+    try {
+      networkManager.setHnsProxy('127.0.0.1:5380');
+      networkManager.setDvpnProxy('127.0.0.1', 10808);
+      await networkManager.rebuild();
+      await networkManager.registerProxySession(privateSession);
+      starting = mod.startTor();
+      await oldApplied;
+      for (const target of [targetSession, privateSession]) {
+        expect(route(target, 'check.onion')).toBe('SOCKS5 127.0.0.1:9150');
+      }
+      await mod.stopTor();
+      if (restart) {
+        tor.externalSocks = '127.0.0.1:9250';
+        await mod.startTor();
+      }
+      releaseOld('SOCKS5 127.0.0.1:9150');
+      await starting;
+      await networkManager.rebuild();
+      for (const target of [targetSession, privateSession]) {
+        expect(route(target, 'check.onion')).toBe(restart ? 'SOCKS5 127.0.0.1:9250' : 'SOCKS5 127.0.0.1:10808; SOCKS 127.0.0.1:10808; DIRECT');
+        expect(route(target, 'app.pirate')).toBe('PROXY 127.0.0.1:20000');
+        expect(route(target, 'example.com')).toBe('SOCKS5 127.0.0.1:10808; SOCKS 127.0.0.1:10808; DIRECT');
+        expect(networkManager.getProxySessionPolicy(target).allowed).toBe(true);
+      }
+    } finally {
+      releaseOld('SOCKS5 127.0.0.1:9150');
+      if (starting) await starting;
+      await mod.stopTor();
+    }
   });
 
   test('a private-window session registered before start is proxied too', async () => {

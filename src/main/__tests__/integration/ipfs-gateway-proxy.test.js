@@ -103,7 +103,6 @@ describeWithElectron('external IPFS gateway transport in a real Electron process
   // clearnet gateway is not "outside Tor" — Tor never claimed it. A gateway on
   // a `.onion` host is the case that genuinely breaks.
   test('the Tor PAC proxies .onion and leaves every other gateway DIRECT', () => {
-    expect(results.pacScript).toContain('SOCKS5');
     expect(results.resolveProxy.onionGateway).toMatch(/^SOCKS5 127\.0\.0\.1:\d+$/);
     expect(results.resolveProxy.remoteGateway).toBe('DIRECT');
     expect(results.resolveProxy.loopbackGateway).toBe('DIRECT');

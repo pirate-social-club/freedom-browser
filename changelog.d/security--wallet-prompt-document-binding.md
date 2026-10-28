@@ -1,0 +1,1 @@
+- Wallet approval prompts keep the original request visible and deliver connection events only to the requesting document ([upstream #810](https://github.com/solardev-xyz/freedom-browser/pull/810)).

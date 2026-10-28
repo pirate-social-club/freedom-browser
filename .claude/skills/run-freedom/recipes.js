@@ -262,7 +262,20 @@ async function sendForm({ app, win }) {
 }
 
 // dApp screens rendered directly from the renderer modules.
+async function rejectVisibleDappApproval(win) {
+  // A visible request now keeps ownership of its prompt. Finish the preceding
+  // visual fixture through its real Reject button before requesting another.
+  for (const kind of ['tx', 'sign', 'connect']) {
+    const screen = win.locator(`#sidebar-dapp-${kind}`);
+    if (await screen.isVisible()) {
+      await win.click(`#dapp-${kind}-reject`);
+      await screen.waitFor({ state: 'hidden' });
+    }
+  }
+}
+
 async function dappTxApproval({ win }) {
+  await rejectVisibleDappApproval(win);
   await win.evaluate(
     async ({ ledger, to }) => {
       const dappTx = await import('./lib/wallet/dapp-tx.js');
@@ -286,23 +299,27 @@ async function dappTxApproval({ win }) {
 }
 
 async function dappSign({ win }) {
+  await rejectVisibleDappApproval(win);
   await win.evaluate(async () => {
     const dappSign = await import('./lib/wallet/dapp-sign.js');
     dappSign.showDappSignApproval({}, 'https://swap.example', 'personal_sign', [
       '0x48656c6c6f2046726565646f6d',
       '0x209693Bc6afc0C5328bA36FaF03C514EF312287C',
-    ]);
+    ]).catch(() => {}); // The next visual fixture rejects this request.
   });
+  await win.waitForSelector('#sidebar-dapp-sign', { state: 'visible' });
   await win.waitForTimeout(600);
 }
 
 async function dappConnect({ win }) {
+  await rejectVisibleDappApproval(win);
   await win.evaluate(async () => {
     const dappConnect = await import('./lib/wallet/dapp-connect.js');
     new Promise((res, rej) =>
       dappConnect.showDappConnect('https://swap.example', 'https://swap.example', res, rej, {})
-    );
+    ).catch(() => {}); // The visual tour may reject this fixture next.
   });
+  await win.waitForSelector('#sidebar-dapp-connect', { state: 'visible' });
   await win.waitForTimeout(600);
 }
 

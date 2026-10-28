@@ -243,6 +243,9 @@ async function handleProviderRequest(webview, request) {
         // Update last used
         await window.dappPermissions.updateLastUsed(permissionKey);
       } else {
+        // The permission lookup may outlive the requesting document. A prompt
+        // opened now would otherwise bind that old request to the new document.
+        if (getNavigationGeneration(webview) !== generation) return;
         // Need to show connection approval UI
         console.log('[DappProvider] Showing connect UI for:', permissionKey);
         const app = getOnchainApp(webview);
@@ -708,7 +711,7 @@ export function broadcastProviderEvent(event, data) {
 }
 
 // Exported for use by swarm-provider.js and swarm-connect.js
-export { getPermissionKey, executeSign };
+export { getPermissionKey, executeSign, getNavigationGeneration };
 
 // Export state for wallet UI to access
 export const walletState = {

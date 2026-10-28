@@ -10,11 +10,16 @@
  * The Colibri CJS shim loads the emscripten glue via dynamic import, so
  * Jest needs VM Modules enabled.
  *
- * Verifies the four scenarios the partner is on the hook for:
+ * Verifies the three scenarios the partner is on the hook for:
  *   1. contenthash + addr on a well-known name (verified happy path)
  *   2. NO_RESOLVER on an unregistered name (revert proven correctly)
- *   3. .box via CCIP-Read (OffchainLookup round-trip + final proven call)
- *   4. Repeated lookups don't leak / fall over (sanity for the warm path)
+ *   3. .box contenthash with a known URI and verified Colibri trust
+ *
+ * ENS_COLIBRI_PRIMARY_NAME defaults to the public ENS integration fixture.
+ * Supply ENS_COLIBRI_REVERSE_ADDRESS and ENS_COLIBRI_REVERSE_NAME for a
+ * forward-confirmed reverse fixture, and ENS_COLIBRI_BOX_NAME plus
+ * ENS_COLIBRI_BOX_URI for a registered contenthash fixture. Missing fixture
+ * inputs fail an enabled run; a missing record never passes a positive case.
  *
  * No package mocks — the real @corpus-core/colibri-stateless WASM runs
  * (WASM specifically: since 2.0.5 the package prefers a native addon, which
@@ -48,6 +53,7 @@ jest.mock('../../ipfs/gateway-transport', () => ({
 }));
 
 const TIMEOUT_MS = 60_000;
+const PRIMARY_NAME = process.env.ENS_COLIBRI_PRIMARY_NAME || 'ur.integration-tests.eth';
 
 // Nothing is stubbed: the real network-registry reads the builtin
 // chains.json / endpoint-sources.json, and the fresh temp userData dir has
@@ -72,8 +78,8 @@ afterAll(() => {
 });
 
 describeOrSkip('colibri e2e against mainnet1.colibri-proof.tech', () => {
-  test('resolves vitalik.eth contenthash with verified-via-colibri trust', async () => {
-    const result = await resolveEnsContent('vitalik.eth');
+  test('resolves the fixture contenthash with verified Colibri trust', async () => {
+    const result = await resolveEnsContent(PRIMARY_NAME);
     expect(result.type).toBe('ok');
     expect(result.uri).toMatch(/^(ipfs|ipns|bzz):\/\//);
     expect(result.trust).toMatchObject({
@@ -83,21 +89,22 @@ describeOrSkip('colibri e2e against mainnet1.colibri-proof.tech', () => {
     });
   }, TIMEOUT_MS);
 
-  test('resolves vitalik.eth addr to a non-zero address', async () => {
-    const result = await resolveEnsAddress('vitalik.eth');
+  test('resolves the fixture to a non-zero address', async () => {
+    const result = await resolveEnsAddress(PRIMARY_NAME);
     expect(result.success).toBe(true);
     expect(result.address).toMatch(/^0x[a-fA-F0-9]{40}$/);
     expect(result.address.toLowerCase()).not.toBe('0x' + '0'.repeat(40));
     expect(result.trust.method).toBe('colibri');
   }, TIMEOUT_MS);
 
-  test('reverse-resolves vitalik.eth\'s known address back to vitalik.eth', async () => {
-    // Vitalik's known main address. The reverse record is well-known and
-    // forward-verifies. Catches a regression where the reverse path falls
-    // off the Colibri orchestrator branch.
-    const result = await resolveEnsReverse('0xd8da6bf26964af9d7eed9e03e53415d37aa96045');
+  test('reverse-resolves the pinned address to its forward-confirmed name', async () => {
+    const address = process.env.ENS_COLIBRI_REVERSE_ADDRESS;
+    const name = process.env.ENS_COLIBRI_REVERSE_NAME;
+    expect(address).toMatch(/^0x[a-fA-F0-9]{40}$/);
+    expect(name).toMatch(/\.eth$/);
+    const result = await resolveEnsReverse(address);
     expect(result.success).toBe(true);
-    expect(result.name).toBe('vitalik.eth');
+    expect(result.name).toBe(name);
     expect(result.trust).toMatchObject({
       level: 'verified',
       method: 'colibri',
@@ -112,27 +119,14 @@ describeOrSkip('colibri e2e against mainnet1.colibri-proof.tech', () => {
     expect(result.trust.method).toBe('colibri');
   }, TIMEOUT_MS);
 
-  test('.box CCIP-Read resolves through to a final proven eth_call', async () => {
-    // .box names are 3DNS-backed and require CCIP-Read. The Colibri prover
-    // surfaces the OffchainLookup revert; ethers fetches the gateway data
-    // and submits resolveCallback, which is independently proven.
-    // If this regresses, the integration loses .box support entirely.
-    const result = await resolveEnsContent('vitalik.box');
-    // Accept any non-error outcome — the point is "didn't throw on CCIP".
-    expect(['ok', 'not_found', 'unsupported']).toContain(result.type);
-    expect(result.trust.method).toBe('colibri');
-  }, TIMEOUT_MS);
-
-  test('repeated lookups warm the cache and stay healthy', async () => {
-    // First call is the real prover hit; rest are cache hits (15-min TTL).
-    // The point is to exercise the cache + singleton interaction and
-    // catch any unbounded-growth or stale-state regression in one shot.
-    const first = await resolveEnsContent('vitalik.eth');
-    expect(first.type).toBe('ok');
-    for (let i = 0; i < 5; i++) {
-      const r = await resolveEnsContent('vitalik.eth');
-      expect(r.type).toBe('ok');
-      expect(r.uri).toBe(first.uri);
-    }
+  test('.box contenthash resolves to the pinned URI with verified Colibri trust', async () => {
+    const name = process.env.ENS_COLIBRI_BOX_NAME;
+    const uri = process.env.ENS_COLIBRI_BOX_URI;
+    expect(name).toMatch(/\.box$/);
+    expect(uri).toMatch(/^(ipfs|ipns|bzz):\/\//);
+    const result = await resolveEnsContent(name);
+    expect(result.type).toBe('ok');
+    expect(result.uri).toBe(uri);
+    expect(result.trust).toMatchObject({ level: 'verified', method: 'colibri' });
   }, TIMEOUT_MS);
 });

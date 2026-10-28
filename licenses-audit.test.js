@@ -1101,7 +1101,9 @@ describe('audit files agree with each other', () => {
       field: 'LICENSE_AUDIT.md Baseline',
       version: expectedBaseline,
     });
-    const footer = auditDoc.match(/Re-derived from the installed tree on [\d-]+ against `([^`]+)`/);
+    // A lock-derived source inventory must not claim an installed-tree audit.
+    // Both records still bind their stated baseline to this exact version.
+    const footer = auditDoc.match(/(?:Re-derived from the installed tree on|Source inventory updated on) [\d-]+ against `([^`]+)`/);
     expect({ field: 'LICENSE_AUDIT.md footer', version: footer?.[1] }).toEqual({
       field: 'LICENSE_AUDIT.md footer',
       version: expectedBaseline,
