@@ -68,17 +68,23 @@ const imageNames = (round) => GUESTS.map((guest) => `img-${guest}${round}.${UNLI
 
 function runProbe(env = {}) {
   return new Promise((resolve, reject) => {
-    // Owned here, not by the probe: Electron's GPU and Crashpad children can
-    // recreate it after the probe exits, and a SIGKILL runs no handler.
+    // Retain profiles until the enclosing CI cgroup has verified descendants
+    // gone. A direct child's close event alone cannot establish that barrier.
     const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-hns-discovery-probe-'));
+    const evidenceRoot = path.join(process.cwd(), 'test-results', 'hns-discovery');
+    fs.mkdirSync(evidenceRoot, { recursive: true });
+    const mode = env.FREEDOM_PROBE_WITHOUT_BLINK_SETTINGS === '1' ? 'control' : 'protected';
+    const evidence = fs.mkdtempSync(path.join(evidenceRoot, `${mode}-`));
+    console.info(`HNS probe evidence: ${evidence}; retained profile: ${userData}`);
     const child = spawn(ELECTRON_PATH, ['--no-sandbox', '--headless', PROBE], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ...env, ELECTRON_RUN_AS_NODE: '', FREEDOM_PROBE_USER_DATA: userData },
+      env: { ...process.env, ...env, ELECTRON_RUN_AS_NODE: '', FREEDOM_PROBE_USER_DATA: userData, FREEDOM_PROBE_EVIDENCE: evidence },
     });
-    child.on('close', () => fs.rmSync(userData, { recursive: true, force: true }));
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill('SIGKILL');
       reject(new Error(`probe timed out after ${PROBE_TIMEOUT_MS}ms\n${stdout}\n${stderr}`));
     }, PROBE_TIMEOUT_MS);
@@ -92,14 +98,17 @@ function runProbe(env = {}) {
       clearTimeout(timer);
       reject(err);
     });
-    child.on('close', () => {
+    child.on('close', (code, signal) => {
       clearTimeout(timer);
-      const line = stdout.split('\n').find((entry) => entry.startsWith('PROBE-RESULT '));
-      if (!line) {
-        reject(new Error(`probe produced no result\nstdout:\n${stdout}\nstderr:\n${stderr}`));
+      fs.writeFileSync(path.join(evidence, 'stdout.log'), stdout);
+      fs.writeFileSync(path.join(evidence, 'stderr.log'), stderr);
+      fs.writeFileSync(path.join(evidence, 'exit.json'), JSON.stringify({ code, signal, timedOut, userData }) + '\n');
+      const lines = stdout.split('\n').filter((entry) => entry.startsWith('PROBE-RESULT '));
+      if (timedOut || code !== 0 || signal || lines.length !== 1) {
+        reject(new Error(`probe failed: code=${code} signal=${signal} timeout=${timedOut}\nstdout:\n${stdout}\nstderr:\n${stderr}`));
         return;
       }
-      resolve(JSON.parse(line.slice('PROBE-RESULT '.length)));
+      try { resolve(JSON.parse(lines[0].slice('PROBE-RESULT '.length))); } catch (error) { reject(error); }
     });
   });
 }
@@ -177,8 +186,8 @@ describeWithElectron('HNS namespace discovery in a real Electron process', () =>
   // The control: without the startup settings, a page's dns-prefetch hints,
   // in its HTML and in a `Link:` header, are looked up for every root, on the
   // first page and on the second, after the theme change. The probe waited
-  // for exactly these lookups before reading, so nothing here depends on how
-  // fast the runner is. That is what makes the absences below observations.
+  // for exactly these lookups within a finite bound. A missing control fails;
+  // elapsed time alone never establishes that prefetching was suppressed.
   // The private guest prefetches all of a page's hints or none of them, about
   // half the runs each, so only the default guest is required to.
   test('without the startup settings, prefetch hints are looked up, before and after a theme change', () => {

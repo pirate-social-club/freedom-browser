@@ -42,7 +42,7 @@
  * Results are printed as one JSON line prefixed with `PROBE-RESULT `.
  */
 
-const { app, session, BrowserWindow, nativeTheme } = require('electron');
+const { app, session, BrowserWindow, nativeTheme, netLog } = require('electron');
 const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
@@ -51,6 +51,7 @@ const net = require('net');
 const os = require('os');
 const path = require('path');
 
+const EVIDENCE = process.env.FREEDOM_PROBE_EVIDENCE;
 const WITHOUT_BLINK_SETTINGS = process.env.FREEDOM_PROBE_WITHOUT_BLINK_SETTINGS === '1';
 if (!WITHOUT_BLINK_SETTINGS) require('../../blink-settings').applyBlinkSettings(app);
 
@@ -69,23 +70,13 @@ const ROUTING_ROUNDS = 20;
 app.commandLine.appendSwitch('host-resolver-rules', `MAP ${DOH_HOST} 127.0.0.1`);
 // The probe's one window closes half way through; the app must outlive it.
 app.on('window-all-closed', () => {});
-// The Jest wrapper owns the profile directory and removes it when this process
-// and its GPU and Crashpad children are gone; a direct run makes its own.
-const OWN_USER_DATA = !process.env.FREEDOM_PROBE_USER_DATA;
+// Profiles remain until the outer process-group cleanup is verified.
 const PROBE_USER_DATA =
   process.env.FREEDOM_PROBE_USER_DATA ||
   fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-hns-discovery-probe-'));
 app.setPath('userData', PROBE_USER_DATA);
 // logger.js writes beside a test profile, never to the default logs path.
 process.env.FREEDOM_TEST_USER_DATA = PROBE_USER_DATA;
-process.on('exit', () => {
-  if (!OWN_USER_DATA) return;
-  try {
-    fs.rmSync(PROBE_USER_DATA, { recursive: true, force: true });
-  } catch {
-    /* cleaned up with the temp dir */
-  }
-});
 
 const { record, response } = require('../../../../test/helpers/hns-dns-fixtures');
 // Lookups may arrive with a search suffix appended (see this module).
@@ -269,6 +260,7 @@ async function until(predicate, ms, refresh = async () => {}) {
 }
 
 async function main() {
+  if (EVIDENCE) await netLog.startLogging(path.join(EVIDENCE, 'netlog.json'), { captureMode: 'default', maxFileSize: 8 * 1024 * 1024 });
   const resolverPort = await startResolver();
   const discoveryPort = await startDiscovery();
   const closed = await closedPort();
@@ -348,9 +340,22 @@ async function main() {
   await networkManager.registerProxySession(privateSession);
   dnsQueries.length = 0;
   const guests = new Map();
+  const documentEvents = [];
   const host = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, webviewTag: true } });
   host.webContents.on('did-attach-webview', (_event, guest) => {
-    guests.set(guest.session === privateSession ? 'private' : 'default', guest);
+    const label = guest.session === privateSession ? 'private' : 'default';
+    guests.set(label, guest);
+    const recordDocument = (event) => {
+      const frame = guest.mainFrame;
+      const row = { guest: label, event, ms: Date.now() - started, contentsId: guest.id,
+        url: guest.getURL(), processId: frame.processId, routingId: frame.routingId };
+      documentEvents.push(row);
+      process.stdout.write(`PROBE-DOCUMENT ${JSON.stringify(row)}\n`);
+    };
+    recordDocument('attached');
+    for (const event of ['did-start-navigation', 'did-navigate', 'dom-ready', 'did-finish-load']) {
+      guest.on(event, () => recordDocument(event));
+    }
   });
   const hostLoad = await within(host.loadURL(`http://127.0.0.1:${pagePort}/host`), 10_000);
   const seen = (name) => dnsQueries.some((queried) => expectedNameOf(queried, [name]) !== null);
@@ -365,6 +370,28 @@ async function main() {
     ...(WITHOUT_BLINK_SETTINGS ? [...hintedNames('default', round).header, ...hintedNames('default', round).html] : []),
   ].every(seen), 15_000);
   const pagesSeen = await awaitRound('');
+  // Freeze the original first-navigation observation before adding distinct
+  // diagnostic hints. These cannot satisfy any required header/html control.
+  const firstDocumentObservation = { atMs: Date.now() - started, lookups: [...dnsQueries], documents: {} };
+  for (const label of GUESTS) {
+    const guest = guests.get(label);
+    firstDocumentObservation.documents[label] = guest ? await within(guest.executeJavaScript(`(() => {
+      const observation = { href: location.href, readyState: document.readyState, timeOrigin: performance.timeOrigin };
+      const names = ${JSON.stringify([LISTED, PIRATE, UNLISTED].map((root) => `diagnostic-${label}.${root}`))};
+      for (const name of names) {
+        const link = document.createElement('link');
+        link.rel = 'dns-prefetch';
+        link.href = '//' + name;
+        document.head.appendChild(link);
+      }
+      return { ...observation, names };
+    })()`), 5_000) : { missing: true };
+  }
+  // Observe these separate hints before the theme update or next navigation.
+  // A missing diagnostic is evidence, never a replacement positive control.
+  firstDocumentObservation.diagnosticWait = await until(() =>
+    [LISTED, PIRATE, UNLISTED].every((root) => seen(`diagnostic-default.${root}`)), 2_000);
+  firstDocumentObservation.diagnosticLookups = allDnsQueries.filter(({ name }) => name.startsWith('diagnostic-'));
 
   // A theme change sends every renderer a web preferences update, so this
   // shows whether the startup prefetch setting survives one: each guest must
@@ -408,6 +435,8 @@ async function main() {
   await settle(200);
   results.pages = {
     hostLoad,
+    documentEvents,
+    firstDocumentObservation,
     pagesSeen,
     themeApplied,
     secondLoads,
@@ -475,14 +504,19 @@ async function main() {
   results.hintLookups = allDnsQueries
     .filter(({ name }) => /^(header|html)-/.test(name))
     .map(({ name, ms }) => ({ name, afterPagesMs: ms - results.pages.loadedAtMs }));
+  results.diagnosticLookups = allDnsQueries.filter(({ name }) => name.startsWith('diagnostic-'));
   results.runMs = Date.now() - started;
   results.fatal = fatal;
+  if (EVIDENCE) await netLog.stopLogging();
   process.stdout.write(`PROBE-RESULT ${JSON.stringify(results)}\n`);
   app.exit(0);
 }
 
 app.whenReady().then(() =>
-  main().catch((err) => {
+  main().catch(async (err) => {
+    if (EVIDENCE && netLog.currentlyLogging) {
+      try { await netLog.stopLogging(); } catch (error) { process.stderr.write(`PROBE-NETLOG-FAILED ${error.message}\n`); }
+    }
     process.stdout.write(`PROBE-FAILED ${err && err.stack}\n`);
     app.exit(1);
   })
