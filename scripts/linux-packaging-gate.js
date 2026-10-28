@@ -32,20 +32,15 @@
 // container reports its /etc/os-release ID, VERSION_ID and glibc version, and a
 // container that is not the expected distribution is a harness error.
 //
-// Each check lists its defects (the package is wrong) and its harness errors
-// (a pull, an apt download, docker, an unexpected image or a timeout failed,
-// which says nothing about the package) separately, so one never hides the
-// other. A check that cannot run because an earlier one in its section failed
-// reports `not-run` with the cause. The summary is written to
+// Defects and harness errors are reported separately; blocked checks report
+// `not-run` with the cause. The summary is written to
 // <out>/summary.json; the exit status is 0 when everything passes, 1 when
 // defects and no harness errors were found, and 3 on any harness error. The
 // whole run has a time budget (35 minutes by default), and every step's
 // timeout is cut to what is left of it, so the summary is written before a CI
 // job timeout fires.
 //
-// Every container is `docker run --rm --init`, named freedom-pkg-gate-*, and
-// none outlives the budget; the committed images, and any base image this run
-// pulled, are removed at the end.
+// Containers use `--rm --init` and a bounded lifetime; owned images are removed.
 //
 // Usage: node scripts/linux-packaging-gate.js [--budget-minutes 35] <deb> <out-dir>
 
@@ -55,6 +50,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const scan = require('./linux-native-scan');
+const { inspectLinuxPermissions } = require('./linux-package-permissions');
 
 // Pinned by manifest-list digest, as recorded by the 2026-10-21 runtime
 // qualification (`docker image inspect --format '{{.RepoDigests}}'`), with the
@@ -816,6 +812,9 @@ class Gate {
         return section;
       }
       const depends = scan.readControlDepends(path.join(work, 'pkg', 'DEBIAN', 'control'));
+      section.checks.push(check('permissions', {
+        defects: inspectLinuxPermissions(path.join(work, 'pkg')),
+      }));
       this.depends = depends;
       const report = scan.scanPackage({
         root: path.join(work, 'pkg'),
