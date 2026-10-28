@@ -26,7 +26,7 @@ const path = require('path');
 const zlib = require('zlib');
 
 const { gatewayFetch } = require('../../ipfs/gateway-transport');
-const { buildOnionPacScript, applyOnionProxy, clearOnionProxy } = require('../../tor-proxy');
+const { applyOnionProxy, clearOnionProxy } = require('../../tor-proxy');
 const { prefetchGatewayUrl } = require('../../ens-prefetch');
 const { updateService } = require('../../service-registry');
 
@@ -294,7 +294,6 @@ async function main() {
 
   // ---- Tor on: the real .onion PAC on the real session --------------------
   await applyOnionProxy(ses, `127.0.0.1:${socksPort}`);
-  results.pacScript = buildOnionPacScript(`127.0.0.1:${socksPort}`);
   results.resolveProxy = {
     onionGateway: await ses.resolveProxy(`${onionGateway}${PROBE_PATH}`),
     remoteGateway: await ses.resolveProxy(`${remoteGateway}${PROBE_PATH}`),

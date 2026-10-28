@@ -1337,7 +1337,7 @@ contextBridge.exposeInMainWorld('freedomAPI', {
   ),
 
   // Settings → About Freedom → Updates (#87). The state is a snapshot of the main-process
-  // updater (updater.js / update-state.js); `onUpdateState` gets every change,
+  // updater (updater.js); `onUpdateState` gets every change,
   // `getUpdateState` hydrates a page opened after the last broadcast. Check
   // and install are settings-only, like every other action in Settings —
   // install quits the app.

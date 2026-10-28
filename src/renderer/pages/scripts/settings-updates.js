@@ -2,7 +2,7 @@
 // download progress, last check, "Check now" and "Restart to update".
 //
 // Everything shown comes from one snapshot the main process builds
-// (src/main/update-state.js via updater.js): `getUpdateState()` paints the
+// (src/main/updater.js): `getUpdateState()` paints the
 // page once, `onUpdateState` repaints on every change. The status sentence
 // (`state.message`) is main's copy, shared with the hamburger menu item, so
 // the two surfaces can't word the same state differently.

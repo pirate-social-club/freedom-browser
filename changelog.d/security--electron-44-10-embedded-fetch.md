@@ -1,0 +1,1 @@
+- Updated Electron 44.9.3 to 44.10.0 (Chromium 152.0.7977.167 to 152.0.7977.169, Node 24.22.0 to 24.22.1), including the [malformed-response fetch fix](https://github.com/nodejs/undici/security/advisories/GHSA-xjj6-f33q-929c).

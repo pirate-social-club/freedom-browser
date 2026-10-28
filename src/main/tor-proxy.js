@@ -1,9 +1,8 @@
 /**
  * Tor proxy wiring for Electron sessions.
  *
- * Scope is `.onion`-only: a PAC script routes `*.onion` hostnames through the
- * local Arti SOCKS5 proxy and returns DIRECT for everything else, so clearnet
- * and the decentralized protocols (bzz/ipfs/ipns/rad) keep connecting directly.
+ * Tor adds an `.onion`-only route to the shared network manager policy.
+ * Other destinations keep the current HNS/dVPN policy or connect directly.
  * `.onion` needs no custom scheme — it is an ordinary http(s) host that just
  * needs proxying, and SOCKS5 does remote DNS so the name resolves at Tor.
  */
@@ -11,28 +10,6 @@
 const log = require('./logger');
 
 const ONION_PROXY_TEST_URL = 'https://freedom-proxy-check.onion/';
-
-/**
- * Build the PAC script that routes only `*.onion` through the SOCKS5 proxy.
- * Pure function so it can be unit-tested without a live session.
- *
- * @param {string} socksHostPort - e.g. '127.0.0.1:9150'
- * @returns {string} PAC script source
- */
-function buildOnionPacScript(socksHostPort) {
-  // dnsDomainIs matches both `foo.onion` and `sub.foo.onion`.
-  // SOCKS5 only (no SOCKS4 fallback): SOCKS4 can't do remote DNS, so a
-  // fallback would make Chromium resolve the .onion name locally — a DNS leak
-  // and a guaranteed failure. Fail closed if the proxy is unreachable.
-  return [
-    'function FindProxyForURL(url, host) {',
-    `  if (dnsDomainIs(host, ".onion") || host === "onion") {`,
-    `    return "SOCKS5 ${socksHostPort}";`,
-    '  }',
-    '  return "DIRECT";',
-    '}',
-  ].join('\n');
-}
 
 async function logOnionProxyResolution(targetSession, socksHostPort) {
   if (!targetSession || typeof targetSession.resolveProxy !== 'function') {
@@ -76,8 +53,14 @@ async function clearOnionProxy() {
   await require('./network-manager').clearTorProxy();
 }
 
+// Replay the current shared intent without withdrawing a newer Tor endpoint
+// or changing HNS/dVPN routing after a superseded start finishes.
+async function reassertOnionProxy() {
+  await require('./network-manager').rebuild();
+}
+
 module.exports = {
-  buildOnionPacScript,
   applyOnionProxy,
   clearOnionProxy,
+  reassertOnionProxy,
 };

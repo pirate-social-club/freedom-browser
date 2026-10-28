@@ -4,19 +4,19 @@ Licence of this fork: AGPL-3.0-or-later. Upstream code inside it remains MPL-2.0
 
 Audit date: 2026-10-15
 
-Baseline: `0.7.17`
+Baseline: `0.7.18`
 
 Method: re-derived from the installed dependency tree, the committed artifacts and `package.json`'s `build` configuration, then checked by `licenses-audit.test.js`.
 
 This is a practical engineering audit, not legal advice. Final licensing decisions should be reviewed by counsel.
 
-This revision replaces the short AGPL posture note (2026-05-08) that the upstream v0.8.7 merge left in place of upstream's component audit. It starts from upstream's 0.8.7 audit (`git show 3a8c75e6:LICENSE_AUDIT.md`), re-reads each of its records against this tree, and adds the fork's own components: the committed Handshake helpers in `hns-bin/`, the committed V2Ray runtime in `dvpn-bin/`, the Agora Web SDK bundle, the dVPN SDK npm packages, and the fork's own `assets/hns/` and `scripts/jacktrip/` files. The upstream pins are unchanged from 0.8.7 and still match the recorded versions. The production npm tree grew from 273 to 299 unique packages, all of the 26 additions through the dVPN SDK and all permissive, and then to 300 when verified Spaces browsing added `@spacesprotocol/libveritas`.
+This revision replaces the short AGPL posture note (2026-05-08) that the upstream v0.8.7 merge left in place of upstream's component audit. It starts from upstream's 0.8.7 audit (`git show 3a8c75e6:LICENSE_AUDIT.md`), re-reads each of its records against this tree, and adds the fork's own components: the committed Handshake helpers in `hns-bin/`, the committed V2Ray runtime in `dvpn-bin/`, the Agora Web SDK bundle, the dVPN SDK npm packages, and the fork's own `assets/hns/` and `scripts/jacktrip/` files. At that initial reading the upstream pins matched 0.8.7; subsequent pin changes are recorded below. The production npm tree grew from 273 to 299 unique packages, all of the 26 additions through the dVPN SDK and all permissive, and then to 300 when verified Spaces browsing added `@spacesprotocol/libveritas`.
 
-`package.json` names version 0.7.17, the fork's next release number, so the audit is baselined there rather than at upstream's 0.8.7. The baseline moved from 0.7.15 to 0.7.16 on 2026-10-22. The last full manual re-reading of this audit was on 2026-10-15, against 0.7.15. Each dependency move since then was recorded here as it landed: Electron 44.7.0 to 44.9.3, freedom-ipfs 0.4.5 to 0.4.6, and Ant 0.5.61 to 0.5.71. The inspection of the security-set candidate dd0e913a, against the accepted 2f7920f3 package, found no third-party component added or removed. The Linux deb carries Debian epoch 1 (`build.deb.fpm`), so the next package version is `1:0.7.17`.
+`package.json` names version 0.7.18, the fork's next release number, so the audit is baselined there rather than at upstream's 0.8.7. The baseline moved from 0.7.15 to 0.7.16 on 2026-10-22. The last full manual re-reading of this audit was on 2026-10-15, against 0.7.15. Each dependency move since then was recorded here as it landed: Electron 44.7.0 to 44.9.3, freedom-ipfs 0.4.5 to 0.4.6, and Ant 0.5.61 to 0.5.71. The inspection of the security-set candidate dd0e913a, against the accepted 2f7920f3 package, found no third-party component added or removed. The Linux deb carries Debian epoch 1 (`build.deb.fpm`), so the next package version is `1:0.7.18`.
 
 The initial 0.7.17 baseline update on 2026-10-23 retained the production dependency inventory and native pins. Hosted exact-lock CI for candidate 9faeecf1 passed the component inventory checks but caught the stale baseline version. Static inspection of its deb, SHA-256 `44acb4b4037ced402fb5f20465780823e725fc84cd9b258ae3b45db712d49d17`, verified all 734 package checksums and 444 packaged source files. Compared with accepted 6c968a49, no package path, native binary or third-party module was added, removed or changed. The build refreshed the five filter-list snapshots; their manifest digests and sizes and the unchanged scriptlet resources verified. The audit's original generation date remains the date of the full manual reading. This baseline reconciliation does not approve public release or replace installed acceptance.
 
-The pending October24 security successor changes that dependency inventory: Zod4.6.6 replaces4.6.5 and the nested3.25.76 copies, and ip-address10.7.4 replaces10.7.3. Both packages retain their MIT license. Native pins remain unchanged. The earlier deb inspection and inventory counts are historical evidence and do not qualify this successor. Exact-lock hosted component checks, inspection of its newly built package and installed acceptance remain required before release.
+The successor retains the October 24 production dependency fixes: Zod4.6.6 replaces4.6.5 and the nested3.25.76 copies, and ip-address10.7.4 replaces10.7.3. Both packages retain their MIT license. Native pins remain unchanged. The earlier deb inspection and inventory counts are historical evidence and do not qualify this successor. Exact-lock hosted component checks, inspection of its newly built package and installed acceptance remain required before release.
 
 ---
 
@@ -30,7 +30,7 @@ Two earlier items are closed. Copyright notices that name individual authors are
 
 | Category                                                          | Count       | Status                                                 |
 | ----------------------------------------------------------------- | ----------- | ------------------------------------------------------ |
-| Production npm packages (unique name@version)                     | 300         | See the distribution below                             |
+| Production npm packages (unique name@version)                     | 281         | See the distribution below                             |
 | External binaries and native addons from upstream in `resources/` | 5           | Ant, freedom-ipfs, libradicle, Myotis, Arti            |
 | Helpers committed by this fork in `resources/`                    | 3 binaries  | hnsd, fingertipd, V2Ray                                |
 | Vendored renderer bundles in `src/renderer/vendor/`               | 5           | OpenLV, highlight.js, marked, DOMPurify, Agora Web SDK |
@@ -40,6 +40,8 @@ Two earlier items are closed. Copyright notices that name individual authors are
 | Weak copyleft (LGPL-3.0)                                          | 5 packages  | Compatible; kept relinkable in the OpenLV bundle       |
 
 ---
+
+The October 28 successor source review updates Electron to 44.10.0 (MIT, re-read at its release tag), removes the unused electron-updater and @ensdomains/content-hash packages, prunes 11 unreachable lock entries and reclassifies seven shared packages as development-only. The resulting lock graph contains 281 unique production packages. These counts describe source metadata; exact-lock installed-tree checks and a fresh package inspection must reconcile them before acceptance. The historical artifact verdict below does not qualify 0.7.18. The last full manual license reading remains October 15.
 
 ## Distribution Model
 
@@ -197,7 +199,7 @@ Thirteen production packages are MPL-2.0: `@ghostery/adblocker` and its `@remusa
 
 ## Electron Framework
 
-Electron 44.9.3 (lockfile-resolved) is MIT and embeds Chromium, which contains hundreds of third-party components under their own licences. Risk: yellow, because it needs notice.
+Electron 44.10.0 (lockfile-resolved) is MIT and embeds Chromium, which contains hundreds of third-party components under their own licences. Risk: yellow, because it needs notice.
 
 ### Chromium's third-party notices
 
@@ -227,27 +229,24 @@ This is a walk of `package.json` `dependencies` and `optionalDependencies` plus 
 
 The 26 packages the fork adds all arrive through `sentinel-ai-connect`, installed as blue-agent-connect 2.0.0 (MIT, "Copyright (c) 2026 Norse Labs"; GitHub's detector reports NOASSERTION only because the file adds a line saying it derives from blue-js-sdk). It brings blue-js-sdk 2.8.0 (MIT), eleven `@cosmjs/*` 0.39.0 packages and cosmjs-types (Apache-2.0), readonly-date-esm 2.0.0 (Apache-2.0), dotenv 16.6.1 (BSD-2-Clause), and socks-proxy-agent, xstream and their helpers (MIT). The `@cosmjs/*` packages ship no licence file, so `NOTICES` carries the Apache-2.0 text for them. readonly-date-esm is the only package in the tree with an Apache-2.0 `NOTICE` file, and `NOTICES` reproduces it.
 
-Verified Spaces browsing adds `@spacesprotocol/libveritas` 0.4.5, the Spaces proof verifier, as a direct dependency with no dependencies of its own, which makes 300 unique packages. Its package.json declares no licence and its tarball ships no licence file, so the walk alone would read it as UNKNOWN; the licence is read from upstream instead, where the workspace `Cargo.toml` declares Apache-2.0 and the repository's `LICENSE` is the Apache License 2.0 at tag v0.4.5. `licenses-audit.test.js` accepts that reading for exactly this version and requires the matching record in `licenses-audit.json`, and `NOTICES` names the package and points to the Apache-2.0 text it reproduces. `libveritas_bg.wasm` is a wasm-bindgen build that statically links 109 crates from upstream's `Cargo.lock` (62 MIT OR Apache-2.0, 17 MIT, 14 Apache-2.0, 8 CC0-1.0, the rest MITNFA, BSD-3-Clause, Unicode-3.0 alongside MIT OR Apache-2.0, or a choice that includes Apache-2.0 or the Unlicense); `licenses-audit.json` lists them, and the 37 proc-macro crates and their dependencies that run only at build time. None is copyleft. Crates offering Apache-2.0, CC0-1.0 or the Unlicense are used under it, and none of them ships a NOTICE file. For the others `NOTICES` reproduces each licence file verbatim in its own section: the 17 MIT crates, hex_lit (MITNFA), subtle (BSD-3-Clause), unicode-ident's Unicode-3.0 licence and the MIT `COPYING` of the C libsecp256k1 that secp256k1-sys vendors. Six of the MIT crates and hex_lit ship no licence file; for those `NOTICES` states the `Cargo.toml` declaration.
+Verified Spaces browsing adds `@spacesprotocol/libveritas` 0.4.5, the Spaces proof verifier, as a direct dependency with no dependencies of its own, which made 300 unique packages at that stage, before the dependency changes recorded above. Its package.json declares no licence and its tarball ships no licence file, so the walk alone would read it as UNKNOWN; the licence is read from upstream instead, where the workspace `Cargo.toml` declares Apache-2.0 and the repository's `LICENSE` is the Apache License 2.0 at tag v0.4.5. `licenses-audit.test.js` accepts that reading for exactly this version and requires the matching record in `licenses-audit.json`, and `NOTICES` names the package and points to the Apache-2.0 text it reproduces. `libveritas_bg.wasm` is a wasm-bindgen build that statically links 109 crates from upstream's `Cargo.lock` (62 MIT OR Apache-2.0, 17 MIT, 14 Apache-2.0, 8 CC0-1.0, the rest MITNFA, BSD-3-Clause, Unicode-3.0 alongside MIT OR Apache-2.0, or a choice that includes Apache-2.0 or the Unlicense); `licenses-audit.json` lists them, and the 37 proc-macro crates and their dependencies that run only at build time. None is copyleft. Crates offering Apache-2.0, CC0-1.0 or the Unlicense are used under it, and none of them ships a NOTICE file. For the others `NOTICES` reproduces each licence file verbatim in its own section: the 17 MIT crates, hex_lit (MITNFA), subtle (BSD-3-Clause), unicode-ident's Unicode-3.0 licence and the MIT `COPYING` of the C libsecp256k1 that secp256k1-sys vendors. Six of the MIT crates and hex_lit ship no licence file; for those `NOTICES` states the `Cargo.toml` declaration.
 
-| License                           | Count |
-| --------------------------------- | ----- |
-| MIT                               | 211   |
-| Apache-2.0                        | 34    |
-| ISC                               | 20    |
-| MPL-2.0                           | 13    |
-| BSD-3-Clause                      | 4     |
-| LGPL-3.0-only                     | 4     |
-| Apache-2.0 OR MIT                 | 3     |
-| 0BSD                              | 3     |
-| LGPL-3.0                          | 1     |
-| MIT OR X11                        | 1     |
-| MIT OR WTFPL                      | 1     |
-| BSD-2-Clause OR MIT OR Apache-2.0 | 1     |
-| Zlib OR MIT OR Apache-2.0         | 1     |
-| Python-2.0                        | 1     |
-| BlueOak-1.0.0                     | 1     |
-| BSD-2-Clause                      | 1     |
-| Total                             | 300   |
+| License | Locked unique packages |
+| --- | ---: |
+| MIT | 198 |
+| Apache-2.0 | 34 |
+| MPL-2.0 | 13 |
+| BSD-3-Clause | 4 |
+| ISC | 19 |
+| LGPL-3.0-only | 4 |
+| BSD-2-Clause | 1 |
+| 0BSD | 3 |
+| (MIT OR WTFPL) | 1 |
+| (Zlib OR MIT OR Apache-2.0) | 1 |
+| (MIT OR X11) | 1 |
+| (BSD-2-Clause OR MIT OR Apache-2.0) | 1 |
+| LGPL-3.0 | 1 |
+| Total | 281 |
 
 ---
 
@@ -378,4 +377,4 @@ Two recommended items are not blockers. Agora should be asked for a licence file
 
 ---
 
-Re-derived from the installed tree on 2026-10-23 against `0.7.17`. That re-derivation is `licenses-audit.test.js`, which walks the installed production dependency tree and every bundled component and compares them with this audit. The hosted component checks and package inspection above support the unchanged inventory; the baseline-version correction requires the successor CI run. The last full manual re-reading was on 2026-10-15 against 0.7.15. Kept honest by `licenses-audit.test.js`.
+Source inventory updated on 2026-10-28 against `0.7.18`, from the pruned lock graph and unchanged bundled-component pins. Exact-lock hosted component checks and the successor package inspection are pending. Historical installed-tree and artifact observations above retain their original scope. The last full manual license reading was on 2026-10-15 against 0.7.15. Kept honest by `licenses-audit.test.js`.

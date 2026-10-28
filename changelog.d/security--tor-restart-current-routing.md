@@ -1,0 +1,1 @@
+- A late Tor startup step no longer removes a newer connection’s `.onion` route ([upstream #812](https://github.com/solardev-xyz/freedom-browser/pull/812)).
