@@ -54,7 +54,7 @@ if (!electron && process.env.FREEDOM_ELECTRON_NET_TEST === '1') {
       { name: 'json', status: 200, value: { ok: true } },
       { name: 'gzip', status: 200, value: { ok: true } },
       expect.objectContaining({ name: 'excessive-encoding', error: 'TypeError', cause: 'too many content-encodings in response: 6, maximum allowed is 5' }),
-      expect.objectContaining({ name: 'early-close', error: 'TypeError', code: 'UND_ERR_SOCKET' }),
+      expect.objectContaining({ name: 'early-close', error: 'TypeError', code: 'UND_ERR_RES_CONTENT_LENGTH_MISMATCH', cause: 'Response body length does not match content-length header' }),
       { name: 'json-after-errors', status: 200, value: { ok: true } },
     ]);
     expect(result.workerExit).toBe(0);
