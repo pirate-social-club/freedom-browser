@@ -66,6 +66,8 @@ const ORDINARY_NAMES = new Set([`www.${LISTED}`, `app.${LATER}`, `app.${LISTED}`
 const DISCOVERY_PATH = '/public/hns/namespaces/v1';
 const GUESTS = ['default', 'private'];
 const ROUTING_ROUNDS = 20;
+const QUALIFIED_ROUNDS = ['-r2', '-r3'];
+const OBSERVATION_MS = 15_000;
 
 app.commandLine.appendSwitch('host-resolver-rules', `MAP ${DOH_HOST} 127.0.0.1`);
 // The probe's one window closes half way through; the app must outlive it.
@@ -206,7 +208,7 @@ function startPages(closedPortNumber, privatePartition) {
       );
       return;
     }
-    if (kind !== 'hints' || !GUESTS.includes(guest) || !['', 'r2'].includes(round)) {
+    if (kind !== 'hints' || !GUESTS.includes(guest) || !['', 'r2', 'r3'].includes(round)) {
       res.writeHead(404);
       res.end();
       return;
@@ -305,6 +307,11 @@ async function main() {
     electron: process.versions.electron,
     blinkSettings: app.commandLine.getSwitchValue('blink-settings'),
     guard: `PROXY ${networkManager.getHnsProxyAddr()}`,
+    qualification: {
+      firstDocumentMatchedHintCoverage: 'unproven',
+      measuredRounds: QUALIFIED_ROUNDS,
+      observationMs: OBSERVATION_MS,
+    },
   };
 
   // ---- 1. Before any list: a dotted name is asked of ordinary DNS first ----
@@ -359,12 +366,9 @@ async function main() {
   });
   const hostLoad = await within(host.loadURL(`http://127.0.0.1:${pagePort}/host`), 10_000);
   const seen = (name) => dnsQueries.some((queried) => expectedNameOf(queried, [name]) !== null);
-  // Each round is read once both guests' unlisted images, fetched after the
-  // page's hints, have been looked up. The control run also waits for every
-  // hint of the default guest, which it requires. The private guest's
-  // prefetching is intermittent even with prefetching on (all of its hints or
-  // none, about half the runs each, on Electron 44.9.3), so nothing waits for
-  // those.
+  // Retain the original first-document experiment, including missing hints.
+  // It is diagnostic only: the release oracle measures subsequent documents.
+  // See docs/hns-prefetch-probe.md for the explicit coverage boundary.
   const awaitRound = (round) => until(() => [
     ...GUESTS.map((guest) => hintedNames(guest, round).img[2]),
     ...(WITHOUT_BLINK_SETTINGS ? [...hintedNames('default', round).header, ...hintedNames('default', round).html] : []),
@@ -393,9 +397,45 @@ async function main() {
     [LISTED, PIRATE, UNLISTED].every((root) => seen(`diagnostic-default.${root}`)), 2_000);
   firstDocumentObservation.diagnosticLookups = allDnsQueries.filter(({ name }) => name.startsWith('diagnostic-'));
 
+  const snapshotDocuments = async () => Object.fromEntries(await Promise.all(GUESTS.map(async (label) => {
+    const guest = guests.get(label);
+    if (!guest || guest.isDestroyed()) return [label, { missing: true }];
+    const document = await within(guest.executeJavaScript('({ href: location.href, readyState: document.readyState, timeOrigin: performance.timeOrigin })'), 5_000);
+    return [label, { ...document, processId: guest.mainFrame.processId, routingId: guest.mainFrame.routingId,
+      session: guest.session === privateSession ? 'private' : 'default' }];
+  })));
+  const qualifiedRounds = [];
+  const measureRound = async (round) => {
+    // Capture before navigation: response-header hints can precede loadURL's
+    // completion. Names are unique to each guest/document, including images.
+    const captureStart = dnsQueries.length;
+    const captureStartedAtMs = Date.now() - started;
+    const loads = {};
+    for (const label of GUESTS) {
+      const guest = guests.get(label);
+      loads[label] = guest ? await within(guest.loadURL(`http://127.0.0.1:${pagePort}/hints/${label}/${round.slice(1)}`), 10_000) : { missing: true };
+    }
+    const before = await snapshotDocuments();
+    const eventsStart = documentEvents.length;
+    const readyAtMs = Date.now() - started;
+    const required = GUESTS.flatMap((label) => {
+      const names = hintedNames(label, round);
+      return [names.img[2], ...(WITHOUT_BLINK_SETTINGS ? [...names.header, ...names.html] : [])];
+    });
+    // Both completed documents stay alive for the full existing 15s bound.
+    // Neither image arrival nor a fast positive hint ends observation early.
+    const observed = await until(() => Date.now() - started - readyAtMs >= OBSERVATION_MS &&
+      required.every((name) => dnsQueries.slice(captureStart).some((query) => expectedNameOf(query, [name]) !== null)), OBSERVATION_MS);
+    const completedAtMs = Date.now() - started;
+    const after = await snapshotDocuments();
+    qualifiedRounds.push({ round, loads, captureStartedAtMs, readyAtMs, completedAtMs, observed,
+      before, after, lifetimeEvents: documentEvents.slice(eventsStart), lookups: dnsQueries.slice(captureStart) });
+  };
+  await measureRound(QUALIFIED_ROUNDS[0]);
+
   // A theme change sends every renderer a web preferences update, so this
   // shows whether the startup prefetch setting survives one: each guest must
-  // first report the new colour scheme, then load a second page of hints.
+  // first report the new colour scheme, then load a third page of hints.
   const prefersDark = async (contents) => {
     try {
       return await contents.executeJavaScript("matchMedia('(prefers-color-scheme: dark)').matches");
@@ -414,16 +454,9 @@ async function main() {
       });
   };
   const themeApplied = { light: await themeTo('light'), dark: await themeTo('dark') };
-  const secondLoads = {};
-  for (const guest of GUESTS) {
-    const contents = guests.get(guest);
-    secondLoads[guest] = contents
-      ? await within(contents.loadURL(`http://127.0.0.1:${pagePort}/hints/${guest}/r2`), 10_000)
-      : { missing: true };
-  }
-  const secondPagesSeen = await awaitRound('-r2');
+  await measureRound(QUALIFIED_ROUNDS[1]);
   nativeTheme.themeSource = 'system';
-  const loadedAtMs = Date.now() - started;
+  const loadedAtMs = qualifiedRounds.at(-1).readyAtMs;
 
   const navigated = {};
   for (const guest of GUESTS) {
@@ -439,8 +472,8 @@ async function main() {
     firstDocumentObservation,
     pagesSeen,
     themeApplied,
-    secondLoads,
-    secondPagesSeen,
+    origin: `http://127.0.0.1:${pagePort}`,
+    qualifiedRounds,
     loadedAtMs,
     guestSessions: Object.fromEntries([...guests].map(([guest, contents]) => [guest, contents.session === privateSession ? 'private' : 'default'])),
     navigated,
@@ -505,6 +538,9 @@ async function main() {
     .filter(({ name }) => /^(header|html)-/.test(name))
     .map(({ name, ms }) => ({ name, afterPagesMs: ms - results.pages.loadedAtMs }));
   results.diagnosticLookups = allDnsQueries.filter(({ name }) => name.startsWith('diagnostic-'));
+  // Include queued page requests observed after the page-phase snapshot, but
+  // exclude the intentional before-discovery app.hnsprobe baseline.
+  results.pageLookups = allDnsQueries.filter(({ name }) => /^(header|html|diagnostic|img|nav)-/.test(name));
   results.runMs = Date.now() - started;
   results.fatal = fatal;
   if (EVIDENCE) await netLog.stopLogging();

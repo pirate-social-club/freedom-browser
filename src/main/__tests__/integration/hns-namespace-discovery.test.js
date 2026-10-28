@@ -59,8 +59,9 @@ const PIRATE = 'pirate';
 const UNLISTED = 'unlistedprobe';
 const GUESTS = ['default', 'private'];
 
-const ROUNDS = ['', '-r2'];
-const isHint = (name) => /^(header|html)-/.test(name);
+const QUALIFIED_ROUNDS = ['-r2', '-r3'];
+const ROUNDS = ['', ...QUALIFIED_ROUNDS];
+const isHint = (name) => /^(header|html|diagnostic)-/.test(name);
 // The hinted names one guest's page carries in one round, as the probe builds them.
 const hintNames = (guest, round) => ['header', 'html'].flatMap((form) =>
   [LISTED, PIRATE, UNLISTED].map((root) => `${form}-${guest}${round}.${root}`));
@@ -120,11 +121,13 @@ describeWithElectron('HNS namespace discovery in a real Electron process', () =>
   beforeAll(async () => {
     results = await runProbe();
     control = await runProbe({ FREEDOM_PROBE_WITHOUT_BLINK_SETTINGS: '1' });
+    console.info('HNS qualification scope:', JSON.stringify({ protected: results.qualification, control: control.qualification }));
   }, 2 * PROBE_TIMEOUT_MS);
 
   test('runs on a live guard with no routing failure, and starts with prefetching off', () => {
     expect(results.guard).toMatch(/^PROXY 127\.0\.0\.1:\d+$/);
     expect(results.fatal).toBeNull();
+    expect(control.fatal).toBeNull();
     expect(results.firstRefresh).toEqual([LISTED]);
     expect(results.blinkSettings).toBe('dnsPrefetchingEnabled=false');
     expect(control.blinkSettings).toBe('');
@@ -167,16 +170,45 @@ describeWithElectron('HNS namespace discovery in a real Electron process', () =>
     expect(namesSeen(fetches.queried, [`fetch.${UNLISTED}`])).toEqual([`fetch.${UNLISTED}`]);
   });
 
-  test('both pages load, in a default-session webview and a private-window partition webview, before and after a theme change', () => {
+  test('both first documents commit while their unmatched hint coverage remains explicitly unproven', () => {
     for (const run of [results, control]) {
       expect(run.pages.hostLoad).toEqual({});
-      expect(run.pages.pagesSeen.met).toBe(true);
-      // The web preferences update reached both guests before their second pages.
+      expect(run.qualification).toEqual({ firstDocumentMatchedHintCoverage: 'unproven', measuredRounds: QUALIFIED_ROUNDS, observationMs: 15_000 });
+      for (const guest of GUESTS) {
+        expect(run.pages.firstDocumentObservation.documents[guest]).toMatchObject({ value: {
+          href: `${run.pages.origin}/hints/${guest}`, readyState: 'complete',
+        } });
+      }
+      expect(namesSeen(run.pages.firstDocumentObservation.lookups, imageNames('')).filter((name) => imageNames('').includes(name)))
+        .toEqual(imageNames('').sort());
+      expect(run.pages.guestSessions).toEqual({ default: 'default', private: 'private' });
+    }
+  });
+
+  test('both subsequent documents stay complete and unchanged through live observation before and after theme changes', () => {
+    for (const run of [results, control]) {
       expect(run.pages.themeApplied.light.met).toBe(true);
       expect(run.pages.themeApplied.dark.met).toBe(true);
-      expect(run.pages.secondLoads).toEqual({ default: {}, private: {} });
-      expect(run.pages.secondPagesSeen.met).toBe(true);
-      expect(run.pages.guestSessions).toEqual({ default: 'default', private: 'private' });
+      expect(run.pages.qualifiedRounds.map(({ round }) => round)).toEqual(QUALIFIED_ROUNDS);
+      for (const observation of run.pages.qualifiedRounds) {
+        expect(observation.loads).toEqual({ default: {}, private: {} });
+        expect(observation.observed.met).toBe(true);
+        expect(observation.readyAtMs).toBeGreaterThanOrEqual(observation.captureStartedAtMs);
+        expect(observation.completedAtMs - observation.readyAtMs).toBeGreaterThanOrEqual(15_000);
+        expect(observation.lifetimeEvents.filter(({ event }) => ['did-start-navigation', 'did-navigate'].includes(event))).toEqual([]);
+        for (const guest of GUESTS) {
+          const before = observation.before[guest];
+          expect(before).toMatchObject({ session: guest, value: {
+            href: `${run.pages.origin}/hints/${guest}/${observation.round.slice(1)}`, readyState: 'complete',
+          } });
+          expect(Number.isFinite(before.value.timeOrigin)).toBe(true);
+          expect(before.processId).toBeGreaterThan(0);
+          expect(before.routingId).toBeGreaterThan(0);
+          expect(observation.after[guest]).toEqual(before);
+        }
+        const images = imageNames(observation.round);
+        expect(namesSeen(observation.lookups, images).filter((name) => images.includes(name))).toEqual(images.sort());
+      }
       for (const guest of GUESTS) {
         expect(run.pages.navigated[guest].error).toMatch(/ERR_TUNNEL_CONNECTION_FAILED/);
       }
@@ -185,36 +217,37 @@ describeWithElectron('HNS namespace discovery in a real Electron process', () =>
 
   // The control: without the startup settings, a page's dns-prefetch hints,
   // in its HTML and in a `Link:` header, are looked up for every root, on the
-  // first page and on the second, after the theme change. The probe waited
-  // for exactly these lookups within a finite bound. A missing control fails;
-  // elapsed time alone never establishes that prefetching was suppressed.
-  // The private guest prefetches all of a page's hints or none of them, about
-  // half the runs each, so only the default guest is required to.
-  test('without the startup settings, prefetch hints are looked up, before and after a theme change', () => {
-    const lookups = control.hintLookups.map(({ name }) => name);
-    for (const round of ROUNDS) {
-      const expected = hintNames('default', round);
-      expect(namesSeen(lookups, expected).filter((name) => expected.includes(name))).toEqual([...expected].sort());
-      const privateSeen = namesSeen(lookups, hintNames('private', round)).filter((name) => hintNames('private', round).includes(name));
-      expect([0, 6]).toContain(privateSeen.length);
+  // second document before the theme change and third afterward. Every guest
+  // must produce every control in that document's own observation interval.
+  // Missing controls fail; first-document diagnostics cannot replace them.
+  test('without startup protection, both guests resolve all six hints in each measured document', () => {
+    for (const observation of control.pages.qualifiedRounds) {
+      for (const guest of GUESTS) {
+        const expected = hintNames(guest, observation.round);
+        expect(namesSeen(observation.lookups, expected).filter((name) => expected.includes(name))).toEqual([...expected].sort());
+      }
     }
   });
 
   test('as Freedom starts, no page has a name under a listed root or .pirate looked up, from a hint or a load', () => {
     const queried = [...new Set(results.pages.queriedInOrder)];
+    const wholeRunPageQueries = results.pageLookups.map(({ name }) => name);
     // A suffixed lookup under either root would count too.
     expect(queried.filter(under(LISTED))).toEqual([]);
     expect(queried.filter(under(PIRATE))).toEqual([]);
-    // Prefetching is off altogether, for unlisted names too, before and after
-    // the theme change and for the whole run: several more seconds pass after
-    // the pages before it ends.
+    expect(wholeRunPageQueries.filter(under(LISTED))).toEqual([]);
+    expect(wholeRunPageQueries.filter(under(PIRATE))).toEqual([]);
+    // Keep whole-run checks as well as the live, per-document windows. A late
+    // diagnostic lookup must not escape because it has a different prefix.
     expect(queried.filter(isHint)).toEqual([]);
     expect(results.hintLookups).toEqual([]);
-    expect(results.runMs - results.pages.loadedAtMs).toBeGreaterThan(3_000);
+    expect(results.diagnosticLookups).toEqual([]);
     // The controls: each guest's unlisted image on both pages, fetched after
-    // the hints, is seen, bare or with a search suffix, and nothing else is.
+    // the hints, is seen on all three documents, bare or suffixed, and nothing
+    // else is. First-document protected refusals remain mandatory.
     const expected = ROUNDS.flatMap(imageNames);
     expect(namesSeen(queried, expected)).toEqual([...expected].sort());
+    expect(namesSeen(wholeRunPageQueries, expected)).toEqual([...expected].sort());
   });
 
   test('the request sends no cookie or header of its own and is never cached', () => {
