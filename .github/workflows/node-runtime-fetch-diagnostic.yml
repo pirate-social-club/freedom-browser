@@ -1,0 +1,67 @@
+name: Node runtime fetch diagnostic
+
+# Publication does not execute the probe. After exact source review and a
+# separate hosted execution disposition, add this marker to PR72's title once.
+# Body edits, source pushes, marker removal and reruns cannot activate it.
+on:
+  pull_request:
+    types: [edited]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: freedom-runtime-fetch-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    if: >-
+      github.event.pull_request.number == 72 &&
+      github.event.pull_request.head.repo.full_name == 'pirate-social-club/freedom-browser' &&
+      github.event.pull_request.head.ref == 'fix/security-dependencies-20261024' &&
+      github.event.changes.title &&
+      !contains(github.event.changes.title.from, '[runtime-probe]') &&
+      contains(github.event.pull_request.title, '[runtime-probe]') &&
+      github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Check out the exact diagnostic head
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Set up pinned Node for ASAR assembly only
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24.14.0
+          cache: npm
+      - name: Install exact-lock tools without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Download and verify the preserved old artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/freedom-runtime-fetch-diagnostic"
+          mkdir -p "$output/artifact" "$output/results"
+          gh api repos/pirate-social-club/freedom-browser/actions/artifacts/12535555105/zip > "$output/artifact/old.zip"
+          printf '%s  %s\n' '926894aa56b35db5a769220a4ef61756dc98f646e09166f752372e601c740010' "$output/artifact/old.zip" | sha256sum --check -
+          unzip -q "$output/artifact/old.zip" -d "$output/artifact/unpacked"
+      - name: Execute six fixed isolated old-runtime cases once
+        run: >-
+          node ops/runtime-fetch-diagnostic/hosted-driver.js --execute
+          "$RUNNER_TEMP/freedom-runtime-fetch-diagnostic"
+          "$RUNNER_TEMP/freedom-runtime-fetch-diagnostic/artifact/unpacked/freedom-browser_0.7.17_amd64.deb"
+      - name: Preserve all complete, failed and partial outcomes
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: freedom-runtime-fetch-diagnostic-${{ env.SOURCE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/freedom-runtime-fetch-diagnostic/results/
+          if-no-files-found: warn
+          retention-days: 14
