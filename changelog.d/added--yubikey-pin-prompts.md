@@ -1,2 +1,3 @@
 - Security-key PIN and account prompts ([#733](https://github.com/solardev-xyz/freedom-browser/issues/733))
-  - Requires an Electron runtime with `collect-webauthn-pin` support; runtime integration and hardware acceptance are pending
+  - Account selection uses the existing Electron event
+  - PIN entry requires an Electron runtime with `collect-webauthn-pin` support; PIN hardware acceptance is pending

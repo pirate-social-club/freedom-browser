@@ -316,13 +316,16 @@ jobs:
       - name: Run ipfs-gateway-proxy
         # The bounded shell sets FREEDOM_ELECTRON_NET_TEST=1 inside its unit.
         shell: /usr/local/bin/freedom-ci-bounded-shell {0}
-        run: >-
-          npx jest --runInBand src/main/__tests__/integration/ipfs-gateway-proxy.test.js
-          src/main/__tests__/integration/ens-ccip-proxy.test.js
-          src/main/__tests__/integration/cert-verify-concurrency.test.js
-          src/main/__tests__/integration/session-transport-proxy.test.js
-          src/main/__tests__/integration/hns-namespace-discovery.test.js
-          src/main/__tests__/integration/embedded-fetch.test.js
+        run: |
+          set -euo pipefail
+          npx jest --runInBand src/main/__tests__/integration/ipfs-gateway-proxy.test.js \
+            src/main/__tests__/integration/ens-ccip-proxy.test.js \
+            src/main/__tests__/integration/cert-verify-concurrency.test.js \
+            src/main/__tests__/integration/session-transport-proxy.test.js \
+            src/main/__tests__/integration/hns-namespace-discovery.test.js \
+            src/main/__tests__/integration/embedded-fetch.test.js
+          electron_path="$(node -e "process.stdout.write(require('electron'))")"
+          "$electron_path" --no-sandbox --headless --ozone-platform=headless scripts/webauthn-account-smoke.js
       - name: Confirm runtime cleanup
         if: always()
         run: |

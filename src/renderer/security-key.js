@@ -12,11 +12,13 @@ securityKeyPrompt.onRequest((request) => {
   if (kind === 'pin') {
     const messages = {
       'wrong-pin': 'That PIN was not accepted.',
-      'too-short': 'That PIN is too short.',
+      'too-short': Number.isSafeInteger(request.minPinLength) && request.minPinLength > 0
+        ? `That PIN is too short. Minimum length: ${request.minPinLength} characters.` : 'That PIN is too short.',
       'invalid-characters': 'That PIN contains invalid characters.',
       'internal-uv-locked': 'Use your PIN to unlock the security key.',
     };
-    $('message').textContent = `${messages[request.error] || 'Enter the PIN for your security key.'} ${request.attemptsRemaining} attempts remain before the key locks.`;
+    const remaining = request.attemptsRemaining === 1 ? '1 attempt remains' : `${request.attemptsRemaining} attempts remain`;
+    $('message').textContent = `${messages[request.error] || 'Enter the PIN for your security key.'} ${remaining} before the key locks.`;
     $('pin').focus();
   } else {
     $('message').textContent = 'Choose the account to sign in with.';

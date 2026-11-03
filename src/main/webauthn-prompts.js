@@ -22,7 +22,7 @@ function requestContext(details, targetSession, webContents, BrowserWindow, getM
     const host = guest.hostWebContents;
     const parent = host && BrowserWindow.fromWebContents(host);
     if (!parent || parent.isDestroyed() || !getMainWindows().includes(parent)) return null;
-    return { frame, guest, parent, url: frame.url, origin: url.origin, rp };
+    return { frame, guest, parent, origin: url.origin, rp };
   } catch { return null; }
 }
 
@@ -30,6 +30,9 @@ function registerWebauthnPrompts({ app, session, webContents, BrowserWindow,
   MessageChannelMain, getMainWindows, getTheme = () => 'dark', timeoutMs = TIMEOUT_MS }) {
   const attached = new WeakSet();
   const active = new Map();
+  // Electron retains Session objects for the lifetime of the process. Reuse
+  // one nonpersistent, trusted-UI-only session, including across PIN retries.
+  let promptSession;
 
   function prompt(targetSession, details, callback, kind) {
     const context = requestContext(details, targetSession, webContents, BrowserWindow, getMainWindows);
@@ -66,7 +69,7 @@ function registerWebauthnPrompts({ app, session, webContents, BrowserWindow,
     const cancel = () => finish();
     const stillCurrent = () => {
       const now = requestContext(details, targetSession, webContents, BrowserWindow, getMainWindows);
-      return now && now.frame === frame && now.url === context.url;
+      return now && now.frame === frame && now.origin === origin;
     };
     active.set(guest, cancel);
     try {
@@ -74,11 +77,12 @@ function registerWebauthnPrompts({ app, session, webContents, BrowserWindow,
       if (kind === 'account' && (!Array.isArray(accounts) || accounts.length === 0 || accounts.length > 100 ||
           accounts.some((a) => typeof a.credentialId !== 'string' || !a.credentialId ||
             a.credentialId.length > 4096))) { cancel(); return; }
+      if (!promptSession) promptSession = session.fromPartition(`webauthn-prompt-${randomUUID()}`);
       win = new BrowserWindow({
         parent, modal: true, show: false, width: 460, height: 490, resizable: false,
         title: 'Security key — Freedom', autoHideMenuBar: true,
         webPreferences: { preload: path.join(__dirname, 'webauthn-prompt-preload.js'),
-          partition: `webauthn-prompt-${randomUUID()}`, nodeIntegration: false,
+          session: promptSession, nodeIntegration: false,
           contextIsolation: true, sandbox: true, webviewTag: false, devTools: false },
       });
       win.setMenu(null);
@@ -98,7 +102,15 @@ function registerWebauthnPrompts({ app, session, webContents, BrowserWindow,
       listen(port, 'close', cancel);
       port.start();
       listen(win, 'closed', cancel);
-      for (const event of ['destroyed', 'render-process-gone', 'did-start-navigation']) listen(guest, event, cancel);
+      for (const event of ['destroyed', 'render-process-gone']) listen(guest, event, cancel);
+      listen(guest, 'did-start-navigation', (navigation, _url, legacyInPlace, legacyMainFrame) => {
+        // Electron 44 supplies event properties; retain its deprecated argument
+        // form for older compatible runtimes. Missing metadata fails closed.
+        const mainFrame = navigation?.isMainFrame ?? legacyMainFrame;
+        const sameDocument = navigation?.isSameDocument ?? legacyInPlace;
+        if (mainFrame === false) return;
+        if (mainFrame !== true || sameDocument !== true) cancel();
+      });
       listen(parent, 'closed', cancel);
       listen(win.webContents, 'render-process-gone', cancel);
       listen(win.webContents, 'will-navigate', (event) => { event.preventDefault(); cancel(); });
@@ -111,6 +123,8 @@ function registerWebauthnPrompts({ app, session, webContents, BrowserWindow,
           kind, origin, rp, theme: theme === 'light' ? 'light' : 'dark',
           error: kind === 'pin' ? details.error : null,
           attemptsRemaining: kind === 'pin' ? details.attemptsRemaining : null,
+          minPinLength: kind === 'pin' && Number.isSafeInteger(details.minPinLength) && details.minPinLength > 0
+            ? details.minPinLength : null,
           accounts: accounts?.map((a) => ({ id: a.credentialId,
             name: typeof a.name === 'string' ? a.name.slice(0, 256) : '',
             displayName: typeof a.displayName === 'string' ? a.displayName.slice(0, 256) : '' })),

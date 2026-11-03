@@ -49,3 +49,10 @@ test('cancel button and Escape send cancellation', () => {
   p.handlers.keydown({ key: 'Escape' });
   expect(p.respond.mock.calls).toEqual([['cancel'], ['cancel']]);
 });
+
+test('minimum PIN length and the last attempt are stated accurately', () => {
+  const p = page({ kind: 'pin', theme: 'dark', attemptsRemaining: 1, minPinLength: 6, error: 'too-short' });
+  expect(p.nodes.message.textContent).toContain('Minimum length: 6 characters');
+  expect(p.nodes.message.textContent).toContain('1 attempt remains');
+  expect(p.nodes.message.textContent).not.toContain('1 attempts');
+});
