@@ -73,6 +73,21 @@ app.whenReady().then(async () => {
     document.body.append(guest);
   }`);
   const guest = await attached;
+  function navigationStarted(mainFrame, sameDocument) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        guest.removeListener('did-start-navigation', started);
+        reject(new Error('Expected native navigation did not start'));
+      }, 5000);
+      function started(event) {
+        if (event.isMainFrame !== mainFrame || event.isSameDocument !== sameDocument) return;
+        clearTimeout(timer);
+        guest.removeListener('did-start-navigation', started);
+        resolve();
+      }
+      guest.on('did-start-navigation', started);
+    });
+  }
   at('guest-attached');
   await waitFor(() => !guest.isLoading() && guest.getURL() === origin + '/', 'guest page');
   at('guest-loaded');
@@ -114,7 +129,12 @@ app.whenReady().then(async () => {
   at('first-chooser');
   assert.equal(await first.webContents.executeJavaScript("document.getElementById('origin').textContent"), origin);
   // Native child-frame navigation and pushState must leave the modal alive.
-  await guest.executeJavaScript("new Promise(resolve => { history.pushState({}, '', '/same-document#x'); const child=document.getElementById('child'); child.addEventListener('load', () => resolve(true), {once:true}); child.src='/child?reload=1'; })");
+  // Observe the browser-process events under test instead of waiting on a DOM
+  // load Promise in the parent renderer while its native modal is open.
+  const childStarted = navigationStarted(false, false);
+  const sameDocumentStarted = navigationStarted(true, true);
+  await guest.executeJavaScript("history.pushState({}, '', '/same-document#x'); document.getElementById('child').src='/child?reload=1'; true");
+  await Promise.all([childStarted, sameDocumentStarted]);
   at('child-navigated');
   assert.equal(first.isDestroyed(), false);
   await first.webContents.executeJavaScript(`document.getElementById('account').value=${JSON.stringify(ids[1])}; document.getElementById('form').requestSubmit(); true;`);

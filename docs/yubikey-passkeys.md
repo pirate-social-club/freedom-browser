@@ -96,3 +96,13 @@ request. The dialog is closed on document lifecycle changes, response or its
 bounded timer; immediate dismissal on a same-document AbortController abort
 needs further native lifecycle support. Native callbacks use request lifetime
 and prompt generation guards, but hardware/candidate acceptance must verify it.
+
+## Native CI timeout follow-up
+
+At head `85660e90` the existing six native suites passed, but the new smoke test
+hit its outer 30-second deadline in CI. Stage-only diagnostic head `c22cf65f` then
+passed the same native job. That pass does not establish the original cause.
+The follow-up probe observes the native `did-start-navigation` events directly
+instead of awaiting a DOM iframe-load Promise while the parent has a modal.
+It passes locally; restoring the old blanket navigation cancellation makes it
+fail at `child-navigated`. New-head CI is still required.
