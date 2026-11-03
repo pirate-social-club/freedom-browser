@@ -17,12 +17,17 @@ app.setPath('userData', scratch);
 app.disableHardwareAcceleration();
 let server;
 let finished = false;
+let stage = 'startup';
+function at(value) {
+  stage = value;
+  console.log(`WEBAUTHN-ACCOUNT-STAGE ${value}`);
+}
 function finish(error, result) {
   if (finished) return;
   finished = true;
   server?.close();
   console.log('WEBAUTHN-ACCOUNT-SMOKE ' + JSON.stringify(error
-    ? { ok: false, error: error.message, electron: process.versions.electron }
+    ? { ok: false, error: error.message, stage, electron: process.versions.electron }
     : { ok: true, electron: process.versions.electron, ...result }));
   app.exit(error ? 1 : 0);
 }
@@ -38,6 +43,7 @@ async function waitFor(predicate, label) {
 }
 
 app.whenReady().then(async () => {
+  at('ready');
   const fixtures = path.join(__dirname, '..', 'test', 'fixtures', 'cert-verify-concurrency-tls');
   server = https.createServer({ key: fs.readFileSync(path.join(fixtures, 'cert-verify-test.key')),
     cert: fs.readFileSync(path.join(fixtures, 'cert-verify-test.crt')) });
@@ -47,6 +53,7 @@ app.whenReady().then(async () => {
       : '<!doctype html><title>WebAuthn fixture</title><iframe id="child" src="/child"></iframe>');
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  at('server-listening');
   const origin = `https://localhost:${server.address().port}`;
   const owner = new BrowserWindow({ show: false, webPreferences: { webviewTag: true,
     nodeIntegration: false, contextIsolation: true, sandbox: true } });
@@ -58,6 +65,7 @@ app.whenReady().then(async () => {
     callback(request.hostname === 'localhost' ? 0 : -3);
   });
   await owner.loadURL('data:text/html,<html><body></body></html>');
+  at('owner-loaded');
   const attached = new Promise((resolve) => owner.webContents.once('did-attach-webview', (_event, guest) => resolve(guest)));
   await owner.webContents.executeJavaScript(`{
     const guest = document.createElement('webview');
@@ -65,7 +73,9 @@ app.whenReady().then(async () => {
     document.body.append(guest);
   }`);
   const guest = await attached;
+  at('guest-attached');
   await waitFor(() => !guest.isLoading() && guest.getURL() === origin + '/', 'guest page');
+  at('guest-loaded');
   guest.debugger.attach('1.3');
   await guest.debugger.sendCommand('WebAuthn.enable');
   const { authenticatorId } = await guest.debugger.sendCommand('WebAuthn.addVirtualAuthenticator', {
@@ -83,6 +93,7 @@ app.whenReady().then(async () => {
       userName: `fixture-user-${i}`, userDisplayName: `Fixture ${i}`, signCount: 0,
     } });
   }
+  at('virtual-credentials-ready');
   const begin = () => guest.executeJavaScript(`{
     window.passkeyResult = null;
     navigator.credentials.get({publicKey: {challenge: crypto.getRandomValues(new Uint8Array(32)),
@@ -98,16 +109,21 @@ app.whenReady().then(async () => {
     return count === 2 ? dialog : null;
   }, 'two-account native chooser');
   await begin();
+  at('request-started');
   const first = await chooser();
+  at('first-chooser');
   assert.equal(await first.webContents.executeJavaScript("document.getElementById('origin').textContent"), origin);
   // Native child-frame navigation and pushState must leave the modal alive.
   await guest.executeJavaScript("new Promise(resolve => { history.pushState({}, '', '/same-document#x'); const child=document.getElementById('child'); child.addEventListener('load', () => resolve(true), {once:true}); child.src='/child?reload=1'; })");
+  at('child-navigated');
   assert.equal(first.isDestroyed(), false);
   await first.webContents.executeJavaScript(`document.getElementById('account').value=${JSON.stringify(ids[1])}; document.getElementById('form').requestSubmit(); true;`);
   const result = await waitFor(() => guest.executeJavaScript('window.passkeyResult'), 'credential assertion');
+  at('assertion-returned');
   assert.equal(result.id, ids[1]);
   await begin();
   const second = await chooser();
+  at('second-chooser');
   const closed = new Promise((resolve) => second.once('closed', resolve));
   guest.reload();
   await closed;
