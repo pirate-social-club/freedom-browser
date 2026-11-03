@@ -195,7 +195,8 @@ const unregisterShutdownSignalHandlers = registerShutdownSignalHandlers({
   logger: log,
   beforeForceExit: () => flushLogFileSync(log.transports.file),
 });
-const { BrowserWindow, protocol, session, webContents } = require('electron');
+const { BrowserWindow, protocol, session, webContents, MessageChannelMain, nativeTheme } = require('electron');
+const { registerWebauthnPrompts } = require('./webauthn-prompts');
 const { createSessionRoutingTermination } = require('./session-routing-termination');
 const { registerApiRequestDiagnostics, initializeSessionRouting, getProxySessionPolicy,
   setProxySessionPolicyObserver, setProxySessionDispatcherOptions,
@@ -604,6 +605,8 @@ async function bootstrap() {
   registerPrivateCleanup((partition) => unregisterOnionRoutingSession(partition));
 
   registerWebContentsHandlers();
+  registerWebauthnPrompts({ app, session, webContents, BrowserWindow, MessageChannelMain, getMainWindows,
+    getTheme: () => nativeTheme.shouldUseDarkColors ? 'dark' : 'light' });
   registerClientCertificateHandler();
   setupApplicationMenu();
 
